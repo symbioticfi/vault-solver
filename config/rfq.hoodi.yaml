@@ -1,0 +1,34 @@
+# vault-solver — RFQ filler, Hoodi testnet (chainId 560048) profile.
+#
+# Addresses are the Hoodi deployment of the RFQ contracts. Provide secrets via env:
+#   SOLVER_PRIVATE_KEY            — the caller EOA (must hold CALLER_ROLE on the Executor)
+#   RFQ_BACKEND_SHARED_SECRET     — shared secret authenticating the backend peer on /quote & /notify
+# ${VAR} fields are expanded from the environment at load time.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_HOODI} # expanded from env; do not commit a real URL
+  chainId: 560048
+
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY # the CALLER_ROLE EOA that submits Executor.fill (P2)
+
+txManager:
+  confirmations: 2
+
+observability:
+  addr: ":9090" # /metrics, /healthz, /readyz (separate from the quote server below)
+
+solver:
+  name: rfq-filler
+  config:
+    backendUrl: ${RFQ_BACKEND_URL}
+    backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+    listenAddr: ":42073" # quote/notify HTTP server
+    # Hoodi RFQ deployment:
+    executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
+    adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
+    reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time (P2)
+    curatorRegistry: "0xa0159c29ff365c478ba858b0da062ad096575c02" # discount/permission (P3)
+    quoteDiscountBps: 1000 # 10.00% discount applied to oracle pricing
+    pollIntervalMs: 3000 # backend order poll cadence (P2)
+    orderLimit: 20 # max open orders fetched per poll (P2)
