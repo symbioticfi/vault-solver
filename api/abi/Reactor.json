@@ -1,0 +1,638 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "adapter",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "permit2",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "receive",
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "eip712Domain",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "fields",
+        "type": "bytes1",
+        "internalType": "bytes1"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "version",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "chainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifyingContract",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "extensions",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "fill",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      },
+      {
+        "name": "protocolSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "swapInputs",
+        "type": "tuple[]",
+        "internalType": "struct IInstantRedemptionAdapter.Swap[]",
+        "components": [
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "discountSwapInputs",
+        "type": "tuple[]",
+        "internalType": "struct IReactor.DiscountSwapInput[]",
+        "components": [
+          {
+            "name": "discountSwap",
+            "type": "tuple",
+            "internalType": "struct IInstantRedemptionAdapter.DiscountSwap",
+            "components": [
+              {
+                "name": "discount",
+                "type": "tuple",
+                "internalType": "struct IInstantRedemptionAdapter.Discount",
+                "components": [
+                  {
+                    "name": "vault",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "tokenToRedeem",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "discount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "signer",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "protocol",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint48",
+                    "internalType": "uint48"
+                  }
+                ]
+              },
+              {
+                "name": "signerSignature",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "protocolDeadline",
+                "type": "uint48",
+                "internalType": "uint48"
+              }
+            ]
+          },
+          {
+            "name": "protocolSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "executorData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "fill",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      },
+      {
+        "name": "protocolSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "swapInputs",
+        "type": "tuple[]",
+        "internalType": "struct IInstantRedemptionAdapter.Swap[]",
+        "components": [
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "executorData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "fill",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      },
+      {
+        "name": "protocolSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "swap",
+        "type": "tuple",
+        "internalType": "struct IInstantRedemptionAdapter.Swap",
+        "components": [
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "vault",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "executorData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "Fill",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "InvalidAmountIn",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidFiller",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidOutput",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidProtocolSignature",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidTokenIn",
+    "inputs": []
+  }
+]

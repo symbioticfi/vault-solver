@@ -3,9 +3,10 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	// Solver implementations self-register via init(); this blank import is the only reference to a
-	// concrete solver. Adding another solver is an import here plus a config switch.
+	// Solver implementations self-register via init(); these blank imports are the only references to
+	// concrete solvers. Adding another solver is an import here plus a config switch.
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
 )
 
 func newRootCmd() *cobra.Command {

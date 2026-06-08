@@ -15,9 +15,14 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 FORGE_OUT ?= ../rfq/out
 # Live 3F OpenAPI spec (Sepolia dev).
 OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
+# RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
+# NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
+# rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
+RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
 
 # Contracts whose ABIs are vendored from a Foundry build via refresh-abi.
-ABIS := BridgeFacilitatorAdapter IVaultV2 IRequest IVaultController IWhitelist
+ABIS := BridgeFacilitatorAdapter IVaultV2 IRequest IVaultController IWhitelist \
+        InstantRedemptionAdapter Executor Reactor ICuratorRegistry
 
 # Contract:relpath mapping for Go bindings. Each contract gets its own package (the leaf dir) so
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.
@@ -27,6 +32,8 @@ ABIS := BridgeFacilitatorAdapter IVaultV2 IRequest IVaultController IWhitelist
 # BINDINGS but not ABIS. aggregate3 is marked `view` there so abigen binds it as a Caller.
 BINDINGS := BridgeFacilitatorAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
+            InstantRedemptionAdapter:rfq/adapter Executor:rfq/executor \
+            Reactor:rfq/reactor ICuratorRegistry:rfq/curatorregistry \
             IVaultV2:vaultv2 Multicall3:multicall3
 
 BIN     := bin/vault-solver
@@ -64,6 +71,12 @@ refresh-openapi: ## Re-pull the live 3F OpenAPI spec
 	@mkdir -p openapi
 	curl -fsSL "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
 	@echo "vendored openapi/3f-bf.openapi.json"
+
+.PHONY: refresh-rfq-openapi
+refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=...)
+	@mkdir -p openapi
+	curl -fsSL "$(RFQ_OPENAPI_URL)" | jq . > openapi/rfq-backend.openapi.json
+	@echo "vendored openapi/rfq-backend.openapi.json (verify field names — see docs/RFQ-PLAN.md)"
 
 .PHONY: bindings
 bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; package = leaf dir)
