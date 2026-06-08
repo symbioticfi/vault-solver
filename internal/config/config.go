@@ -33,8 +33,11 @@ type ObservabilityConfig struct {
 
 // ChainConfig describes the EVM endpoint the bot reads from and sends to.
 type ChainConfig struct {
-	RPCURL  string `yaml:"rpcUrl"`
-	ChainID uint64 `yaml:"chainId"`
+	RPCURL string `yaml:"rpcUrl"`
+	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
+	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
+	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
+	ChainID         uint64   `yaml:"chainId"`
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
 	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
@@ -121,6 +124,11 @@ func (c *Config) applyDefaults() {
 func (c *Config) Validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("chain.rpcUrl is required")
+	}
+	for i, u := range c.Chain.RPCFallbackURLs {
+		if u == "" {
+			return errors.Errorf("chain.rpcFallbackUrls[%d] is empty", i)
+		}
 	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")

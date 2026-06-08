@@ -143,7 +143,12 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
   / `Reactor` / `CuratorRegistry` addresses, the backend shared secret, and the caller key (last two
   via env). Hoodi addresses are known from the TS deployment manifest; local from the rfq-integration
   local-stack deploy.
-- **RPC**: single configured `chain.rpcUrl` (the TS per-chain public-RPC fallback is dropped for v0).
+- **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
+  when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
+  barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
+  JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
+  operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
+  chain. A single `rpcUrl` keeps the plain dial (any scheme).
 - _(resolved)_ Recovery now filters direct vaults by executor authorization via
   `readPermissionedVaultInventories` (`marketMaker`/`curatorRegistry.getCurator`
   /`isFiller`). Quote-time inventories come from the backend (already authorized), so this only

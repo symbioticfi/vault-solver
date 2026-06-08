@@ -6,12 +6,15 @@ package chain
 import (
 	"context"
 	"math/big"
+	"net/http"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 )
@@ -24,15 +27,21 @@ type Client struct {
 	multicall common.Address
 }
 
-// Dial connects to an EVM RPC endpoint, records its chain id, and pins the Multicall3 address used
-// for batched reads.
-func Dial(ctx context.Context, rpcURL, multicallAddr string) (*Client, error) {
+// Dial connects to the EVM RPC endpoint(s), records the chain id, and pins the Multicall3 address
+// used for batched reads. rpcURLs[0] is the primary; any extra entries are HTTP(S) fallbacks tried in
+// order when the primary is unavailable (see fallbackTransport). A single URL preserves the plain
+// ethclient dial (any scheme), so non-HTTP transports keep working when no fallback is configured.
+func Dial(ctx context.Context, rpcURLs []string, multicallAddr string, log logr.Logger) (*Client, error) {
+	if len(rpcURLs) == 0 {
+		return nil, errors.New("chain: no rpc url configured")
+	}
 	if !common.IsHexAddress(multicallAddr) {
 		return nil, errors.Errorf("chain: invalid multicall address %q", multicallAddr)
 	}
-	ec, err := ethclient.DialContext(ctx, rpcURL)
+
+	ec, err := dialClient(ctx, rpcURLs, log)
 	if err != nil {
-		return nil, errors.Errorf("chain: dial: %w", err)
+		return nil, err
 	}
 	id, err := ec.ChainID(ctx)
 	if err != nil {
@@ -40,6 +49,28 @@ func Dial(ctx context.Context, rpcURL, multicallAddr string) (*Client, error) {
 		return nil, errors.Errorf("chain: get chain id: %w", err)
 	}
 	return &Client{Client: ec, chainID: id, multicall: common.HexToAddress(multicallAddr)}, nil
+}
+
+// dialClient builds the ethclient: a plain dial for a single endpoint, or an HTTP client backed by
+// the fallback transport when more than one endpoint is configured.
+func dialClient(ctx context.Context, rpcURLs []string, log logr.Logger) (*ethclient.Client, error) {
+	if len(rpcURLs) == 1 {
+		ec, err := ethclient.DialContext(ctx, rpcURLs[0])
+		if err != nil {
+			return nil, errors.Errorf("chain: dial: %w", err)
+		}
+		return ec, nil
+	}
+	endpoints, err := parseHTTPEndpoints(rpcURLs)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{Transport: &fallbackTransport{endpoints: endpoints, base: http.DefaultTransport, log: log}}
+	rc, err := rpc.DialOptions(ctx, rpcURLs[0], rpc.WithHTTPClient(httpClient))
+	if err != nil {
+		return nil, errors.Errorf("chain: dial (fallback): %w", err)
+	}
+	return ethclient.NewClient(rc), nil
 }
 
 // ChainID returns a copy of the cached chain id.

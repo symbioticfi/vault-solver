@@ -6,7 +6,9 @@
 # ${VAR} fields are expanded from the environment at load time.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL_HOODI} # expanded from env; do not commit a real URL
+  rpcUrl: ${ETH_RPC_URL_HOODI} # primary; expanded from env; do not commit a real URL
+  # rpcFallbackUrls:           # optional HTTP(S) fallbacks tried in order when rpcUrl is down
+  #   - ${ETH_RPC_URL_HOODI_BACKUP}
   chainId: 560048
 
 signer:

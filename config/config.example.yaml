@@ -9,8 +9,11 @@
 # or debug log can't leak it). Never commit real keys or production endpoints.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL}                # EVM RPC endpoint (expanded from env; or a literal URL)
+  rpcUrl: ${ETH_RPC_URL}                # primary EVM RPC endpoint (expanded from env; or a literal URL)
   chainId: 11155111                     # must match the RPC's chain id (asserted at startup)
+  # rpcFallbackUrls:                    # optional HTTP(S) fallbacks, tried in order when rpcUrl is down
+  #   - ${ETH_RPC_URL_BACKUP}
+  #   - https://rpc.backup.example
   # wsUrl: wss://sepolia.example.org    # optional; enables live log subscriptions (latency only)
 
 signer:
