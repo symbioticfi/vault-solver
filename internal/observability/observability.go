@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -50,7 +51,8 @@ func NewMetrics() *Metrics {
 		},
 		[]string{"version", "commit"},
 	)
-	reg.MustRegister(buildInfo)
+	// Standard Go runtime + process metrics, so /metrics carries CPU, memory, goroutines, GC, FDs, etc.
+	reg.MustRegister(buildInfo, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return &Metrics{registry: reg, buildInfo: buildInfo}
 }
 

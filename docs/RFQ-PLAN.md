@@ -48,10 +48,14 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   **422** (Huma/RFC 9457), where the TS Hono/Zod filler returns 400 — same reject, different status
   code; this is the one deliberate external-interface deviation on `/quote`.
 - **`/metrics` is served by the framework's shared observability server, not the RFQ HTTP server.**
-  The TS filler bundles `/metrics` into its own Hono app; in Go, Prometheus metrics belong to the
-  generic `internal/observability` layer (one registry, one `/metrics`), so duplicating it onto the
-  RFQ server would fragment the registry and violate the modularity rule. The metric *is* exposed,
-  just on the observability port — a documented architectural deviation.
+  Prometheus metrics belong to the generic `internal/observability` layer (one registry, one
+  `/metrics` on `:9090`), so the RFQ server doesn't expose its own. Instead the solver **registers its
+  collectors on the shared registry** via `deps.Metrics.Registerer()` in the factory: a Huma/HTTP
+  middleware records `rfq_filler_http_requests_total{method,route,status}` and
+  `rfq_filler_http_request_duration_seconds` (route is allowlisted to bound cardinality). The
+  framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
+  memory, goroutines, GC, and FDs. Net effect: the same metric names the filler exposed, surfaced on
+  the shared observability port rather than a per-solver endpoint.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
   builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
 - **On-chain reads use `chain.Multicall`** (the adapter exposes many per-vault views per quote).
@@ -76,7 +80,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `domain.ts` | `store.go` types + `strategy.go` types (records, legs, inventories) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
 | `db`/repositories | `store.go` (in-memory strategies/orders/attempts) |
-| `metrics.ts` | framework `internal/observability` (shared `/metrics` — see §2) |
+| `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
 
 ---
 

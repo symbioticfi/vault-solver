@@ -29,6 +29,7 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
+	metrics      *httpMetrics // nil disables HTTP instrumentation (e.g. in tests)
 	log          logr.Logger
 }
 
@@ -70,6 +71,9 @@ func (s *server) handler() http.Handler {
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
 
+	if s.metrics != nil {
+		return s.metrics.instrument(mux)
+	}
 	return mux
 }
 
