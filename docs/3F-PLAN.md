@@ -141,7 +141,7 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 the chosen solver decodes it into its own typed struct.
 
 ```yaml
-chain: { rpcUrl, chainId, wsUrl? }
+chain: { rpcUrl, chainId, rpcFallbackUrls?, wsUrl? }   # rpcFallbackUrls: HTTP(S), tried on primary failure
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # or keystorePath + passphraseEnv
 txManager: { confirmations: 2, maxFeeGwei, tipGwei }
 

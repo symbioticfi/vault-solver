@@ -125,8 +125,9 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. A documented
 example lives at `config/config.example.yaml` (per-instance vault selection, exposure caps,
-intervals). **Never commit a real key or live config** — keys are supplied via env/file behind the
-`Signer` interface; `*.local.*` and `.env` are gitignored.
+intervals). The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S)
+endpoints tried in order when the primary is unavailable. **Never commit a real key or live config**
+— keys are supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
 
 ## Code generation
 
