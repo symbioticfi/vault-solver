@@ -47,6 +47,13 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, cfg.Adapter, log)
 
+	var metrics *httpMetrics
+	if deps.Metrics != nil {
+		if metrics, err = newHTTPMetrics(deps.Metrics.Registerer()); err != nil {
+			return nil, err
+		}
+	}
+
 	quotes := &quoteService{
 		chainID:     chainID,
 		executor:    cfg.Executor,
@@ -77,6 +84,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
+			metrics:      metrics,
 			log:          log,
 		},
 		log: log,
