@@ -2,7 +2,7 @@
 #
 # Addresses are the Hoodi deployment of the RFQ contracts. Provide secrets via env:
 #   SOLVER_PRIVATE_KEY            — the caller EOA (must hold CALLER_ROLE on the Executor)
-#   RFQ_BACKEND_SHARED_SECRET     — shared secret authenticating the backend peer on /quote & /notify
+#   RFQ_BACKEND_SHARED_SECRET     — shared secret authenticating the backend peer on /quote
 # ${VAR} fields are expanded from the environment at load time.
 
 chain:
@@ -23,7 +23,7 @@ solver:
   config:
     backendUrl: ${RFQ_BACKEND_URL}
     backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
-    listenAddr: ":42073" # quote/notify HTTP server
+    listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
     # Hoodi RFQ deployment:
     executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
     adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
