@@ -115,6 +115,9 @@ func (r *reader) amountsOut(
 	if err != nil {
 		return nil, err
 	}
+	if len(res) != len(calls) {
+		return nil, errors.Errorf("amountsOut: got %d results for %d calls", len(res), len(calls))
+	}
 	out := make(map[common.Address]*big.Int, len(uniq))
 	for i, rr := range res {
 		if !rr.Success {

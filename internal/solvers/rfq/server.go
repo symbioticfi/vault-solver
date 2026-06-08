@@ -84,6 +84,8 @@ func (s *server) handleHealth(_ context.Context, _ *struct{}) (*healthOutput, er
 
 func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput, error) {
 	if !s.authorized(in.Secret) {
+		// Log the denial (never the attempted secret) so credential scanning is observable.
+		s.log.V(1).Info("rejected /quote: bad shared secret")
 		return nil, huma.Error403Forbidden("forbidden")
 	}
 	resp, err := s.quotes.quote(ctx, &in.Body)

@@ -23,6 +23,16 @@ func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted
 }
 
+const (
+	// strategyTTL bounds how long a quoted strategy is cached before eviction. A later award that
+	// misses the cache is rebuilt from on-chain state by recoverStrategy, so this only caps memory;
+	// it does not drop fillable orders.
+	strategyTTL = 3 * time.Hour
+	// terminalOrderTTL is how long terminal orders (and their attempt counts) are retained for
+	// reconciliation/observability before eviction.
+	terminalOrderTTL = 3 * time.Hour
+)
+
 // orderRecord is the local tracking state for one order. The executable payload (encodedOrder,
 // signature, deadline) is fetched fresh from the backend at fill time, so it is not persisted here.
 type orderRecord struct {
@@ -68,10 +78,33 @@ func (s *store) putStrategy(rec *strategyRecord) {
 	s.strategies[rec.QuoteID] = rec
 }
 
+// strategy returns the cached strategy for quoteID, or nil. It returns the shared pointer (not a
+// clone): a strategyRecord is immutable after putStrategy, so concurrent readers are safe. Do not
+// mutate a returned record in place — copy it, or that invariant (and the lack of a data race) breaks.
 func (s *store) strategy(quoteID string) *strategyRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.strategies[quoteID]
+}
+
+// sweep evicts stale entries so the in-memory maps don't grow without bound over a long run:
+// strategies older than strategyTTL, and terminal orders (with their attempt counts) untouched for
+// longer than terminalOrderTTL. Called from the poll loop.
+func (s *store) sweep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for id, rec := range s.strategies {
+		if now.Sub(rec.CreatedAt) > strategyTTL {
+			delete(s.strategies, id)
+		}
+	}
+	for id, rec := range s.orders {
+		if !rec.Status.active() && now.Sub(rec.UpdatedAt) > terminalOrderTTL {
+			delete(s.orders, id)
+			delete(s.attempts, id)
+		}
+	}
 }
 
 /* ───────── orders ───────── */

@@ -83,6 +83,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	for _, o := range e.store.activeOrders() {
 		e.handleOrder(ctx, o)
 	}
+	e.store.sweep() // evict stale strategies/terminal orders so the maps stay bounded
 }
 
 func (e *executionService) pollOpenOrders(ctx context.Context) error {
@@ -150,6 +151,11 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(orderID, "decode order: "+err.Error())
 		return
 	}
+	if dl := order.Request.Deadline; dl == nil || dl.Int64() <= e.now().Unix() {
+		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
+		e.fail(orderID, "order deadline has passed")
+		return
+	}
 	outputToken, ok := singleOutputToken(exec.outputs)
 	if !ok {
 		e.fail(orderID, "only single output-token orders are supported")
@@ -160,8 +166,15 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(orderID, "sum outputs: "+err.Error())
 		return
 	}
+	// The strategy is looked up by the backend-supplied quoteId, so bind it to the awarded order's
+	// own terms before filling: a reused/mismatched quoteId must not let us fill on stale pricing.
 	if selected.Asset != outputToken {
 		e.fail(orderID, "strategy asset does not match order output token")
+		return
+	}
+	if selected.TokenIn != order.Request.TokenIn || selected.TokenOut != outputToken ||
+		selected.AmountIn.Cmp(order.Request.AmountIn) != 0 {
+		e.fail(orderID, "stored strategy does not match the awarded order (tokenIn/tokenOut/amountIn)")
 		return
 	}
 	if selected.QuotedAmountOut.Cmp(required) < 0 {
@@ -218,7 +231,9 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		return
 	}
 	txHash := common.Hash{}
-	if bo.TxHash != nil {
+	// HexToHash silently zero-pads/truncates malformed input, so only accept a well-formed 32-byte
+	// hash from the backend; otherwise leave it zero rather than record a garbage reference.
+	if bo.TxHash != nil && isHash32(*bo.TxHash) {
 		txHash = common.HexToHash(*bo.TxHash)
 	}
 	switch bo.OrderStatus {
@@ -434,6 +449,12 @@ func executableFromBackend(bo *backendOrder) (*executable, error) {
 		filler:       common.HexToAddress(*bo.Filler),
 		outputs:      bo.Outputs,
 	}, nil
+}
+
+// isHash32 reports whether s is a 0x-prefixed, well-formed 32-byte hash.
+func isHash32(s string) bool {
+	b, err := hexutil.Decode(s)
+	return err == nil && len(b) == 32
 }
 
 func singleOutputToken(outputs []backendOut) (common.Address, bool) {

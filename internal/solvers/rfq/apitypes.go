@@ -23,7 +23,7 @@ type quoteRequest struct {
 	Protocol        string         `json:"protocol" enum:"v1"`
 	NumOutputs      int            `json:"numOutputs" minimum:"1"`
 	QuoteID         string         `json:"quoteId" format:"uuid"`
-	Adapters        []quoteAdapter `json:"adapters"`
+	Adapters        []quoteAdapter `json:"adapters" maxItems:"256"`
 }
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.

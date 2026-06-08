@@ -27,6 +27,15 @@ func (t *offerTracker) record(auctionID int64, expiration time.Time) {
 	t.expiry[auctionID] = expiration
 }
 
+// pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
+func (t *offerTracker) pruneExpired(now time.Time) {
+	for id, exp := range t.expiry {
+		if !exp.After(now) {
+			delete(t.expiry, id)
+		}
+	}
+}
+
 // parseUnixTime parses a uint256 unix-seconds string (as the API encodes expirations).
 func parseUnixTime(s string) (time.Time, error) {
 	sec, err := strconv.ParseInt(s, 10, 64)

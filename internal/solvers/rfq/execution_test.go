@@ -71,7 +71,7 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 	t.Helper()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", Asset: tOut, AssetDecimals: 6,
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
 		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
 		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000)}},
 	})
@@ -126,7 +126,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	// Replace the cached strategy with a discount leg, and have the backend resolve the discount.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", Asset: tOut, AssetDecimals: 6,
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
 		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
 		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
 	})

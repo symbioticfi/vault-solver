@@ -2,6 +2,8 @@ package bridgefacilitator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"math/big"
 	"net/http"
 	"strings"
@@ -56,11 +58,20 @@ func newAPIClient(
 	return ac, nil
 }
 
-// setKey records the active x-api-key and logs it at debug (V(1)) so an operator can replay 3F API
-// calls out-of-band. The key is a secret, so it is ONLY ever emitted at debug level — never at info.
+// setKey records the active x-api-key and logs a non-reversible fingerprint (not the key) so an
+// operator can tell which key is active without the secret ever landing in logs.
 func (ac *apiClient) setKey(key, source string) {
 	ac.apiKey = key
-	ac.log.V(1).Info("3F API key set", "source", source, "apiKey", key)
+	ac.log.V(1).Info("3F API key set", "source", source, "fingerprint", keyFingerprint(key))
+}
+
+// keyFingerprint is a short, non-reversible identifier for a secret, for log correlation only.
+func keyFingerprint(key string) string {
+	if key == "" {
+		return "(empty)"
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:4])
 }
 
 func (ac *apiClient) injectAPIKey(_ context.Context, req *http.Request) error {

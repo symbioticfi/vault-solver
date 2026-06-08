@@ -55,6 +55,10 @@ type backendClient struct {
 	http    *http.Client
 }
 
+// maxBackendResponseBytes caps a backend JSON response (order/discount lists are small; this is a
+// safety bound against an unbounded body, not a tuning knob).
+const maxBackendResponseBytes = 8 << 20 // 8 MiB
+
 func newBackendClient(baseURL string) *backendClient {
 	// Trim any trailing slash so path joins (baseURL + "/orders") never double up.
 	return &backendClient{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 10 * time.Second}}
@@ -207,7 +211,8 @@ func (c *backendClient) doJSON(ctx context.Context, method, path string, query u
 	if resp.StatusCode/100 != 2 {
 		return errors.Errorf("backend: %s %s: status %d", method, path, resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+	// Cap the response so a hostile/buggy backend can't stream an unbounded body into the decoder.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBackendResponseBytes)).Decode(dst); err != nil {
 		return errors.Errorf("backend: decode %s: %w", path, err)
 	}
 	return nil

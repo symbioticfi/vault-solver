@@ -200,6 +200,7 @@ func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []t
 	committed := new(big.Int)
 	opened := 0
 	now := time.Now()
+	s.offers.pruneExpired(now) // drop expired offer-tracking entries so the map stays bounded
 	for i := range auctions {
 		av := auctionView{auctions[i]}
 		auctionID := int64(av.dto.Id)
