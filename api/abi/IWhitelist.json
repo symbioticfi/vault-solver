@@ -1,0 +1,21 @@
+[
+  {
+    "type": "function",
+    "name": "isWhitelisted",
+    "inputs": [
+      {
+        "name": "a",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum IWhitelist.WhitelistStatus"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

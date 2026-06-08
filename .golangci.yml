@@ -1,0 +1,280 @@
+version: "2"
+run:
+  go: "1.26"
+  build-tags:
+    - integration
+  tests: true
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - decorder
+    #    - dogsled
+    - durationcheck
+    - embeddedstructfieldcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - fatcontext
+    - forbidigo
+    - funcorder
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - gochecksumtype
+    - goconst
+    - gocritic
+    #    - godox
+    - gomoddirectives
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - govet
+    - grouper
+    - importas
+    - inamedparam
+    - ineffassign
+    - iotamixing
+    - loggercheck
+    - makezero
+    - modernize
+    - mirror
+    - misspell
+    - musttag
+    - nakedret
+    - nilerr
+    - nilnesserr
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - prealloc
+    - predeclared
+    - protogetter
+    - reassign
+    - revive
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - testableexamples
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+  #    - wrapcheck
+  settings:
+    gomoddirectives:
+      replace-allow-list:
+        - github.com/consensys/gnark
+        - github.com/consensys/gnark-crypto
+    cyclop:
+      max-complexity: 30
+      package-average: 10
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      check:
+        - switch
+        - map
+    funlen:
+      lines: 100
+      statements: 50
+      ignore-comments: true
+    gocognit:
+      min-complexity: 20
+    gocritic:
+      disabled-checks:
+        - commentFormatting
+        - ifElseChain
+        - appendAssign
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+    gomodguard:
+      blocked:
+        modules:
+          - github.com/golang/protobuf:
+              recommendations:
+                - google.golang.org/protobuf
+              reason: see https://developers.google.com/protocol-buffers/docs/reference/go/faq#modules
+          - github.com/satori/go.uuid:
+              recommendations:
+                - github.com/google/uuid
+              reason: satori's package is not maintained
+          - github.com/gofrs/uuid:
+              recommendations:
+                - github.com/gofrs/uuid/v5
+              reason: gofrs' package was not go module before v5
+    govet:
+      disable:
+        - fieldalignment
+      enable-all: true
+      settings:
+        shadow:
+          strict: true
+    inamedparam:
+      skip-single-param: true
+    mnd:
+      ignored-functions:
+        - args.Error
+        - flag.Arg
+        - flag.Duration.*
+        - flag.Float.*
+        - flag.Int.*
+        - flag.Uint.*
+        - os.Chmod
+        - os.Mkdir.*
+        - os.OpenFile
+        - os.WriteFile
+        - prometheus.ExponentialBuckets.*
+        - prometheus.LinearBuckets
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-no-explanation:
+        - funlen
+        - gocognit
+        - lll
+    perfsprint:
+      strconcat: false
+    revive:
+      severity: warning
+      rules:
+        - name: atomic
+        - name: banned-characters
+        - name: bare-return
+        - name: bool-literal-in-expr
+        - name: call-to-gc
+        - name: comments-density
+        - name: confusing-results
+        - name: constant-logical-expr
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: datarace
+        - name: deep-exit
+        - name: defer
+        - name: dot-imports
+        - name: duplicated-imports
+        - name: early-return
+        - name: empty-block
+        - name: empty-lines
+        - name: enforce-map-style
+        - name: enforce-repeated-arg-type-style
+        - name: enforce-slice-style
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: file-header
+        - name: forbidden-call-in-wg-go
+        #        - name: flag-parameter
+        - name: function-result-limit
+        - name: identical-branches
+        - name: imports-blocklist
+        - name: inefficient-map-lookup
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: modifies-parameter
+        - name: modifies-value-receiver
+        - name: nested-structs
+        - name: optimize-operands-order
+        - name: range-val-address
+        - name: range-val-in-closure
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: redundant-import-alias
+        - name: string-format
+        - name: string-of-int
+        - name: struct-tag
+        - name: superfluous-else
+        - name: time-equal
+        - name: time-naming
+        - name: unconditional-recursion
+        - name: unexported-naming
+        - name: unexported-return
+        - name: unnecessary-if
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: useless-break
+        - name: var-declaration
+        - name: waitgroup-by-value
+    rowserrcheck:
+      packages:
+        - github.com/jmoiron/sqlx
+    sloglint:
+      no-global: ""
+      context: scope
+    wrapcheck:
+      ignore-package-globs:
+        - golang.org/x/sync/errgroup
+    modernize:
+      disable:
+        - any
+    funcorder:
+      constructor: true
+      struct-method: false
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Errorf$
+          msg: "use errors.Errorf instead of fmt.Errorf"
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - goconst
+          - wrapcheck
+          - prealloc
+          - modernize
+        path: _test\.go
+      - path: _test\.go
+        text: 'subtests should call t.Parallel'
+      - path: (.+)\.go$
+        text: ST1003
+      - path: (.+)\.go$
+        text: 'shadow: declaration of "err" shadows declaration at line'
+      - path: (.+)\.go$
+        text: G115
+      - path: (.+)\.go$
+        text: G706
+      - path: cmd/utils/
+        text: "use of `fmt.Printf` forbidden"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - hack/
+issues:
+  max-issues-per-linter: 500
+  max-same-issues: 500
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

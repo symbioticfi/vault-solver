@@ -1,0 +1,22 @@
+# Keep secrets and local-only files out of the build context / image.
+.git
+.github
+bin/
+dist/
+.tools/
+
+# Secrets / local config — never bake into an image.
+*.local.yaml
+*.local.yml
+*.local.txt
+*.local.md
+*.local.*
+dev-account.local.txt
+.env
+.env.*
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

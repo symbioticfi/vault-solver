@@ -1,0 +1,35 @@
+# vault-solver — 3F Sepolia dev profile.
+#
+# Addresses for the BridgeFacilitatorAdapter, its vault, and the RequestWhitelist are filled in at
+# deploy time. On testnet the whitelist is a mock (3F's registry is prod-only); see
+# 3F_BRIDGE_FACILITATOR_INTEGRATION.md §6. Provide the key via SOLVER_PRIVATE_KEY in the env.
+#
+# ${VAR} fields are expanded from the environment at load time.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_SEPOLIA}        # expanded from env; do not commit a real URL
+  chainId: 11155111
+
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+
+txManager:
+  confirmations: 2
+
+observability:
+  addr: ":9090"
+
+solver:
+  name: 3f-bridge-facilitator
+  config:
+    apiBaseUrl: https://bf.dev.gcp.3f.xyz
+    vault: "0x0000000000000000000000000000000000000000"      # TODO: deployed test VaultV2
+    adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter
+    exposure:                                                # USDC base units (6 decimals)
+      perRequestMaxUsdc: "100000"
+      totalSleeveMaxUsdc: "500000"
+      maxConcurrentLoans: 10
+    intervals:
+      discover: 1h
+      redeemPoll: 5m
+      reconcile: 15m

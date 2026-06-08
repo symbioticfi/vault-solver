@@ -1,0 +1,52 @@
+# vault-solver configuration (annotated example).
+#
+# The framework parses everything except `solver.config`, which is handed verbatim to the selected
+# solver and typed by it.
+#
+# ${VAR} / $VAR are expanded from the environment at load time, for non-secret deploy-injected
+# fields like rpcUrl. Do NOT put the signing key this way — use the *Env name fields below, which
+# read the env var at point of use and keep the secret out of the parsed config (so a config dump
+# or debug log can't leak it). Never commit real keys or production endpoints.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL}                # EVM RPC endpoint (expanded from env; or a literal URL)
+  chainId: 11155111                     # must match the RPC's chain id (asserted at startup)
+  # wsUrl: wss://sepolia.example.org    # optional; enables live log subscriptions (latency only)
+
+signer:
+  # Exactly one key source. The bot's EOA both sends transactions (via txmanager) and signs
+  # EIP-712 payloads (3F API key + offers, validated on-chain via the adapter's EIP-1271).
+  # This is an env var NAME, not the key itself — the key never enters the parsed config.
+  keyEnv: SOLVER_PRIVATE_KEY            # env var holding a hex private key
+  # keystorePath: ./keystore/bot.json   # ...or a go-ethereum keystore file
+  # passphraseEnv: SOLVER_KEYSTORE_PASS  # (required with keystorePath)
+
+txManager:
+  confirmations: 2                      # blocks to wait past inclusion (default 2)
+  # maxFeeGwei: 50                       # cap max fee per gas; omit to derive from base fee
+  # tipGwei: 1                           # priority fee; omit to use the node's suggestion
+
+observability:
+  addr: ":9090"                         # /metrics, /healthz, /readyz
+  debug: false                          # debug-level logging; the --debug CLI flag overrides this
+
+solver:
+  name: 3f-bridge-facilitator           # registry key selecting the implementation
+  config:                               # opaque to the framework; typed by the 3F solver
+    apiBaseUrl: https://bf.dev.gcp.3f.xyz
+    # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
+                                          # generates one at startup (EIP-712) and re-auths on 401/403.
+    minReturnBps: 100                     # don't bid below this yield (basis points)
+    redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
+    # The single vault+adapter pair this facilitator serves. 3F registers exactly one offer-address
+    # per facilitator, so this solver is single-pair by construction.
+    vault: "0x0000000000000000000000000000000000000000"
+    adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
+    exposure:                             # amounts are USDC base units (6 decimals): "250000" = 0.25 USDC
+      perRequestMaxUsdc: "250000"
+      totalSleeveMaxUsdc: "1000000"
+      maxConcurrentLoans: 10
+    intervals:
+      discover: 1h
+      redeemPoll: 5m
+      reconcile: 15m

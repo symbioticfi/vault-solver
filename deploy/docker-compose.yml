@@ -1,0 +1,28 @@
+# Local / single-host deployment of the vault-solver.
+#
+# Provides at runtime (both gitignored — never commit them):
+#   - .env at the repo root with the signing key + any secret env vars referenced by the config,
+#     e.g. SOLVER_PRIVATE_KEY=0x...   (see config/config.example.yaml for the *Env field names)
+#   - a config file mounted at /etc/vault-solver/config.yaml (override CONFIG_FILE below).
+#
+# Usage (from this directory):  docker compose up --build
+services:
+  vault-solver:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        DATE: ${DATE:-unknown}
+    image: vault-solver:${VERSION:-dev}
+    restart: unless-stopped
+    # Secrets (SOLVER_PRIVATE_KEY, API keys) — supplied via the gitignored .env file.
+    env_file:
+      - ../.env
+    # Operator config. Defaults to the committed Sepolia template; point CONFIG_FILE at your own.
+    volumes:
+      - ${CONFIG_FILE:-../config/sepolia.yaml}:/etc/vault-solver/config.yaml:ro
+    command: ["run", "--config", "/etc/vault-solver/config.yaml"]
+    ports:
+      - "9090:9090" # /metrics, /healthz, /readyz

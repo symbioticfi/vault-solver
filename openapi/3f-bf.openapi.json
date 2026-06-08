@@ -1,0 +1,1198 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/v1/facilitator/generate-key": {
+      "post": {
+        "description": "Creates (and revokes any previously-active) API key for the facilitator after verifying an EIP-712 signature. Contract wallets are supported via EIP-1271.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 1,\n    },\n    types: {\n      GenerateFacilitatorApiKey: [\n        {\n          name: 'facilitator',\n          type: 'address',\n        },\n        {\n          name: 'deadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'GenerateFacilitatorApiKey',\n    message: {\n      facilitator: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      deadline: 4102444800n,\n    },\n  }\n)\n```\n\nSubmit the resulting signature in the request body `signature` field and encode `deadline` as a decimal string. The current implementation only accepts `chainId = 1`.",
+        "operationId": "AdminController_generateKey_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateFacilitatorApiKeyDto"
+              },
+              "examples": {
+                "signed": {
+                  "summary": "Signed request",
+                  "description": "Use the typed data shown in the operation description to produce the signature.",
+                  "value": {
+                    "chainId": 1,
+                    "facilitator": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                    "deadline": "4102444800",
+                    "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Returns the generated API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneratedApiKeyDto"
+                },
+                "example": {
+                  "apiKey": "3f_live_123e4567-e89b-12d3-a456-426614174000_a1b2c3d4e5f6"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Generate a facilitator API key",
+        "tags": [
+          "facilitator"
+        ]
+      }
+    },
+    "/v1/facilitator/offer-address": {
+      "post": {
+        "description": "Updates the offer address for the facilitator associated with the provided API key.",
+        "operationId": "AdminController_setFacilitatorOfferAddress_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetFacilitatorOfferAddressDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Returns the updated facilitator offer address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetFacilitatorOfferAddressResponseDto"
+                },
+                "example": {
+                  "facilitator": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                  "offerAddress": "0x1234567890abcdef1234567890abcdef12345678"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The requested offer address is already in use.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "statusCode": 409,
+                  "message": "offerAddress already in use",
+                  "error": "Conflict",
+                  "reason": "offer_address_already_in_use"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Set facilitator offer address",
+        "tags": [
+          "facilitator"
+        ]
+      },
+      "get": {
+        "description": "Returns the current offer address for the facilitator associated with the provided API key.",
+        "operationId": "AdminController_getFacilitatorOfferAddress_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the current facilitator offer address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetFacilitatorOfferAddressResponseDto"
+                },
+                "example": {
+                  "facilitator": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                  "offerAddress": "0x1234567890abcdef1234567890abcdef12345678"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get facilitator offer address",
+        "tags": [
+          "facilitator"
+        ]
+      }
+    },
+    "/v1/offer": {
+      "post": {
+        "description": "Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, it is verified as an EIP-712 signature and the `maker` must be a registered facilitator. Contract wallets are supported via EIP-1271. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nSigned offer requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to the request contract address for the selected auction. If the contract exposes a `salt`, include it; otherwise omit that field.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit the resulting signature in the request body `signature` field. All `uint256` request fields stay decimal strings in the HTTP payload.",
+        "operationId": "OfferController_create_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key (required when `signature` is not provided).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOfferDto"
+              },
+              "examples": {
+                "signed": {
+                  "summary": "Signed request",
+                  "description": "Submit a signature generated from the `Offer` typed data shown in the operation description.",
+                  "value": {
+                    "chainId": 11155111,
+                    "auctionId": 42,
+                    "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                    "amount": "1000000000",
+                    "expectedReturn": "5000000",
+                    "nonce": "1",
+                    "expiration": "4102444800",
+                    "useCallback": false,
+                    "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+                  }
+                },
+                "apiKey": {
+                  "summary": "API key request",
+                  "description": "Unsigned requests omit `chainId` and `signature` and must include `x-api-key`.",
+                  "value": {
+                    "auctionId": 42,
+                    "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                    "amount": "1000000000",
+                    "expectedReturn": "5000000",
+                    "nonce": "1",
+                    "expiration": "4102444800",
+                    "useCallback": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Returns the created or updated offer ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateOfferResponseDto"
+                },
+                "example": {
+                  "id": 123
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create or update an offer",
+        "tags": [
+          "offer"
+        ]
+      },
+      "get": {
+        "description": "Lists offers created by `maker`. If `Authorization: Bearer <signature>` is provided, it is verified as an EIP-712 signature over the query (including a `deadline`). Contract wallets are supported via EIP-1271. If no signature is provided, a valid facilitator `x-api-key` header is required and `maker` must be that facilitator broker address; API-key list responses also include offers stored under the facilitator configured offer address.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 1,\n    },\n    types: {\n      GetOffers: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'deadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'GetOffers',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      deadline: 4102444800n,\n    },\n  }\n)\n```\n\nSend the resulting signature as `Authorization: Bearer <signature>`. Keep `maker`, `chainId`, and `deadline` in the query string.",
+        "operationId": "OfferController_get_v1",
+        "parameters": [
+          {
+            "name": "maker",
+            "required": true,
+            "in": "query",
+            "description": "Ethereum address of the maker to list offers for",
+            "schema": {
+              "pattern": "^0x[a-fA-F0-9]{40}$",
+              "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+              "type": "string"
+            }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "description": "Chain ID for signature verification",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "deadline",
+            "required": false,
+            "in": "query",
+            "description": "Signature deadline timestamp (uint256). Required when using `authorization: Bearer <signature>`.",
+            "schema": {
+              "example": "4102444800",
+              "type": "string"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "description": "Optional `Bearer <signature>` for EIP-712 authenticated requests.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "Bearer 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key (required when `Authorization: Bearer <signature>` is not provided).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns an array of offers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OfferDto"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 123,
+                    "auctionId": 42,
+                    "status": "SUBMITTED",
+                    "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                    "requestId": "0x1234567890abcdef1234567890abcdef12345678",
+                    "asset": {
+                      "slug": "superstate-uscc",
+                      "displayName": "Superstate USCC",
+                      "positionManager": "0x68253c103464e93c218a91b5f168e2a4c003821b",
+                      "riskLevel": "low",
+                      "riskSummary": "Low volatility collateral profile"
+                    },
+                    "vault": {
+                      "address": "0x68253c103464e93c218a91b5f168e2a4c003821b",
+                      "leverage": 2
+                    },
+                    "amount": "1000000000",
+                    "expectedReturn": "5000000",
+                    "nonce": "1",
+                    "expiration": "4102444800",
+                    "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "summary": "List offers for a maker",
+        "tags": [
+          "offer"
+        ]
+      }
+    },
+    "/v1/offer/cancel": {
+      "post": {
+        "description": "Cancels an offer that has not been accepted. If `signature` is provided, it is verified as an EIP-712 signature. Contract wallets are supported via EIP-1271. If `signature` is omitted, a valid facilitator `x-api-key` header is required and `maker` must be that facilitator broker address; API-key cancellation can also match offers stored under the facilitator configured offer address.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 1,\n    },\n    types: {\n      CancelOffer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'offerId',\n          type: 'uint256',\n        },\n        {\n          name: 'deadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'CancelOffer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      offerId: 123n,\n      deadline: 4102444800n,\n    },\n  }\n)\n```\n\nSubmit the resulting signature in the request body `signature` field and encode `offerId` and `deadline` as decimal strings.",
+        "operationId": "OfferController_cancel_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key (required when `signature` is not provided).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOfferDto"
+              },
+              "examples": {
+                "signed": {
+                  "summary": "Signed request",
+                  "description": "Submit a signature generated from the `CancelOffer` typed data shown in the operation description.",
+                  "value": {
+                    "offerId": 123,
+                    "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+                    "chainId": 1,
+                    "deadline": "4102444800",
+                    "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+                  }
+                },
+                "apiKey": {
+                  "summary": "API key request",
+                  "description": "Unsigned requests omit `chainId`, `deadline`, and `signature` and must include `x-api-key`.",
+                  "value": {
+                    "offerId": 123,
+                    "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the canceled offer ID and status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelOfferResponseDto"
+                },
+                "example": {
+                  "id": 123,
+                  "status": "CANCELLED"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel an offer",
+        "tags": [
+          "offer"
+        ]
+      }
+    },
+    "/v1/offer/{id}": {
+      "get": {
+        "description": "Returns a single offer by ID for the authenticated maker. Uses the same API-key or EIP-712 authentication as the offer list endpoint.",
+        "operationId": "OfferController_getById_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Offer ID",
+            "schema": {
+              "minimum": 1,
+              "example": 123,
+              "type": "number"
+            }
+          },
+          {
+            "name": "maker",
+            "required": true,
+            "in": "query",
+            "description": "Ethereum address of the maker to list offers for",
+            "schema": {
+              "pattern": "^0x[a-fA-F0-9]{40}$",
+              "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+              "type": "string"
+            }
+          },
+          {
+            "name": "chainId",
+            "required": false,
+            "in": "query",
+            "description": "Chain ID for signature verification",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "deadline",
+            "required": false,
+            "in": "query",
+            "description": "Signature deadline timestamp (uint256). Required when using `authorization: Bearer <signature>`.",
+            "schema": {
+              "example": "4102444800",
+              "type": "string"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "description": "Optional `Bearer <signature>` for EIP-712 authenticated requests.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "Bearer 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "description": "Facilitator API key (required when `Authorization: Bearer <signature>` is not provided).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the matching offer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Offer not found"
+          }
+        },
+        "summary": "Get offer by ID",
+        "tags": [
+          "offer"
+        ]
+      }
+    },
+    "/v1/auction": {
+      "get": {
+        "description": "Lists auctions, optionally including terminal auctions based on the `scope` query param. Request-contract EIP-712 domain metadata is included only when `domain=true` is provided.",
+        "operationId": "AuctionController_list_v1",
+        "parameters": [
+          {
+            "name": "scope",
+            "required": false,
+            "in": "query",
+            "description": "Whether to list all auctions or only active ones",
+            "schema": {
+              "default": "active",
+              "type": "string",
+              "enum": [
+                "active",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "domain",
+            "required": false,
+            "in": "query",
+            "description": "When true, include request-contract EIP-712 domain metadata in each auction response.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns an array of auctions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuctionDto"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 42,
+                    "requestId": "0x1234567890abcdef1234567890abcdef12345678",
+                    "amountRequested": "1000000000",
+                    "solve_start_time": "2026-02-16T12:00:00.000Z",
+                    "maxRate": 50.5,
+                    "status": "open",
+                    "asset": {
+                      "slug": "superstate-uscc",
+                      "displayName": "Superstate USCC",
+                      "positionManager": "0x68253c103464e93c218a91b5f168e2a4c003821b",
+                      "riskLevel": "low",
+                      "riskSummary": "Low volatility collateral profile"
+                    },
+                    "vault": {
+                      "address": "0x68253c103464e93c218a91b5f168e2a4c003821b",
+                      "leverage": 2
+                    },
+                    "settlement": {
+                      "cadence": "Monthly",
+                      "delay": "3 days",
+                      "delayDays": 3
+                    },
+                    "eip712Domain": {
+                      "name": "SuperstateRequest",
+                      "version": "1",
+                      "chainId": 11155111
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "summary": "List auctions",
+        "tags": [
+          "auction"
+        ]
+      }
+    },
+    "/v1/auction/{id}": {
+      "get": {
+        "description": "Returns a single auction by ID, including terminal auctions. Request-contract EIP-712 domain metadata is included only when `domain=true` is provided.",
+        "operationId": "AuctionController_getById_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Auction ID",
+            "schema": {
+              "minimum": 1,
+              "example": 42,
+              "type": "number"
+            }
+          },
+          {
+            "name": "domain",
+            "required": false,
+            "in": "query",
+            "description": "When true, include request-contract EIP-712 domain metadata in the auction response.",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the matching auction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Auction not found"
+          }
+        },
+        "summary": "Get auction by ID",
+        "tags": [
+          "auction"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "BF API Reference",
+    "description": "BP subdomain API documentation for bf.dev.gcp.3f.xyz",
+    "version": "0.0.1",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "GenerateFacilitatorApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "description": "Chain ID for EIP-712 signature verification",
+            "example": 1
+          },
+          "facilitator": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "Ethereum address of the facilitator",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "deadline": {
+            "type": "string",
+            "description": "Signature deadline timestamp (uint256)",
+            "example": "4102444800"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-712 signature from the facilitator",
+            "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+          }
+        },
+        "required": [
+          "chainId",
+          "facilitator",
+          "deadline",
+          "signature"
+        ]
+      },
+      "GeneratedApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "Facilitator API key (store this secret; it cannot be recovered)",
+            "example": "3f_live_uuid_secret"
+          }
+        },
+        "required": [
+          "apiKey"
+        ]
+      },
+      "SetFacilitatorOfferAddressDto": {
+        "type": "object",
+        "properties": {
+          "offerAddress": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "Offer address to associate with the facilitator",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          }
+        },
+        "required": [
+          "offerAddress"
+        ]
+      },
+      "SetFacilitatorOfferAddressResponseDto": {
+        "type": "object",
+        "properties": {
+          "facilitator": {
+            "type": "string",
+            "description": "Facilitator address that was updated",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "offerAddress": {
+            "type": "string",
+            "description": "Offer address that was set",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          }
+        },
+        "required": [
+          "facilitator",
+          "offerAddress"
+        ]
+      },
+      "GetFacilitatorOfferAddressResponseDto": {
+        "type": "object",
+        "properties": {
+          "facilitator": {
+            "type": "string",
+            "description": "Facilitator address associated with the API key",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "offerAddress": {
+            "type": "string",
+            "description": "Current offer address for the facilitator",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          }
+        },
+        "required": [
+          "facilitator",
+          "offerAddress"
+        ]
+      },
+      "CreateOfferDto": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "description": "Chain ID for signature verification",
+            "example": 1
+          },
+          "auctionId": {
+            "type": "number",
+            "description": "ID of the auction to submit an offer for",
+            "example": 42
+          },
+          "maker": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "Ethereum address of the offer maker. For unsigned API-key requests, the configured facilitator offer address is used as the stored maker when present.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Offer amount as a numeric string (uint256)",
+            "example": "1000000000"
+          },
+          "expectedReturn": {
+            "type": "string",
+            "description": "Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.",
+            "example": "5000000"
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Nonce for replay protection (uint256)",
+            "example": "1"
+          },
+          "expiration": {
+            "type": "string",
+            "description": "Offer expiration timestamp (uint256)",
+            "example": "4102444800"
+          },
+          "useCallback": {
+            "type": "boolean",
+            "description": "Whether to use callback when executing the offer",
+            "example": false
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-712 signature (required if chainId is provided)",
+            "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+          }
+        },
+        "required": [
+          "auctionId",
+          "maker",
+          "amount",
+          "expectedReturn",
+          "nonce",
+          "expiration",
+          "useCallback"
+        ]
+      },
+      "CreateOfferResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "Created or updated offer ID",
+            "example": 123
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "CancelOfferDto": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "number",
+            "description": "Offer ID to cancel",
+            "example": 123
+          },
+          "maker": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "Ethereum address of the offer maker",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "chainId": {
+            "type": "number",
+            "description": "Chain ID for signature verification",
+            "example": 1
+          },
+          "deadline": {
+            "type": "string",
+            "description": "Signature deadline timestamp (uint256)",
+            "example": "4102444800"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-712 signature (required if chainId is provided)",
+            "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+          }
+        },
+        "required": [
+          "offerId",
+          "maker"
+        ]
+      },
+      "CancelOfferResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "Canceled offer ID",
+            "example": 123
+          },
+          "status": {
+            "type": "string",
+            "description": "Updated offer status",
+            "example": "CANCELLED"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ]
+      },
+      "ResolvedAssetDto": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "Asset slug",
+            "example": "superstate-uscc"
+          },
+          "displayName": {
+            "type": "string",
+            "description": "Asset display name",
+            "example": "Superstate USCC"
+          },
+          "positionManager": {
+            "type": "string",
+            "description": "Resolved position manager address",
+            "example": "0x68253c103464e93c218a91b5f168e2a4c003821b"
+          },
+          "riskLevel": {
+            "type": "string",
+            "nullable": true,
+            "description": "Asset risk level or null if unknown",
+            "example": "low"
+          },
+          "riskSummary": {
+            "type": "string",
+            "nullable": true,
+            "description": "Asset risk summary or null if unknown",
+            "example": "Low volatility collateral profile"
+          },
+          "maxLeverage": {
+            "type": "number",
+            "nullable": true,
+            "description": "Maximum leverage supported by the asset (static per vault) or null if not configured",
+            "example": 5
+          }
+        },
+        "required": [
+          "slug",
+          "displayName",
+          "positionManager",
+          "riskLevel",
+          "riskSummary",
+          "maxLeverage"
+        ]
+      },
+      "ResolvedVaultDto": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Resolved vault address",
+            "example": "0x68253c103464e93c218a91b5f168e2a4c003821b"
+          },
+          "leverage": {
+            "type": "number",
+            "nullable": true,
+            "description": "Target vault leverage or null if unknown",
+            "example": 2
+          }
+        },
+        "required": [
+          "address",
+          "leverage"
+        ]
+      },
+      "OfferDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "Unique offer ID",
+            "example": 123
+          },
+          "auctionId": {
+            "type": "number",
+            "description": "ID of the auction associated with the offer",
+            "example": 42
+          },
+          "status": {
+            "type": "string",
+            "description": "Offer status for the offer",
+            "example": "SUBMITTED"
+          },
+          "maker": {
+            "type": "string",
+            "description": "Ethereum address of the offer maker",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request contract address",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          },
+          "asset": {
+            "nullable": true,
+            "description": "Asset metadata resolved for the linked request or null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedAssetDto"
+              }
+            ]
+          },
+          "vault": {
+            "nullable": true,
+            "description": "Vault metadata resolved for the linked request or null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedVaultDto"
+              }
+            ]
+          },
+          "amount": {
+            "type": "string",
+            "description": "Offer amount as a numeric string (uint256). For offers with a broadcast transaction, this reflects the linked transaction amount when present.",
+            "example": "1000000000"
+          },
+          "expectedReturn": {
+            "type": "string",
+            "description": "Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.",
+            "example": "5000000"
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Nonce for replay protection (uint256)",
+            "example": "1"
+          },
+          "expiration": {
+            "type": "string",
+            "description": "Offer expiration timestamp (uint256)",
+            "example": "4102444800"
+          },
+          "signature": {
+            "type": "string",
+            "nullable": true,
+            "description": "EIP-712 signature or null if unsigned",
+            "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+          }
+        },
+        "required": [
+          "id",
+          "auctionId",
+          "status",
+          "maker",
+          "requestId",
+          "asset",
+          "vault",
+          "amount",
+          "expectedReturn",
+          "nonce",
+          "expiration",
+          "signature"
+        ]
+      },
+      "AuctionDepositAssetDto": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Deposit (stablecoin) token contract address",
+            "example": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Deposit token symbol (ERC-20 ticker)",
+            "example": "USDC"
+          },
+          "decimals": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Deposit token decimals",
+            "example": 6
+          }
+        },
+        "required": [
+          "address",
+          "symbol",
+          "decimals"
+        ]
+      },
+      "ResolvedSettlementDto": {
+        "type": "object",
+        "properties": {
+          "cadence": {
+            "type": "string",
+            "description": "Settlement cadence label",
+            "example": "Monthly"
+          },
+          "delay": {
+            "type": "string",
+            "description": "Settlement delay label",
+            "example": "3 days"
+          },
+          "delayDays": {
+            "type": "number",
+            "nullable": true,
+            "description": "Settlement delay in whole days or null if not parseable",
+            "example": 3
+          }
+        },
+        "required": [
+          "cadence",
+          "delay",
+          "delayDays"
+        ]
+      },
+      "AuctionEip712DomainDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Resolved EIP-712 domain name or null if unavailable",
+            "example": "SuperstateRequest"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true,
+            "description": "Resolved EIP-712 domain version or null if unavailable",
+            "example": "1"
+          },
+          "chainId": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Resolved EIP-712 domain chain ID or null if unavailable",
+            "example": 11155111
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "chainId"
+        ]
+      },
+      "AuctionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Auction ID",
+            "example": 42
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request contract address",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          },
+          "amountRequested": {
+            "type": "string",
+            "nullable": true,
+            "description": "Amount requested (numeric string) or null if unknown",
+            "example": "1000000000"
+          },
+          "solve_start_time": {
+            "type": "string",
+            "nullable": true,
+            "description": "Solve start time (derived from deposit_deadline) or null",
+            "example": "2026-02-16T12:00:00.000Z"
+          },
+          "maxRate": {
+            "type": "number",
+            "nullable": true,
+            "description": "Current max rate in basis points for active auctions, or the blended succeeded-offer rate for succeeded/repaid auctions, with tenths-of-a-basis-point precision, or null",
+            "example": 50.5
+          },
+          "status": {
+            "type": "string",
+            "description": "Auction status",
+            "example": "open"
+          },
+          "asset": {
+            "nullable": true,
+            "description": "Asset metadata resolved for the auction or null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedAssetDto"
+              }
+            ]
+          },
+          "depositAsset": {
+            "nullable": true,
+            "description": "Deposit asset (stablecoin lent in the auction, from requests.asset) or null if metadata unavailable",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuctionDepositAssetDto"
+              }
+            ]
+          },
+          "vault": {
+            "nullable": true,
+            "description": "Vault metadata resolved for the auction or null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedVaultDto"
+              }
+            ]
+          },
+          "settlement": {
+            "nullable": true,
+            "description": "Settlement metadata for the linked asset or null",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedSettlementDto"
+              }
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "redemption"
+            ],
+            "description": "Auction direction derived from the first facility-intent operation, or null if no operation has been recorded yet",
+            "example": "subscription",
+            "nullable": true
+          },
+          "eip712Domain": {
+            "nullable": true,
+            "description": "Omitted unless domain=true is provided; when requested, resolved request-contract EIP-712 domain metadata or null if unavailable",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuctionEip712DomainDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "requestId",
+          "amountRequested",
+          "solve_start_time",
+          "maxRate",
+          "status",
+          "asset",
+          "depositAsset",
+          "vault",
+          "settlement",
+          "direction"
+        ]
+      }
+    }
+  }
+}

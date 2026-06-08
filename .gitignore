@@ -1,0 +1,30 @@
+# Binaries
+bin/
+dist/
+
+
+# Go
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local config / secrets — never commit keys or live config
+*.local.yaml
+*.local.yml
+*.local.txt
+*.local.md
+config/*.local.*
+dev-account.local.txt
+.env
+.env.*
+!.env.example
+
+# Tooling
+/.tools/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
