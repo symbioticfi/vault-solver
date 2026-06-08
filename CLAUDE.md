@@ -112,9 +112,25 @@ Write defensively; this bot holds a signing key and moves funds.
 - Prefer the standard library and already-vendored deps; adding a dependency is a deliberate decision
   (supply-chain surface). Run `make tidy` and keep `go.sum` honest.
 
+## Keep the plan in sync — required
+
+`PLAN.md` (and the per-solver plans under `docs/`, e.g. `docs/RFQ-PLAN.md`) are the source of truth for
+the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
+
+- **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
+  a changed data flow, a new/removed integration, an interface or external-contract change, a
+  deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
+- **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
+  TODO list (§10 of `PLAN.md` / the solver plan)** so it always reflects reality.
+- A code change that alters architecture/design but leaves the plan stale is **incomplete**. If a
+  change is purely local (a bug fix, a refactor with no design impact), no plan update is needed —
+  use judgement, but err toward recording anything a future reader would be surprised to discover.
+
 ## Quick reference
 
 - Run gate: `make format && make test && make lint && go build ./...`
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solver.config` block. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
+- Keep the plan current: architecture/design or TODO changes must update `PLAN.md` / `docs/*-PLAN.md`
+  in the same change.

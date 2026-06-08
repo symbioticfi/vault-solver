@@ -150,8 +150,10 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
   affects post-restart recovery, where an unauthorized vault would surface as a reverting fill.
 - **Pricing is a faithful port for now** — same discount + greedy-leg selection as the TS
   `selectBestStrategy`; a richer quoting strategy is a later follow-up (mirrors the 3F pricing TODO).
-- **Quote latency** — `/quote` is synchronous in the backend's fan-out; keep reads to a single
-  multicall per quote.
+- **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
+  one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
+  single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
+  Keep it that way — don't add per-quote chain reads outside that one multicall.
 
 ### 1:1 parity notes (refactored filler resync)
 
@@ -168,9 +170,15 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.
-- **`getMaxAssets` arity** — the deployed `InstantRedemptionAdapter` (`rfq/out`) exposes
-  `getMaxAssets(vault)` (1 arg); the filler's inline ABI string had 2 args. The Go recovery reads
-  match the **deployed contract** (1 arg).
+- **`getMaxAssets` arity — Go is right, TS is buggy (deliberate divergence).** The contract is
+  `getMaxAssets(address vault)` — **1 arg** — confirmed three ways: the source
+  (`core-mirror/.../InstantRedemptionAdapter.sol`), the interface (`IInstantRedemptionAdapter.sol`),
+  and the compiled `rfq/out` artifact all agree. The TS filler's hand-written ABI (`contracts.ts`)
+  declares and calls it with **2 args** (`getMaxAssets(vault, tokenToRedeem)`) — a bug: that selector
+  (`getMaxAssets(address,address)`) does not exist on the contract, so the read reverts/fails. The TS
+  almost certainly copied the 2-arg shape of its neighbor `getMaxRate(vault, tokenToRedeem)` (which
+  *is* 2-arg). Go calls the 1-arg form and is correct; we intentionally do **not** mirror the TS here
+  (mirroring it would break inventory recovery). The TS should be fixed to 1 arg.
 
 ### Backend OpenAPI spec (vendored)
 
