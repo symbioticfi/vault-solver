@@ -27,12 +27,12 @@ func (f fakeReader) tokenDecimals(context.Context, common.Address) (int, error) 
 }
 
 func (f fakeReader) amountsOut(
-	_ context.Context, _ common.Address, assets []common.Address, _ *big.Int,
+	_ context.Context, _ common.Address, inventories []solverInventory, _ *big.Int,
 ) (map[common.Address]*big.Int, error) {
 	out := make(map[common.Address]*big.Int)
-	for _, a := range assets {
-		if v, ok := f.oracle[a]; ok {
-			out[a] = v
+	for _, inv := range inventories {
+		if v, ok := f.oracle[inv.Asset]; ok {
+			out[inv.Asset] = v
 		}
 	}
 	return out, nil

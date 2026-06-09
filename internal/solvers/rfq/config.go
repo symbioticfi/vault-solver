@@ -11,16 +11,22 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string   `yaml:"backendUrl"`
-	BackendSharedSecretEnv string   `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string   `yaml:"listenAddr"`
-	Executor               string   `yaml:"executor"`
-	Adapter                string   `yaml:"adapter"`
-	Reactor                string   `yaml:"reactor"`
-	CuratorRegistry        string   `yaml:"curatorRegistry"`
-	PollIntervalMs         int      `yaml:"pollIntervalMs"`
-	OrderLimit             int      `yaml:"orderLimit"`
-	Vaults                 []string `yaml:"vaults"`
+	BackendURL             string     `yaml:"backendUrl"`
+	BackendSharedSecretEnv string     `yaml:"backendSharedSecretEnv"`
+	ListenAddr             string     `yaml:"listenAddr"`
+	Executor               string     `yaml:"executor"`
+	Reactor                string     `yaml:"reactor"`
+	PollIntervalMs         int        `yaml:"pollIntervalMs"`
+	OrderLimit             int        `yaml:"orderLimit"`
+	Vaults                 []rawVault `yaml:"vaults"`
+}
+
+// rawVault mirrors one entry of the recovery `vaults` list: a vault, its LiquidLane adapter, and the
+// vault's collateral asset.
+type rawVault struct {
+	Address string `yaml:"address"`
+	Adapter string `yaml:"adapter"`
+	Asset   string `yaml:"asset"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -34,19 +40,16 @@ type Config struct {
 	ListenAddr string
 	// Executor is the Executor contract (the on-chain filler identity; the bot EOA holds CALLER_ROLE).
 	Executor common.Address
-	// Adapter is the InstantRedemptionAdapter the filler prices against.
-	Adapter common.Address
-	// Reactor is the RFQ Reactor (used at execution time; P2).
+	// Reactor is the RFQ Reactor (used at execution time); optional.
 	Reactor common.Address
-	// CuratorRegistry resolves vault curators for permissioned/discount vaults (P3); optional.
-	CuratorRegistry common.Address
-	// PollInterval is how often the backend is polled for open orders (P2).
+	// PollInterval is how often the backend is polled for open orders.
 	PollInterval time.Duration
-	// OrderLimit caps how many open orders are fetched per poll (P2).
+	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// Vaults is an optional candidate vault universe used to rebuild a strategy on-chain when the
-	// quote-time strategy isn't cached (e.g. after a restart). Empty disables recovery.
-	Vaults []common.Address
+	// Vaults is an optional candidate universe used to rebuild a strategy on-chain when the
+	// quote-time strategy isn't cached (e.g. after a restart). Each entry pins a vault, its LiquidLane
+	// adapter, and the expected collateral asset. Empty disables recovery.
+	Vaults []recoveryVault
 }
 
 // Defaults applied when a field is unset.
@@ -72,17 +75,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	adapter, err := parseAddress(raw.Adapter, "adapter")
-	if err != nil {
-		return nil, err
-	}
 
 	cfg := &Config{
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
 		ListenAddr:             orStr(raw.ListenAddr, defaultListenAddr),
 		Executor:               executor,
-		Adapter:                adapter,
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
 	}
@@ -92,26 +90,38 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
 	}
-	// Reactor and CuratorRegistry are optional in P1 (used by execution/discount phases). Parse when
-	// present so a bad address fails fast.
+	// Reactor is optional (used by execution). Parse when present so a bad address fails fast.
 	if raw.Reactor != "" {
 		if cfg.Reactor, err = parseAddress(raw.Reactor, "reactor"); err != nil {
 			return nil, err
 		}
 	}
-	if raw.CuratorRegistry != "" {
-		if cfg.CuratorRegistry, err = parseAddress(raw.CuratorRegistry, "curatorRegistry"); err != nil {
-			return nil, err
-		}
-	}
 	for i, v := range raw.Vaults {
-		addr, verr := parseAddress(v, "vaults["+strconv.Itoa(i)+"]")
+		rv, verr := v.parse(i)
 		if verr != nil {
 			return nil, verr
 		}
-		cfg.Vaults = append(cfg.Vaults, addr)
+		cfg.Vaults = append(cfg.Vaults, rv)
 	}
 	return cfg, nil
+}
+
+// parse validates one recovery vault entry into the typed form.
+func (v rawVault) parse(i int) (recoveryVault, error) {
+	prefix := "vaults[" + strconv.Itoa(i) + "]."
+	addr, err := parseAddress(v.Address, prefix+"address")
+	if err != nil {
+		return recoveryVault{}, err
+	}
+	adapterAddr, err := parseAddress(v.Adapter, prefix+"adapter")
+	if err != nil {
+		return recoveryVault{}, err
+	}
+	asset, err := parseAddress(v.Asset, prefix+"asset")
+	if err != nil {
+		return recoveryVault{}, err
+	}
+	return recoveryVault{Adapter: adapterAddr, Vault: addr, AssetHint: asset}, nil
 }
 
 func parseAddress(s, field string) (common.Address, error) {

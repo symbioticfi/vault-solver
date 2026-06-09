@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,7 +21,6 @@ const minimalConfig = `
 backendUrl: https://rfq-backend.example
 backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET
 executor: "0x0000000000000000000000000000000000000010"
-adapter: "0x0000000000000000000000000000000000000020"
 `
 
 func TestParseConfig_Defaults(t *testing.T) {
@@ -58,23 +58,53 @@ reactor: "0x0000000000000000000000000000000000000030"
 	}
 }
 
+func TestParseConfig_Vaults(t *testing.T) {
+	cfg, err := parse(t, minimalConfig+`
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "0x0000000000000000000000000000000000000042"
+    asset: "0x0000000000000000000000000000000000000043"
+`)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if len(cfg.Vaults) != 1 {
+		t.Fatalf("vaults = %d, want 1", len(cfg.Vaults))
+	}
+	v := cfg.Vaults[0]
+	if v.Vault != common.HexToAddress("0x0000000000000000000000000000000000000041") ||
+		v.Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") ||
+		v.AssetHint != common.HexToAddress("0x0000000000000000000000000000000000000043") {
+		t.Fatalf("vault entry not parsed: %+v", v)
+	}
+}
+
+func TestParseConfig_BadVault(t *testing.T) {
+	_, err := parse(t, minimalConfig+`
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "not-an-address"
+    asset: "0x0000000000000000000000000000000000000043"
+`)
+	if err == nil {
+		t.Fatal("expected an error for a bad vault adapter address")
+	}
+}
+
 func TestParseConfig_Errors(t *testing.T) {
 	cases := map[string]string{ //nolint:gosec // G101 false positive: YAML test fixtures, not credentials.
 		"missing backendUrl": `
 backendSharedSecretEnv: S
 executor: "0x0000000000000000000000000000000000000010"
-adapter: "0x0000000000000000000000000000000000000020"
 `,
 		"missing sharedSecretEnv": `
 backendUrl: https://x
 executor: "0x0000000000000000000000000000000000000010"
-adapter: "0x0000000000000000000000000000000000000020"
 `,
 		"bad executor": `
 backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
-adapter: "0x0000000000000000000000000000000000000020"
 `,
 	}
 	for name, body := range cases {

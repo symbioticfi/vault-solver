@@ -13,24 +13,23 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/adapter"
-	"github.com/symbioticfi/vault-solver/api/bindings/rfq/curatorregistry"
-	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 // Parsed ABIs for packing Multicall3 sub-calls.
 var (
-	adapterABI         = mustABI(adapter.InstantRedemptionAdapterMetaData)
-	vaultABI           = mustABI(vaultv2.IVaultV2MetaData)
-	curatorRegistryABI = mustABI(curatorregistry.ICuratorRegistryMetaData)
+	adapterABI = mustABI(adapter.LiquidLaneAdapterMetaData)
+	vaultABI   = mustABI(erc4626.IERC4626MetaData)
 	// erc20DecimalsABI is a minimal ERC-20 fragment — the quote path only needs decimals().
 	erc20DecimalsABI = mustParseABI(`[{"inputs":[],"name":"decimals","outputs":[{"type":"uint8"}],` +
 		`"stateMutability":"view","type":"function"}]`)
 )
 
-// readsPerVault is the number of Multicall3 sub-calls readVaultInventories issues per vault.
-const readsPerVault = 6
+// readsPerAdapter is the number of Multicall3 sub-calls readVaultInventories issues per adapter
+// (paused, vault, asset, getMaxAssets, getMaxRate) — mirrors readAdapterInventories in inventories.ts.
+const readsPerAdapter = 5
 
 func mustABI(md *bind.MetaData) abi.ABI {
 	parsed, err := md.GetAbi()
@@ -48,19 +47,26 @@ func mustParseABI(j string) abi.ABI {
 	return parsed
 }
 
-// reader performs the quote-path on-chain reads, batching via Multicall3. Token decimals are cached;
-// the HTTP server serves quotes concurrently, so the cache is mutex-guarded.
+// reader performs the on-chain reads, batching via Multicall3. Token decimals are cached; the HTTP
+// server serves quotes concurrently, so the cache is mutex-guarded.
 type reader struct {
-	chain   *chain.Client
-	adapter common.Address
-	log     logr.Logger
+	chain *chain.Client
+	log   logr.Logger
 
 	mu       sync.Mutex
 	decimals map[common.Address]int
 }
 
-func newReader(c *chain.Client, adapterAddr common.Address, log logr.Logger) *reader {
-	return &reader{chain: c, adapter: adapterAddr, log: log, decimals: make(map[common.Address]int)}
+func newReader(c *chain.Client, log logr.Logger) *reader {
+	return &reader{chain: c, log: log, decimals: make(map[common.Address]int)}
+}
+
+// recoveryVault is one configured recovery candidate: a LiquidLane adapter, its vault, and the
+// expected collateral hint. Mirrors InventorySource in inventories.ts.
+type recoveryVault struct {
+	Adapter   common.Address
+	Vault     common.Address
+	AssetHint common.Address
 }
 
 // tokenDecimals returns the ERC-20 decimals for token, caching the result.
@@ -93,22 +99,38 @@ func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, 
 	return int(d), nil
 }
 
-// amountsOut fetches adapter.getAmountOut(tokenIn, asset, amount) for each distinct asset in one
-// multicall. A reverting sub-call is omitted from the result (that asset is skipped by
-// the selector), so the map only holds successfully-priced assets.
+// amountsOut prices each distinct asset by calling its representative adapter's getAmountOut(tokenIn,
+// amount). The quote oracle is per asset-group: the representative is the first inventory entry seen
+// for that asset, matching evaluateInventoryGroup in strategy.ts (inventories[0].adapter). Targets are
+// heterogeneous (each call hits that asset's adapter). A reverting sub-call leaves the asset unpriced
+// (the selector then skips it), so the map only holds successfully-priced assets.
 func (r *reader) amountsOut(
-	ctx context.Context, tokenIn common.Address, assets []common.Address, amount *big.Int,
+	ctx context.Context, tokenIn common.Address, inventories []solverInventory, amount *big.Int,
 ) (map[common.Address]*big.Int, error) {
-	uniq := dedupeAddrs(assets)
-	if len(uniq) == 0 {
+	// Pick the representative adapter per distinct asset (first seen), preserving deterministic order.
+	type group struct {
+		asset   common.Address
+		adapter common.Address
+	}
+	var groups []group
+	seen := make(map[common.Address]bool, len(inventories))
+	for _, inv := range inventories {
+		if seen[inv.Asset] {
+			continue
+		}
+		seen[inv.Asset] = true
+		groups = append(groups, group{asset: inv.Asset, adapter: inv.Adapter})
+	}
+	if len(groups) == 0 {
 		return map[common.Address]*big.Int{}, nil
 	}
-	calls := make([]chain.Call, len(uniq))
-	for i, c := range uniq {
+
+	calls := make([]chain.Call, len(groups))
+	for i, g := range groups {
 		calls[i] = chain.Call{
-			Target:       r.adapter,
+			Target:       g.adapter,
 			AllowFailure: true,
-			Data:         mustPack(adapterABI, "getAmountOut", tokenIn, c, amount),
+			Data:         mustPack(adapterABI, "getAmountOut", tokenIn, amount),
 		}
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -118,43 +140,43 @@ func (r *reader) amountsOut(
 	if len(res) != len(calls) {
 		return nil, errors.Errorf("amountsOut: got %d results for %d calls", len(res), len(calls))
 	}
-	out := make(map[common.Address]*big.Int, len(uniq))
+	out := make(map[common.Address]*big.Int, len(groups))
 	for i, rr := range res {
 		if !rr.Success {
-			r.log.V(1).Info("getAmountOut reverted; asset left unpriced", "asset", uniq[i].Hex())
+			r.log.V(1).Info("getAmountOut reverted; asset left unpriced", "asset", groups[i].asset.Hex())
 			continue
 		}
 		amt, derr := unpackBig(adapterABI, "getAmountOut", rr.ReturnData)
 		if derr != nil {
-			r.log.V(1).Error(derr, "getAmountOut decode failed; asset left unpriced", "asset", uniq[i].Hex())
+			r.log.V(1).Error(derr, "getAmountOut decode failed; asset left unpriced", "asset", groups[i].asset.Hex())
 			continue
 		}
-		out[uniq[i]] = amt
+		out[groups[i].asset] = amt
 	}
 	return out, nil
 }
 
-// readVaultInventories reads, for each vault in ONE multicall, the adapter views the strategy
-// selector needs (isPaused, collateral, getMaxAssets, limit, allocated, getMaxRate), and resolves
-// collateral decimals (cached). Used for strategy recovery when the quote-time strategy isn't
-// cached (e.g. after a restart). Paused / failing / zero-liquidity vaults are dropped. Direct legs
-// only (discountId nil); permissioned/discount inventories are P3.
+// readVaultInventories reads, per adapter in ONE multicall, the LiquidLane views the strategy
+// selector needs (paused, vault, IERC4626(vault).asset, getMaxAssets(tokenIn), getMaxRate(tokenIn)),
+// and resolves asset decimals (cached). Used for strategy recovery when the quote-time strategy isn't
+// cached (e.g. after a restart). Paused / failing / zero-liquidity adapters, and any whose vault()
+// doesn't match the configured vault, are dropped. Direct legs only (DiscountID nil). Mirrors
+// readAdapterInventories in inventories.ts.
 func (r *reader) readVaultInventories(
-	ctx context.Context, tokenIn common.Address, vaults []common.Address,
+	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
-	vaults = dedupeAddrs(vaults)
+	vaults = dedupeVaultsByAdapter(vaults)
 	if len(vaults) == 0 {
 		return nil, nil
 	}
-	calls := make([]chain.Call, 0, len(vaults)*readsPerVault)
+	calls := make([]chain.Call, 0, len(vaults)*readsPerAdapter)
 	for _, v := range vaults {
 		calls = append(calls,
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "isPaused", v)},
-			chain.Call{Target: v, AllowFailure: true, Data: mustPack(vaultABI, "collateral")},
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxAssets", v)},
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "limit", v, tokenIn)},
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "allocated", v, tokenIn)},
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxRate", v, tokenIn)},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "paused")},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "vault")},
+			chain.Call{Target: v.Vault, AllowFailure: true, Data: mustPack(vaultABI, "asset")},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxAssets", tokenIn)},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxRate", tokenIn)},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -167,61 +189,59 @@ func (r *reader) readVaultInventories(
 
 	out := make([]solverInventory, 0, len(vaults))
 	for i, v := range vaults {
-		base := i * readsPerVault
-		paused, coll, maxA := res[base], res[base+1], res[base+2]
-		lim, alloc, mr := res[base+3], res[base+4], res[base+5]
-		if !coll.Success || !maxA.Success || !lim.Success || !alloc.Success || !mr.Success {
+		base := i * readsPerAdapter
+		paused, vaultAddr, assetRes := res[base], res[base+1], res[base+2]
+		maxA, mr := res[base+3], res[base+4]
+		if !vaultAddr.Success || !assetRes.Success || !maxA.Success || !mr.Success {
 			continue
 		}
-		if p, perr := unpackBool(adapterABI, "isPaused", paused.ReturnData); paused.Success && perr == nil && p {
+		if p, perr := unpackBool(adapterABI, "paused", paused.ReturnData); paused.Success && perr == nil && p {
 			continue
 		}
-		asset, cerr := unpackAddress(vaultABI, "collateral", coll.ReturnData)
+		gotVault, verr := unpackAddress(adapterABI, "vault", vaultAddr.ReturnData)
+		if verr != nil || gotVault != v.Vault {
+			continue
+		}
+		asset, aerr := unpackAddress(vaultABI, "asset", assetRes.ReturnData)
 		maxAssets, e1 := unpackBig(adapterABI, "getMaxAssets", maxA.ReturnData)
-		limit, e2 := unpackBig(adapterABI, "limit", lim.ReturnData)
-		allocated, e3 := unpackBig(adapterABI, "allocated", alloc.ReturnData)
-		maxRate, e4 := unpackBig(adapterABI, "getMaxRate", mr.ReturnData)
-		if cerr != nil || e1 != nil || e2 != nil || e3 != nil || e4 != nil {
+		maxRate, e2 := unpackBig(adapterABI, "getMaxRate", mr.ReturnData)
+		if aerr != nil || e1 != nil || e2 != nil {
 			continue
 		}
-		maxOut := capAssetsByTokenLimit(maxAssets, limit, allocated)
-		if maxOut.Sign() <= 0 || maxRate.Sign() <= 0 {
+		if maxAssets.Sign() <= 0 || maxRate.Sign() <= 0 {
 			continue
 		}
 		decimals, derr := r.tokenDecimals(ctx, asset)
 		if derr != nil {
 			continue
 		}
-		// The on-chain Swap takes the vault address in its "adapter"/vault slot, so Adapter == v.
 		out = append(out, solverInventory{
-			Adapter: v, Asset: asset, AssetDecimals: decimals,
-			MaxAssets: maxOut, MaxRate: maxRate, DiscountID: nil,
+			Adapter: v.Adapter, Asset: asset, AssetDecimals: decimals,
+			MaxAssets: maxAssets, MaxRate: maxRate, DiscountID: nil,
 		})
 	}
 	return out, nil
 }
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
-// authorized to fill through: vault marketMaker == executor, or curatorRegistry curator == executor,
-// or the marketMaker has delegated via isFiller(marketMaker, executor). Used in recovery so we never
-// build a fill against an unauthorized vault. With no curatorRegistry configured it returns nothing.
+// authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
+// marketMaker has delegated via adapter.isFiller(marketMaker, executor). Used in recovery so we never
+// build a fill against an unauthorized adapter. Mirrors readPermissionedAdapterInventories in
+// inventories.ts (marketMaker / owner / isFiller).
 func (r *reader) readPermissionedVaultInventories(
-	ctx context.Context, executor, curatorRegistry, tokenIn common.Address, vaults []common.Address,
+	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
-	if curatorRegistry == (common.Address{}) {
-		return nil, nil
-	}
 	base, err := r.readVaultInventories(ctx, tokenIn, vaults)
 	if err != nil || len(base) == 0 {
 		return base, err
 	}
 
-	// 1) marketMaker(vault) + curatorRegistry.getCurator(vault) for each candidate, in one multicall.
+	// 1) marketMaker() + owner() for each candidate adapter, in one multicall.
 	calls := make([]chain.Call, 0, len(base)*2)
 	for _, inv := range base {
 		calls = append(calls,
-			chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "marketMaker", inv.Adapter)},
-			chain.Call{Target: curatorRegistry, AllowFailure: true, Data: mustPack(curatorRegistryABI, "getCurator", inv.Adapter)},
+			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "marketMaker")},
+			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "owner")},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -233,33 +253,33 @@ func (r *reader) readPermissionedVaultInventories(
 	}
 
 	type authz struct {
-		marketMaker, curator common.Address
-		resolved             bool
+		marketMaker, owner common.Address
+		resolved           bool
 	}
 	auths := make([]authz, len(base))
 	var fillerChecks []int // base indices needing an isFiller delegation check
 	for i := range base {
-		mm, cu := res[i*2], res[i*2+1]
-		if !mm.Success || !cu.Success {
+		mm, ow := res[i*2], res[i*2+1]
+		if !mm.Success || !ow.Success {
 			continue
 		}
 		marketMaker, e1 := unpackAddress(adapterABI, "marketMaker", mm.ReturnData)
-		curator, e2 := unpackAddress(curatorRegistryABI, "getCurator", cu.ReturnData)
+		owner, e2 := unpackAddress(adapterABI, "owner", ow.ReturnData)
 		if e1 != nil || e2 != nil {
 			continue
 		}
-		auths[i] = authz{marketMaker: marketMaker, curator: curator, resolved: true}
-		if marketMaker != executor && curator != executor {
+		auths[i] = authz{marketMaker: marketMaker, owner: owner, resolved: true}
+		if marketMaker != executor && owner != executor {
 			fillerChecks = append(fillerChecks, i)
 		}
 	}
 
-	// 2) isFiller(marketMaker, executor) for the vaults not directly owned, in one multicall.
+	// 2) isFiller(marketMaker, executor) for the adapters not directly owned, in one multicall.
 	delegated := make(map[int]bool, len(fillerChecks))
 	if len(fillerChecks) > 0 {
 		fcalls := make([]chain.Call, len(fillerChecks))
 		for j, i := range fillerChecks {
-			fcalls[j] = chain.Call{Target: r.adapter, AllowFailure: true, Data: mustPack(adapterABI, "isFiller", auths[i].marketMaker, executor)}
+			fcalls[j] = chain.Call{Target: base[i].Adapter, AllowFailure: true, Data: mustPack(adapterABI, "isFiller", auths[i].marketMaker, executor)}
 		}
 		fres, ferr := r.chain.Multicall(ctx, fcalls)
 		if ferr != nil {
@@ -277,44 +297,24 @@ func (r *reader) readPermissionedVaultInventories(
 	out := make([]solverInventory, 0, len(base))
 	for i, inv := range base {
 		a := auths[i]
-		if a.resolved && (a.marketMaker == executor || a.curator == executor || delegated[i]) {
+		if a.resolved && (a.marketMaker == executor || a.owner == executor || delegated[i]) {
 			out = append(out, inv)
 		}
 	}
 	return out, nil
 }
 
-// capAssetsByTokenLimit = min(maxAssets, max(limit-allocated, 0)); limit==0 means uncapped.
-func capAssetsByTokenLimit(maxAssets, limit, allocated *big.Int) *big.Int {
-	if maxAssets.Sign() <= 0 {
-		return new(big.Int)
-	}
-	if limit.Sign() == 0 {
-		return new(big.Int).Set(maxAssets)
-	}
-	remaining := new(big.Int).Sub(limit, allocated)
-	if remaining.Sign() < 0 {
-		remaining = new(big.Int)
-	}
-	return minBig(remaining, maxAssets)
-}
-
-func minBig(a, b *big.Int) *big.Int {
-	if a.Cmp(b) <= 0 {
-		return new(big.Int).Set(a)
-	}
-	return new(big.Int).Set(b)
-}
-
-func dedupeAddrs(in []common.Address) []common.Address {
+// dedupeByAdapter keeps the first recovery vault per distinct adapter, matching the de-dup in
+// readAdapterInventories (keyed by adapter).
+func dedupeVaultsByAdapter(in []recoveryVault) []recoveryVault {
 	seen := make(map[common.Address]bool, len(in))
-	out := make([]common.Address, 0, len(in))
-	for _, a := range in {
-		if seen[a] {
+	out := make([]recoveryVault, 0, len(in))
+	for _, v := range in {
+		if seen[v.Adapter] {
 			continue
 		}
-		seen[a] = true
-		out = append(out, a)
+		seen[v.Adapter] = true
+		out = append(out, v)
 	}
 	return out
 }

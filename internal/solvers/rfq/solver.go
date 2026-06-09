@@ -1,5 +1,5 @@
 // Package rfq implements the Symbiotic RFQ filler solver: it serves backend quote requests off the
-// on-chain InstantRedemptionAdapter, and (P2+) fills won orders via the Executor contract. It
+// on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. It
 // self-registers with the solver framework via init(). See docs/RFQ-PLAN.md.
 package rfq
 
@@ -45,7 +45,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	chainID := deps.Chain.ChainID().Int64()
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
-	rdr := newReader(deps.Chain, cfg.Adapter, log)
+	rdr := newReader(deps.Chain, log)
 
 	var metrics *httpMetrics
 	if deps.Metrics != nil {
@@ -63,18 +63,17 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		now:      time.Now,
 	}
 	exec := &executionService{
-		chainID:         chainID,
-		executor:        cfg.Executor,
-		curatorRegistry: cfg.CuratorRegistry,
-		orderLimit:      cfg.OrderLimit,
-		vaults:          cfg.Vaults,
-		backend:         newBackendClient(cfg.BackendURL),
-		store:           st,
-		reader:          rdr,
-		txm:             deps.TxManager,
-		log:             log,
-		now:             time.Now,
-		inflight:        make(map[string]bool),
+		chainID:    chainID,
+		executor:   cfg.Executor,
+		orderLimit: cfg.OrderLimit,
+		vaults:     cfg.Vaults,
+		backend:    newBackendClient(cfg.BackendURL),
+		store:      st,
+		reader:     rdr,
+		txm:        deps.TxManager,
+		log:        log,
+		now:        time.Now,
+		inflight:   make(map[string]bool),
 	}
 	return &Solver{
 		cfg:  cfg,
@@ -98,7 +97,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
-		"adapter", s.cfg.Adapter.Hex(),
+		"recoveryVaults", len(s.cfg.Vaults),
 		"backendUrl", s.cfg.BackendURL,
 	)
 
