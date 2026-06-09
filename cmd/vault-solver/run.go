@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/config"
@@ -50,11 +51,15 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log, sync := observability.NewLogger(debug)
 	defer sync()
 
+	solverNames := make([]string, len(cfg.Solvers))
+	for i, s := range cfg.Solvers {
+		solverNames[i] = s.Name
+	}
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,
 		"goVersion", version.GoVersion(),
-		"solver", cfg.Solver.Name,
+		"solvers", solverNames,
 		"debug", debug,
 	)
 
@@ -92,18 +97,26 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}, log)
 	go txm.Start(ctx)
 
-	// Select and build the configured solver.
-	slv, err := solver.New(cfg.Solver.Name, cfg.Solver.Config, solver.Deps{
-		Chain:     chainClient,
-		TxManager: txm,
-		Signer:    sgnr,
-		Log:       log,
-		Metrics:   metrics,
-	})
-	if err != nil {
-		return err
+	// Build every configured solver. They share the chain client, signer, and the single
+	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
+	// shared txManager exists for, so they never race on nonces.
+	deps := solver.Deps{Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics}
+	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	for _, sc := range cfg.Solvers {
+		slv, err := solver.New(sc.Name, sc.Config, deps)
+		if err != nil {
+			return err
+		}
+		solvers = append(solvers, slv)
 	}
 
 	health.SetReady(true)
-	return solver.Run(ctx, slv, log)
+
+	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
+	// clean shutdown (solver.Run maps context.Canceled to nil).
+	g, gctx := errgroup.WithContext(ctx)
+	for _, slv := range solvers {
+		g.Go(func() error { return solver.Run(gctx, slv, log) })
+	}
+	return g.Wait()
 }

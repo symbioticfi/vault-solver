@@ -30,9 +30,12 @@ on-chain views and the relevant protocol API on each tick — no database. See
 
 ## Solvers
 
-The running solver is chosen by `solver.name` in config; its `solver.config` block is typed and
-validated by that solver (two-stage decode). Adding a solver touches **no** framework code — see the
-recipe in [`CLAUDE.md`](./CLAUDE.md).
+Solvers are chosen in config — a single `solver:` block, or a `solvers:` list to run several at once
+(**at most one entry per solver type**). Every solver in the process shares the chain client, signer,
+and the single nonce-serialized `txManager`, so multiple solvers on one EOA never race on nonces —
+that shared sender is exactly why running them together is safe. Each `config` block is typed and
+validated by its own solver (two-stage decode). Adding a solver touches **no** framework code — see
+the recipe in [`CLAUDE.md`](./CLAUDE.md).
 
 | `solver.name` | Integration | Status | Docs |
 |---|---|---|---|
