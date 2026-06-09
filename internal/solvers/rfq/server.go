@@ -71,10 +71,13 @@ func (s *server) handler() http.Handler {
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
 
+	// Middleware chain (outer → inner): body cap, access log + request-id, metrics, panic recovery.
+	var h = recoverPanics(mux, s.log)
 	if s.metrics != nil {
-		return s.metrics.instrument(mux)
+		h = s.metrics.instrument(h)
 	}
-	return mux
+	h = logRequests(h, s.log)
+	return http.MaxBytesHandler(h, maxRequestBytes)
 }
 
 const version1 = "1.0.0"
@@ -89,7 +92,7 @@ func (s *server) handleHealth(_ context.Context, _ *struct{}) (*healthOutput, er
 func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput, error) {
 	if !s.authorized(in.Secret) {
 		// Log the denial (never the attempted secret) so credential scanning is observable.
-		s.log.V(1).Info("rejected /quote: bad shared secret")
+		s.log.V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
 	}
 	resp, err := s.quotes.quote(ctx, &in.Body)
@@ -98,7 +101,7 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if errors.As(err, &bad) {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		s.log.Error(err, "quote failed", "quoteId", in.Body.QuoteID)
+		s.log.Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
 		return nil, huma.Error502BadGateway("quote failed")
 	}
 	if resp == nil {

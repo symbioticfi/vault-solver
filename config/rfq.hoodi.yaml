@@ -19,6 +19,7 @@ txManager:
 
 observability:
   addr: ":9090" # /metrics, /healthz, /readyz (separate from the quote server below)
+  # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
 solver:
   name: rfq-filler

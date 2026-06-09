@@ -109,6 +109,9 @@ func (s *Solver) Run(ctx context.Context) error {
 		Addr:              s.cfg.ListenAddr,
 		Handler:           s.server.handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	errCh := make(chan error, 1)
 	go func() {
