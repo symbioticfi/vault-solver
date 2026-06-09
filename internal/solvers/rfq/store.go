@@ -109,8 +109,13 @@ func (s *store) sweep() {
 
 /* ───────── orders ───────── */
 
-// upsertQueued creates a queued order if absent, or refreshes the existing record's poll fields
-// without regressing a non-queued status.
+// upsertQueued creates a queued order if absent, or refreshes the existing record's poll fields. A
+// still-open order that previously failed a fill is re-armed to queued for another attempt (mirrors the
+// TS filler, whose status precedence excludes `failed`): upsertQueued is only called for orders the
+// backend still lists as open, so a transient failure (e.g. a fill that lost a race) gets retried while
+// the order is live, and a deterministic one just re-fails cheaply via the pre-submit guards
+// (deadline / strategy-binding / filler checks fail before any tx is sent). In-flight and terminal
+// states (submitting / submitted / filled / expired) are left untouched so we never regress them.
 func (s *store) upsertQueued(in queuedOrder) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,6 +124,10 @@ func (s *store) upsertQueued(in queuedOrder) {
 	if !ok {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
+	}
+	if rec.Status == statusFailed {
+		rec.Status = statusQueued
+		rec.LastError = ""
 	}
 	rec.QuoteID = orStr(in.QuoteID, rec.QuoteID)
 	rec.UpdatedAt = now
