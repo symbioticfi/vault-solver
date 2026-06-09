@@ -70,9 +70,10 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **On-chain reads use `chain.Multicall`** (the adapter exposes many per-vault views per quote).
 - **Addresses + backend URL come from `solver.config`** (config-is-king); secrets
   (`backendSharedSecret`, the caller key) via `*Env` indirection (`os.Getenv` at point of use).
-- **Bindings** for `Executor`, `InstantRedemptionAdapter`, `Reactor`, `IVaultV2`, `CuratorRegistry`
-  vendored from a `forge build` of `../rfq` into `api/bindings/rfq/` (`make refresh-abi` + `bindings`).
-  The nested `fill` / order ABI is encoded/decoded via the generated bindings, never hand-rolled.
+- **Bindings** for `Executor`/`Reactor` (from the `rfq` build) and `LiquidLaneAdapter`/`UniversalDelegator`/
+  `IVaultV2`/`IERC4626` (from a standalone `core-mirror` build) are vendored via `make refresh-abi` +
+  `bindings` (two `FORGE_OUT`/`CORE_MIRROR_OUT` sources). The nested `fill`/order ABI is encoded/decoded
+  via the generated bindings, never hand-rolled.
 - **Signer** — the framework's single EOA is the RFQ **caller** (holds `CALLER_ROLE` on the Executor).
 
 ### Component port map (TS → Go)
@@ -105,12 +106,11 @@ solver:
     backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET   # env var NAME (secret never in config)
     listenAddr: ":42073"                                # quote HTTP server (poll-only; no /notify)
     executor:             "0x…"                         # Executor (bot EOA holds CALLER_ROLE)
-    instantRedemptionAdapter: "0x…"
     reactor:              "0x…"
-    curatorRegistry:      "0x…"
-    quoteDiscountBps: 1000                              # 10.00% discount applied to quotes
     pollIntervalMs: 3000
     orderLimit: 20
+    vaults:                                             # per-vault LiquidLane adapters (recovery only)
+      - { address: "0x…vault", adapter: "0x…liquidLaneAdapter", asset: "0x…collateral" }
 ```
 
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
@@ -188,15 +188,22 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.
-- **`getMaxAssets` arity — Go is right, TS is buggy (deliberate divergence).** The contract is
-  `getMaxAssets(address vault)` — **1 arg** — confirmed three ways: the source
-  (`core-mirror/.../InstantRedemptionAdapter.sol`), the interface (`IInstantRedemptionAdapter.sol`),
-  and the compiled `rfq/out` artifact all agree. The TS filler's hand-written ABI (`contracts.ts`)
-  declares and calls it with **2 args** (`getMaxAssets(vault, tokenToRedeem)`) — a bug: that selector
-  (`getMaxAssets(address,address)`) does not exist on the contract, so the read reverts/fails. The TS
-  almost certainly copied the 2-arg shape of its neighbor `getMaxRate(vault, tokenToRedeem)` (which
-  *is* 2-arg). Go calls the 1-arg form and is correct; we intentionally do **not** mirror the TS here
-  (mirroring it would break inventory recovery). The TS should be fixed to 1 arg.
+- **LiquidLane adapter migration (supersedes the old InstantRedemptionAdapter).** The RFQ adapter is
+  now core-mirror's **per-vault `LiquidLaneAdapter`** (the `delegator-simplify` branch), not the old
+  one-adapter-many-vaults `InstantRedemptionAdapter`. Reads take **no vault arg**: `paused()`,
+  `vault()`, `marketMaker()`, `isFiller(marketMaker, filler)`, `getMaxAssets(tokenToRedeem)`,
+  `getMaxRate(tokenToRedeem)`, `getAmountOut(tokenToRedeem, amountIn)` (2-arg). The vault's collateral
+  is `IERC4626(vault).asset()` (the vault is now ERC4626). `curatorRegistry`/`getCurator`, `limit`,
+  `allocated`, and the `capAssetsByTokenLimit` cap are **gone**; authorization is `marketMaker()` /
+  `owner()` / `isFiller()` == executor. The bindings come from a standalone `core-mirror` build
+  (`CORE_MIRROR_ABIS`); the swap-side `ILiquidLaneAdapter` (rfq) and read-side `LiquidLaneAdapter`
+  (core-mirror) share a basename, so the read ABI is vendored from core-mirror's build.
+- **`Executor.fill` re-encoded.** swapInputs are now `(address adapter, (recipient,tokenIn,amountIn,
+  amountOut) swap)[]` and discountSwapInputs `(address adapter, (discount{tokenToRedeem,…},sig,
+  protocolDeadline), protocolSig, recipient, amountIn)[]` — the inner discount dropped its `vault`
+  slot and the discount input dropped `amountOut`. Selector `0x2b137442` (pinned by the golden test).
+- **Quote discount removed** (mirrors filler `ac65587`): the quoted output is the adapter oracle
+  `getAmountOut` directly; `quoteDiscountBps`/`applyQuoteDiscount` are gone.
 - **OpenTelemetry — intentionally not ported.** The TS filler declares `@opentelemetry/*` packages in
   `dependencies` but never initializes an SDK, tracer, or spans (no `opentelemetry.ts`, no `OTEL_*`
   reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
