@@ -19,17 +19,17 @@ txManager:
 observability:
   addr: ":9090"
 
-solver:
-  name: 3f-bridge-facilitator
-  config:
-    apiBaseUrl: https://bf.dev.gcp.3f.xyz
-    vault: "0x0000000000000000000000000000000000000000"      # TODO: deployed test VaultV2
-    adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter
-    exposure:                                                # USDC base units (6 decimals)
-      perRequestMaxUsdc: "100000"
-      totalSleeveMaxUsdc: "500000"
-      maxConcurrentLoans: 10
-    intervals:
-      discover: 1h
-      redeemPoll: 5m
-      reconcile: 15m
+solvers:
+  - name: 3f-bridge-facilitator
+    config:
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      vault: "0x0000000000000000000000000000000000000000"      # TODO: deployed test VaultV2
+      adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter
+      exposure:                                                # USDC base units (6 decimals)
+        perRequestMaxUsdc: "100000"
+        totalSleeveMaxUsdc: "500000"
+        maxConcurrentLoans: 10
+      intervals:
+        discover: 1h
+        redeemPoll: 5m
+        reconcile: 15m

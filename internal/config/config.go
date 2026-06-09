@@ -21,9 +21,8 @@ type Config struct {
 	TxManager TxManagerConfig `yaml:"txManager"`
 	// Solvers is the set of solvers to run in one process — at most one entry per solver type. They
 	// share the chain client, signer, and (crucially) the single nonce-serialized txManager, so they
-	// never race on nonces. `solver` (singular) is the legacy single-solver form and is folded in.
-	Solvers       []SolverConfig      `yaml:"solvers,omitempty"`
-	Solver        SolverConfig        `yaml:"solver,omitempty"`
+	// never race on nonces.
+	Solvers       []SolverConfig      `yaml:"solvers"`
 	Observability ObservabilityConfig `yaml:"observability"`
 }
 
@@ -113,12 +112,6 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	// Fold the legacy single `solver` block into the `solvers` list so the rest of the code only
-	// deals with the list form.
-	if c.Solver.Name != "" {
-		c.Solvers = append(c.Solvers, c.Solver)
-		c.Solver = SolverConfig{}
-	}
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
 	}

@@ -34,31 +34,26 @@ observability:
   debug: false                          # debug-level logging; the --debug CLI flag overrides this
   # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
-# Run one solver (the `solver:` block below) or several at once with a `solvers:` list — at most one
-# entry per solver type. Every solver in the process shares the chain client, signer, and the single
-# nonce-serialized txManager, so they never race on nonces. Multi-solver form:
-#   solvers:
-#     - name: 3f-bridge-facilitator
-#       config: { ... }
-#     - name: rfq-filler
-#       config: { ... }
-solver:
-  name: 3f-bridge-facilitator           # registry key selecting the implementation
-  config:                               # opaque to the framework; typed by the 3F solver
-    apiBaseUrl: https://bf.dev.gcp.3f.xyz
-    # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
-                                          # generates one at startup (EIP-712) and re-auths on 401/403.
-    minReturnBps: 100                     # don't bid below this yield (basis points)
-    redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
-    # The single vault+adapter pair this facilitator serves. 3F registers exactly one offer-address
-    # per facilitator, so this solver is single-pair by construction.
-    vault: "0x0000000000000000000000000000000000000000"
-    adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
-    exposure:                             # amounts are USDC base units (6 decimals): "250000" = 0.25 USDC
-      perRequestMaxUsdc: "250000"
-      totalSleeveMaxUsdc: "1000000"
-      maxConcurrentLoans: 10
-    intervals:
-      discover: 1h
-      redeemPoll: 5m
-      reconcile: 15m
+# `solvers` runs one or more solvers in this process — at most one entry per solver type. Every solver
+# shares the chain client, signer, and the single nonce-serialized txManager, so they never race on
+# nonces. Add more entries (e.g. an `rfq-filler` alongside the 3F one) to run them together.
+solvers:
+  - name: 3f-bridge-facilitator           # registry key selecting the implementation
+    config:                               # opaque to the framework; typed by the 3F solver
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
+                                            # generates one at startup (EIP-712) and re-auths on 401/403.
+      minReturnBps: 100                     # don't bid below this yield (basis points)
+      redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
+      # The single vault+adapter pair this facilitator serves. 3F registers exactly one offer-address
+      # per facilitator, so this solver is single-pair by construction.
+      vault: "0x0000000000000000000000000000000000000000"
+      adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
+      exposure:                             # amounts are USDC base units (6 decimals): "250000" = 0.25 USDC
+        perRequestMaxUsdc: "250000"
+        totalSleeveMaxUsdc: "1000000"
+        maxConcurrentLoans: 10
+      intervals:
+        discover: 1h
+        redeemPoll: 5m
+        reconcile: 15m

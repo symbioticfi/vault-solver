@@ -21,17 +21,17 @@ observability:
   addr: ":9090" # /metrics, /healthz, /readyz (separate from the quote server below)
   # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
-solver:
-  name: rfq-filler
-  config:
-    backendUrl: ${RFQ_BACKEND_URL}
-    backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
-    listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
-    # Hoodi RFQ deployment:
-    executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
-    adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
-    reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time (P2)
-    curatorRegistry: "0xa0159c29ff365c478ba858b0da062ad096575c02" # discount/permission (P3)
-    quoteDiscountBps: 1000 # 10.00% discount applied to oracle pricing
-    pollIntervalMs: 3000 # backend order poll cadence (P2)
-    orderLimit: 20 # max open orders fetched per poll (P2)
+solvers:
+  - name: rfq-filler
+    config:
+      backendUrl: ${RFQ_BACKEND_URL}
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+      listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
+      # Hoodi RFQ deployment:
+      executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
+      adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
+      reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time (P2)
+      curatorRegistry: "0xa0159c29ff365c478ba858b0da062ad096575c02" # discount/permission (P3)
+      quoteDiscountBps: 1000 # 10.00% discount applied to oracle pricing
+      pollIntervalMs: 3000 # backend order poll cadence (P2)
+      orderLimit: 20 # max open orders fetched per poll (P2)
