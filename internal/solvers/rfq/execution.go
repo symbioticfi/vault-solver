@@ -48,7 +48,6 @@ type executionService struct {
 	executor        common.Address
 	curatorRegistry common.Address
 	orderLimit      int
-	discountBps     uint64
 	vaults          []common.Address
 	backend         orderBackend
 	store           *store
@@ -288,7 +287,7 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	best := selectBestStrategy(req, inv, tokenInDecimals, e.discountBps, oracle, e.now())
+	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, e.now())
 	if best == nil || best.QuotedAmountOut.Cmp(required) < 0 {
 		return nil, nil
 	}

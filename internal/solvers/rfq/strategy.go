@@ -8,11 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// Fixed-point scales matching the on-chain adapter's rate math.
-var (
-	rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil) // 1e18, the adapter rate scale
-	bpsScale  = big.NewInt(10_000)
-)
+// rateScale is the adapter's fixed-point rate scale (1e18).
+var rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
 // solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
 // (the filler does not re-read maxAssets/maxRate/decimals on-chain in the quote path). "adapter" is
@@ -62,8 +59,8 @@ type strategyRequest struct {
 }
 
 // selectBestStrategy picks the best single-asset strategy for the request. It is a pure function:
-// oracleByAsset supplies the pre-fetched adapter.getAmountOut(tokenIn, asset, amount) for each
-// candidate asset, and `now` is injected, so it is fully unit-testable.
+// oracleByAsset supplies the pre-fetched adapter.getAmountOut(tokenIn, amount) for each candidate
+// asset, and `now` is injected, so it is fully unit-testable.
 //
 // It groups inventories by asset, evaluates each group whose asset matches tokenOut, and picks the
 // highest quotedAmountOut (tie-broken by assetAmountOut). Groups are iterated in sorted asset order
@@ -72,7 +69,6 @@ func selectBestStrategy(
 	req strategyRequest,
 	inventories []solverInventory,
 	tokenInDecimals int,
-	quoteDiscountBps uint64,
 	oracleByAsset map[common.Address]*big.Int,
 	now time.Time,
 ) *strategyRecord {
@@ -90,7 +86,7 @@ func selectBestStrategy(
 		if oracle == nil {
 			continue // no oracle price fetched for this asset
 		}
-		cand := evaluateGroup(req, groups[asset], tokenInDecimals, quoteDiscountBps, oracle, now)
+		cand := evaluateGroup(req, groups[asset], tokenInDecimals, oracle, now)
 		if cand == nil {
 			continue
 		}
@@ -122,7 +118,6 @@ func evaluateGroup(
 	req strategyRequest,
 	group []solverInventory,
 	tokenInDecimals int,
-	quoteDiscountBps uint64,
 	oracleAmountOut *big.Int,
 	now time.Time,
 ) *strategyRecord {
@@ -132,8 +127,8 @@ func evaluateGroup(
 		return nil // this filler only fills when the output token is the adapter asset
 	}
 
-	privateQuoted := applyQuoteDiscount(oracleAmountOut, quoteDiscountBps)
-	privateRate := rateForAmountOut(privateQuoted, req.Amount, tokenInDecimals, assetDecimals)
+	// The quoted output is the adapter's oracle amountOut (no extra quote discount is applied).
+	privateRate := rateForAmountOut(oracleAmountOut, req.Amount, tokenInDecimals, assetDecimals)
 
 	eligible := make([]eligibleLeg, 0, len(group))
 	for _, inv := range group {
@@ -277,16 +272,6 @@ func minAmountInForAmountOut(amountOut, rate *big.Int, tokenInDec, assetDec int)
 	num.Mul(num, pow10(tokenInDec))
 	num.Add(num, new(big.Int).Sub(den, big.NewInt(1))) // ceil
 	return num.Div(num, den)
-}
-
-// applyQuoteDiscount = amountOut * (10000 - bps) / 10000 (no-op when bps == 0).
-func applyQuoteDiscount(amountOut *big.Int, quoteDiscountBps uint64) *big.Int {
-	if quoteDiscountBps == 0 {
-		return new(big.Int).Set(amountOut)
-	}
-	factor := new(big.Int).Sub(bpsScale, new(big.Int).SetUint64(quoteDiscountBps))
-	num := new(big.Int).Mul(amountOut, factor)
-	return num.Div(num, bpsScale)
 }
 
 // rateForAmountOut = amountOut * RATE_SCALE * 10^tokenInDec / (amountIn * 10^assetDec); 0 when amountIn == 0.
