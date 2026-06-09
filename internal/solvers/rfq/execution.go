@@ -50,13 +50,23 @@ type executionService struct {
 	vaults     []recoveryVault
 	backend    orderBackend
 	store      *store
-	reader     *reader
+	reader     recoveryReader
 	txm        txSender
 	log        logr.Logger
 	now        func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
+}
+
+// recoveryReader is the on-chain surface strategy recovery needs (satisfied by *reader). It extends
+// the quote path's priceReader with the permissioned-inventory read; kept an interface so recovery is
+// unit-testable without a chain backend.
+type recoveryReader interface {
+	priceReader
+	readPermissionedVaultInventories(
+		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
+	) ([]solverInventory, error)
 }
 
 func (e *executionService) run(ctx context.Context, interval time.Duration) {
@@ -246,12 +256,11 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	}
 }
 
-// recoverStrategy rebuilds a strategy from current on-chain state when the quote-time strategy is
-// not cached (e.g. after a restart). Requires a configured candidate vault universe.
+// recoverStrategy rebuilds a strategy from current on-chain + backend state when the quote-time
+// strategy is not cached (e.g. after a restart). Direct inventories come from the configured candidate
+// vault universe; discount inventories come from the backend (independent of config), so a discount-only
+// solver recovers with an empty `vaults` list. Bails only when neither source yields any inventory.
 func (e *executionService) recoverStrategy(ctx context.Context, exec *executable) (*strategyRecord, error) {
-	if len(e.vaults) == 0 {
-		return nil, nil
-	}
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
 		return nil, err
@@ -264,10 +273,15 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 	if err != nil {
 		return nil, err
 	}
-	// Direct inventories are filtered to adapters this executor is authorized to fill through.
-	inv, err := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
-	if err != nil {
-		return nil, err
+	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
+	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
+	inv := make([]solverInventory, 0, len(e.vaults)+1)
+	if len(e.vaults) > 0 {
+		direct, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
+		if derr != nil {
+			return nil, derr
+		}
+		inv = append(inv, direct...)
 	}
 	inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
 	if len(inv) == 0 {
