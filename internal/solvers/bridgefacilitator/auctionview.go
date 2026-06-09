@@ -20,18 +20,23 @@ type auctionView struct {
 // vault, so assets (not vault addresses) are what pair them. The adapter also enforces this on-chain
 // (AssetMismatch), so this is the off-chain pre-filter.
 func (a auctionView) matchesAsset(want common.Address) bool {
-	if a.dto.DepositAsset == nil || !common.IsHexAddress(a.dto.DepositAsset.Address) {
+	addr := a.depositAsset()
+	if !common.IsHexAddress(addr) {
 		return false
 	}
-	return common.HexToAddress(a.dto.DepositAsset.Address) == want
+	return common.HexToAddress(addr) == want
 }
 
 // depositAsset returns the auction's deposit-asset address string for logging ("" if absent).
 func (a auctionView) depositAsset() string {
-	if a.dto.DepositAsset == nil {
+	da, ok := a.dto.GetDepositAssetOk()
+	if !ok || da == nil {
 		return ""
 	}
-	return a.dto.DepositAsset.Address
+	if addr, hasAddr := da.GetAddressOk(); hasAddr && addr != nil {
+		return *addr
+	}
+	return ""
 }
 
 // isOpen reports whether the auction status permits offers.
@@ -47,12 +52,23 @@ func (a auctionView) requestAddr() common.Address {
 	return common.HexToAddress(a.dto.RequestId)
 }
 
+// maxRate returns the auction's current max rate (basis points) as a float64, or 0 if the API
+// didn't resolve it (for logging only).
+func (a auctionView) maxRate() float64 {
+	r, ok := a.dto.GetMaxRateOk()
+	if !ok || r == nil {
+		return 0
+	}
+	return float64(*r)
+}
+
 // amountRequested returns the requested principal, or nil if the API didn't resolve it.
 func (a auctionView) amountRequested() *big.Int {
-	if a.dto.AmountRequested == nil {
+	s, ok := a.dto.GetAmountRequestedOk()
+	if !ok || s == nil {
 		return nil
 	}
-	n, ok := new(big.Int).SetString(*a.dto.AmountRequested, 10)
+	n, ok := new(big.Int).SetString(*s, 10)
 	if !ok {
 		return nil
 	}

@@ -85,7 +85,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (pricing, discount, leg selection) |
 | `execution.ts` | `execution.go` (poll loop, order state machine, fill, recovery) |
 | `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
-| `backend.ts` + `discounts.ts` | `backend.go` (backend HTTP client: `/orders`, `/discounts`) |
+| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client: `/orders`, `/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
 | `domain.ts` | `store.go` types + `strategy.go` types (records, legs, inventories) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
@@ -212,8 +212,8 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
 ### Backend OpenAPI spec (vendored)
 
 The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generated at runtime). It is
-vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `backend.go` client
-structs are verified against, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
+vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is
+generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
 
 - **The temp railway deployment is stale.** As of this writing it is built from a commit *before* the
   backend renamed discount `vault`→`adapter` and order `signature`→`protocolSignature`, so its served
@@ -221,7 +221,13 @@ structs are verified against, and refreshed with `make refresh-rfq-openapi` (`RF
   generated from **current backend code**, not that deployment. Until the deployment is refreshed,
   regenerate the vendored spec from a backend running current code — e.g. `pnpm tsx
   scripts/dump-openapi.ts` in `rfq-backend` (builds the Hono app in-process, no DB, dumps the spec).
-- **No generated Go client** (unlike 3F's `make openapi-client`). hono-openapi inlines every schema
-  (no `components`/`$refs`, `anyOf` unions), so `oapi-codegen` would emit unusable anonymous types.
-  The hand-written `backend.go` client is intentionally kept and verified field-for-field against the
-  vendored spec instead.
+- **Generated Go client (`api/rfqbackend/`).** The spec now carries `components` schemas with `$ref`s
+  (the earlier hono-openapi all-inlined limitation is fixed), so the client is generated with the Java
+  **openapi-generator** (`make refresh-rfq-client`) — the only generator that ingests this OpenAPI 3.1
+  spec (`oapi-codegen`/kin-openapi and `ogen` both reject its numeric `exclusiveMinimum` + `type:[…,null]`
+  unions; see the Makefile note). `backend.go` is now a thin adapter that calls the generated client and
+  projects its models into the solver's internal domain rows. Two deliberate carry-overs: the generated
+  client embeds the spec's `/api/v1` path prefix (so `backendUrl` is the host root), and the
+  `ResolveDiscountResponse` `anyOf` union is consumed via its single shape (the batch shape is accepted
+  only when it contains exactly one entry — fail closed). `apitypes.go` is unchanged: it is the filler's
+  own inbound `/quote` server contract (Huma validation tags), not a backend-client type.

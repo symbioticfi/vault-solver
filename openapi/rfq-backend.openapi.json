@@ -2,13 +2,1380 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Symbiotic RFQ Backend API",
-    "description": "Public RFQ backend API for approval checks, quote creation, order submission, and order polling.",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "description": "Public RFQ backend API for approval checks, quote creation, order submission, and order polling."
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ]
+      },
+      "ApprovalCheckResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "approval": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "to": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "data": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "to",
+              "data",
+              "value"
+            ]
+          },
+          "cancel": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "requestId",
+          "approval",
+          "cancel"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ApprovalCheckRequest": {
+        "type": "object",
+        "properties": {
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "chainId": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          }
+        },
+        "required": [
+          "walletAddress",
+          "chainId",
+          "token",
+          "amount"
+        ]
+      },
+      "LocalFundResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "fundedEth": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          },
+          "fundedToken": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          }
+        },
+        "required": [
+          "requestId",
+          "walletAddress",
+          "fundedEth",
+          "fundedToken",
+          "token"
+        ]
+      },
+      "LocalFundRequest": {
+        "type": "object",
+        "properties": {
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          }
+        },
+        "required": [
+          "walletAddress"
+        ]
+      },
+      "LocalFaucetResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "symbol": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decimals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "amount": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "erc20"
+                  ]
+                }
+              },
+              "required": [
+                "token",
+                "symbol",
+                "name",
+                "decimals",
+                "amount",
+                "kind"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "assets"
+        ]
+      },
+      "LocalFaucetFundResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "fundedAssets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "symbol": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decimals": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "amount": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "erc20"
+                  ]
+                }
+              },
+              "required": [
+                "token",
+                "symbol",
+                "name",
+                "decimals",
+                "amount",
+                "kind"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "walletAddress",
+          "fundedAssets"
+        ]
+      },
+      "PublicQuoteResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "routing": {
+            "type": "string",
+            "enum": [
+              "Priority"
+            ]
+          },
+          "quote": {
+            "type": "object",
+            "properties": {
+              "quoteId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "slippageTolerance": {
+                "type": "number",
+                "minimum": 0
+              },
+              "aggregatedOutputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "amount"
+                  ]
+                }
+              },
+              "orderInfo": {
+                "type": "object",
+                "properties": {
+                  "tokenIn": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "amountIn": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "outputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "recipient": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        },
+                        "portionBps": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10000
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "recipient",
+                        "amount"
+                      ]
+                    }
+                  },
+                  "deadline": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]+$"
+                  }
+                },
+                "required": [
+                  "tokenIn",
+                  "amountIn",
+                  "outputs",
+                  "deadline",
+                  "nonce"
+                ]
+              }
+            },
+            "required": [
+              "quoteId",
+              "slippageTolerance",
+              "aggregatedOutputs",
+              "orderInfo"
+            ]
+          },
+          "signatureData": {
+            "type": "object",
+            "properties": {
+              "domain": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "types": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "primaryType": {
+                "type": "string"
+              },
+              "value": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "domain",
+              "types",
+              "primaryType",
+              "value"
+            ]
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "solver": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "filler": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "filler",
+                    "metadata"
+                  ]
+                },
+                "quote": {
+                  "type": "object",
+                  "properties": {
+                    "quoteId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "slippageTolerance": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "aggregatedOutputs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "token": {
+                            "type": "string",
+                            "pattern": "^0x[a-fA-F0-9]{40}$"
+                          },
+                          "amount": {
+                            "type": "string",
+                            "pattern": "^\\d+$"
+                          }
+                        },
+                        "required": [
+                          "token",
+                          "amount"
+                        ]
+                      }
+                    },
+                    "orderInfo": {
+                      "type": "object",
+                      "properties": {
+                        "tokenIn": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "amountIn": {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        },
+                        "outputs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "token": {
+                                "type": "string",
+                                "pattern": "^0x[a-fA-F0-9]{40}$"
+                              },
+                              "recipient": {
+                                "type": "string",
+                                "pattern": "^0x[a-fA-F0-9]{40}$"
+                              },
+                              "amount": {
+                                "type": "string",
+                                "pattern": "^\\d+$"
+                              },
+                              "portionBps": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10000
+                              }
+                            },
+                            "required": [
+                              "token",
+                              "recipient",
+                              "amount"
+                            ]
+                          }
+                        },
+                        "deadline": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "nonce": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]+$"
+                        }
+                      },
+                      "required": [
+                        "tokenIn",
+                        "amountIn",
+                        "outputs",
+                        "deadline",
+                        "nonce"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "quoteId",
+                    "slippageTolerance",
+                    "aggregatedOutputs",
+                    "orderInfo"
+                  ]
+                },
+                "signatureData": {
+                  "type": "object",
+                  "properties": {
+                    "domain": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "types": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "primaryType": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "domain",
+                    "types",
+                    "primaryType",
+                    "value"
+                  ]
+                }
+              },
+              "required": [
+                "solver",
+                "quote",
+                "signatureData"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "routing",
+          "quote",
+          "signatureData"
+        ]
+      },
+      "QuoteRequest": {
+        "type": "object",
+        "properties": {
+          "tokenInChainId": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "tokenOutChainId": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "tokenIn": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "tokenOut": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "EXACT_INPUT"
+            ]
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          },
+          "swapper": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "slippageTolerance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "routingPreference": {
+            "type": "string",
+            "enum": [
+              "BEST_PRICE",
+              "FASTEST"
+            ],
+            "default": "BEST_PRICE"
+          },
+          "permitAmount": {
+            "type": "string",
+            "enum": [
+              "EXACT"
+            ]
+          },
+          "solverIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "recipient": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "description": "Defaults to swapper when omitted for backward compatibility."
+                },
+                "portionBps": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "token"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "tokenInChainId",
+          "tokenOutChainId",
+          "tokenIn",
+          "tokenOut",
+          "type",
+          "amount",
+          "swapper",
+          "slippageTolerance",
+          "outputs"
+        ]
+      },
+      "LiquidityResponse": {
+        "type": "object",
+        "properties": {
+          "tokenIn": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "tokenOut": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "amountIn": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "amountOut": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "priceImpactBps": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "amountIn",
+                "amountOut",
+                "priceImpactBps"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tokenIn",
+          "tokenOut",
+          "quotes"
+        ]
+      },
+      "LiquidityRequest": {
+        "type": "object",
+        "properties": {
+          "tokenIn": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "solverIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "tokenIn"
+        ]
+      },
+      "DiscountsResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "protocol": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "discountId": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{64}$"
+                },
+                "adapter": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "tokenToRedeem": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "collateral": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "collateralDecimals": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "discount": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "signer": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "deadline": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "maxRate": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "maxAssets": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                }
+              },
+              "required": [
+                "discountId",
+                "adapter",
+                "tokenToRedeem",
+                "collateral",
+                "collateralDecimals",
+                "discount",
+                "signer",
+                "deadline",
+                "maxRate",
+                "maxAssets"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "protocol",
+          "discounts"
+        ]
+      },
+      "PublishDiscountResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "discountId": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$"
+          }
+        },
+        "required": [
+          "requestId",
+          "discountId"
+        ]
+      },
+      "PublishDiscountRequest": {
+        "type": "object",
+        "properties": {
+          "discount": {
+            "type": "object",
+            "properties": {
+              "adapter": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "tokenToRedeem": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "discount": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "signer": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "protocol": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "nonce": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              },
+              "deadline": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "adapter",
+              "tokenToRedeem",
+              "discount",
+              "signer",
+              "protocol",
+              "nonce",
+              "deadline"
+            ]
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$"
+          }
+        },
+        "required": [
+          "discount",
+          "signature"
+        ]
+      },
+      "ResolveDiscountResponse": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "discountId": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{64}$"
+              },
+              "discount": {
+                "type": "object",
+                "properties": {
+                  "adapter": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "tokenToRedeem": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "discount": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "signer": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]+$"
+                  },
+                  "deadline": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "adapter",
+                  "tokenToRedeem",
+                  "discount",
+                  "signer",
+                  "protocol",
+                  "nonce",
+                  "deadline"
+                ]
+              },
+              "signerSignature": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              },
+              "protocolDeadline": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "protocolSignature": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              }
+            },
+            "required": [
+              "requestId",
+              "discountId",
+              "discount",
+              "signerSignature",
+              "protocolDeadline",
+              "protocolSignature"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "discounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "discountId": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{64}$"
+                    },
+                    "discount": {
+                      "type": "object",
+                      "properties": {
+                        "adapter": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "tokenToRedeem": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "discount": {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        },
+                        "signer": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "nonce": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]+$"
+                        },
+                        "deadline": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "required": [
+                        "adapter",
+                        "tokenToRedeem",
+                        "discount",
+                        "signer",
+                        "protocol",
+                        "nonce",
+                        "deadline"
+                      ]
+                    },
+                    "signerSignature": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]+$"
+                    },
+                    "protocolDeadline": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "protocolSignature": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]+$"
+                    }
+                  },
+                  "required": [
+                    "discountId",
+                    "discount",
+                    "signerSignature",
+                    "protocolDeadline",
+                    "protocolSignature"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "requestId",
+              "discounts"
+            ]
+          }
+        ]
+      },
+      "CreateOrderResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderStatus": {
+            "type": "string",
+            "enum": [
+              "open",
+              "expired",
+              "error",
+              "cancelled",
+              "filled",
+              "unverified",
+              "insufficient-funds"
+            ]
+          }
+        },
+        "required": [
+          "requestId",
+          "orderId",
+          "orderStatus"
+        ]
+      },
+      "CreateOrderRequest": {
+        "type": "object",
+        "properties": {
+          "quote": {
+            "type": "object",
+            "properties": {
+              "quoteId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "slippageTolerance": {
+                "type": "number",
+                "minimum": 0
+              },
+              "aggregatedOutputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "amount"
+                  ]
+                }
+              },
+              "orderInfo": {
+                "type": "object",
+                "properties": {
+                  "tokenIn": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "amountIn": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "outputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        },
+                        "recipient": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "amount",
+                        "recipient"
+                      ]
+                    }
+                  },
+                  "deadline": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]+$"
+                  }
+                },
+                "required": [
+                  "tokenIn",
+                  "amountIn",
+                  "outputs",
+                  "deadline",
+                  "nonce"
+                ]
+              }
+            },
+            "required": [
+              "quoteId",
+              "slippageTolerance",
+              "aggregatedOutputs",
+              "orderInfo"
+            ]
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$"
+          }
+        },
+        "required": [
+          "quote",
+          "signature"
+        ]
+      },
+      "OrdersResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "Priority"
+                  ]
+                },
+                "orderId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "orderStatus": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "expired",
+                    "error",
+                    "cancelled",
+                    "filled",
+                    "unverified",
+                    "insufficient-funds"
+                  ]
+                },
+                "quoteId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "swapper": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "txHash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^0x[a-fA-F0-9]+$"
+                },
+                "nonce": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "amount"
+                  ]
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string",
+                        "pattern": "^0x[a-fA-F0-9]{40}$"
+                      },
+                      "recipient": {
+                        "type": "string",
+                        "pattern": "^0x[a-fA-F0-9]{40}$"
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+$"
+                      },
+                      "portionBps": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "recipient",
+                      "amount"
+                    ]
+                  }
+                },
+                "settledAmounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string",
+                        "pattern": "^0x[a-fA-F0-9]{40}$"
+                      },
+                      "amount": {
+                        "type": "string",
+                        "pattern": "^\\d+$"
+                      },
+                      "recipient": {
+                        "type": "string",
+                        "pattern": "^0x[a-fA-F0-9]{40}$"
+                      },
+                      "txHash": {
+                        "type": "string",
+                        "pattern": "^0x[a-fA-F0-9]+$"
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "amount",
+                      "recipient",
+                      "txHash"
+                    ]
+                  }
+                },
+                "encodedOrder": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]+$"
+                },
+                "protocolSignature": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]+$"
+                },
+                "deadline": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "filler": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                }
+              },
+              "required": [
+                "type",
+                "orderId",
+                "orderStatus",
+                "quoteId",
+                "swapper",
+                "txHash",
+                "nonce",
+                "input",
+                "outputs",
+                "settledAmounts"
+              ]
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requestId",
+          "orders",
+          "cursor"
+        ]
+      }
+    },
+    "parameters": {}
   },
   "paths": {
     "/api/v1/health": {
       "get": {
-        "operationId": "getApiV1Health",
         "tags": [
           "System"
         ],
@@ -19,20 +1386,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "const": "ok"
-                    },
-                    "timestamp": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "status",
-                    "timestamp"
-                  ]
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             }
@@ -42,60 +1396,28 @@
     },
     "/api/v1/check_approval": {
       "post": {
-        "operationId": "postApiV1CheckApproval",
         "tags": [
           "RFQ"
         ],
         "summary": "Check Reactor approval",
         "description": "Returns an ERC-20 approval payload when Reactor allowance is insufficient.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalCheckRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Approval state resolved",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "approval": {
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "to": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "data": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]+$"
-                            },
-                            "value": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "to",
-                            "data",
-                            "value"
-                          ]
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "cancel": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "approval",
-                    "cancel"
-                  ]
+                  "$ref": "#/components/schemas/ApprovalCheckResponse"
                 }
               }
             }
@@ -105,51 +1427,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "walletAddress": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "chainId": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "token": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "amount": {
-                    "type": "string",
-                    "pattern": "^\\d+$"
-                  }
-                },
-                "required": [
-                  "walletAddress",
-                  "chainId",
-                  "token",
-                  "amount"
-                ]
               }
             }
           }
@@ -158,47 +1437,28 @@
     },
     "/api/v1/dev/fund": {
       "post": {
-        "operationId": "postApiV1DevFund",
         "tags": [
           "Development"
         ],
         "summary": "Fund a local wallet",
         "description": "Local-only helper that tops a wallet up with ETH and the local input token.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalFundRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Wallet funding result",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "walletAddress": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "fundedEth": {
-                      "type": "string",
-                      "pattern": "^\\d+$"
-                    },
-                    "fundedToken": {
-                      "type": "string",
-                      "pattern": "^\\d+$"
-                    },
-                    "token": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "walletAddress",
-                    "fundedEth",
-                    "fundedToken",
-                    "token"
-                  ]
+                  "$ref": "#/components/schemas/LocalFundResponse"
                 }
               }
             }
@@ -208,15 +1468,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -226,35 +1478,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "walletAddress": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  }
-                },
-                "required": [
-                  "walletAddress"
-                ]
               }
             }
           }
@@ -263,7 +1488,6 @@
     },
     "/api/v1/dev/faucet": {
       "get": {
-        "operationId": "getApiV1DevFaucet",
         "tags": [
           "Development"
         ],
@@ -275,60 +1499,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "assets": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "token": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "symbol": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "decimals": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "amount": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "native",
-                              "erc20"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "token",
-                          "symbol",
-                          "name",
-                          "decimals",
-                          "amount",
-                          "kind"
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "assets"
-                  ]
+                  "$ref": "#/components/schemas/LocalFaucetResponse"
                 }
               }
             }
@@ -338,15 +1509,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -354,77 +1517,28 @@
         }
       },
       "post": {
-        "operationId": "postApiV1DevFaucet",
         "tags": [
           "Development"
         ],
         "summary": "Fund a wallet from the faucet",
         "description": "Development/test helper that transfers the full faucet bundle to the requested wallet.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalFundRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Wallet funded from faucet",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "walletAddress": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "fundedAssets": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "token": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "symbol": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "name": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "decimals": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "amount": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "kind": {
-                            "type": "string",
-                            "enum": [
-                              "native",
-                              "erc20"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "token",
-                          "symbol",
-                          "name",
-                          "decimals",
-                          "amount",
-                          "kind"
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "walletAddress",
-                    "fundedAssets"
-                  ]
+                  "$ref": "#/components/schemas/LocalFaucetFundResponse"
                 }
               }
             }
@@ -434,15 +1548,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -452,15 +1558,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -470,35 +1568,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "walletAddress": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  }
-                },
-                "required": [
-                  "walletAddress"
-                ]
               }
             }
           }
@@ -507,367 +1578,28 @@
     },
     "/api/v1/quote": {
       "post": {
-        "operationId": "postApiV1Quote",
         "tags": [
           "RFQ"
         ],
         "summary": "Request a quote",
         "description": "Returns an indicative quote or 404 when no solver can quote.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Quote available",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "routing": {
-                      "type": "string",
-                      "const": "Priority"
-                    },
-                    "quote": {
-                      "type": "object",
-                      "properties": {
-                        "quoteId": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "slippageTolerance": {
-                          "type": "number",
-                          "minimum": 0
-                        },
-                        "aggregatedOutputs": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "token": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]{40}$"
-                              },
-                              "amount": {
-                                "type": "string",
-                                "pattern": "^\\d+$"
-                              }
-                            },
-                            "required": [
-                              "token",
-                              "amount"
-                            ]
-                          }
-                        },
-                        "orderInfo": {
-                          "type": "object",
-                          "properties": {
-                            "tokenIn": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "amountIn": {
-                              "type": "string",
-                              "pattern": "^\\d+$"
-                            },
-                            "outputs": {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "token": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "recipient": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "amount": {
-                                    "type": "string",
-                                    "pattern": "^\\d+$"
-                                  },
-                                  "portionBps": {
-                                    "type": "integer",
-                                    "minimum": 0,
-                                    "maximum": 10000
-                                  }
-                                },
-                                "required": [
-                                  "token",
-                                  "recipient",
-                                  "amount"
-                                ]
-                              }
-                            },
-                            "deadline": {
-                              "type": "integer",
-                              "exclusiveMinimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "nonce": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]+$"
-                            }
-                          },
-                          "required": [
-                            "tokenIn",
-                            "amountIn",
-                            "outputs",
-                            "deadline",
-                            "nonce"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "quoteId",
-                        "slippageTolerance",
-                        "aggregatedOutputs",
-                        "orderInfo"
-                      ]
-                    },
-                    "permitData": {
-                      "type": "object",
-                      "properties": {
-                        "domain": {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {}
-                        },
-                        "types": {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "additionalProperties": {
-                                "type": "string"
-                              }
-                            }
-                          }
-                        },
-                        "primaryType": {
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "object",
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": [
-                        "domain",
-                        "types",
-                        "primaryType",
-                        "value"
-                      ]
-                    },
-                    "quotes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "solver": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              "name": {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              "filler": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]{40}$"
-                              },
-                              "metadata": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {}
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "name",
-                              "filler",
-                              "metadata"
-                            ]
-                          },
-                          "quote": {
-                            "type": "object",
-                            "properties": {
-                              "quoteId": {
-                                "type": "string",
-                                "format": "uuid",
-                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                              },
-                              "slippageTolerance": {
-                                "type": "number",
-                                "minimum": 0
-                              },
-                              "aggregatedOutputs": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "token": {
-                                      "type": "string",
-                                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                                    },
-                                    "amount": {
-                                      "type": "string",
-                                      "pattern": "^\\d+$"
-                                    }
-                                  },
-                                  "required": [
-                                    "token",
-                                    "amount"
-                                  ]
-                                }
-                              },
-                              "orderInfo": {
-                                "type": "object",
-                                "properties": {
-                                  "tokenIn": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "amountIn": {
-                                    "type": "string",
-                                    "pattern": "^\\d+$"
-                                  },
-                                  "outputs": {
-                                    "type": "array",
-                                    "items": {
-                                      "type": "object",
-                                      "properties": {
-                                        "token": {
-                                          "type": "string",
-                                          "pattern": "^0x[a-fA-F0-9]{40}$"
-                                        },
-                                        "recipient": {
-                                          "type": "string",
-                                          "pattern": "^0x[a-fA-F0-9]{40}$"
-                                        },
-                                        "amount": {
-                                          "type": "string",
-                                          "pattern": "^\\d+$"
-                                        },
-                                        "portionBps": {
-                                          "type": "integer",
-                                          "minimum": 0,
-                                          "maximum": 10000
-                                        }
-                                      },
-                                      "required": [
-                                        "token",
-                                        "recipient",
-                                        "amount"
-                                      ]
-                                    }
-                                  },
-                                  "deadline": {
-                                    "type": "integer",
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 9007199254740991
-                                  },
-                                  "nonce": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]+$"
-                                  }
-                                },
-                                "required": [
-                                  "tokenIn",
-                                  "amountIn",
-                                  "outputs",
-                                  "deadline",
-                                  "nonce"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "quoteId",
-                              "slippageTolerance",
-                              "aggregatedOutputs",
-                              "orderInfo"
-                            ]
-                          },
-                          "permitData": {
-                            "type": "object",
-                            "properties": {
-                              "domain": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {}
-                              },
-                              "types": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "propertyNames": {
-                                      "type": "string"
-                                    },
-                                    "additionalProperties": {
-                                      "type": "string"
-                                    }
-                                  }
-                                }
-                              },
-                              "primaryType": {
-                                "type": "string"
-                              },
-                              "value": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {}
-                              }
-                            },
-                            "required": [
-                              "domain",
-                              "types",
-                              "primaryType",
-                              "value"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "solver",
-                          "quote",
-                          "permitData"
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "routing",
-                    "quote",
-                    "permitData"
-                  ]
+                  "$ref": "#/components/schemas/PublicQuoteResponse"
                 }
               }
             }
@@ -877,15 +1609,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -895,120 +1619,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "tokenInChainId": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "tokenOutChainId": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "tokenIn": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "tokenOut": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "type": {
-                    "type": "string",
-                    "const": "EXACT_INPUT"
-                  },
-                  "amount": {
-                    "type": "string",
-                    "pattern": "^\\d+$"
-                  },
-                  "swapper": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "slippageTolerance": {
-                    "type": "number",
-                    "minimum": 0
-                  },
-                  "routingPreference": {
-                    "default": "BEST_PRICE",
-                    "type": "string",
-                    "enum": [
-                      "BEST_PRICE",
-                      "FASTEST"
-                    ]
-                  },
-                  "permitAmount": {
-                    "type": "string",
-                    "const": "EXACT"
-                  },
-                  "solverIds": {
-                    "minItems": 1,
-                    "maxItems": 50,
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  },
-                  "outputs": {
-                    "minItems": 1,
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "token": {
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]{40}$"
-                        },
-                        "recipient": {
-                          "description": "Defaults to swapper when omitted for backward compatibility.",
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]{40}$"
-                        },
-                        "portionBps": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 10000
-                        }
-                      },
-                      "required": [
-                        "token"
-                      ]
-                    }
-                  }
-                },
-                "required": [
-                  "tokenInChainId",
-                  "tokenOutChainId",
-                  "tokenIn",
-                  "tokenOut",
-                  "type",
-                  "amount",
-                  "swapper",
-                  "slippageTolerance",
-                  "outputs"
-                ]
               }
             }
           }
@@ -1017,67 +1629,28 @@
     },
     "/api/v1/liquidity": {
       "post": {
-        "operationId": "postApiV1Liquidity",
         "tags": [
           "RFQ"
         ],
         "summary": "Check available liquidity",
         "description": "Requests best solver quotes for configured input amounts and reports oracle-relative price impact when a Midas oracle is configured.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiquidityRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Liquidity quotes available",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "tokenIn": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "tokenOut": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "quotes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "amountIn": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "amountOut": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "priceImpactBps": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "amountIn",
-                          "amountOut",
-                          "priceImpactBps"
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "tokenIn",
-                    "tokenOut",
-                    "quotes"
-                  ]
+                  "$ref": "#/components/schemas/LiquidityResponse"
                 }
               }
             }
@@ -1087,15 +1660,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1105,44 +1670,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "tokenIn": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                  },
-                  "solverIds": {
-                    "minItems": 1,
-                    "maxItems": 50,
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  }
-                },
-                "required": [
-                  "tokenIn"
-                ]
               }
             }
           }
@@ -1151,373 +1680,83 @@
     },
     "/api/v1/discounts": {
       "get": {
-        "operationId": "getApiV1Discounts",
         "tags": [
           "RFQ"
         ],
         "summary": "List live discounts",
         "description": "Returns currently live discount-backed inventory for adapter/token pairs.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{64}$"
+            },
+            "required": false,
+            "name": "discountId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "discountIds",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            },
+            "required": false,
+            "name": "adapter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            },
+            "required": false,
+            "name": "tokenToRedeem",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "adapters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "tokensToRedeem",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Live discounts response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "protocol": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "discounts": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "discountId": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{64}$"
-                          },
-                          "adapter": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "tokenToRedeem": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "collateral": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "collateralDecimals": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 255
-                          },
-                          "discount": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "signer": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "deadline": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "maxRate": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "maxAssets": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          }
-                        },
-                        "required": [
-                          "discountId",
-                          "adapter",
-                          "tokenToRedeem",
-                          "collateral",
-                          "collateralDecimals",
-                          "discount",
-                          "signer",
-                          "deadline",
-                          "maxRate",
-                          "maxAssets"
-                        ]
-                      }
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "protocol",
-                    "discounts"
-                  ]
+                  "$ref": "#/components/schemas/DiscountsResponse"
                 }
               }
             }
           }
-        },
-        "parameters": [
-          {
-            "in": "query",
-            "name": "discountId",
-            "schema": {
-              "type": "string",
-              "pattern": "^0x[a-fA-F0-9]{64}$"
-            }
-          },
-          {
-            "in": "query",
-            "name": "discountIds",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "adapter",
-            "schema": {
-              "type": "string",
-              "pattern": "^0x[a-fA-F0-9]{40}$"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tokenToRedeem",
-            "schema": {
-              "type": "string",
-              "pattern": "^0x[a-fA-F0-9]{40}$"
-            }
-          },
-          {
-            "in": "query",
-            "name": "adapters",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tokensToRedeem",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
+        }
       },
       "post": {
-        "operationId": "postApiV1Discounts",
         "tags": [
           "RFQ"
         ],
         "summary": "Resolve a live discount",
         "description": "Returns the stored discount plus a fresh short-lived protocol signature.",
-        "responses": {
-          "200": {
-            "description": "Resolved discount package",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "requestId": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "discountId": {
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]{64}$"
-                        },
-                        "discount": {
-                          "type": "object",
-                          "properties": {
-                            "adapter": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "tokenToRedeem": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "discount": {
-                              "type": "string",
-                              "pattern": "^\\d+$"
-                            },
-                            "signer": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "protocol": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "nonce": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]+$"
-                            },
-                            "deadline": {
-                              "type": "integer",
-                              "exclusiveMinimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          },
-                          "required": [
-                            "adapter",
-                            "tokenToRedeem",
-                            "discount",
-                            "signer",
-                            "protocol",
-                            "nonce",
-                            "deadline"
-                          ]
-                        },
-                        "signerSignature": {
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]+$"
-                        },
-                        "protocolDeadline": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "protocolSignature": {
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]+$"
-                        }
-                      },
-                      "required": [
-                        "requestId",
-                        "discountId",
-                        "discount",
-                        "signerSignature",
-                        "protocolDeadline",
-                        "protocolSignature"
-                      ]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "requestId": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "discounts": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "discountId": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]{64}$"
-                              },
-                              "discount": {
-                                "type": "object",
-                                "properties": {
-                                  "adapter": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "tokenToRedeem": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "discount": {
-                                    "type": "string",
-                                    "pattern": "^\\d+$"
-                                  },
-                                  "signer": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "protocol": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]{40}$"
-                                  },
-                                  "nonce": {
-                                    "type": "string",
-                                    "pattern": "^0x[a-fA-F0-9]+$"
-                                  },
-                                  "deadline": {
-                                    "type": "integer",
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 9007199254740991
-                                  }
-                                },
-                                "required": [
-                                  "adapter",
-                                  "tokenToRedeem",
-                                  "discount",
-                                  "signer",
-                                  "protocol",
-                                  "nonce",
-                                  "deadline"
-                                ]
-                              },
-                              "signerSignature": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]+$"
-                              },
-                              "protocolDeadline": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              "protocolSignature": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]+$"
-                              }
-                            },
-                            "required": [
-                              "discountId",
-                              "discount",
-                              "signerSignature",
-                              "protocolDeadline",
-                              "protocolSignature"
-                            ]
-                          }
-                        }
-                      },
-                      "required": [
-                        "requestId",
-                        "discounts"
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request payload",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Unknown discount",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
-                }
-              }
-            }
-          }
-        },
         "requestBody": {
           "required": true,
           "content": {
@@ -1544,39 +1783,14 @@
               }
             }
           }
-        }
-      }
-    },
-    "/api/v1/discount": {
-      "post": {
-        "operationId": "postApiV1Discount",
-        "tags": [
-          "RFQ"
-        ],
-        "summary": "Publish a live discount",
-        "description": "Validates a reusable discount signature and stores it as the live row for an adapter/token pair.",
+        },
         "responses": {
           "200": {
-            "description": "Discount published",
+            "description": "Resolved discount package",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "discountId": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{64}$"
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "discountId"
-                  ]
+                  "$ref": "#/components/schemas/ResolveDiscountResponse"
                 }
               }
             }
@@ -1586,79 +1800,59 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown discount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           }
-        },
+        }
+      }
+    },
+    "/api/v1/discount": {
+      "post": {
+        "tags": [
+          "RFQ"
+        ],
+        "summary": "Publish a live discount",
+        "description": "Validates a reusable discount signature and stores it as the live row for an adapter/token pair.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "discount": {
-                    "type": "object",
-                    "properties": {
-                      "adapter": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]{40}$"
-                      },
-                      "tokenToRedeem": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]{40}$"
-                      },
-                      "discount": {
-                        "type": "string",
-                        "pattern": "^\\d+$"
-                      },
-                      "signer": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]{40}$"
-                      },
-                      "protocol": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]{40}$"
-                      },
-                      "nonce": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]+$"
-                      },
-                      "deadline": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0,
-                        "maximum": 9007199254740991
-                      }
-                    },
-                    "required": [
-                      "adapter",
-                      "tokenToRedeem",
-                      "discount",
-                      "signer",
-                      "protocol",
-                      "nonce",
-                      "deadline"
-                    ]
-                  },
-                  "signature": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
-                  }
-                },
-                "required": [
-                  "discount",
-                  "signature"
-                ]
+                "$ref": "#/components/schemas/PublishDiscountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Discount published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishDiscountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           }
@@ -1667,46 +1861,28 @@
     },
     "/api/v1/order": {
       "post": {
-        "operationId": "postApiV1Order",
         "tags": [
           "RFQ"
         ],
         "summary": "Create an order",
         "description": "Submits a signed quote and creates an RFQ order.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrderRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Order created",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "orderId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "orderStatus": {
-                      "type": "string",
-                      "enum": [
-                        "open",
-                        "expired",
-                        "error",
-                        "cancelled",
-                        "filled",
-                        "unverified",
-                        "insufficient-funds"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "orderId",
-                    "orderStatus"
-                  ]
+                  "$ref": "#/components/schemas/CreateOrderResponse"
                 }
               }
             }
@@ -1716,15 +1892,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1734,15 +1902,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1752,130 +1912,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "quote": {
-                    "type": "object",
-                    "properties": {
-                      "quoteId": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      "slippageTolerance": {
-                        "type": "number",
-                        "minimum": 0
-                      },
-                      "aggregatedOutputs": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "token": {
-                              "type": "string",
-                              "pattern": "^0x[a-fA-F0-9]{40}$"
-                            },
-                            "amount": {
-                              "type": "string",
-                              "pattern": "^\\d+$"
-                            }
-                          },
-                          "required": [
-                            "token",
-                            "amount"
-                          ]
-                        }
-                      },
-                      "orderInfo": {
-                        "type": "object",
-                        "properties": {
-                          "tokenIn": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "amountIn": {
-                            "type": "string",
-                            "pattern": "^\\d+$"
-                          },
-                          "outputs": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "token": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                },
-                                "amount": {
-                                  "type": "string",
-                                  "pattern": "^\\d+$"
-                                },
-                                "recipient": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                }
-                              },
-                              "required": [
-                                "token",
-                                "amount",
-                                "recipient"
-                              ]
-                            }
-                          },
-                          "deadline": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "nonce": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]+$"
-                          }
-                        },
-                        "required": [
-                          "tokenIn",
-                          "amountIn",
-                          "outputs",
-                          "deadline",
-                          "nonce"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "quoteId",
-                      "slippageTolerance",
-                      "aggregatedOutputs",
-                      "orderInfo"
-                    ]
-                  },
-                  "signature": {
-                    "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
-                  }
-                },
-                "required": [
-                  "quote",
-                  "signature"
-                ]
               }
             }
           }
@@ -1884,247 +1922,39 @@
     },
     "/api/v1/orders": {
       "get": {
-        "operationId": "getApiV1Orders",
         "tags": [
           "RFQ"
         ],
         "summary": "List orders",
         "description": "Lists orders by supported filters such as orderId, status, swapper, or filler.",
-        "responses": {
-          "200": {
-            "description": "Orders response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "requestId": {
-                      "type": "string"
-                    },
-                    "orders": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "type": {
-                            "type": "string",
-                            "const": "Priority"
-                          },
-                          "orderId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "orderStatus": {
-                            "type": "string",
-                            "enum": [
-                              "open",
-                              "expired",
-                              "error",
-                              "cancelled",
-                              "filled",
-                              "unverified",
-                              "insufficient-funds"
-                            ]
-                          },
-                          "quoteId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "swapper": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          },
-                          "txHash": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]+$"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "nonce": {
-                            "type": "string"
-                          },
-                          "input": {
-                            "type": "object",
-                            "properties": {
-                              "token": {
-                                "type": "string",
-                                "pattern": "^0x[a-fA-F0-9]{40}$"
-                              },
-                              "amount": {
-                                "type": "string",
-                                "pattern": "^\\d+$"
-                              }
-                            },
-                            "required": [
-                              "token",
-                              "amount"
-                            ]
-                          },
-                          "outputs": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "token": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                },
-                                "recipient": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                },
-                                "amount": {
-                                  "type": "string",
-                                  "pattern": "^\\d+$"
-                                },
-                                "portionBps": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 10000
-                                }
-                              },
-                              "required": [
-                                "token",
-                                "recipient",
-                                "amount"
-                              ]
-                            }
-                          },
-                          "settledAmounts": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "token": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                },
-                                "amount": {
-                                  "type": "string",
-                                  "pattern": "^\\d+$"
-                                },
-                                "recipient": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                                },
-                                "txHash": {
-                                  "type": "string",
-                                  "pattern": "^0x[a-fA-F0-9]+$"
-                                }
-                              },
-                              "required": [
-                                "token",
-                                "amount",
-                                "recipient",
-                                "txHash"
-                              ]
-                            }
-                          },
-                          "encodedOrder": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]+$"
-                          },
-                          "protocolSignature": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]+$"
-                          },
-                          "deadline": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "filler": {
-                            "type": "string",
-                            "pattern": "^0x[a-fA-F0-9]{40}$"
-                          }
-                        },
-                        "required": [
-                          "type",
-                          "orderId",
-                          "orderStatus",
-                          "quoteId",
-                          "swapper",
-                          "txHash",
-                          "nonce",
-                          "input",
-                          "outputs",
-                          "settledAmounts"
-                        ]
-                      }
-                    },
-                    "cursor": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "requestId",
-                    "orders",
-                    "cursor"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing or invalid filters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
-                  ]
-                }
-              }
-            }
-          }
-        },
         "parameters": [
           {
-            "in": "query",
-            "name": "orderType",
             "schema": {
               "type": "string"
-            }
+            },
+            "required": false,
+            "name": "orderType",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "limit",
             "schema": {
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 100
-            }
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "cursor",
             "schema": {
               "type": "string"
-            }
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "orderStatus",
             "schema": {
               "type": "string",
               "enum": [
@@ -2136,80 +1966,112 @@
                 "unverified",
                 "insufficient-funds"
               ]
-            }
+            },
+            "required": false,
+            "name": "orderStatus",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "orderId",
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "orderId",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "orderIds",
             "schema": {
               "type": "string"
-            }
+            },
+            "required": false,
+            "name": "orderIds",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "orderHash",
             "schema": {
               "type": "string",
               "pattern": "^0x[a-fA-F0-9]{64}$"
-            }
+            },
+            "required": false,
+            "name": "orderHash",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "orderHashes",
             "schema": {
               "type": "string"
-            }
+            },
+            "required": false,
+            "name": "orderHashes",
+            "in": "query"
           },
           {
-            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            },
+            "required": false,
             "name": "swapper",
+            "in": "query"
+          },
+          {
             "schema": {
               "type": "string",
               "pattern": "^0x[a-fA-F0-9]{40}$"
-            }
-          },
-          {
-            "in": "query",
+            },
+            "required": false,
             "name": "filler",
-            "schema": {
-              "type": "string",
-              "pattern": "^0x[a-fA-F0-9]{40}$"
-            }
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "sortKey",
             "schema": {
               "type": "string",
               "enum": [
                 "createdAt",
                 "updatedAt"
               ]
-            }
+            },
+            "required": false,
+            "name": "sortKey",
+            "in": "query"
           },
           {
-            "in": "query",
-            "name": "sort",
             "schema": {
               "type": "string",
               "enum": [
                 "asc",
                 "desc"
               ]
+            },
+            "required": false,
+            "name": "sort",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Orders response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrdersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
-        ]
+        }
       }
     }
   },
-  "components": {}
+  "webhooks": {}
 }

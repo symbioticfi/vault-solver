@@ -34,7 +34,7 @@ const keyRegenCooldown = 2 * time.Minute
 //
 // All methods are called from the single solver Run goroutine, so the cached key needs no lock.
 type apiClient struct {
-	c            *threef.ClientWithResponses
+	c            *threef.APIClient
 	sgnr         signer.Signer
 	facilitator  common.Address
 	fallbackKey  string // operator-provided key (apiKeyEnv); used if self-generation is unavailable
@@ -46,12 +46,18 @@ type apiClient struct {
 func newAPIClient(
 	baseURL string, sgnr signer.Signer, facilitator common.Address, fallbackKey string, log logr.Logger,
 ) (*apiClient, error) {
-	ac := &apiClient{sgnr: sgnr, facilitator: facilitator, fallbackKey: fallbackKey, log: log}
-	c, err := threef.NewClientWithResponses(baseURL, threef.WithRequestEditorFn(ac.injectAPIKey))
-	if err != nil {
-		return nil, errors.Errorf("3f api: new client: %w", err)
+	if baseURL == "" {
+		return nil, errors.New("3f api: base URL is required")
 	}
-	ac.c = c
+	cfg := threef.NewConfiguration()
+	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
+	ac := &apiClient{
+		c:           threef.NewAPIClient(cfg),
+		sgnr:        sgnr,
+		facilitator: facilitator,
+		fallbackKey: fallbackKey,
+		log:         log,
+	}
 	if fallbackKey != "" {
 		ac.setKey(fallbackKey, "env fallback")
 	}
@@ -72,13 +78,6 @@ func keyFingerprint(key string) string {
 	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:4])
-}
-
-func (ac *apiClient) injectAPIKey(_ context.Context, req *http.Request) error {
-	if ac.apiKey != "" {
-		req.Header.Set("x-api-key", ac.apiKey)
-	}
-	return nil
 }
 
 // ensureKey makes sure a key is available, generating one if needed.
@@ -131,71 +130,73 @@ func (ac *apiClient) generate(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", errors.Errorf("3f api: sign generate-key: %w", err)
 	}
-	resp, err := ac.c.AdminControllerGenerateKeyV1WithResponse(ctx, threef.GenerateFacilitatorApiKeyDto{
-		ChainId:     apiKeyDomainChainID,
-		Facilitator: lowerAddr(ac.facilitator),
-		Deadline:    deadline.String(),
-		Signature:   hexutil.Encode(sig),
-	})
+	dto := *threef.NewGenerateFacilitatorApiKeyDto(
+		apiKeyDomainChainID,
+		lowerAddr(ac.facilitator),
+		deadline.String(),
+		hexutil.Encode(sig),
+	)
+	resp, httpResp, err := ac.c.FacilitatorAPI.AdminControllerGenerateKeyV1(ctx).
+		GenerateFacilitatorApiKeyDto(dto).Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return "", errors.Errorf("3f api: generate-key: %w", err)
+		return "", errors.Errorf("3f api: generate-key: %s: %w", statusOf(httpResp), err)
 	}
-	if resp.JSON201 == nil {
-		return "", errors.Errorf("3f api: generate-key: status %s: %s", resp.Status(), string(resp.Body))
+	if resp == nil {
+		return "", errors.Errorf("3f api: generate-key: empty response (%s)", statusOf(httpResp))
 	}
-	return resp.JSON201.ApiKey, nil
+	apiKey, ok := resp.GetApiKeyOk()
+	if !ok || apiKey == nil || *apiKey == "" {
+		return "", errors.Errorf("3f api: generate-key: response missing apiKey (%s)", statusOf(httpResp))
+	}
+	return *apiKey, nil
 }
 
 // withAuth runs an authed call, ensuring a key first and regenerating + retrying once on 401/403.
+// `do` performs one attempt and returns the HTTP status of that attempt (so the auth-failure retry
+// can trigger) plus any transport/decoding error.
 func (ac *apiClient) withAuth(ctx context.Context, do func() (int, error)) error {
 	if err := ac.ensureKey(ctx); err != nil {
 		return err
 	}
 	status, err := do()
-	if err != nil {
-		return err
-	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		if rErr := ac.refreshKey(ctx); rErr != nil {
 			return errors.Errorf("3f api: re-auth after %d: %w", status, rErr)
 		}
-		if _, err = do(); err != nil {
-			return err
-		}
+		return wrapAttempt(do())
 	}
-	return nil
+	return err
 }
 
-// listAuctions returns the current auctions, each carrying its EIP-712 domain (needed for signing). No auth needed here.
+// wrapAttempt collapses a (status, err) attempt into a single error (status is irrelevant once the
+// retry has run — the error, if any, is what the caller cares about).
+func wrapAttempt(_ int, err error) error { return err }
+
+// listAuctions returns the current auctions, each carrying its EIP-712 domain (needed for signing).
+// No auth needed here.
 func (ac *apiClient) listAuctions(ctx context.Context) ([]threef.AuctionDto, error) {
-	withDomain := true
-	params := &threef.AuctionControllerListV1Params{Domain: &withDomain}
-	resp, err := ac.c.AuctionControllerListV1WithResponse(ctx, params)
+	auctions, httpResp, err := ac.c.AuctionAPI.AuctionControllerListV1(ctx).Domain(true).Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return nil, errors.Errorf("3f api: list auctions: %w", err)
+		return nil, errors.Errorf("3f api: list auctions: %s: %w", statusOf(httpResp), err)
 	}
-	if resp.JSON200 == nil {
-		return nil, errors.Errorf("3f api: list auctions: unexpected status %s", resp.Status())
-	}
-	return *resp.JSON200, nil
+	return auctions, nil
 }
 
 // createOffer submits a signed offer.
 func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto) error {
-	var resp *threef.OfferControllerCreateV1Response
 	err := ac.withAuth(ctx, func() (int, error) {
-		r, e := ac.c.OfferControllerCreateV1WithResponse(ctx, nil, dto)
+		_, httpResp, e := ac.c.OfferAPI.OfferControllerCreateV1(ctx).
+			XApiKey(ac.apiKey).CreateOfferDto(dto).Execute()
+		closeResp(httpResp)
 		if e != nil {
-			return 0, e
+			return statusCode(httpResp), errors.Errorf("3f api: create offer: %s: %w", statusOf(httpResp), e)
 		}
-		resp = r
-		return r.StatusCode(), nil
+		return statusCode(httpResp), nil
 	})
 	if err != nil {
 		return errors.Errorf("3f api: create offer: %w", err)
-	}
-	if resp.JSON201 == nil {
-		return errors.Errorf("3f api: create offer: unexpected status %s: %s", resp.Status(), string(resp.Body))
 	}
 	return nil
 }
@@ -210,64 +211,88 @@ func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto)
 // EIP-712 GetOffers signature instead of the api key.)
 func (ac *apiClient) listOffers(ctx context.Context) ([]threef.OfferDto, error) {
 	makerLower := lowerAddr(ac.facilitator)
-	var resp *threef.OfferControllerGetV1Response
+	var offers []threef.OfferDto
 	err := ac.withAuth(ctx, func() (int, error) {
-		r, e := ac.c.OfferControllerGetV1WithResponse(ctx, &threef.OfferControllerGetV1Params{Maker: makerLower})
+		o, httpResp, e := ac.c.OfferAPI.OfferControllerGetV1(ctx).
+			Maker(makerLower).XApiKey(ac.apiKey).Execute()
+		closeResp(httpResp)
 		if e != nil {
-			return 0, e
+			return statusCode(httpResp), errors.Errorf("3f api: list offers: %s: %w", statusOf(httpResp), e)
 		}
-		resp = r
-		return r.StatusCode(), nil
+		offers = o
+		return statusCode(httpResp), nil
 	})
 	if err != nil {
 		return nil, errors.Errorf("3f api: list offers: %w", err)
 	}
-	if resp.JSON200 == nil {
-		return nil, errors.Errorf("3f api: list offers: unexpected status %s: %s", resp.Status(), string(resp.Body))
-	}
-	return *resp.JSON200, nil
+	return offers, nil
 }
 
 // offerAddress returns the facilitator's currently-registered offer (maker) address, or the zero
 // address if none is set.
 func (ac *apiClient) offerAddress(ctx context.Context) (common.Address, error) {
-	var resp *threef.AdminControllerGetFacilitatorOfferAddressV1Response
+	var addr common.Address
 	err := ac.withAuth(ctx, func() (int, error) {
-		r, e := ac.c.AdminControllerGetFacilitatorOfferAddressV1WithResponse(ctx, nil)
+		resp, httpResp, e := ac.c.FacilitatorAPI.AdminControllerGetFacilitatorOfferAddressV1(ctx).
+			XApiKey(ac.apiKey).Execute()
+		closeResp(httpResp)
 		if e != nil {
-			return 0, e
+			return statusCode(httpResp), errors.Errorf("3f api: get offer-address: %s: %w", statusOf(httpResp), e)
 		}
-		resp = r
-		return r.StatusCode(), nil
+		if s, ok := resp.GetOfferAddressOk(); ok && s != nil && common.IsHexAddress(*s) {
+			addr = common.HexToAddress(*s)
+		}
+		return statusCode(httpResp), nil
 	})
 	if err != nil {
 		return common.Address{}, errors.Errorf("3f api: get offer-address: %w", err)
 	}
-	if resp.JSON200 == nil || !common.IsHexAddress(resp.JSON200.OfferAddress) {
-		return common.Address{}, nil // none set yet
-	}
-	return common.HexToAddress(resp.JSON200.OfferAddress), nil
+	return addr, nil
 }
 
 // setOfferAddress registers `addr` as the facilitator's offer (maker) address.
 func (ac *apiClient) setOfferAddress(ctx context.Context, addr common.Address) error {
-	var resp *threef.AdminControllerSetFacilitatorOfferAddressV1Response
+	dto := *threef.NewSetFacilitatorOfferAddressDto(lowerAddr(addr))
 	err := ac.withAuth(ctx, func() (int, error) {
-		r, e := ac.c.AdminControllerSetFacilitatorOfferAddressV1WithResponse(ctx, nil,
-			threef.SetFacilitatorOfferAddressDto{OfferAddress: lowerAddr(addr)})
+		_, httpResp, e := ac.c.FacilitatorAPI.AdminControllerSetFacilitatorOfferAddressV1(ctx).
+			XApiKey(ac.apiKey).SetFacilitatorOfferAddressDto(dto).Execute()
+		closeResp(httpResp)
 		if e != nil {
-			return 0, e
+			return statusCode(httpResp), errors.Errorf("3f api: set offer-address: %s: %w", statusOf(httpResp), e)
 		}
-		resp = r
-		return r.StatusCode(), nil
+		return statusCode(httpResp), nil
 	})
 	if err != nil {
 		return errors.Errorf("3f api: set offer-address: %w", err)
 	}
-	if resp.JSON201 == nil {
-		return errors.Errorf("3f api: set offer-address: unexpected status %s: %s", resp.Status(), string(resp.Body))
-	}
 	return nil
+}
+
+// closeResp closes the HTTP response body. The generated client already reads the body fully and
+// closes it inside Execute, so this is a harmless no-op that satisfies the "body must be closed"
+// contract without a lint suppression (bodyclose can't see across the Execute call boundary).
+func closeResp(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+// statusCode returns the HTTP status code of resp, or 0 if resp is nil (e.g. a transport error
+// before any response). The auth-retry logic keys off this, so a nil response must not look like
+// a 401/403.
+func statusCode(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
+}
+
+// statusOf renders an HTTP response's status for error context ("no response" if there was none).
+func statusOf(resp *http.Response) string {
+	if resp == nil {
+		return "no response"
+	}
+	return resp.Status
 }
 
 // lowerAddr renders an address as a lowercase hex string; the 3F API rejects checksummed addresses.

@@ -1,110 +1,173 @@
 package rfq
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 )
 
-// backendOrder is one order row from the RFQ backend (GET /orders). The optional fields
-// (encodedOrder/protocolSignature/deadline/filler) are populated only for executable orders.
+// backendOrder is one order row from the RFQ backend (GET /orders), projected from the generated
+// rfqbackend.OrdersResponseOrdersInner. The optional fields (encodedOrder/protocolSignature/deadline/
+// filler) are populated only for executable orders; the generated model exposes them as pointers, so
+// they are copied here only when present (nil ⇒ absent), preserving the executable-payload nil checks
+// in execution.go.
 type backendOrder struct {
-	Type              string       `json:"type"`
-	OrderID           string       `json:"orderId"`
-	OrderStatus       string       `json:"orderStatus"`
-	QuoteID           string       `json:"quoteId"`
-	Swapper           string       `json:"swapper"`
-	TxHash            *string      `json:"txHash"`
-	Nonce             string       `json:"nonce"`
-	Input             backendToken `json:"input"`
-	Outputs           []backendOut `json:"outputs"`
-	EncodedOrder      *string      `json:"encodedOrder,omitempty"`
-	ProtocolSignature *string      `json:"protocolSignature,omitempty"`
-	Deadline          *int64       `json:"deadline,omitempty"`
-	Filler            *string      `json:"filler,omitempty"`
+	Type              string
+	OrderID           string
+	OrderStatus       string
+	QuoteID           string
+	Swapper           string
+	TxHash            *string
+	Nonce             string
+	Input             backendToken
+	Outputs           []backendOut
+	EncodedOrder      *string
+	ProtocolSignature *string
+	Deadline          *int64
+	Filler            *string
 }
 
 type backendToken struct {
-	Token  string `json:"token"`
-	Amount string `json:"amount"`
+	Token  string
+	Amount string
 }
 
 type backendOut struct {
-	Token     string `json:"token"`
-	Amount    string `json:"amount"`
-	Recipient string `json:"recipient"`
+	Token     string
+	Amount    string
+	Recipient string
 }
 
-type ordersResponse struct {
-	RequestID string         `json:"requestId"`
-	Orders    []backendOrder `json:"orders"`
-	Cursor    *string        `json:"cursor"`
-}
-
-// backendClient is a small HTTP client for the backend's filler-facing order endpoints.
+// backendClient is a thin adapter over the generated rfqbackend client for the filler-facing order
+// and discount endpoints. It owns no transport state of its own beyond the generated APIClient, whose
+// HTTPClient carries the request timeout. Used from the single execution goroutine.
 type backendClient struct {
-	baseURL string
-	http    *http.Client
+	api *rfqbackend.APIClient
 }
 
-// maxBackendResponseBytes caps a backend JSON response (order/discount lists are small; this is a
-// safety bound against an unbounded body, not a tuning knob).
-const maxBackendResponseBytes = 8 << 20 // 8 MiB
-
+// newBackendClient builds a backend client rooted at baseURL. The generated client carries the
+// `/api/v1` path prefix from the spec, so baseURL is the backend host root. A trailing slash is
+// trimmed so the spec paths join cleanly. The 10s per-request timeout matches the prior hand-rolled
+// client.
 func newBackendClient(baseURL string) *backendClient {
-	// Trim any trailing slash so path joins (baseURL + "/orders") never double up.
-	return &backendClient{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 10 * time.Second}}
+	cfg := rfqbackend.NewConfiguration()
+	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
+	cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
+	return &backendClient{api: rfqbackend.NewAPIClient(cfg)}
+}
+
+// closeResp drains and closes the HTTP response body. The generated client already reads the body
+// fully into memory and closes it before returning, so this is belt-and-suspenders: it satisfies the
+// "response body must be closed" contract and is a harmless no-op on the already-closed body.
+func closeResp(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 }
 
 // listOpenOrders lists open orders assigned to filler.
 func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error) {
-	resp, err := c.getOrders(ctx, url.Values{
-		"filler":      {filler},
-		"orderStatus": {"open"},
-		"limit":       {strconv.Itoa(limit)},
-	})
+	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100, so the int→int32
+	// narrowing is safe.
+	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
+		Filler(filler).
+		OrderStatus("open").
+		Limit(int32(limit))
+	resp, httpResp, err := req.Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("backend: list open orders: %w", err)
 	}
-	return resp.Orders, nil
+	return ordersFromResponse(resp), nil
 }
 
 // getExecutableOrder reads the canonical open executable view for one order, or nil if absent.
 func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error) {
-	resp, err := c.getOrders(ctx, url.Values{
-		"orderId":     {orderID},
-		"filler":      {filler},
-		"orderStatus": {"open"},
-	})
+	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
+		OrderId(orderID).
+		Filler(filler).
+		OrderStatus("open")
+	resp, httpResp, err := req.Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("backend: get executable order: %w", err)
 	}
-	return first(resp.Orders), nil
+	return first(ordersFromResponse(resp)), nil
 }
 
 // getOrder reads the backend view of one order regardless of status, or nil if absent.
 func (c *backendClient) getOrder(ctx context.Context, orderID string) (*backendOrder, error) {
-	resp, err := c.getOrders(ctx, url.Values{"orderId": {orderID}})
+	resp, httpResp, err := c.api.RFQAPI.ApiV1OrdersGet(ctx).OrderId(orderID).Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("backend: get order: %w", err)
 	}
-	return first(resp.Orders), nil
+	return first(ordersFromResponse(resp)), nil
 }
 
-func (c *backendClient) getOrders(ctx context.Context, query url.Values) (*ordersResponse, error) {
-	var out ordersResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/orders", query, nil, &out); err != nil {
-		return nil, err
+// ordersFromResponse projects the generated orders response into the internal order rows. A nil
+// response (no body) yields no orders. Optional fields are copied only when the generated model
+// reports them set, preserving execution.go's incomplete-payload detection.
+func ordersFromResponse(resp *rfqbackend.OrdersResponse) []backendOrder {
+	if resp == nil {
+		return nil
 	}
-	return &out, nil
+	gen := resp.GetOrders()
+	out := make([]backendOrder, 0, len(gen))
+	for i := range gen {
+		out = append(out, orderFromModel(&gen[i]))
+	}
+	return out
+}
+
+func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
+	bo := backendOrder{
+		Type:        o.GetType(),
+		OrderID:     o.GetOrderId(),
+		OrderStatus: o.GetOrderStatus(),
+		QuoteID:     o.GetQuoteId(),
+		Swapper:     o.GetSwapper(),
+		Nonce:       o.GetNonce(),
+		Input: backendToken{
+			Token:  o.Input.GetToken(),
+			Amount: o.Input.GetAmount(),
+		},
+	}
+	// txHash is a nullable string in the schema; copy through whatever the backend reported (including
+	// an explicit null) so reconcileTerminalStatus can validate it.
+	if v, ok := o.GetTxHashOk(); ok {
+		bo.TxHash = v
+	}
+	outs := o.GetOutputs()
+	bo.Outputs = make([]backendOut, 0, len(outs))
+	for i := range outs {
+		bo.Outputs = append(bo.Outputs, backendOut{
+			Token:     outs[i].GetToken(),
+			Amount:    outs[i].GetAmount(),
+			Recipient: outs[i].GetRecipient(),
+		})
+	}
+	// Executable-only optional fields: copy only when present so a non-executable row keeps them nil
+	// and executableFromBackend rejects it as incomplete.
+	if v, ok := o.GetEncodedOrderOk(); ok {
+		bo.EncodedOrder = v
+	}
+	if v, ok := o.GetProtocolSignatureOk(); ok {
+		bo.ProtocolSignature = v
+	}
+	if v, ok := o.GetDeadlineOk(); ok {
+		d := int64(*v)
+		bo.Deadline = &d
+	}
+	if v, ok := o.GetFillerOk(); ok {
+		bo.Filler = v
+	}
+	return bo
 }
 
 func first(orders []backendOrder) *backendOrder {
@@ -119,101 +182,140 @@ func first(orders []backendOrder) *backendOrder {
 // discountTerms is the signed discount the adapter's discount-swap verifies. Amounts/nonce are
 // numeric/hex strings on the wire.
 type discountTerms struct {
-	Adapter       string `json:"adapter"`
-	TokenToRedeem string `json:"tokenToRedeem"`
-	Discount      string `json:"discount"`
-	Signer        string `json:"signer"`
-	Protocol      string `json:"protocol"`
-	Nonce         string `json:"nonce"`
-	Deadline      int64  `json:"deadline"`
+	Adapter       string
+	TokenToRedeem string
+	Discount      string
+	Signer        string
+	Protocol      string
+	Nonce         string
+	Deadline      int64
 }
 
-// resolveDiscountResponse is the fresh, signed discount the backend issues at fill time.
+// resolveDiscountResponse is the fresh, signed discount the backend issues at fill time (the single
+// shape of the backend's ResolveDiscountResponse anyOf union; see resolveDiscount).
 type resolveDiscountResponse struct {
-	RequestID         string        `json:"requestId"`
-	DiscountID        string        `json:"discountId"`
-	Discount          discountTerms `json:"discount"`
-	SignerSignature   string        `json:"signerSignature"`
-	ProtocolDeadline  int64         `json:"protocolDeadline"`
-	ProtocolSignature string        `json:"protocolSignature"`
+	RequestID         string
+	DiscountID        string
+	Discount          discountTerms
+	SignerSignature   string
+	ProtocolDeadline  int64
+	ProtocolSignature string
 }
 
 // discountListItem is one offered discount (GET /discounts), used during strategy recovery.
 type discountListItem struct {
-	DiscountID         string `json:"discountId"`
-	Adapter            string `json:"adapter"`
-	TokenToRedeem      string `json:"tokenToRedeem"`
-	Collateral         string `json:"collateral"`
-	CollateralDecimals int    `json:"collateralDecimals"`
-	Discount           string `json:"discount"`
-	Signer             string `json:"signer"`
-	Deadline           int64  `json:"deadline"`
-	MaxRate            string `json:"maxRate"`
-	MaxAssets          string `json:"maxAssets"`
+	DiscountID         string
+	Adapter            string
+	TokenToRedeem      string
+	Collateral         string
+	CollateralDecimals int
+	Discount           string
+	Signer             string
+	Deadline           int64
+	MaxRate            string
+	MaxAssets          string
 }
 
 type discountsResponse struct {
-	RequestID string             `json:"requestId"`
-	Protocol  string             `json:"protocol"`
-	Discounts []discountListItem `json:"discounts"`
+	RequestID string
+	Protocol  string
+	Discounts []discountListItem
 }
 
 // resolveDiscount fetches the fresh signed discount for a discountId (POST /discounts).
+//
+// The backend's ResolveDiscountResponse is an anyOf union of a single resolved discount (anyOf[0]) and
+// a batch (anyOf[1]). The filler resolves one discountId at a time, so it expects — and requires — the
+// single shape. If the backend returns the batch shape with exactly one entry, that lone entry is
+// accepted (it carries the same signed fields); anything else (neither shape, or a batch with ≠1
+// entries) is rejected so we never fill on an ambiguous resolution.
 func (c *backendClient) resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error) {
-	var out resolveDiscountResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/discounts", nil, map[string]string{"discountId": discountID}, &out); err != nil {
-		return nil, err
+	body := rfqbackend.NewApiV1DiscountsPostRequest()
+	body.SetDiscountId(discountID)
+	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsPost(ctx).ApiV1DiscountsPostRequest(*body).Execute()
+	closeResp(httpResp)
+	if err != nil {
+		return nil, errors.Errorf("backend: resolve discount: %w", err)
 	}
-	return &out, nil
+	if resp == nil {
+		return nil, errors.New("backend: resolve discount: empty response")
+	}
+	if single := resp.ResolveDiscountResponseAnyOf; single != nil {
+		return resolvedFromSingle(single), nil
+	}
+	if batch := resp.ResolveDiscountResponseAnyOf1; batch != nil {
+		items := batch.GetDiscounts()
+		if len(items) != 1 {
+			return nil, errors.Errorf("backend: resolve discount: expected a single discount, got %d", len(items))
+		}
+		return resolvedFromBatchItem(batch.GetRequestId(), &items[0]), nil
+	}
+	return nil, errors.New("backend: resolve discount: response matched neither discount shape")
+}
+
+func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *resolveDiscountResponse {
+	return &resolveDiscountResponse{
+		RequestID:         s.GetRequestId(),
+		DiscountID:        s.GetDiscountId(),
+		Discount:          termsFromModel(s.GetDiscount()),
+		SignerSignature:   s.GetSignerSignature(),
+		ProtocolDeadline:  int64(s.GetProtocolDeadline()),
+		ProtocolSignature: s.GetProtocolSignature(),
+	}
+}
+
+func resolvedFromBatchItem(requestID string, it *rfqbackend.ResolveDiscountResponseAnyOf1DiscountsInner) *resolveDiscountResponse {
+	return &resolveDiscountResponse{
+		RequestID:         requestID,
+		DiscountID:        it.GetDiscountId(),
+		Discount:          termsFromModel(it.GetDiscount()),
+		SignerSignature:   it.GetSignerSignature(),
+		ProtocolDeadline:  int64(it.GetProtocolDeadline()),
+		ProtocolSignature: it.GetProtocolSignature(),
+	}
+}
+
+func termsFromModel(d rfqbackend.PublishDiscountRequestDiscount) discountTerms {
+	return discountTerms{
+		Adapter:       d.GetAdapter(),
+		TokenToRedeem: d.GetTokenToRedeem(),
+		Discount:      d.GetDiscount(),
+		Signer:        d.GetSigner(),
+		Protocol:      d.GetProtocol(),
+		Nonce:         d.GetNonce(),
+		Deadline:      int64(d.GetDeadline()),
+	}
 }
 
 // listDiscounts lists currently-offered discounts (GET /discounts).
 func (c *backendClient) listDiscounts(ctx context.Context) (*discountsResponse, error) {
-	var out discountsResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/discounts", nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// doJSON performs a JSON request to baseURL+path (with optional query), decoding the 2xx body into
-// dst. A nil body sends no request body (GET).
-func (c *backendClient) doJSON(ctx context.Context, method, path string, query url.Values, body, dst any) error {
-	u, err := url.Parse(c.baseURL)
+	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsGet(ctx).Execute()
+	closeResp(httpResp)
 	if err != nil {
-		return errors.Errorf("backend: bad base url: %w", err)
+		return nil, errors.Errorf("backend: list discounts: %w", err)
 	}
-	u.Path += path
-	if len(query) > 0 {
-		u.RawQuery = query.Encode()
+	out := &discountsResponse{}
+	if resp == nil {
+		return out, nil
 	}
-
-	var reqBody io.Reader // stays an untyped-nil interface when there's no body
-	if body != nil {
-		b, mErr := json.Marshal(body)
-		if mErr != nil {
-			return errors.Errorf("backend: marshal %s body: %w", path, mErr)
-		}
-		reqBody = bytes.NewReader(b)
+	out.RequestID = resp.GetRequestId()
+	out.Protocol = resp.GetProtocol()
+	gen := resp.GetDiscounts()
+	out.Discounts = make([]discountListItem, 0, len(gen))
+	for i := range gen {
+		d := &gen[i]
+		out.Discounts = append(out.Discounts, discountListItem{
+			DiscountID:         d.GetDiscountId(),
+			Adapter:            d.GetAdapter(),
+			TokenToRedeem:      d.GetTokenToRedeem(),
+			Collateral:         d.GetCollateral(),
+			CollateralDecimals: int(d.GetCollateralDecimals()),
+			Discount:           d.GetDiscount(),
+			Signer:             d.GetSigner(),
+			Deadline:           int64(d.GetDeadline()),
+			MaxRate:            d.GetMaxRate(),
+			MaxAssets:          d.GetMaxAssets(),
+		})
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), reqBody)
-	if err != nil {
-		return errors.Errorf("backend: build %s request: %w", path, err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return errors.Errorf("backend: %s %s: %w", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		return errors.Errorf("backend: %s %s: status %d", method, path, resp.StatusCode)
-	}
-	// Cap the response so a hostile/buggy backend can't stream an unbounded body into the decoder.
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBackendResponseBytes)).Decode(dst); err != nil {
-		return errors.Errorf("backend: decode %s: %w", path, err)
-	}
-	return nil
+	return out, nil
 }
