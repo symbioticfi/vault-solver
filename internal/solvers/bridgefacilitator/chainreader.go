@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/go-errors/errors"
 
@@ -13,14 +14,23 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/vaultcontroller"
+	"github.com/symbioticfi/vault-solver/api/bindings/delegator"
+	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 // Parsed ABIs for packing/decoding Multicall3 sub-calls. adapterABI is defined in redeemer.go.
+//
+// In the redesigned core-mirror model the funding cap and asset live on different contracts than
+// the vault: the collateral token is read via IERC4626(vault).asset(), and the per-adapter cap via
+// UniversalDelegator(vault.delegator()).limitOf(adapter). vaultABI is therefore only used for the
+// vault.delegator() lookup.
 var (
-	vaultABI = mustABI(vaultv2.IVaultV2MetaData)
-	vcABI    = mustABI(vaultcontroller.IVaultControllerMetaData)
+	vaultABI     = mustABI(vaultv2.IVaultV2MetaData)
+	vcABI        = mustABI(vaultcontroller.IVaultControllerMetaData)
+	erc4626ABI   = mustABI(erc4626.IERC4626MetaData)
+	delegatorABI = mustABI(delegator.UniversalDelegatorMetaData)
 )
 
 func mustABI(md *bind.MetaData) abi.ABI {
@@ -35,9 +45,17 @@ func mustABI(md *bind.MetaData) abi.ABI {
 // Multicall3 where calls are independent.
 type reader struct {
 	chain *chain.Client
+
+	// delegatorMu guards the per-vault delegator-address cache. Reader methods are invoked serially
+	// from the solver's single ticker loop, but the cache is guarded anyway so it stays correct if
+	// that ever changes.
+	delegatorMu    sync.Mutex
+	delegatorCache map[common.Address]common.Address
 }
 
-func newReader(c *chain.Client) *reader { return &reader{chain: c} }
+func newReader(c *chain.Client) *reader {
+	return &reader{chain: c, delegatorCache: make(map[common.Address]common.Address)}
+}
 
 func (r *reader) adapterCaller(addr common.Address) (*adapter.BridgeFacilitatorAdapterCaller, error) {
 	caller, err := adapter.NewBridgeFacilitatorAdapterCaller(addr, r.chain.Client)
@@ -47,38 +65,79 @@ func (r *reader) adapterCaller(addr common.Address) (*adapter.BridgeFacilitatorA
 	return caller, nil
 }
 
-// vaultCollateral returns the vault's collateral token, used to match auctions (by deposit asset)
-// to this funding vault.
-func (r *reader) vaultCollateral(ctx context.Context, vault common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: mustPack(vaultABI, "collateral")}})
+// vaultAsset returns the vault's collateral token, used to match auctions (by deposit asset) to this
+// funding vault. In the core-mirror VaultV2 the deposit/collateral token is the ERC-4626 asset, so
+// this reads IERC4626(vault).asset() (the old vault.collateral() no longer exists).
+func (r *reader) vaultAsset(ctx context.Context, vault common.Address) (common.Address, error) {
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: mustPack(erc4626ABI, "asset")}})
 	if err != nil {
 		return common.Address{}, err
 	}
 	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, errors.New("vault.collateral() reverted")
+		return common.Address{}, errors.New("vault.asset() reverted")
 	}
-	return unpackAddress(vaultABI, "collateral", res[0].ReturnData)
+	return unpackAddress(erc4626ABI, "asset", res[0].ReturnData)
 }
 
-// liquidityAndExposure reads, in a SINGLE multicall, everything the offer sizer needs:
+// vaultDelegator resolves the vault's delegator address (the contract that holds the per-adapter
+// allocation caps via limitOf). It is read once per vault and cached: a Multicall can't feed one
+// call's result into another, so liquidityAndExposure needs the delegator address up front, and the
+// vault's delegator is effectively fixed for the bot's lifetime. A cache miss falls through to a
+// single eth_call.
+func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (common.Address, error) {
+	r.delegatorMu.Lock()
+	if d, ok := r.delegatorCache[vault]; ok {
+		r.delegatorMu.Unlock()
+		return d, nil
+	}
+	r.delegatorMu.Unlock()
+
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: mustPack(vaultABI, "delegator")}})
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(res) != 1 || !res[0].Success {
+		return common.Address{}, errors.New("vault.delegator() reverted")
+	}
+	d, err := unpackAddress(vaultABI, "delegator", res[0].ReturnData)
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	r.delegatorMu.Lock()
+	r.delegatorCache[vault] = d
+	r.delegatorMu.Unlock()
+	return d, nil
+}
+
+// liquidityAndExposure reads everything the offer sizer needs and reduces it to:
 //
-//	fundable    = min(vault.allocatable(), adapterLimit(adapter) - adapterAllocated(adapter))
-//	outstanding = adapterAllocated(adapter) - adapter.realizedPrincipal()   // principal in live loans
+//	fundable    = max(delegator.limitOf(adapter) - adapter.totalAssets(), 0)
+//	outstanding = adapter.outstandingPrincipal()   // principal in live loans (clamped >= 0)
 //	openCount   = len(adapter.activeRequests())
 //
-// Deriving `outstanding` from the two running totals avoids iterating positions(request) entirely.
-// (In a loss scenario `outstanding` is conservatively overstated by the unreconciled shortfall
-// until deallocate, which only makes the bot bid less — safe.)
+// In the redesigned core-mirror model the per-adapter cap lives on the vault's delegator
+// (UniversalDelegator.limitOf), not on the vault, and the adapter exposes its own running totals:
+//   - totalAssets()          = free assets + outstanding the adapter holds (what's already against the cap)
+//   - outstandingPrincipal() = principal currently out in live loans (the direct outstanding)
+//
+// Because a Multicall can't chain one call's result into another, the delegator address is resolved
+// first (cached on the reader; see vaultDelegator), then the cap + adapter totals are read in a
+// single batched multicall.
 //
 //nolint:revive // function-result-limit: (fundable, outstanding, openCount, err) reads clearer than a result struct.
 func (r *reader) liquidityAndExposure(
 	ctx context.Context, vault, adapterAddr common.Address,
 ) (fundable, outstanding *big.Int, openCount int, err error) {
+	delegatorAddr, err := r.vaultDelegator(ctx, vault)
+	if err != nil {
+		return nil, nil, 0, errors.Errorf("resolve vault delegator: %w", err)
+	}
+
 	calls := []chain.Call{
-		{Target: vault, Data: mustPack(vaultABI, "allocatable")},
-		{Target: vault, Data: mustPack(vaultABI, "adapterLimit", adapterAddr)},
-		{Target: vault, Data: mustPack(vaultABI, "adapterAllocated", adapterAddr)},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "realizedPrincipal")},
+		{Target: delegatorAddr, Data: mustPack(delegatorABI, "limitOf", adapterAddr)},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "totalAssets")},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "outstandingPrincipal")},
 		{Target: adapterAddr, Data: mustPack(adapterABI, "activeRequests")},
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -94,38 +153,42 @@ func (r *reader) liquidityAndExposure(
 		}
 	}
 
-	allocatable, err := unpackBig(vaultABI, "allocatable", res[0].ReturnData)
+	limit, err := unpackBig(delegatorABI, "limitOf", res[0].ReturnData)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	adapterLimit, err := unpackBig(vaultABI, "adapterLimit", res[1].ReturnData)
+	held, err := unpackBig(adapterABI, "totalAssets", res[1].ReturnData)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	adapterAllocated, err := unpackBig(vaultABI, "adapterAllocated", res[2].ReturnData)
+	outstandingPrincipal, err := unpackBig(adapterABI, "outstandingPrincipal", res[2].ReturnData)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	realized, err := unpackBig(adapterABI, "realizedPrincipal", res[3].ReturnData)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	reqs, err := unpackAddresses(adapterABI, "activeRequests", res[4].ReturnData)
+	reqs, err := unpackAddresses(adapterABI, "activeRequests", res[3].ReturnData)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	room := new(big.Int).Sub(adapterLimit, adapterAllocated)
-	if room.Sign() < 0 {
-		room.SetInt64(0)
-	}
-	fundable = minBig(allocatable, room)
+	fundable, outstanding = deriveLiquidity(limit, held, outstandingPrincipal)
+	return fundable, outstanding, len(reqs), nil
+}
 
-	outstanding = new(big.Int).Sub(adapterAllocated, realized)
+// deriveLiquidity reduces the raw on-chain reads to the sizer's inputs. Split out as a pure helper so
+// the clamping is unit-testable without a chain backend:
+//
+//	fundable    = max(limit - held, 0)   // remaining room under the delegator's per-adapter cap
+//	outstanding = max(outstandingPrincipal, 0)
+func deriveLiquidity(limit, held, outstandingPrincipal *big.Int) (fundable, outstanding *big.Int) {
+	fundable = new(big.Int).Sub(limit, held)
+	if fundable.Sign() < 0 {
+		fundable.SetInt64(0)
+	}
+	outstanding = new(big.Int).Set(outstandingPrincipal)
 	if outstanding.Sign() < 0 {
 		outstanding.SetInt64(0)
 	}
-	return fundable, outstanding, len(reqs), nil
+	return fundable, outstanding
 }
 
 // readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads the
