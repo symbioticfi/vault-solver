@@ -16,10 +16,14 @@ import (
 
 // Config is the top-level bot configuration.
 type Config struct {
-	Chain         ChainConfig         `yaml:"chain"`
-	Signer        SignerConfig        `yaml:"signer"`
-	TxManager     TxManagerConfig     `yaml:"txManager"`
-	Solver        SolverConfig        `yaml:"solver"`
+	Chain     ChainConfig     `yaml:"chain"`
+	Signer    SignerConfig    `yaml:"signer"`
+	TxManager TxManagerConfig `yaml:"txManager"`
+	// Solvers is the set of solvers to run in one process — at most one entry per solver type. They
+	// share the chain client, signer, and (crucially) the single nonce-serialized txManager, so they
+	// never race on nonces. `solver` (singular) is the legacy single-solver form and is folded in.
+	Solvers       []SolverConfig      `yaml:"solvers,omitempty"`
+	Solver        SolverConfig        `yaml:"solver,omitempty"`
 	Observability ObservabilityConfig `yaml:"observability"`
 }
 
@@ -109,6 +113,12 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	// Fold the legacy single `solver` block into the `solvers` list so the rest of the code only
+	// deals with the list form.
+	if c.Solver.Name != "" {
+		c.Solvers = append(c.Solvers, c.Solver)
+		c.Solver = SolverConfig{}
+	}
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
 	}
@@ -136,8 +146,18 @@ func (c *Config) Validate() error {
 	if err := c.Signer.validate(); err != nil {
 		return err
 	}
-	if c.Solver.Name == "" {
-		return errors.New("solver.name is required")
+	if len(c.Solvers) == 0 {
+		return errors.New("at least one solver is required (set `solver` or `solvers`)")
+	}
+	seen := make(map[string]bool, len(c.Solvers))
+	for i, s := range c.Solvers {
+		if s.Name == "" {
+			return errors.Errorf("solvers[%d].name is required", i)
+		}
+		if seen[s.Name] {
+			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", s.Name)
+		}
+		seen[s.Name] = true
 	}
 	return nil
 }

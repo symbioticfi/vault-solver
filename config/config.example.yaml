@@ -34,6 +34,14 @@ observability:
   debug: false                          # debug-level logging; the --debug CLI flag overrides this
   # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
+# Run one solver (the `solver:` block below) or several at once with a `solvers:` list — at most one
+# entry per solver type. Every solver in the process shares the chain client, signer, and the single
+# nonce-serialized txManager, so they never race on nonces. Multi-solver form:
+#   solvers:
+#     - name: 3f-bridge-facilitator
+#       config: { ... }
+#     - name: rfq-filler
+#       config: { ... }
 solver:
   name: 3f-bridge-facilitator           # registry key selecting the implementation
   config:                               # opaque to the framework; typed by the 3F solver

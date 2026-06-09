@@ -42,6 +42,48 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	}
 }
 
+const multiSolverConfig = `
+chain:
+  rpcUrl: https://sepolia.example.org
+  chainId: 11155111
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: 3f-bridge-facilitator
+    config: {apiBaseUrl: https://bf.dev.gcp.3f.xyz}
+  - name: rfq-filler
+    config: {backendUrl: https://rfq.example}
+`
+
+func TestLoad_MultipleSolvers(t *testing.T) {
+	cfg, err := Load(writeTemp(t, multiSolverConfig))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Solvers) != 2 ||
+		cfg.Solvers[0].Name != "3f-bridge-facilitator" || cfg.Solvers[1].Name != "rfq-filler" {
+		t.Fatalf("expected two distinct solvers, got %+v", cfg.Solvers)
+	}
+}
+
+func TestLoad_RejectsDuplicateSolverType(t *testing.T) {
+	dup := `
+chain:
+  rpcUrl: https://sepolia.example.org
+  chainId: 11155111
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: rfq-filler
+    config: {}
+  - name: rfq-filler
+    config: {}
+`
+	if _, err := Load(writeTemp(t, dup)); err == nil {
+		t.Fatal("expected an error for duplicate solver type")
+	}
+}
+
 func TestLoad_TwoStageSolverDecode(t *testing.T) {
 	cfg, err := Load(writeTemp(t, validConfig))
 	if err != nil {
@@ -52,7 +94,7 @@ func TestLoad_TwoStageSolverDecode(t *testing.T) {
 		APIBaseURL string `yaml:"apiBaseUrl"`
 		Answer     int    `yaml:"answer"`
 	}
-	if err := cfg.Solver.Config.Decode(&sub); err != nil {
+	if err := cfg.Solvers[0].Config.Decode(&sub); err != nil {
 		t.Fatalf("decode solver.config: %v", err)
 	}
 	if sub.APIBaseURL != "https://bf.dev.gcp.3f.xyz" || sub.Answer != 42 {
@@ -104,7 +146,7 @@ solver:
 	var sub struct {
 		APIBaseURL string `yaml:"apiBaseUrl"`
 	}
-	if err := cfg.Solver.Config.Decode(&sub); err != nil {
+	if err := cfg.Solvers[0].Config.Decode(&sub); err != nil {
 		t.Fatalf("decode solver.config: %v", err)
 	}
 	if sub.APIBaseURL != "https://api.from.env" {
