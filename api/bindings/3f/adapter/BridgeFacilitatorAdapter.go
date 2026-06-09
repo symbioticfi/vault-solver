@@ -41,7 +41,7 @@ type Offer struct {
 
 // BridgeFacilitatorAdapterMetaData contains all meta data concerning the BridgeFacilitatorAdapter contract.
 var BridgeFacilitatorAdapterMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"rewards\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"curatorRegistry\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"VAULT\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"VAULT_FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeRequests\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocatable\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"globalAllocated\",\"inputs\":[{\"name\":\"collateral\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"globalLimit\",\"inputs\":[{\"name\":\"collateral\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"positions\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"principal\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"ytExpected\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"openedAt\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"redeemed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"realizedPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"recover\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"requests\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setGlobalLimit\",\"inputs\":[{\"name\":\"collateral\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"limit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"skim\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"skimmable\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionOpened\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionRedeemed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Recover\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetGlobalLimit\",\"inputs\":[{\"name\":\"asset\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"limit\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AssetMismatch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientLiquidity\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAttested\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotCurator\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"Reentrancy\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SkimFailed\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ZeroAmount\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapterFactory\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeRequests\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"deallocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"outstandingPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"positions\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"principal\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"ytExpected\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"openedAt\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"redeemed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"realizedPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"requests\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestDeallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"vault\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionOpened\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionRedeemed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetVault\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AssetMismatch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientLiquidity\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAttested\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
 }
 
 // BridgeFacilitatorAdapterABI is the input ABI used to generate the binding from.
@@ -190,6 +190,37 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorRaw) Transact
 	return _BridgeFacilitatorAdapter.Contract.contract.Transact(opts, method, params...)
 }
 
+// FACTORY is a free data retrieval call binding the contract method 0x2dd31000.
+//
+// Solidity: function FACTORY() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) FACTORY(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "FACTORY")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// FACTORY is a free data retrieval call binding the contract method 0x2dd31000.
+//
+// Solidity: function FACTORY() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) FACTORY() (common.Address, error) {
+	return _BridgeFacilitatorAdapter.Contract.FACTORY(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// FACTORY is a free data retrieval call binding the contract method 0x2dd31000.
+//
+// Solidity: function FACTORY() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) FACTORY() (common.Address, error) {
+	return _BridgeFacilitatorAdapter.Contract.FACTORY(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
 // REQUESTWHITELIST is a free data retrieval call binding the contract method 0x894e6d61.
 //
 // Solidity: function REQUEST_WHITELIST() view returns(address)
@@ -219,68 +250,6 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) REQUESTWHITELI
 // Solidity: function REQUEST_WHITELIST() view returns(address)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) REQUESTWHITELIST() (common.Address, error) {
 	return _BridgeFacilitatorAdapter.Contract.REQUESTWHITELIST(&_BridgeFacilitatorAdapter.CallOpts)
-}
-
-// VAULT is a free data retrieval call binding the contract method 0x411557d1.
-//
-// Solidity: function VAULT() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) VAULT(opts *bind.CallOpts) (common.Address, error) {
-	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "VAULT")
-
-	if err != nil {
-		return *new(common.Address), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-
-	return out0, err
-
-}
-
-// VAULT is a free data retrieval call binding the contract method 0x411557d1.
-//
-// Solidity: function VAULT() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) VAULT() (common.Address, error) {
-	return _BridgeFacilitatorAdapter.Contract.VAULT(&_BridgeFacilitatorAdapter.CallOpts)
-}
-
-// VAULT is a free data retrieval call binding the contract method 0x411557d1.
-//
-// Solidity: function VAULT() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) VAULT() (common.Address, error) {
-	return _BridgeFacilitatorAdapter.Contract.VAULT(&_BridgeFacilitatorAdapter.CallOpts)
-}
-
-// VAULTFACTORY is a free data retrieval call binding the contract method 0x103f2907.
-//
-// Solidity: function VAULT_FACTORY() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) VAULTFACTORY(opts *bind.CallOpts) (common.Address, error) {
-	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "VAULT_FACTORY")
-
-	if err != nil {
-		return *new(common.Address), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-
-	return out0, err
-
-}
-
-// VAULTFACTORY is a free data retrieval call binding the contract method 0x103f2907.
-//
-// Solidity: function VAULT_FACTORY() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) VAULTFACTORY() (common.Address, error) {
-	return _BridgeFacilitatorAdapter.Contract.VAULTFACTORY(&_BridgeFacilitatorAdapter.CallOpts)
-}
-
-// VAULTFACTORY is a free data retrieval call binding the contract method 0x103f2907.
-//
-// Solidity: function VAULT_FACTORY() view returns(address)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) VAULTFACTORY() (common.Address, error) {
-	return _BridgeFacilitatorAdapter.Contract.VAULTFACTORY(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // ActiveRequests is a free data retrieval call binding the contract method 0x83cc915c.
@@ -314,12 +283,12 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) ActiveRe
 	return _BridgeFacilitatorAdapter.Contract.ActiveRequests(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Allocatable is a free data retrieval call binding the contract method 0xb7820f9c.
+// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
 //
-// Solidity: function allocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Allocatable(opts *bind.CallOpts, vault common.Address) (*big.Int, error) {
+// Solidity: function allocatable() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Allocatable(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "allocatable", vault)
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "allocatable")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -331,26 +300,26 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Allocatable(opt
 
 }
 
-// Allocatable is a free data retrieval call binding the contract method 0xb7820f9c.
+// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
 //
-// Solidity: function allocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Allocatable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Allocatable(&_BridgeFacilitatorAdapter.CallOpts, vault)
+// Solidity: function allocatable() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Allocatable() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.Allocatable(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Allocatable is a free data retrieval call binding the contract method 0xb7820f9c.
+// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
 //
-// Solidity: function allocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Allocatable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Allocatable(&_BridgeFacilitatorAdapter.CallOpts, vault)
+// Solidity: function allocatable() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Allocatable() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.Allocatable(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Deallocatable is a free data retrieval call binding the contract method 0xc36a73ce.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function deallocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Deallocatable(opts *bind.CallOpts, vault common.Address) (*big.Int, error) {
+// Solidity: function freeAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) FreeAssets(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "deallocatable", vault)
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "freeAssets")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -362,80 +331,18 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Deallocatable(o
 
 }
 
-// Deallocatable is a free data retrieval call binding the contract method 0xc36a73ce.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function deallocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Deallocatable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Deallocatable(&_BridgeFacilitatorAdapter.CallOpts, vault)
+// Solidity: function freeAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) FreeAssets() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.FreeAssets(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Deallocatable is a free data retrieval call binding the contract method 0xc36a73ce.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function deallocatable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Deallocatable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Deallocatable(&_BridgeFacilitatorAdapter.CallOpts, vault)
-}
-
-// GlobalAllocated is a free data retrieval call binding the contract method 0xc85771db.
-//
-// Solidity: function globalAllocated(address collateral) view returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) GlobalAllocated(opts *bind.CallOpts, collateral common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "globalAllocated", collateral)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// GlobalAllocated is a free data retrieval call binding the contract method 0xc85771db.
-//
-// Solidity: function globalAllocated(address collateral) view returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) GlobalAllocated(collateral common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.GlobalAllocated(&_BridgeFacilitatorAdapter.CallOpts, collateral)
-}
-
-// GlobalAllocated is a free data retrieval call binding the contract method 0xc85771db.
-//
-// Solidity: function globalAllocated(address collateral) view returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) GlobalAllocated(collateral common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.GlobalAllocated(&_BridgeFacilitatorAdapter.CallOpts, collateral)
-}
-
-// GlobalLimit is a free data retrieval call binding the contract method 0x74be68e0.
-//
-// Solidity: function globalLimit(address collateral) view returns(uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) GlobalLimit(opts *bind.CallOpts, collateral common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "globalLimit", collateral)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// GlobalLimit is a free data retrieval call binding the contract method 0x74be68e0.
-//
-// Solidity: function globalLimit(address collateral) view returns(uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) GlobalLimit(collateral common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.GlobalLimit(&_BridgeFacilitatorAdapter.CallOpts, collateral)
-}
-
-// GlobalLimit is a free data retrieval call binding the contract method 0x74be68e0.
-//
-// Solidity: function globalLimit(address collateral) view returns(uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) GlobalLimit(collateral common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.GlobalLimit(&_BridgeFacilitatorAdapter.CallOpts, collateral)
+// Solidity: function freeAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) FreeAssets() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.FreeAssets(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // IsValidSignature is a free data retrieval call binding the contract method 0x1626ba7e.
@@ -498,6 +405,37 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) OfferSigner() 
 // Solidity: function offerSigner() view returns(address)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) OfferSigner() (common.Address, error) {
 	return _BridgeFacilitatorAdapter.Contract.OfferSigner(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// OutstandingPrincipal is a free data retrieval call binding the contract method 0x29b1829e.
+//
+// Solidity: function outstandingPrincipal() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) OutstandingPrincipal(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "outstandingPrincipal")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// OutstandingPrincipal is a free data retrieval call binding the contract method 0x29b1829e.
+//
+// Solidity: function outstandingPrincipal() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) OutstandingPrincipal() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.OutstandingPrincipal(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// OutstandingPrincipal is a free data retrieval call binding the contract method 0x29b1829e.
+//
+// Solidity: function outstandingPrincipal() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) OutstandingPrincipal() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.OutstandingPrincipal(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // Owner is a free data retrieval call binding the contract method 0x8da5cb5b.
@@ -617,12 +555,12 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Realized
 	return _BridgeFacilitatorAdapter.Contract.RealizedPrincipal(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Skimmable is a free data retrieval call binding the contract method 0x62e6ba28.
+// TotalAssets is a free data retrieval call binding the contract method 0x01e1d114.
 //
-// Solidity: function skimmable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Skimmable(opts *bind.CallOpts, vault common.Address) (*big.Int, error) {
+// Solidity: function totalAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) TotalAssets(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "skimmable", vault)
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "totalAssets")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -634,81 +572,164 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Skimmable(opts 
 
 }
 
-// Skimmable is a free data retrieval call binding the contract method 0x62e6ba28.
+// TotalAssets is a free data retrieval call binding the contract method 0x01e1d114.
 //
-// Solidity: function skimmable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Skimmable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Skimmable(&_BridgeFacilitatorAdapter.CallOpts, vault)
+// Solidity: function totalAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) TotalAssets() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.TotalAssets(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
-// Skimmable is a free data retrieval call binding the contract method 0x62e6ba28.
+// TotalAssets is a free data retrieval call binding the contract method 0x01e1d114.
 //
-// Solidity: function skimmable(address vault) view returns(uint256)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Skimmable(vault common.Address) (*big.Int, error) {
-	return _BridgeFacilitatorAdapter.Contract.Skimmable(&_BridgeFacilitatorAdapter.CallOpts, vault)
+// Solidity: function totalAssets() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) TotalAssets() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.TotalAssets(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// Vault is a free data retrieval call binding the contract method 0xfbfa77cf.
+//
+// Solidity: function vault() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Vault(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "vault")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// Vault is a free data retrieval call binding the contract method 0xfbfa77cf.
+//
+// Solidity: function vault() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Vault() (common.Address, error) {
+	return _BridgeFacilitatorAdapter.Contract.Vault(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// Vault is a free data retrieval call binding the contract method 0xfbfa77cf.
+//
+// Solidity: function vault() view returns(address)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Vault() (common.Address, error) {
+	return _BridgeFacilitatorAdapter.Contract.Vault(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(uint64)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) Version(opts *bind.CallOpts) (uint64, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "version")
+
+	if err != nil {
+		return *new(uint64), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(uint64)).(*uint64)
+
+	return out0, err
+
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(uint64)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Version() (uint64, error) {
+	return _BridgeFacilitatorAdapter.Contract.Version(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// Version is a free data retrieval call binding the contract method 0x54fd4d50.
+//
+// Solidity: function version() view returns(uint64)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Version() (uint64, error) {
+	return _BridgeFacilitatorAdapter.Contract.Version(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // Allocate is a paid mutator transaction binding the contract method 0x90ca796b.
 //
-// Solidity: function allocate(uint256 amount) returns()
+// Solidity: function allocate(uint256 amount) returns(uint256)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Allocate(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.contract.Transact(opts, "allocate", amount)
 }
 
 // Allocate is a paid mutator transaction binding the contract method 0x90ca796b.
 //
-// Solidity: function allocate(uint256 amount) returns()
+// Solidity: function allocate(uint256 amount) returns(uint256)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Allocate(amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.Allocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
 // Allocate is a paid mutator transaction binding the contract method 0x90ca796b.
 //
-// Solidity: function allocate(uint256 amount) returns()
+// Solidity: function allocate(uint256 amount) returns(uint256)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Allocate(amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.Allocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
 // Deallocate is a paid mutator transaction binding the contract method 0x6f6c441f.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256)
+// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Deallocate(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.contract.Transact(opts, "deallocate", amount)
 }
 
 // Deallocate is a paid mutator transaction binding the contract method 0x6f6c441f.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256)
+// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Deallocate(amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.Deallocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
 // Deallocate is a paid mutator transaction binding the contract method 0x6f6c441f.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256)
+// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Deallocate(amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.Deallocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
-// Initialize is a paid mutator transaction binding the contract method 0x8129fc1c.
+// Initialize is a paid mutator transaction binding the contract method 0x57ec83cc.
 //
-// Solidity: function initialize() returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Initialize(opts *bind.TransactOpts) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.contract.Transact(opts, "initialize")
+// Solidity: function initialize(uint64 initialVersion, address owner_, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Initialize(opts *bind.TransactOpts, initialVersion uint64, owner_ common.Address, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.contract.Transact(opts, "initialize", initialVersion, owner_, data)
 }
 
-// Initialize is a paid mutator transaction binding the contract method 0x8129fc1c.
+// Initialize is a paid mutator transaction binding the contract method 0x57ec83cc.
 //
-// Solidity: function initialize() returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Initialize() (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Initialize(&_BridgeFacilitatorAdapter.TransactOpts)
+// Solidity: function initialize(uint64 initialVersion, address owner_, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Initialize(initialVersion uint64, owner_ common.Address, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.Initialize(&_BridgeFacilitatorAdapter.TransactOpts, initialVersion, owner_, data)
 }
 
-// Initialize is a paid mutator transaction binding the contract method 0x8129fc1c.
+// Initialize is a paid mutator transaction binding the contract method 0x57ec83cc.
 //
-// Solidity: function initialize() returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Initialize() (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Initialize(&_BridgeFacilitatorAdapter.TransactOpts)
+// Solidity: function initialize(uint64 initialVersion, address owner_, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Initialize(initialVersion uint64, owner_ common.Address, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.Initialize(&_BridgeFacilitatorAdapter.TransactOpts, initialVersion, owner_, data)
+}
+
+// Migrate is a paid mutator transaction binding the contract method 0x2abe3048.
+//
+// Solidity: function migrate(uint64 newVersion, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Migrate(opts *bind.TransactOpts, newVersion uint64, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.contract.Transact(opts, "migrate", newVersion, data)
+}
+
+// Migrate is a paid mutator transaction binding the contract method 0x2abe3048.
+//
+// Solidity: function migrate(uint64 newVersion, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Migrate(newVersion uint64, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.Migrate(&_BridgeFacilitatorAdapter.TransactOpts, newVersion, data)
+}
+
+// Migrate is a paid mutator transaction binding the contract method 0x2abe3048.
+//
+// Solidity: function migrate(uint64 newVersion, bytes data) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Migrate(newVersion uint64, data []byte) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.Migrate(&_BridgeFacilitatorAdapter.TransactOpts, newVersion, data)
 }
 
 // Multicall is a paid mutator transaction binding the contract method 0xac9650d8.
@@ -753,27 +774,6 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) OnRe
 	return _BridgeFacilitatorAdapter.Contract.OnRequestConsumed(&_BridgeFacilitatorAdapter.TransactOpts, arg0, arg1, principal, yield)
 }
 
-// Recover is a paid mutator transaction binding the contract method 0x5705ae43.
-//
-// Solidity: function recover(address vault, uint256 amount) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Recover(opts *bind.TransactOpts, vault common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.contract.Transact(opts, "recover", vault, amount)
-}
-
-// Recover is a paid mutator transaction binding the contract method 0x5705ae43.
-//
-// Solidity: function recover(address vault, uint256 amount) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Recover(vault common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Recover(&_BridgeFacilitatorAdapter.TransactOpts, vault, amount)
-}
-
-// Recover is a paid mutator transaction binding the contract method 0x5705ae43.
-//
-// Solidity: function recover(address vault, uint256 amount) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Recover(vault common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Recover(&_BridgeFacilitatorAdapter.TransactOpts, vault, amount)
-}
-
 // Redeem is a paid mutator transaction binding the contract method 0x8730b205.
 //
 // Solidity: function redeem(address[] requests) returns()
@@ -816,25 +816,25 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Reno
 	return _BridgeFacilitatorAdapter.Contract.RenounceOwnership(&_BridgeFacilitatorAdapter.TransactOpts)
 }
 
-// SetGlobalLimit is a paid mutator transaction binding the contract method 0xa69b5109.
+// RequestDeallocate is a paid mutator transaction binding the contract method 0xf79f679d.
 //
-// Solidity: function setGlobalLimit(address collateral, uint256 limit) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) SetGlobalLimit(opts *bind.TransactOpts, collateral common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.contract.Transact(opts, "setGlobalLimit", collateral, limit)
+// Solidity: function requestDeallocate(uint256 amount) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) RequestDeallocate(opts *bind.TransactOpts, amount *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.contract.Transact(opts, "requestDeallocate", amount)
 }
 
-// SetGlobalLimit is a paid mutator transaction binding the contract method 0xa69b5109.
+// RequestDeallocate is a paid mutator transaction binding the contract method 0xf79f679d.
 //
-// Solidity: function setGlobalLimit(address collateral, uint256 limit) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) SetGlobalLimit(collateral common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.SetGlobalLimit(&_BridgeFacilitatorAdapter.TransactOpts, collateral, limit)
+// Solidity: function requestDeallocate(uint256 amount) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) RequestDeallocate(amount *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.RequestDeallocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
-// SetGlobalLimit is a paid mutator transaction binding the contract method 0xa69b5109.
+// RequestDeallocate is a paid mutator transaction binding the contract method 0xf79f679d.
 //
-// Solidity: function setGlobalLimit(address collateral, uint256 limit) returns()
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) SetGlobalLimit(collateral common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.SetGlobalLimit(&_BridgeFacilitatorAdapter.TransactOpts, collateral, limit)
+// Solidity: function requestDeallocate(uint256 amount) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) RequestDeallocate(amount *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.RequestDeallocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
 }
 
 // SetOfferSigner is a paid mutator transaction binding the contract method 0x868adcae.
@@ -856,27 +856,6 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) SetOfferSigner
 // Solidity: function setOfferSigner(address signer) returns()
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) SetOfferSigner(signer common.Address) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.SetOfferSigner(&_BridgeFacilitatorAdapter.TransactOpts, signer)
-}
-
-// Skim is a paid mutator transaction binding the contract method 0xbc25cf77.
-//
-// Solidity: function skim(address vault) returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) Skim(opts *bind.TransactOpts, vault common.Address) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.contract.Transact(opts, "skim", vault)
-}
-
-// Skim is a paid mutator transaction binding the contract method 0xbc25cf77.
-//
-// Solidity: function skim(address vault) returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Skim(vault common.Address) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Skim(&_BridgeFacilitatorAdapter.TransactOpts, vault)
-}
-
-// Skim is a paid mutator transaction binding the contract method 0xbc25cf77.
-//
-// Solidity: function skim(address vault) returns(uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) Skim(vault common.Address) (*types.Transaction, error) {
-	return _BridgeFacilitatorAdapter.Contract.Skim(&_BridgeFacilitatorAdapter.TransactOpts, vault)
 }
 
 // TransferOwnership is a paid mutator transaction binding the contract method 0xf2fde38b.
@@ -1479,296 +1458,6 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParsePosition
 	return event, nil
 }
 
-// BridgeFacilitatorAdapterRecoverIterator is returned from FilterRecover and is used to iterate over the raw logs and unpacked data for Recover events raised by the BridgeFacilitatorAdapter contract.
-type BridgeFacilitatorAdapterRecoverIterator struct {
-	Event *BridgeFacilitatorAdapterRecover // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *BridgeFacilitatorAdapterRecoverIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(BridgeFacilitatorAdapterRecover)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(BridgeFacilitatorAdapterRecover)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *BridgeFacilitatorAdapterRecoverIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *BridgeFacilitatorAdapterRecoverIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// BridgeFacilitatorAdapterRecover represents a Recover event raised by the BridgeFacilitatorAdapter contract.
-type BridgeFacilitatorAdapterRecover struct {
-	Vault  common.Address
-	Amount *big.Int
-	Raw    types.Log // Blockchain specific contextual infos
-}
-
-// FilterRecover is a free log retrieval operation binding the contract event 0x817c5912299b2d8eea4d9429e557c7b42c96a31499b4229932d1f070f068e37a.
-//
-// Solidity: event Recover(address indexed vault, uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) FilterRecover(opts *bind.FilterOpts, vault []common.Address) (*BridgeFacilitatorAdapterRecoverIterator, error) {
-
-	var vaultRule []interface{}
-	for _, vaultItem := range vault {
-		vaultRule = append(vaultRule, vaultItem)
-	}
-
-	logs, sub, err := _BridgeFacilitatorAdapter.contract.FilterLogs(opts, "Recover", vaultRule)
-	if err != nil {
-		return nil, err
-	}
-	return &BridgeFacilitatorAdapterRecoverIterator{contract: _BridgeFacilitatorAdapter.contract, event: "Recover", logs: logs, sub: sub}, nil
-}
-
-// WatchRecover is a free log subscription operation binding the contract event 0x817c5912299b2d8eea4d9429e557c7b42c96a31499b4229932d1f070f068e37a.
-//
-// Solidity: event Recover(address indexed vault, uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchRecover(opts *bind.WatchOpts, sink chan<- *BridgeFacilitatorAdapterRecover, vault []common.Address) (event.Subscription, error) {
-
-	var vaultRule []interface{}
-	for _, vaultItem := range vault {
-		vaultRule = append(vaultRule, vaultItem)
-	}
-
-	logs, sub, err := _BridgeFacilitatorAdapter.contract.WatchLogs(opts, "Recover", vaultRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(BridgeFacilitatorAdapterRecover)
-				if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "Recover", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseRecover is a log parse operation binding the contract event 0x817c5912299b2d8eea4d9429e557c7b42c96a31499b4229932d1f070f068e37a.
-//
-// Solidity: event Recover(address indexed vault, uint256 amount)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParseRecover(log types.Log) (*BridgeFacilitatorAdapterRecover, error) {
-	event := new(BridgeFacilitatorAdapterRecover)
-	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "Recover", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// BridgeFacilitatorAdapterSetGlobalLimitIterator is returned from FilterSetGlobalLimit and is used to iterate over the raw logs and unpacked data for SetGlobalLimit events raised by the BridgeFacilitatorAdapter contract.
-type BridgeFacilitatorAdapterSetGlobalLimitIterator struct {
-	Event *BridgeFacilitatorAdapterSetGlobalLimit // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *BridgeFacilitatorAdapterSetGlobalLimitIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(BridgeFacilitatorAdapterSetGlobalLimit)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(BridgeFacilitatorAdapterSetGlobalLimit)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *BridgeFacilitatorAdapterSetGlobalLimitIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *BridgeFacilitatorAdapterSetGlobalLimitIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// BridgeFacilitatorAdapterSetGlobalLimit represents a SetGlobalLimit event raised by the BridgeFacilitatorAdapter contract.
-type BridgeFacilitatorAdapterSetGlobalLimit struct {
-	Asset common.Address
-	Limit *big.Int
-	Raw   types.Log // Blockchain specific contextual infos
-}
-
-// FilterSetGlobalLimit is a free log retrieval operation binding the contract event 0x7bd864b8ef4d7c1c4558c27c45f97152e628a3a3ef3866f9c3f9ac3b798ea954.
-//
-// Solidity: event SetGlobalLimit(address indexed asset, uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) FilterSetGlobalLimit(opts *bind.FilterOpts, asset []common.Address) (*BridgeFacilitatorAdapterSetGlobalLimitIterator, error) {
-
-	var assetRule []interface{}
-	for _, assetItem := range asset {
-		assetRule = append(assetRule, assetItem)
-	}
-
-	logs, sub, err := _BridgeFacilitatorAdapter.contract.FilterLogs(opts, "SetGlobalLimit", assetRule)
-	if err != nil {
-		return nil, err
-	}
-	return &BridgeFacilitatorAdapterSetGlobalLimitIterator{contract: _BridgeFacilitatorAdapter.contract, event: "SetGlobalLimit", logs: logs, sub: sub}, nil
-}
-
-// WatchSetGlobalLimit is a free log subscription operation binding the contract event 0x7bd864b8ef4d7c1c4558c27c45f97152e628a3a3ef3866f9c3f9ac3b798ea954.
-//
-// Solidity: event SetGlobalLimit(address indexed asset, uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchSetGlobalLimit(opts *bind.WatchOpts, sink chan<- *BridgeFacilitatorAdapterSetGlobalLimit, asset []common.Address) (event.Subscription, error) {
-
-	var assetRule []interface{}
-	for _, assetItem := range asset {
-		assetRule = append(assetRule, assetItem)
-	}
-
-	logs, sub, err := _BridgeFacilitatorAdapter.contract.WatchLogs(opts, "SetGlobalLimit", assetRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(BridgeFacilitatorAdapterSetGlobalLimit)
-				if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetGlobalLimit", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseSetGlobalLimit is a log parse operation binding the contract event 0x7bd864b8ef4d7c1c4558c27c45f97152e628a3a3ef3866f9c3f9ac3b798ea954.
-//
-// Solidity: event SetGlobalLimit(address indexed asset, uint256 limit)
-func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParseSetGlobalLimit(log types.Log) (*BridgeFacilitatorAdapterSetGlobalLimit, error) {
-	event := new(BridgeFacilitatorAdapterSetGlobalLimit)
-	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetGlobalLimit", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
 // BridgeFacilitatorAdapterSetOfferSignerIterator is returned from FilterSetOfferSigner and is used to iterate over the raw logs and unpacked data for SetOfferSigner events raised by the BridgeFacilitatorAdapter contract.
 type BridgeFacilitatorAdapterSetOfferSignerIterator struct {
 	Event *BridgeFacilitatorAdapterSetOfferSigner // Event containing the contract specifics and raw log
@@ -1907,6 +1596,150 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchSetOffer
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParseSetOfferSigner(log types.Log) (*BridgeFacilitatorAdapterSetOfferSigner, error) {
 	event := new(BridgeFacilitatorAdapterSetOfferSigner)
 	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetOfferSigner", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeFacilitatorAdapterSetVaultIterator is returned from FilterSetVault and is used to iterate over the raw logs and unpacked data for SetVault events raised by the BridgeFacilitatorAdapter contract.
+type BridgeFacilitatorAdapterSetVaultIterator struct {
+	Event *BridgeFacilitatorAdapterSetVault // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeFacilitatorAdapterSetVaultIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeFacilitatorAdapterSetVault)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeFacilitatorAdapterSetVault)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeFacilitatorAdapterSetVaultIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeFacilitatorAdapterSetVaultIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeFacilitatorAdapterSetVault represents a SetVault event raised by the BridgeFacilitatorAdapter contract.
+type BridgeFacilitatorAdapterSetVault struct {
+	Vault common.Address
+	Raw   types.Log // Blockchain specific contextual infos
+}
+
+// FilterSetVault is a free log retrieval operation binding the contract event 0xd459c7242e23d490831b5676a611c4342d899d28f342d89ae80793e56a930f30.
+//
+// Solidity: event SetVault(address indexed vault)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) FilterSetVault(opts *bind.FilterOpts, vault []common.Address) (*BridgeFacilitatorAdapterSetVaultIterator, error) {
+
+	var vaultRule []interface{}
+	for _, vaultItem := range vault {
+		vaultRule = append(vaultRule, vaultItem)
+	}
+
+	logs, sub, err := _BridgeFacilitatorAdapter.contract.FilterLogs(opts, "SetVault", vaultRule)
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeFacilitatorAdapterSetVaultIterator{contract: _BridgeFacilitatorAdapter.contract, event: "SetVault", logs: logs, sub: sub}, nil
+}
+
+// WatchSetVault is a free log subscription operation binding the contract event 0xd459c7242e23d490831b5676a611c4342d899d28f342d89ae80793e56a930f30.
+//
+// Solidity: event SetVault(address indexed vault)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchSetVault(opts *bind.WatchOpts, sink chan<- *BridgeFacilitatorAdapterSetVault, vault []common.Address) (event.Subscription, error) {
+
+	var vaultRule []interface{}
+	for _, vaultItem := range vault {
+		vaultRule = append(vaultRule, vaultItem)
+	}
+
+	logs, sub, err := _BridgeFacilitatorAdapter.contract.WatchLogs(opts, "SetVault", vaultRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeFacilitatorAdapterSetVault)
+				if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetVault", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseSetVault is a log parse operation binding the contract event 0xd459c7242e23d490831b5676a611c4342d899d28f342d89ae80793e56a930f30.
+//
+// Solidity: event SetVault(address indexed vault)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParseSetVault(log types.Log) (*BridgeFacilitatorAdapterSetVault, error) {
+	event := new(BridgeFacilitatorAdapterSetVault)
+	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetVault", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

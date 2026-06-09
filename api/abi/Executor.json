@@ -8,14 +8,14 @@
         "internalType": "address"
       },
       {
-        "name": "irAdapter",
+        "name": "owner",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "admin",
-        "type": "address",
-        "internalType": "address"
+        "name": "initCallers",
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
     "stateMutability": "nonpayable"
@@ -26,13 +26,19 @@
   },
   {
     "type": "function",
-    "name": "DEFAULT_ADMIN_ROLE",
-    "inputs": [],
+    "name": "callers",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
         "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -120,32 +126,39 @@
       {
         "name": "swapInputs",
         "type": "tuple[]",
-        "internalType": "struct IInstantRedemptionAdapter.Swap[]",
+        "internalType": "struct IReactor.SwapInput[]",
         "components": [
           {
-            "name": "recipient",
+            "name": "adapter",
             "type": "address",
             "internalType": "address"
           },
           {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "tokenIn",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
-            "type": "uint256",
-            "internalType": "uint256"
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
           }
         ]
       },
@@ -155,20 +168,20 @@
         "internalType": "struct IReactor.DiscountSwapInput[]",
         "components": [
           {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
             "name": "discountSwap",
             "type": "tuple",
-            "internalType": "struct IInstantRedemptionAdapter.DiscountSwap",
+            "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
             "components": [
               {
                 "name": "discount",
                 "type": "tuple",
-                "internalType": "struct IInstantRedemptionAdapter.Discount",
+                "internalType": "struct ILiquidLaneAdapter.Discount",
                 "components": [
-                  {
-                    "name": "vault",
-                    "type": "address",
-                    "internalType": "address"
-                  },
                   {
                     "name": "tokenToRedeem",
                     "type": "address",
@@ -225,11 +238,6 @@
           },
           {
             "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
             "type": "uint256",
             "internalType": "uint256"
           }
@@ -332,32 +340,39 @@
       {
         "name": "swapInputs",
         "type": "tuple[]",
-        "internalType": "struct IInstantRedemptionAdapter.Swap[]",
+        "internalType": "struct IReactor.SwapInput[]",
         "components": [
           {
-            "name": "recipient",
+            "name": "adapter",
             "type": "address",
             "internalType": "address"
           },
           {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "tokenIn",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
-            "type": "uint256",
-            "internalType": "uint256"
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
           }
         ]
       },
@@ -367,20 +382,20 @@
         "internalType": "struct IReactor.DiscountSwapInput[]",
         "components": [
           {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
             "name": "discountSwap",
             "type": "tuple",
-            "internalType": "struct IInstantRedemptionAdapter.DiscountSwap",
+            "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
             "components": [
               {
                 "name": "discount",
                 "type": "tuple",
-                "internalType": "struct IInstantRedemptionAdapter.Discount",
+                "internalType": "struct ILiquidLaneAdapter.Discount",
                 "components": [
-                  {
-                    "name": "vault",
-                    "type": "address",
-                    "internalType": "address"
-                  },
                   {
                     "name": "tokenToRedeem",
                     "type": "address",
@@ -437,11 +452,6 @@
           },
           {
             "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
             "type": "uint256",
             "internalType": "uint256"
           }
@@ -544,32 +554,39 @@
       {
         "name": "swapInputs",
         "type": "tuple[]",
-        "internalType": "struct IInstantRedemptionAdapter.Swap[]",
+        "internalType": "struct IReactor.SwapInput[]",
         "components": [
           {
-            "name": "recipient",
+            "name": "adapter",
             "type": "address",
             "internalType": "address"
           },
           {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "tokenIn",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
-            "type": "uint256",
-            "internalType": "uint256"
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
           }
         ]
       },
@@ -668,34 +685,41 @@
         "internalType": "bytes"
       },
       {
-        "name": "swap",
+        "name": "swapInput",
         "type": "tuple",
-        "internalType": "struct IInstantRedemptionAdapter.Swap",
+        "internalType": "struct IReactor.SwapInput",
         "components": [
           {
-            "name": "recipient",
+            "name": "adapter",
             "type": "address",
             "internalType": "address"
           },
           {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "tokenIn",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
-            "type": "uint256",
-            "internalType": "uint256"
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
           }
         ]
       },
@@ -710,36 +734,32 @@
   },
   {
     "type": "function",
-    "name": "getRoleAdmin",
-    "inputs": [
-      {
-        "name": "role",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
+    "name": "owner",
+    "inputs": [],
     "outputs": [
       {
         "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
   },
   {
     "type": "function",
-    "name": "grantRole",
+    "name": "renounceOwnership",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setCallers",
     "inputs": [
       {
-        "name": "role",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
+        "name": "newCallers",
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
     "outputs": [],
@@ -747,126 +767,29 @@
   },
   {
     "type": "function",
-    "name": "hasRole",
+    "name": "transferOwnership",
     "inputs": [
       {
-        "name": "role",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "renounceRole",
-    "inputs": [
-      {
-        "name": "role",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "callerConfirmation",
+        "name": "newOwner",
         "type": "address",
         "internalType": "address"
       }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "revokeRole",
-    "inputs": [
-      {
-        "name": "role",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "supportsInterface",
-    "inputs": [
-      {
-        "name": "interfaceId",
-        "type": "bytes4",
-        "internalType": "bytes4"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "event",
-    "name": "RoleAdminChanged",
+    "name": "OwnershipTransferred",
     "inputs": [
       {
-        "name": "role",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "previousAdminRole",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "newAdminRole",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "RoleGranted",
-    "inputs": [
-      {
-        "name": "role",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "account",
+        "name": "previousOwner",
         "type": "address",
         "indexed": true,
         "internalType": "address"
       },
       {
-        "name": "sender",
+        "name": "newOwner",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -876,47 +799,46 @@
   },
   {
     "type": "event",
-    "name": "RoleRevoked",
+    "name": "SetCallers",
     "inputs": [
       {
-        "name": "role",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "account",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "sender",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
+        "name": "newCallers",
+        "type": "address[]",
+        "indexed": false,
+        "internalType": "address[]"
       }
     ],
     "anonymous": false
   },
   {
     "type": "error",
-    "name": "AccessControlBadConfirmation",
+    "name": "AddressEmptyCode",
+    "inputs": [
+      {
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "FailedCall",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "AccessControlUnauthorizedAccount",
+    "name": "InsufficientBalance",
     "inputs": [
       {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
+        "name": "balance",
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
-        "name": "neededRole",
-        "type": "bytes32",
-        "internalType": "bytes32"
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ]
   },
@@ -929,5 +851,38 @@
     "type": "error",
     "name": "NotReactor",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "OwnableInvalidOwner",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "OwnableUnauthorizedAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SafeERC20FailedOperation",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   }
 ]

@@ -29,9 +29,8 @@ var (
 	_ = abi.ConvertType
 )
 
-// IInstantRedemptionAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterDiscount struct {
-	Vault         common.Address
+// ILiquidLaneAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscount struct {
 	TokenToRedeem common.Address
 	Discount      *big.Int
 	Signer        common.Address
@@ -40,17 +39,16 @@ type IInstantRedemptionAdapterDiscount struct {
 	Deadline      *big.Int
 }
 
-// IInstantRedemptionAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterDiscountSwap struct {
-	Discount         IInstantRedemptionAdapterDiscount
+// ILiquidLaneAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscountSwap struct {
+	Discount         ILiquidLaneAdapterDiscount
 	SignerSignature  []byte
 	ProtocolDeadline *big.Int
 }
 
-// IInstantRedemptionAdapterSwap is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterSwap struct {
+// ILiquidLaneAdapterSwap is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterSwap struct {
 	Recipient common.Address
-	Vault     common.Address
 	TokenIn   common.Address
 	AmountIn  *big.Int
 	AmountOut *big.Int
@@ -58,11 +56,11 @@ type IInstantRedemptionAdapterSwap struct {
 
 // IReactorDiscountSwapInput is an auto generated low-level Go binding around an user-defined struct.
 type IReactorDiscountSwapInput struct {
-	DiscountSwap      IInstantRedemptionAdapterDiscountSwap
+	Adapter           common.Address
+	DiscountSwap      ILiquidLaneAdapterDiscountSwap
 	ProtocolSignature []byte
 	Recipient         common.Address
 	AmountIn          *big.Int
-	AmountOut         *big.Int
 }
 
 // IReactorOrder is an auto generated low-level Go binding around an user-defined struct.
@@ -90,9 +88,15 @@ type IReactorRequest struct {
 	Protocol common.Address
 }
 
+// IReactorSwapInput is an auto generated low-level Go binding around an user-defined struct.
+type IReactorSwapInput struct {
+	Adapter common.Address
+	Swap    ILiquidLaneAdapterSwap
+}
+
 // ExecutorMetaData contains all meta data concerning the Executor contract.
 var ExecutorMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"irAdapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"admin\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"DEFAULT_ADMIN_ROLE\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIInstantRedemptionAdapter.Swap[]\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.Discount\",\"components\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIInstantRedemptionAdapter.Swap[]\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.Discount\",\"components\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIInstantRedemptionAdapter.Swap[]\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"getRoleAdmin\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"grantRole\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"hasRole\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"renounceRole\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"callerConfirmation\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"revokeRole\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"supportsInterface\",\"inputs\":[{\"name\":\"interfaceId\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"RoleAdminChanged\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"previousAdminRole\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"newAdminRole\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"RoleGranted\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"account\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"sender\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"RoleRevoked\",\"inputs\":[{\"name\":\"role\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"account\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"sender\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AccessControlBadConfirmation\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AccessControlUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"neededRole\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotReactor\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"callers\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.SwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.SwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.SwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInput\",\"type\":\"tuple\",\"internalType\":\"structIReactor.SwapInput\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"indexed\":false,\"internalType\":\"address[]\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AddressEmptyCode\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"FailedCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientBalance\",\"inputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"needed\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotReactor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
 }
 
 // ExecutorABI is the input ABI used to generate the binding from.
@@ -241,275 +245,213 @@ func (_Executor *ExecutorTransactorRaw) Transact(opts *bind.TransactOpts, method
 	return _Executor.Contract.contract.Transact(opts, method, params...)
 }
 
-// DEFAULTADMINROLE is a free data retrieval call binding the contract method 0xa217fddf.
+// Callers is a free data retrieval call binding the contract method 0xaa03fa3d.
 //
-// Solidity: function DEFAULT_ADMIN_ROLE() view returns(bytes32)
-func (_Executor *ExecutorCaller) DEFAULTADMINROLE(opts *bind.CallOpts) ([32]byte, error) {
+// Solidity: function callers(uint256 ) view returns(address)
+func (_Executor *ExecutorCaller) Callers(opts *bind.CallOpts, arg0 *big.Int) (common.Address, error) {
 	var out []interface{}
-	err := _Executor.contract.Call(opts, &out, "DEFAULT_ADMIN_ROLE")
+	err := _Executor.contract.Call(opts, &out, "callers", arg0)
 
 	if err != nil {
-		return *new([32]byte), err
+		return *new(common.Address), err
 	}
 
-	out0 := *abi.ConvertType(out[0], new([32]byte)).(*[32]byte)
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 
 	return out0, err
 
 }
 
-// DEFAULTADMINROLE is a free data retrieval call binding the contract method 0xa217fddf.
+// Callers is a free data retrieval call binding the contract method 0xaa03fa3d.
 //
-// Solidity: function DEFAULT_ADMIN_ROLE() view returns(bytes32)
-func (_Executor *ExecutorSession) DEFAULTADMINROLE() ([32]byte, error) {
-	return _Executor.Contract.DEFAULTADMINROLE(&_Executor.CallOpts)
+// Solidity: function callers(uint256 ) view returns(address)
+func (_Executor *ExecutorSession) Callers(arg0 *big.Int) (common.Address, error) {
+	return _Executor.Contract.Callers(&_Executor.CallOpts, arg0)
 }
 
-// DEFAULTADMINROLE is a free data retrieval call binding the contract method 0xa217fddf.
+// Callers is a free data retrieval call binding the contract method 0xaa03fa3d.
 //
-// Solidity: function DEFAULT_ADMIN_ROLE() view returns(bytes32)
-func (_Executor *ExecutorCallerSession) DEFAULTADMINROLE() ([32]byte, error) {
-	return _Executor.Contract.DEFAULTADMINROLE(&_Executor.CallOpts)
+// Solidity: function callers(uint256 ) view returns(address)
+func (_Executor *ExecutorCallerSession) Callers(arg0 *big.Int) (common.Address, error) {
+	return _Executor.Contract.Callers(&_Executor.CallOpts, arg0)
 }
 
-// GetRoleAdmin is a free data retrieval call binding the contract method 0x248a9ca3.
+// Owner is a free data retrieval call binding the contract method 0x8da5cb5b.
 //
-// Solidity: function getRoleAdmin(bytes32 role) view returns(bytes32)
-func (_Executor *ExecutorCaller) GetRoleAdmin(opts *bind.CallOpts, role [32]byte) ([32]byte, error) {
+// Solidity: function owner() view returns(address)
+func (_Executor *ExecutorCaller) Owner(opts *bind.CallOpts) (common.Address, error) {
 	var out []interface{}
-	err := _Executor.contract.Call(opts, &out, "getRoleAdmin", role)
+	err := _Executor.contract.Call(opts, &out, "owner")
 
 	if err != nil {
-		return *new([32]byte), err
+		return *new(common.Address), err
 	}
 
-	out0 := *abi.ConvertType(out[0], new([32]byte)).(*[32]byte)
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 
 	return out0, err
 
 }
 
-// GetRoleAdmin is a free data retrieval call binding the contract method 0x248a9ca3.
+// Owner is a free data retrieval call binding the contract method 0x8da5cb5b.
 //
-// Solidity: function getRoleAdmin(bytes32 role) view returns(bytes32)
-func (_Executor *ExecutorSession) GetRoleAdmin(role [32]byte) ([32]byte, error) {
-	return _Executor.Contract.GetRoleAdmin(&_Executor.CallOpts, role)
+// Solidity: function owner() view returns(address)
+func (_Executor *ExecutorSession) Owner() (common.Address, error) {
+	return _Executor.Contract.Owner(&_Executor.CallOpts)
 }
 
-// GetRoleAdmin is a free data retrieval call binding the contract method 0x248a9ca3.
+// Owner is a free data retrieval call binding the contract method 0x8da5cb5b.
 //
-// Solidity: function getRoleAdmin(bytes32 role) view returns(bytes32)
-func (_Executor *ExecutorCallerSession) GetRoleAdmin(role [32]byte) ([32]byte, error) {
-	return _Executor.Contract.GetRoleAdmin(&_Executor.CallOpts, role)
+// Solidity: function owner() view returns(address)
+func (_Executor *ExecutorCallerSession) Owner() (common.Address, error) {
+	return _Executor.Contract.Owner(&_Executor.CallOpts)
 }
 
-// HasRole is a free data retrieval call binding the contract method 0x91d14854.
+// Execute is a paid mutator transaction binding the contract method 0xa3b18964.
 //
-// Solidity: function hasRole(bytes32 role, address account) view returns(bool)
-func (_Executor *ExecutorCaller) HasRole(opts *bind.CallOpts, role [32]byte, account common.Address) (bool, error) {
-	var out []interface{}
-	err := _Executor.contract.Call(opts, &out, "hasRole", role, account)
-
-	if err != nil {
-		return *new(bool), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
-
-	return out0, err
-
-}
-
-// HasRole is a free data retrieval call binding the contract method 0x91d14854.
-//
-// Solidity: function hasRole(bytes32 role, address account) view returns(bool)
-func (_Executor *ExecutorSession) HasRole(role [32]byte, account common.Address) (bool, error) {
-	return _Executor.Contract.HasRole(&_Executor.CallOpts, role, account)
-}
-
-// HasRole is a free data retrieval call binding the contract method 0x91d14854.
-//
-// Solidity: function hasRole(bytes32 role, address account) view returns(bool)
-func (_Executor *ExecutorCallerSession) HasRole(role [32]byte, account common.Address) (bool, error) {
-	return _Executor.Contract.HasRole(&_Executor.CallOpts, role, account)
-}
-
-// SupportsInterface is a free data retrieval call binding the contract method 0x01ffc9a7.
-//
-// Solidity: function supportsInterface(bytes4 interfaceId) view returns(bool)
-func (_Executor *ExecutorCaller) SupportsInterface(opts *bind.CallOpts, interfaceId [4]byte) (bool, error) {
-	var out []interface{}
-	err := _Executor.contract.Call(opts, &out, "supportsInterface", interfaceId)
-
-	if err != nil {
-		return *new(bool), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
-
-	return out0, err
-
-}
-
-// SupportsInterface is a free data retrieval call binding the contract method 0x01ffc9a7.
-//
-// Solidity: function supportsInterface(bytes4 interfaceId) view returns(bool)
-func (_Executor *ExecutorSession) SupportsInterface(interfaceId [4]byte) (bool, error) {
-	return _Executor.Contract.SupportsInterface(&_Executor.CallOpts, interfaceId)
-}
-
-// SupportsInterface is a free data retrieval call binding the contract method 0x01ffc9a7.
-//
-// Solidity: function supportsInterface(bytes4 interfaceId) view returns(bool)
-func (_Executor *ExecutorCallerSession) SupportsInterface(interfaceId [4]byte) (bool, error) {
-	return _Executor.Contract.SupportsInterface(&_Executor.CallOpts, interfaceId)
-}
-
-// Execute is a paid mutator transaction binding the contract method 0xc2a597df.
-//
-// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactor) Execute(opts *bind.TransactOpts, order IReactorOrder, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactor) Execute(opts *bind.TransactOpts, order IReactorOrder, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.contract.Transact(opts, "execute", order, swapInputs, discountSwapInputs, executorData)
 }
 
-// Execute is a paid mutator transaction binding the contract method 0xc2a597df.
+// Execute is a paid mutator transaction binding the contract method 0xa3b18964.
 //
-// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorSession) Execute(order IReactorOrder, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorSession) Execute(order IReactorOrder, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Execute(&_Executor.TransactOpts, order, swapInputs, discountSwapInputs, executorData)
 }
 
-// Execute is a paid mutator transaction binding the contract method 0xc2a597df.
+// Execute is a paid mutator transaction binding the contract method 0xa3b18964.
 //
-// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactorSession) Execute(order IReactorOrder, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function execute(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactorSession) Execute(order IReactorOrder, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Execute(&_Executor.TransactOpts, order, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactor) Fill(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactor) Fill(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.contract.Transact(opts, "fill", order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Fill(&_Executor.TransactOpts, order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Fill(&_Executor.TransactOpts, order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactor) Fill0(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactor) Fill0(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.contract.Transact(opts, "fill0", order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Executor *ExecutorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Executor *ExecutorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Fill0(&_Executor.TransactOpts, order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Executor *ExecutorTransactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Executor *ExecutorTransactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Executor.Contract.Fill0(&_Executor.TransactOpts, order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Executor *ExecutorTransactor) Fill1(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Executor.contract.Transact(opts, "fill1", order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Executor *ExecutorTransactor) Fill1(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Executor.contract.Transact(opts, "fill1", order, protocolSignature, swapInput, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Executor *ExecutorSession) Fill1(order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Executor.Contract.Fill1(&_Executor.TransactOpts, order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Executor *ExecutorSession) Fill1(order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Executor.Contract.Fill1(&_Executor.TransactOpts, order, protocolSignature, swapInput, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Executor *ExecutorTransactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Executor.Contract.Fill1(&_Executor.TransactOpts, order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Executor *ExecutorTransactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Executor.Contract.Fill1(&_Executor.TransactOpts, order, protocolSignature, swapInput, executorData)
 }
 
-// GrantRole is a paid mutator transaction binding the contract method 0x2f2ff15d.
+// RenounceOwnership is a paid mutator transaction binding the contract method 0x715018a6.
 //
-// Solidity: function grantRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorTransactor) GrantRole(opts *bind.TransactOpts, role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.contract.Transact(opts, "grantRole", role, account)
+// Solidity: function renounceOwnership() returns()
+func (_Executor *ExecutorTransactor) RenounceOwnership(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _Executor.contract.Transact(opts, "renounceOwnership")
 }
 
-// GrantRole is a paid mutator transaction binding the contract method 0x2f2ff15d.
+// RenounceOwnership is a paid mutator transaction binding the contract method 0x715018a6.
 //
-// Solidity: function grantRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorSession) GrantRole(role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.GrantRole(&_Executor.TransactOpts, role, account)
+// Solidity: function renounceOwnership() returns()
+func (_Executor *ExecutorSession) RenounceOwnership() (*types.Transaction, error) {
+	return _Executor.Contract.RenounceOwnership(&_Executor.TransactOpts)
 }
 
-// GrantRole is a paid mutator transaction binding the contract method 0x2f2ff15d.
+// RenounceOwnership is a paid mutator transaction binding the contract method 0x715018a6.
 //
-// Solidity: function grantRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorTransactorSession) GrantRole(role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.GrantRole(&_Executor.TransactOpts, role, account)
+// Solidity: function renounceOwnership() returns()
+func (_Executor *ExecutorTransactorSession) RenounceOwnership() (*types.Transaction, error) {
+	return _Executor.Contract.RenounceOwnership(&_Executor.TransactOpts)
 }
 
-// RenounceRole is a paid mutator transaction binding the contract method 0x36568abe.
+// SetCallers is a paid mutator transaction binding the contract method 0x43ded848.
 //
-// Solidity: function renounceRole(bytes32 role, address callerConfirmation) returns()
-func (_Executor *ExecutorTransactor) RenounceRole(opts *bind.TransactOpts, role [32]byte, callerConfirmation common.Address) (*types.Transaction, error) {
-	return _Executor.contract.Transact(opts, "renounceRole", role, callerConfirmation)
+// Solidity: function setCallers(address[] newCallers) returns()
+func (_Executor *ExecutorTransactor) SetCallers(opts *bind.TransactOpts, newCallers []common.Address) (*types.Transaction, error) {
+	return _Executor.contract.Transact(opts, "setCallers", newCallers)
 }
 
-// RenounceRole is a paid mutator transaction binding the contract method 0x36568abe.
+// SetCallers is a paid mutator transaction binding the contract method 0x43ded848.
 //
-// Solidity: function renounceRole(bytes32 role, address callerConfirmation) returns()
-func (_Executor *ExecutorSession) RenounceRole(role [32]byte, callerConfirmation common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.RenounceRole(&_Executor.TransactOpts, role, callerConfirmation)
+// Solidity: function setCallers(address[] newCallers) returns()
+func (_Executor *ExecutorSession) SetCallers(newCallers []common.Address) (*types.Transaction, error) {
+	return _Executor.Contract.SetCallers(&_Executor.TransactOpts, newCallers)
 }
 
-// RenounceRole is a paid mutator transaction binding the contract method 0x36568abe.
+// SetCallers is a paid mutator transaction binding the contract method 0x43ded848.
 //
-// Solidity: function renounceRole(bytes32 role, address callerConfirmation) returns()
-func (_Executor *ExecutorTransactorSession) RenounceRole(role [32]byte, callerConfirmation common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.RenounceRole(&_Executor.TransactOpts, role, callerConfirmation)
+// Solidity: function setCallers(address[] newCallers) returns()
+func (_Executor *ExecutorTransactorSession) SetCallers(newCallers []common.Address) (*types.Transaction, error) {
+	return _Executor.Contract.SetCallers(&_Executor.TransactOpts, newCallers)
 }
 
-// RevokeRole is a paid mutator transaction binding the contract method 0xd547741f.
+// TransferOwnership is a paid mutator transaction binding the contract method 0xf2fde38b.
 //
-// Solidity: function revokeRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorTransactor) RevokeRole(opts *bind.TransactOpts, role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.contract.Transact(opts, "revokeRole", role, account)
+// Solidity: function transferOwnership(address newOwner) returns()
+func (_Executor *ExecutorTransactor) TransferOwnership(opts *bind.TransactOpts, newOwner common.Address) (*types.Transaction, error) {
+	return _Executor.contract.Transact(opts, "transferOwnership", newOwner)
 }
 
-// RevokeRole is a paid mutator transaction binding the contract method 0xd547741f.
+// TransferOwnership is a paid mutator transaction binding the contract method 0xf2fde38b.
 //
-// Solidity: function revokeRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorSession) RevokeRole(role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.RevokeRole(&_Executor.TransactOpts, role, account)
+// Solidity: function transferOwnership(address newOwner) returns()
+func (_Executor *ExecutorSession) TransferOwnership(newOwner common.Address) (*types.Transaction, error) {
+	return _Executor.Contract.TransferOwnership(&_Executor.TransactOpts, newOwner)
 }
 
-// RevokeRole is a paid mutator transaction binding the contract method 0xd547741f.
+// TransferOwnership is a paid mutator transaction binding the contract method 0xf2fde38b.
 //
-// Solidity: function revokeRole(bytes32 role, address account) returns()
-func (_Executor *ExecutorTransactorSession) RevokeRole(role [32]byte, account common.Address) (*types.Transaction, error) {
-	return _Executor.Contract.RevokeRole(&_Executor.TransactOpts, role, account)
+// Solidity: function transferOwnership(address newOwner) returns()
+func (_Executor *ExecutorTransactorSession) TransferOwnership(newOwner common.Address) (*types.Transaction, error) {
+	return _Executor.Contract.TransferOwnership(&_Executor.TransactOpts, newOwner)
 }
 
 // Receive is a paid mutator transaction binding the contract receive function.
@@ -533,9 +475,9 @@ func (_Executor *ExecutorTransactorSession) Receive() (*types.Transaction, error
 	return _Executor.Contract.Receive(&_Executor.TransactOpts)
 }
 
-// ExecutorRoleAdminChangedIterator is returned from FilterRoleAdminChanged and is used to iterate over the raw logs and unpacked data for RoleAdminChanged events raised by the Executor contract.
-type ExecutorRoleAdminChangedIterator struct {
-	Event *ExecutorRoleAdminChanged // Event containing the contract specifics and raw log
+// ExecutorOwnershipTransferredIterator is returned from FilterOwnershipTransferred and is used to iterate over the raw logs and unpacked data for OwnershipTransferred events raised by the Executor contract.
+type ExecutorOwnershipTransferredIterator struct {
+	Event *ExecutorOwnershipTransferred // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -549,7 +491,7 @@ type ExecutorRoleAdminChangedIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *ExecutorRoleAdminChangedIterator) Next() bool {
+func (it *ExecutorOwnershipTransferredIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -558,7 +500,7 @@ func (it *ExecutorRoleAdminChangedIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(ExecutorRoleAdminChanged)
+			it.Event = new(ExecutorOwnershipTransferred)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -573,7 +515,7 @@ func (it *ExecutorRoleAdminChangedIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(ExecutorRoleAdminChanged)
+		it.Event = new(ExecutorOwnershipTransferred)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -589,69 +531,60 @@ func (it *ExecutorRoleAdminChangedIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *ExecutorRoleAdminChangedIterator) Error() error {
+func (it *ExecutorOwnershipTransferredIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *ExecutorRoleAdminChangedIterator) Close() error {
+func (it *ExecutorOwnershipTransferredIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// ExecutorRoleAdminChanged represents a RoleAdminChanged event raised by the Executor contract.
-type ExecutorRoleAdminChanged struct {
-	Role              [32]byte
-	PreviousAdminRole [32]byte
-	NewAdminRole      [32]byte
-	Raw               types.Log // Blockchain specific contextual infos
+// ExecutorOwnershipTransferred represents a OwnershipTransferred event raised by the Executor contract.
+type ExecutorOwnershipTransferred struct {
+	PreviousOwner common.Address
+	NewOwner      common.Address
+	Raw           types.Log // Blockchain specific contextual infos
 }
 
-// FilterRoleAdminChanged is a free log retrieval operation binding the contract event 0xbd79b86ffe0ab8e8776151514217cd7cacd52c909f66475c3af44e129f0b00ff.
+// FilterOwnershipTransferred is a free log retrieval operation binding the contract event 0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0.
 //
-// Solidity: event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)
-func (_Executor *ExecutorFilterer) FilterRoleAdminChanged(opts *bind.FilterOpts, role [][32]byte, previousAdminRole [][32]byte, newAdminRole [][32]byte) (*ExecutorRoleAdminChangedIterator, error) {
+// Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
+func (_Executor *ExecutorFilterer) FilterOwnershipTransferred(opts *bind.FilterOpts, previousOwner []common.Address, newOwner []common.Address) (*ExecutorOwnershipTransferredIterator, error) {
 
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
+	var previousOwnerRule []interface{}
+	for _, previousOwnerItem := range previousOwner {
+		previousOwnerRule = append(previousOwnerRule, previousOwnerItem)
 	}
-	var previousAdminRoleRule []interface{}
-	for _, previousAdminRoleItem := range previousAdminRole {
-		previousAdminRoleRule = append(previousAdminRoleRule, previousAdminRoleItem)
-	}
-	var newAdminRoleRule []interface{}
-	for _, newAdminRoleItem := range newAdminRole {
-		newAdminRoleRule = append(newAdminRoleRule, newAdminRoleItem)
+	var newOwnerRule []interface{}
+	for _, newOwnerItem := range newOwner {
+		newOwnerRule = append(newOwnerRule, newOwnerItem)
 	}
 
-	logs, sub, err := _Executor.contract.FilterLogs(opts, "RoleAdminChanged", roleRule, previousAdminRoleRule, newAdminRoleRule)
+	logs, sub, err := _Executor.contract.FilterLogs(opts, "OwnershipTransferred", previousOwnerRule, newOwnerRule)
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorRoleAdminChangedIterator{contract: _Executor.contract, event: "RoleAdminChanged", logs: logs, sub: sub}, nil
+	return &ExecutorOwnershipTransferredIterator{contract: _Executor.contract, event: "OwnershipTransferred", logs: logs, sub: sub}, nil
 }
 
-// WatchRoleAdminChanged is a free log subscription operation binding the contract event 0xbd79b86ffe0ab8e8776151514217cd7cacd52c909f66475c3af44e129f0b00ff.
+// WatchOwnershipTransferred is a free log subscription operation binding the contract event 0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0.
 //
-// Solidity: event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)
-func (_Executor *ExecutorFilterer) WatchRoleAdminChanged(opts *bind.WatchOpts, sink chan<- *ExecutorRoleAdminChanged, role [][32]byte, previousAdminRole [][32]byte, newAdminRole [][32]byte) (event.Subscription, error) {
+// Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
+func (_Executor *ExecutorFilterer) WatchOwnershipTransferred(opts *bind.WatchOpts, sink chan<- *ExecutorOwnershipTransferred, previousOwner []common.Address, newOwner []common.Address) (event.Subscription, error) {
 
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
+	var previousOwnerRule []interface{}
+	for _, previousOwnerItem := range previousOwner {
+		previousOwnerRule = append(previousOwnerRule, previousOwnerItem)
 	}
-	var previousAdminRoleRule []interface{}
-	for _, previousAdminRoleItem := range previousAdminRole {
-		previousAdminRoleRule = append(previousAdminRoleRule, previousAdminRoleItem)
-	}
-	var newAdminRoleRule []interface{}
-	for _, newAdminRoleItem := range newAdminRole {
-		newAdminRoleRule = append(newAdminRoleRule, newAdminRoleItem)
+	var newOwnerRule []interface{}
+	for _, newOwnerItem := range newOwner {
+		newOwnerRule = append(newOwnerRule, newOwnerItem)
 	}
 
-	logs, sub, err := _Executor.contract.WatchLogs(opts, "RoleAdminChanged", roleRule, previousAdminRoleRule, newAdminRoleRule)
+	logs, sub, err := _Executor.contract.WatchLogs(opts, "OwnershipTransferred", previousOwnerRule, newOwnerRule)
 	if err != nil {
 		return nil, err
 	}
@@ -661,8 +594,8 @@ func (_Executor *ExecutorFilterer) WatchRoleAdminChanged(opts *bind.WatchOpts, s
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(ExecutorRoleAdminChanged)
-				if err := _Executor.contract.UnpackLog(event, "RoleAdminChanged", log); err != nil {
+				event := new(ExecutorOwnershipTransferred)
+				if err := _Executor.contract.UnpackLog(event, "OwnershipTransferred", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -683,21 +616,21 @@ func (_Executor *ExecutorFilterer) WatchRoleAdminChanged(opts *bind.WatchOpts, s
 	}), nil
 }
 
-// ParseRoleAdminChanged is a log parse operation binding the contract event 0xbd79b86ffe0ab8e8776151514217cd7cacd52c909f66475c3af44e129f0b00ff.
+// ParseOwnershipTransferred is a log parse operation binding the contract event 0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0.
 //
-// Solidity: event RoleAdminChanged(bytes32 indexed role, bytes32 indexed previousAdminRole, bytes32 indexed newAdminRole)
-func (_Executor *ExecutorFilterer) ParseRoleAdminChanged(log types.Log) (*ExecutorRoleAdminChanged, error) {
-	event := new(ExecutorRoleAdminChanged)
-	if err := _Executor.contract.UnpackLog(event, "RoleAdminChanged", log); err != nil {
+// Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
+func (_Executor *ExecutorFilterer) ParseOwnershipTransferred(log types.Log) (*ExecutorOwnershipTransferred, error) {
+	event := new(ExecutorOwnershipTransferred)
+	if err := _Executor.contract.UnpackLog(event, "OwnershipTransferred", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
 	return event, nil
 }
 
-// ExecutorRoleGrantedIterator is returned from FilterRoleGranted and is used to iterate over the raw logs and unpacked data for RoleGranted events raised by the Executor contract.
-type ExecutorRoleGrantedIterator struct {
-	Event *ExecutorRoleGranted // Event containing the contract specifics and raw log
+// ExecutorSetCallersIterator is returned from FilterSetCallers and is used to iterate over the raw logs and unpacked data for SetCallers events raised by the Executor contract.
+type ExecutorSetCallersIterator struct {
+	Event *ExecutorSetCallers // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -711,7 +644,7 @@ type ExecutorRoleGrantedIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *ExecutorRoleGrantedIterator) Next() bool {
+func (it *ExecutorSetCallersIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -720,7 +653,7 @@ func (it *ExecutorRoleGrantedIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(ExecutorRoleGranted)
+			it.Event = new(ExecutorSetCallers)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -735,7 +668,7 @@ func (it *ExecutorRoleGrantedIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(ExecutorRoleGranted)
+		it.Event = new(ExecutorSetCallers)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -751,69 +684,41 @@ func (it *ExecutorRoleGrantedIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *ExecutorRoleGrantedIterator) Error() error {
+func (it *ExecutorSetCallersIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *ExecutorRoleGrantedIterator) Close() error {
+func (it *ExecutorSetCallersIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// ExecutorRoleGranted represents a RoleGranted event raised by the Executor contract.
-type ExecutorRoleGranted struct {
-	Role    [32]byte
-	Account common.Address
-	Sender  common.Address
-	Raw     types.Log // Blockchain specific contextual infos
+// ExecutorSetCallers represents a SetCallers event raised by the Executor contract.
+type ExecutorSetCallers struct {
+	NewCallers []common.Address
+	Raw        types.Log // Blockchain specific contextual infos
 }
 
-// FilterRoleGranted is a free log retrieval operation binding the contract event 0x2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d.
+// FilterSetCallers is a free log retrieval operation binding the contract event 0x0e123de96057b6051041e23e21f5c45be29329e5dde6f3a360901e20395ad0fd.
 //
-// Solidity: event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) FilterRoleGranted(opts *bind.FilterOpts, role [][32]byte, account []common.Address, sender []common.Address) (*ExecutorRoleGrantedIterator, error) {
+// Solidity: event SetCallers(address[] newCallers)
+func (_Executor *ExecutorFilterer) FilterSetCallers(opts *bind.FilterOpts) (*ExecutorSetCallersIterator, error) {
 
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
-	}
-	var accountRule []interface{}
-	for _, accountItem := range account {
-		accountRule = append(accountRule, accountItem)
-	}
-	var senderRule []interface{}
-	for _, senderItem := range sender {
-		senderRule = append(senderRule, senderItem)
-	}
-
-	logs, sub, err := _Executor.contract.FilterLogs(opts, "RoleGranted", roleRule, accountRule, senderRule)
+	logs, sub, err := _Executor.contract.FilterLogs(opts, "SetCallers")
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutorRoleGrantedIterator{contract: _Executor.contract, event: "RoleGranted", logs: logs, sub: sub}, nil
+	return &ExecutorSetCallersIterator{contract: _Executor.contract, event: "SetCallers", logs: logs, sub: sub}, nil
 }
 
-// WatchRoleGranted is a free log subscription operation binding the contract event 0x2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d.
+// WatchSetCallers is a free log subscription operation binding the contract event 0x0e123de96057b6051041e23e21f5c45be29329e5dde6f3a360901e20395ad0fd.
 //
-// Solidity: event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) WatchRoleGranted(opts *bind.WatchOpts, sink chan<- *ExecutorRoleGranted, role [][32]byte, account []common.Address, sender []common.Address) (event.Subscription, error) {
+// Solidity: event SetCallers(address[] newCallers)
+func (_Executor *ExecutorFilterer) WatchSetCallers(opts *bind.WatchOpts, sink chan<- *ExecutorSetCallers) (event.Subscription, error) {
 
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
-	}
-	var accountRule []interface{}
-	for _, accountItem := range account {
-		accountRule = append(accountRule, accountItem)
-	}
-	var senderRule []interface{}
-	for _, senderItem := range sender {
-		senderRule = append(senderRule, senderItem)
-	}
-
-	logs, sub, err := _Executor.contract.WatchLogs(opts, "RoleGranted", roleRule, accountRule, senderRule)
+	logs, sub, err := _Executor.contract.WatchLogs(opts, "SetCallers")
 	if err != nil {
 		return nil, err
 	}
@@ -823,8 +728,8 @@ func (_Executor *ExecutorFilterer) WatchRoleGranted(opts *bind.WatchOpts, sink c
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(ExecutorRoleGranted)
-				if err := _Executor.contract.UnpackLog(event, "RoleGranted", log); err != nil {
+				event := new(ExecutorSetCallers)
+				if err := _Executor.contract.UnpackLog(event, "SetCallers", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -845,174 +750,12 @@ func (_Executor *ExecutorFilterer) WatchRoleGranted(opts *bind.WatchOpts, sink c
 	}), nil
 }
 
-// ParseRoleGranted is a log parse operation binding the contract event 0x2f8788117e7eff1d82e926ec794901d17c78024a50270940304540a733656f0d.
+// ParseSetCallers is a log parse operation binding the contract event 0x0e123de96057b6051041e23e21f5c45be29329e5dde6f3a360901e20395ad0fd.
 //
-// Solidity: event RoleGranted(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) ParseRoleGranted(log types.Log) (*ExecutorRoleGranted, error) {
-	event := new(ExecutorRoleGranted)
-	if err := _Executor.contract.UnpackLog(event, "RoleGranted", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// ExecutorRoleRevokedIterator is returned from FilterRoleRevoked and is used to iterate over the raw logs and unpacked data for RoleRevoked events raised by the Executor contract.
-type ExecutorRoleRevokedIterator struct {
-	Event *ExecutorRoleRevoked // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *ExecutorRoleRevokedIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(ExecutorRoleRevoked)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(ExecutorRoleRevoked)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *ExecutorRoleRevokedIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *ExecutorRoleRevokedIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// ExecutorRoleRevoked represents a RoleRevoked event raised by the Executor contract.
-type ExecutorRoleRevoked struct {
-	Role    [32]byte
-	Account common.Address
-	Sender  common.Address
-	Raw     types.Log // Blockchain specific contextual infos
-}
-
-// FilterRoleRevoked is a free log retrieval operation binding the contract event 0xf6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b.
-//
-// Solidity: event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) FilterRoleRevoked(opts *bind.FilterOpts, role [][32]byte, account []common.Address, sender []common.Address) (*ExecutorRoleRevokedIterator, error) {
-
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
-	}
-	var accountRule []interface{}
-	for _, accountItem := range account {
-		accountRule = append(accountRule, accountItem)
-	}
-	var senderRule []interface{}
-	for _, senderItem := range sender {
-		senderRule = append(senderRule, senderItem)
-	}
-
-	logs, sub, err := _Executor.contract.FilterLogs(opts, "RoleRevoked", roleRule, accountRule, senderRule)
-	if err != nil {
-		return nil, err
-	}
-	return &ExecutorRoleRevokedIterator{contract: _Executor.contract, event: "RoleRevoked", logs: logs, sub: sub}, nil
-}
-
-// WatchRoleRevoked is a free log subscription operation binding the contract event 0xf6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b.
-//
-// Solidity: event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) WatchRoleRevoked(opts *bind.WatchOpts, sink chan<- *ExecutorRoleRevoked, role [][32]byte, account []common.Address, sender []common.Address) (event.Subscription, error) {
-
-	var roleRule []interface{}
-	for _, roleItem := range role {
-		roleRule = append(roleRule, roleItem)
-	}
-	var accountRule []interface{}
-	for _, accountItem := range account {
-		accountRule = append(accountRule, accountItem)
-	}
-	var senderRule []interface{}
-	for _, senderItem := range sender {
-		senderRule = append(senderRule, senderItem)
-	}
-
-	logs, sub, err := _Executor.contract.WatchLogs(opts, "RoleRevoked", roleRule, accountRule, senderRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(ExecutorRoleRevoked)
-				if err := _Executor.contract.UnpackLog(event, "RoleRevoked", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseRoleRevoked is a log parse operation binding the contract event 0xf6391f5c32d9c69d2a47ea670b442974b53935d1edc7fd64eb21e047a839171b.
-//
-// Solidity: event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)
-func (_Executor *ExecutorFilterer) ParseRoleRevoked(log types.Log) (*ExecutorRoleRevoked, error) {
-	event := new(ExecutorRoleRevoked)
-	if err := _Executor.contract.UnpackLog(event, "RoleRevoked", log); err != nil {
+// Solidity: event SetCallers(address[] newCallers)
+func (_Executor *ExecutorFilterer) ParseSetCallers(log types.Log) (*ExecutorSetCallers, error) {
+	event := new(ExecutorSetCallers)
+	if err := _Executor.contract.UnpackLog(event, "SetCallers", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

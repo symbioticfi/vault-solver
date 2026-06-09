@@ -13,6 +13,10 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out
+# core-mirror is a separate Foundry project (vendored as an rfq submodule). The LiquidLane adapter,
+# the universal delegator, and the vault/ERC4626 interfaces live there and are built standalone
+# (`cd ../rfq/lib/core-mirror && forge build`).
+CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
 # Live 3F OpenAPI spec (Sepolia dev).
 OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
@@ -20,9 +24,13 @@ OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
 RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
 
-# Contracts whose ABIs are vendored from a Foundry build via refresh-abi.
-ABIS := BridgeFacilitatorAdapter IVaultV2 IRequest IVaultController IWhitelist \
-        InstantRedemptionAdapter Executor Reactor ICuratorRegistry
+# Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
+# CORE_MIRROR_ABIS (LiquidLane adapter, universal delegator, vault/ERC4626 interfaces) come from the
+# core-mirror build, since nothing in rfq/src imports them so they aren't in rfq/out.
+ABIS := BridgeFacilitatorAdapter IRequest IVaultController IWhitelist Executor Reactor
+CORE_MIRROR_ABIS := LiquidLaneAdapter IVaultV2 IERC4626
+# api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
+# an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 
 # Contract:relpath mapping for Go bindings. Each contract gets its own package (the leaf dir) so
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.
@@ -32,9 +40,8 @@ ABIS := BridgeFacilitatorAdapter IVaultV2 IRequest IVaultController IWhitelist \
 # BINDINGS but not ABIS. aggregate3 is marked `view` there so abigen binds it as a Caller.
 BINDINGS := BridgeFacilitatorAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
-            InstantRedemptionAdapter:rfq/adapter Executor:rfq/executor \
-            Reactor:rfq/reactor ICuratorRegistry:rfq/curatorregistry \
-            IVaultV2:vaultv2 Multicall3:multicall3
+            LiquidLaneAdapter:rfq/adapter Executor:rfq/executor Reactor:rfq/reactor \
+            UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 Multicall3:multicall3
 
 BIN     := bin/vault-solver
 PKG     := github.com/symbioticfi/vault-solver
@@ -57,13 +64,19 @@ tools: ## Install pinned codegen + lint tools
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: refresh-abi
-refresh-abi: ## Re-vendor ABIs from a Foundry out/ dir (FORGE_OUT=...)
+refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_OUT=..., CORE_MIRROR_OUT=...)
 	@mkdir -p api/abi
 	@for c in $(ABIS); do \
 		src="$(FORGE_OUT)/$$c.sol/$$c.json"; \
 		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(FORGE_OUT)/..)"; exit 1; fi; \
 		jq '.abi' "$$src" > "api/abi/$$c.json"; \
 		echo "vendored api/abi/$$c.json"; \
+	done
+	@for c in $(CORE_MIRROR_ABIS); do \
+		src="$(CORE_MIRROR_OUT)/$$c.sol/$$c.json"; \
+		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(CORE_MIRROR_OUT)/..)"; exit 1; fi; \
+		jq '.abi' "$$src" > "api/abi/$$c.json"; \
+		echo "vendored api/abi/$$c.json (core-mirror)"; \
 	done
 
 .PHONY: refresh-openapi
