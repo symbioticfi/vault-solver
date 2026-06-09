@@ -320,7 +320,7 @@ func (s *Solver) nextNonce() uint64 {
 // then matches) but doesn't stop redemption/reconciliation.
 func (s *Solver) resolveCollateral(ctx context.Context) {
 	t := &s.cfg.Target
-	collateral, err := s.reader.vaultCollateral(ctx, t.Vault)
+	collateral, err := s.reader.vaultAsset(ctx, t.Vault)
 	if err != nil {
 		s.log.Error(err, "resolve collateral; will match no auctions until restart", "vault", t.Vault.Hex())
 		return

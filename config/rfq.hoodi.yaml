@@ -29,8 +29,12 @@ solvers:
       listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
       # Hoodi RFQ deployment:
       executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
-      adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
-      reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time (P2)
-      curatorRegistry: "0xa0159c29ff365c478ba858b0da062ad096575c02" # discount/permission (P3)
-      pollIntervalMs: 3000 # backend order poll cadence (P2)
-      orderLimit: 20 # max open orders fetched per poll (P2)
+      reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time
+      pollIntervalMs: 3000 # backend order poll cadence
+      orderLimit: 20 # max open orders fetched per poll
+      # Per-vault LiquidLane adapters, used only for on-chain strategy recovery (e.g. after a restart);
+      # the quote path's inventory comes from the backend request. Empty disables recovery.
+      vaults:
+        - address: "0x0000000000000000000000000000000000000000" # Symbiotic vault
+          adapter: "0x0000000000000000000000000000000000000000" # its LiquidLane adapter
+          asset:   "0x0000000000000000000000000000000000000000" # vault collateral (asset hint)

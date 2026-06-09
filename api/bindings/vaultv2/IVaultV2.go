@@ -33,40 +33,23 @@ var (
 type IVaultV2InitParams struct {
 	Name                          string
 	Symbol                        string
-	Collateral                    common.Address
-	Burner                        common.Address
-	EpochDuration                 *big.Int
+	Asset                         common.Address
 	DepositWhitelist              bool
 	DepositorToWhitelist          common.Address
-	IsDepositLimit                bool
 	DepositLimit                  *big.Int
+	IsDepositLimit                bool
 	DefaultAdminRoleHolder        common.Address
-	DepositWhitelistSetRoleHolder common.Address
+	ManagementFeeRoleHolder       common.Address
+	PerformanceFeeRoleHolder      common.Address
+	DepositLimitSetRoleHolder     common.Address
 	DepositorWhitelistRoleHolder  common.Address
 	IsDepositLimitSetRoleHolder   common.Address
-	DepositLimitSetRoleHolder     common.Address
-	SetAdapterLimitRoleHolder     common.Address
-	SwapAdaptersRoleHolder        common.Address
-	AllocateAdapterRoleHolder     common.Address
-	DeallocateAdapterRoleHolder   common.Address
-}
-
-// IVaultV2MigrateParams is an auto generated low-level Go binding around an user-defined struct.
-type IVaultV2MigrateParams struct {
-	Name                        string
-	Symbol                      string
-	DefaultAdminRoleHolder      common.Address
-	SetAdapterLimitRoleHolder   common.Address
-	SwapAdaptersRoleHolder      common.Address
-	AllocateAdapterRoleHolder   common.Address
-	DeallocateAdapterRoleHolder common.Address
-	DelegatorParams             []byte
-	SlasherParams               []byte
+	DepositWhitelistSetRoleHolder common.Address
 }
 
 // IVaultV2MetaData contains all meta data concerning the IVaultV2 contract.
 var IVaultV2MetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeBalanceOf\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeBalanceOfAt\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeShares\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeSharesAt\",\"inputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"hint\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeSharesOf\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeSharesOfAt\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"hint\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeStake\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeStakeAt\",\"inputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"hint\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalShares\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalSharesAt\",\"inputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalSharesFor\",\"inputs\":[{\"name\":\"duration\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalSharesForAt\",\"inputs\":[{\"name\":\"duration\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalSharesOfAt\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawals\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalsAt\",\"inputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalsFor\",\"inputs\":[{\"name\":\"duration\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeWithdrawalsForAt\",\"inputs\":[{\"name\":\"duration\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adapterAllocated\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adapterLimit\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint208\",\"internalType\":\"uint208\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adapters\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adaptersAllocated\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adaptersLength\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"adaptersOwe\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocateAdapter\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"allocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"burner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claim\",\"inputs\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"claimBatch\",\"inputs\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"indexes\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"collateral\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"deallocateAdapter\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"deallocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocateAdapters\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"delegator\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"deposit\",\"inputs\":[{\"name\":\"onBehalfOf\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"depositedAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"mintedShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"depositLimit\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"depositWhitelist\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"epochDuration\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"instantWithdraw\",\"inputs\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"withdrawnAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"burnedShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isDepositLimit\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isDepositorWhitelisted\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isInitialized\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isWithdrawalsClaimed\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"migrateTimestamp\",\"inputs\":[],\"outputs\":[{\"name\":\"migrateTimestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"claimer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"shares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"withdrawnAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"mintedShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setAdapterLimit\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"limit\",\"type\":\"uint208\",\"internalType\":\"uint208\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositLimit\",\"inputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositWhitelist\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositorWhitelistStatus\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setIsDepositLimit\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"skimAdapters\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"slasher\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"swapAdapters\",\"inputs\":[{\"name\":\"adapter1\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapter2\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalStake\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"unclaimed\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdraw\",\"inputs\":[{\"name\":\"claimer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"burnedShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"mintedShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"withdrawalBucket\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint208\",\"internalType\":\"uint208\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawalShares\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawalSharesOf\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawalUnlockAt\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawals\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawalsOf\",\"inputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawalsOfLength\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"Allocate\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Claim\",\"inputs\":[{\"name\":\"claimer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"recipient\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"index\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Deallocate\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Deposit\",\"inputs\":[{\"name\":\"depositor\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"onBehalfOf\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"shares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Donate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Initialize\",\"inputs\":[{\"name\":\"params\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structIVaultV2.InitParams\",\"components\":[{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"symbol\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"collateral\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"burner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"epochDuration\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"depositWhitelist\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"depositorToWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"isDepositLimit\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"depositLimit\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"defaultAdminRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositWhitelistSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositorWhitelistRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"isDepositLimitSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositLimitSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"setAdapterLimitRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swapAdaptersRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"allocateAdapterRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"deallocateAdapterRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"}]}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"InstantWithdraw\",\"inputs\":[{\"name\":\"withdrawer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"burnedShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Migrate\",\"inputs\":[{\"name\":\"params\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structIVaultV2.MigrateParams\",\"components\":[{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"symbol\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"defaultAdminRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"setAdapterLimitRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swapAdaptersRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"allocateAdapterRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"deallocateAdapterRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"delegatorParams\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"slasherParams\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"newDelegator\",\"type\":\"address\",\"indexed\":false,\"internalType\":\"address\"},{\"name\":\"newSlasher\",\"type\":\"address\",\"indexed\":false,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OnSlash\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"slashedAmount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetAdapterLimit\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"limit\",\"type\":\"uint208\",\"indexed\":false,\"internalType\":\"uint208\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDelegator\",\"inputs\":[{\"name\":\"delegator\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositLimit\",\"inputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositWhitelist\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositorWhitelistStatus\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetIsDepositLimit\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetSlasher\",\"inputs\":[{\"name\":\"slasher\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SwapAdapters\",\"inputs\":[{\"name\":\"adapter1\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"adapter2\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SyncOwedSlash\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Withdraw\",\"inputs\":[{\"name\":\"withdrawer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"claimer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"burnedShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"mintedShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"index\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AdapterAllocated\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AlreadyClaimed\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"DelegatorAlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"DepositLimitReached\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"FeeOnTransferNotSupported\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientAmount\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidAddress\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidCollateral\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidDelegator\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidDepositorToWhitelist\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidSlasher\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidTimestamp\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NoPreviousEpoch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAdapter\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotRewards\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotSlasher\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotWhitelistedDepositor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SlasherAlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooLongDuration\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooManyAdapters\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooMuchRedeem\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooMuchWithdraw\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"WithdrawalNotMatured\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"accrueInterest\",\"inputs\":[],\"outputs\":[{\"name\":\"managementFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"performanceFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocolFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"balanceOfAt\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"delegator\",\"inputs\":[],\"outputs\":[{\"name\":\"delegatorAddress\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"depositLimit\",\"inputs\":[],\"outputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"depositWhitelist\",\"inputs\":[],\"outputs\":[{\"name\":\"enabled\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getAccrueInterest\",\"inputs\":[],\"outputs\":[{\"name\":\"newTotalAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"managementFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"performanceFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocolFeeShares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isDepositLimit\",\"inputs\":[],\"outputs\":[{\"name\":\"enabled\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isDepositorWhitelisted\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"whitelisted\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isInitialized\",\"inputs\":[],\"outputs\":[{\"name\":\"initialized\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lastProtocolFeeReceiver\",\"inputs\":[],\"outputs\":[{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lastProtocolManagementFee\",\"inputs\":[],\"outputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lastProtocolPerformanceFee\",\"inputs\":[],\"outputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lastUpdate\",\"inputs\":[],\"outputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"managementFee\",\"inputs\":[],\"outputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"managementFeeReceiver\",\"inputs\":[],\"outputs\":[{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"performanceFee\",\"inputs\":[],\"outputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"performanceFeeReceiver\",\"inputs\":[],\"outputs\":[{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"pull\",\"inputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"push\",\"inputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"redeemable\",\"inputs\":[],\"outputs\":[{\"name\":\"shares\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDelegator\",\"inputs\":[{\"name\":\"delegator\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositLimit\",\"inputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositWhitelist\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setDepositorWhitelistStatus\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setIsDepositLimit\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setManagementFee\",\"inputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"},{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setPerformanceFee\",\"inputs\":[{\"name\":\"fee\",\"type\":\"uint96\",\"internalType\":\"uint96\"},{\"name\":\"receiver\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setSlasher\",\"inputs\":[{\"name\":\"slasher\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalSupplyAt\",\"inputs\":[{\"name\":\"timestamp\",\"type\":\"uint48\",\"internalType\":\"uint48\"}],\"outputs\":[{\"name\":\"supply\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawable\",\"inputs\":[],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"withdrawalQueue\",\"inputs\":[],\"outputs\":[{\"name\":\"withdrawalQueueAddress\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"AccrueInterest\",\"inputs\":[{\"name\":\"newTotalAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"managementFeeShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"performanceFeeShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"protocolFeeShares\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Claim\",\"inputs\":[{\"name\":\"claimer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"receiver\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"tokenId\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"assets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Initialize\",\"inputs\":[{\"name\":\"params\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structIVaultV2.InitParams\",\"components\":[{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"symbol\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"asset\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositWhitelist\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"depositorToWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositLimit\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"isDepositLimit\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"defaultAdminRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"managementFeeRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"performanceFeeRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositLimitSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositorWhitelistRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"isDepositLimitSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"depositWhitelistSetRoleHolder\",\"type\":\"address\",\"internalType\":\"address\"}]}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Pull\",\"inputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"receiver\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Push\",\"inputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"owner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDelegator\",\"inputs\":[{\"name\":\"delegator\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositLimit\",\"inputs\":[{\"name\":\"limit\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositWhitelist\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetDepositorWhitelistStatus\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetIsDepositLimit\",\"inputs\":[{\"name\":\"status\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetManagementFee\",\"inputs\":[{\"name\":\"fee\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"receiver\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetPerformanceFee\",\"inputs\":[{\"name\":\"fee\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"receiver\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetWithdrawalQueue\",\"inputs\":[{\"name\":\"withdrawalQueue\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"UpdateProtocolFee\",\"inputs\":[{\"name\":\"receiver\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"managementFee\",\"type\":\"uint96\",\"indexed\":false,\"internalType\":\"uint96\"},{\"name\":\"performanceFee\",\"type\":\"uint96\",\"indexed\":false,\"internalType\":\"uint96\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"DelegatorAlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"DepositLimitReached\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"FeeTooHigh\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientFreeAssets\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidAddress\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidDelegator\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidDepositorToWhitelist\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotDelegator\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotWhitelistedDepositor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotWithdrawalQueue\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"PendingWithdrawalQueue\",\"inputs\":[]}]",
 }
 
 // IVaultV2ABI is the input ABI used to generate the binding from.
@@ -246,12 +229,12 @@ func (_IVaultV2 *IVaultV2CallerSession) FACTORY() (common.Address, error) {
 	return _IVaultV2.Contract.FACTORY(&_IVaultV2.CallOpts)
 }
 
-// ActiveBalanceOf is a free data retrieval call binding the contract method 0x59f769a9.
+// BalanceOfAt is a free data retrieval call binding the contract method 0x95c3a492.
 //
-// Solidity: function activeBalanceOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveBalanceOf(opts *bind.CallOpts, account common.Address) (*big.Int, error) {
+// Solidity: function balanceOfAt(address account, uint48 timestamp) view returns(uint256 balance)
+func (_IVaultV2 *IVaultV2Caller) BalanceOfAt(opts *bind.CallOpts, account common.Address, timestamp *big.Int) (*big.Int, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeBalanceOf", account)
+	err := _IVaultV2.contract.Call(opts, &out, "balanceOfAt", account, timestamp)
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -263,798 +246,23 @@ func (_IVaultV2 *IVaultV2Caller) ActiveBalanceOf(opts *bind.CallOpts, account co
 
 }
 
-// ActiveBalanceOf is a free data retrieval call binding the contract method 0x59f769a9.
+// BalanceOfAt is a free data retrieval call binding the contract method 0x95c3a492.
 //
-// Solidity: function activeBalanceOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveBalanceOf(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveBalanceOf(&_IVaultV2.CallOpts, account)
+// Solidity: function balanceOfAt(address account, uint48 timestamp) view returns(uint256 balance)
+func (_IVaultV2 *IVaultV2Session) BalanceOfAt(account common.Address, timestamp *big.Int) (*big.Int, error) {
+	return _IVaultV2.Contract.BalanceOfAt(&_IVaultV2.CallOpts, account, timestamp)
 }
 
-// ActiveBalanceOf is a free data retrieval call binding the contract method 0x59f769a9.
+// BalanceOfAt is a free data retrieval call binding the contract method 0x95c3a492.
 //
-// Solidity: function activeBalanceOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveBalanceOf(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveBalanceOf(&_IVaultV2.CallOpts, account)
-}
-
-// ActiveBalanceOfAt is a free data retrieval call binding the contract method 0xefb559d6.
-//
-// Solidity: function activeBalanceOfAt(address account, uint48 timestamp, bytes ) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveBalanceOfAt(opts *bind.CallOpts, account common.Address, timestamp *big.Int, arg2 []byte) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeBalanceOfAt", account, timestamp, arg2)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveBalanceOfAt is a free data retrieval call binding the contract method 0xefb559d6.
-//
-// Solidity: function activeBalanceOfAt(address account, uint48 timestamp, bytes ) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveBalanceOfAt(account common.Address, timestamp *big.Int, arg2 []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveBalanceOfAt(&_IVaultV2.CallOpts, account, timestamp, arg2)
-}
-
-// ActiveBalanceOfAt is a free data retrieval call binding the contract method 0xefb559d6.
-//
-// Solidity: function activeBalanceOfAt(address account, uint48 timestamp, bytes ) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveBalanceOfAt(account common.Address, timestamp *big.Int, arg2 []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveBalanceOfAt(&_IVaultV2.CallOpts, account, timestamp, arg2)
-}
-
-// ActiveShares is a free data retrieval call binding the contract method 0xbfefcd7b.
-//
-// Solidity: function activeShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveShares(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeShares")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveShares is a free data retrieval call binding the contract method 0xbfefcd7b.
-//
-// Solidity: function activeShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveShares() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveShares(&_IVaultV2.CallOpts)
-}
-
-// ActiveShares is a free data retrieval call binding the contract method 0xbfefcd7b.
-//
-// Solidity: function activeShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveShares() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveShares(&_IVaultV2.CallOpts)
-}
-
-// ActiveSharesAt is a free data retrieval call binding the contract method 0x50f22068.
-//
-// Solidity: function activeSharesAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveSharesAt(opts *bind.CallOpts, timestamp *big.Int, hint []byte) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeSharesAt", timestamp, hint)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveSharesAt is a free data retrieval call binding the contract method 0x50f22068.
-//
-// Solidity: function activeSharesAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveSharesAt(timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesAt(&_IVaultV2.CallOpts, timestamp, hint)
-}
-
-// ActiveSharesAt is a free data retrieval call binding the contract method 0x50f22068.
-//
-// Solidity: function activeSharesAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveSharesAt(timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesAt(&_IVaultV2.CallOpts, timestamp, hint)
-}
-
-// ActiveSharesOf is a free data retrieval call binding the contract method 0x9d66201b.
-//
-// Solidity: function activeSharesOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveSharesOf(opts *bind.CallOpts, account common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeSharesOf", account)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveSharesOf is a free data retrieval call binding the contract method 0x9d66201b.
-//
-// Solidity: function activeSharesOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveSharesOf(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesOf(&_IVaultV2.CallOpts, account)
-}
-
-// ActiveSharesOf is a free data retrieval call binding the contract method 0x9d66201b.
-//
-// Solidity: function activeSharesOf(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveSharesOf(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesOf(&_IVaultV2.CallOpts, account)
-}
-
-// ActiveSharesOfAt is a free data retrieval call binding the contract method 0x2d73c69c.
-//
-// Solidity: function activeSharesOfAt(address account, uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveSharesOfAt(opts *bind.CallOpts, account common.Address, timestamp *big.Int, hint []byte) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeSharesOfAt", account, timestamp, hint)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveSharesOfAt is a free data retrieval call binding the contract method 0x2d73c69c.
-//
-// Solidity: function activeSharesOfAt(address account, uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveSharesOfAt(account common.Address, timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesOfAt(&_IVaultV2.CallOpts, account, timestamp, hint)
-}
-
-// ActiveSharesOfAt is a free data retrieval call binding the contract method 0x2d73c69c.
-//
-// Solidity: function activeSharesOfAt(address account, uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveSharesOfAt(account common.Address, timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveSharesOfAt(&_IVaultV2.CallOpts, account, timestamp, hint)
-}
-
-// ActiveStake is a free data retrieval call binding the contract method 0xbd49c35f.
-//
-// Solidity: function activeStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveStake(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeStake")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveStake is a free data retrieval call binding the contract method 0xbd49c35f.
-//
-// Solidity: function activeStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveStake() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveStake(&_IVaultV2.CallOpts)
-}
-
-// ActiveStake is a free data retrieval call binding the contract method 0xbd49c35f.
-//
-// Solidity: function activeStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveStake() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveStake(&_IVaultV2.CallOpts)
-}
-
-// ActiveStakeAt is a free data retrieval call binding the contract method 0x810da75d.
-//
-// Solidity: function activeStakeAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveStakeAt(opts *bind.CallOpts, timestamp *big.Int, hint []byte) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeStakeAt", timestamp, hint)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveStakeAt is a free data retrieval call binding the contract method 0x810da75d.
-//
-// Solidity: function activeStakeAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveStakeAt(timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveStakeAt(&_IVaultV2.CallOpts, timestamp, hint)
-}
-
-// ActiveStakeAt is a free data retrieval call binding the contract method 0x810da75d.
-//
-// Solidity: function activeStakeAt(uint48 timestamp, bytes hint) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveStakeAt(timestamp *big.Int, hint []byte) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveStakeAt(&_IVaultV2.CallOpts, timestamp, hint)
-}
-
-// ActiveWithdrawalShares is a free data retrieval call binding the contract method 0x49578b7b.
-//
-// Solidity: function activeWithdrawalShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalShares(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalShares")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalShares is a free data retrieval call binding the contract method 0x49578b7b.
-//
-// Solidity: function activeWithdrawalShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalShares() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalShares(&_IVaultV2.CallOpts)
-}
-
-// ActiveWithdrawalShares is a free data retrieval call binding the contract method 0x49578b7b.
-//
-// Solidity: function activeWithdrawalShares() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalShares() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalShares(&_IVaultV2.CallOpts)
-}
-
-// ActiveWithdrawalSharesAt is a free data retrieval call binding the contract method 0x13e0f932.
-//
-// Solidity: function activeWithdrawalSharesAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalSharesAt(opts *bind.CallOpts, timestamp *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalSharesAt", timestamp)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalSharesAt is a free data retrieval call binding the contract method 0x13e0f932.
-//
-// Solidity: function activeWithdrawalSharesAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalSharesAt(timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesAt(&_IVaultV2.CallOpts, timestamp)
-}
-
-// ActiveWithdrawalSharesAt is a free data retrieval call binding the contract method 0x13e0f932.
-//
-// Solidity: function activeWithdrawalSharesAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalSharesAt(timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesAt(&_IVaultV2.CallOpts, timestamp)
-}
-
-// ActiveWithdrawalSharesFor is a free data retrieval call binding the contract method 0xe9f28b01.
-//
-// Solidity: function activeWithdrawalSharesFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalSharesFor(opts *bind.CallOpts, duration *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalSharesFor", duration)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalSharesFor is a free data retrieval call binding the contract method 0xe9f28b01.
-//
-// Solidity: function activeWithdrawalSharesFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalSharesFor(duration *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesFor(&_IVaultV2.CallOpts, duration)
-}
-
-// ActiveWithdrawalSharesFor is a free data retrieval call binding the contract method 0xe9f28b01.
-//
-// Solidity: function activeWithdrawalSharesFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalSharesFor(duration *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesFor(&_IVaultV2.CallOpts, duration)
-}
-
-// ActiveWithdrawalSharesForAt is a free data retrieval call binding the contract method 0x204ff5ab.
-//
-// Solidity: function activeWithdrawalSharesForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalSharesForAt(opts *bind.CallOpts, duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalSharesForAt", duration, timestamp)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalSharesForAt is a free data retrieval call binding the contract method 0x204ff5ab.
-//
-// Solidity: function activeWithdrawalSharesForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalSharesForAt(duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesForAt(&_IVaultV2.CallOpts, duration, timestamp)
-}
-
-// ActiveWithdrawalSharesForAt is a free data retrieval call binding the contract method 0x204ff5ab.
-//
-// Solidity: function activeWithdrawalSharesForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalSharesForAt(duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesForAt(&_IVaultV2.CallOpts, duration, timestamp)
-}
-
-// ActiveWithdrawalSharesOfAt is a free data retrieval call binding the contract method 0xb039876a.
-//
-// Solidity: function activeWithdrawalSharesOfAt(address account, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalSharesOfAt(opts *bind.CallOpts, account common.Address, timestamp *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalSharesOfAt", account, timestamp)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalSharesOfAt is a free data retrieval call binding the contract method 0xb039876a.
-//
-// Solidity: function activeWithdrawalSharesOfAt(address account, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalSharesOfAt(account common.Address, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesOfAt(&_IVaultV2.CallOpts, account, timestamp)
-}
-
-// ActiveWithdrawalSharesOfAt is a free data retrieval call binding the contract method 0xb039876a.
-//
-// Solidity: function activeWithdrawalSharesOfAt(address account, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalSharesOfAt(account common.Address, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalSharesOfAt(&_IVaultV2.CallOpts, account, timestamp)
-}
-
-// ActiveWithdrawals is a free data retrieval call binding the contract method 0xca0aabbb.
-//
-// Solidity: function activeWithdrawals() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawals(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawals")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawals is a free data retrieval call binding the contract method 0xca0aabbb.
-//
-// Solidity: function activeWithdrawals() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawals() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawals(&_IVaultV2.CallOpts)
-}
-
-// ActiveWithdrawals is a free data retrieval call binding the contract method 0xca0aabbb.
-//
-// Solidity: function activeWithdrawals() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawals() (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawals(&_IVaultV2.CallOpts)
-}
-
-// ActiveWithdrawalsAt is a free data retrieval call binding the contract method 0xaee9d015.
-//
-// Solidity: function activeWithdrawalsAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalsAt(opts *bind.CallOpts, timestamp *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalsAt", timestamp)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalsAt is a free data retrieval call binding the contract method 0xaee9d015.
-//
-// Solidity: function activeWithdrawalsAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalsAt(timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsAt(&_IVaultV2.CallOpts, timestamp)
-}
-
-// ActiveWithdrawalsAt is a free data retrieval call binding the contract method 0xaee9d015.
-//
-// Solidity: function activeWithdrawalsAt(uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalsAt(timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsAt(&_IVaultV2.CallOpts, timestamp)
-}
-
-// ActiveWithdrawalsFor is a free data retrieval call binding the contract method 0xb90c4fdb.
-//
-// Solidity: function activeWithdrawalsFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalsFor(opts *bind.CallOpts, duration *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalsFor", duration)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalsFor is a free data retrieval call binding the contract method 0xb90c4fdb.
-//
-// Solidity: function activeWithdrawalsFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalsFor(duration *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsFor(&_IVaultV2.CallOpts, duration)
-}
-
-// ActiveWithdrawalsFor is a free data retrieval call binding the contract method 0xb90c4fdb.
-//
-// Solidity: function activeWithdrawalsFor(uint48 duration) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalsFor(duration *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsFor(&_IVaultV2.CallOpts, duration)
-}
-
-// ActiveWithdrawalsForAt is a free data retrieval call binding the contract method 0x3dd14288.
-//
-// Solidity: function activeWithdrawalsForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) ActiveWithdrawalsForAt(opts *bind.CallOpts, duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "activeWithdrawalsForAt", duration, timestamp)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// ActiveWithdrawalsForAt is a free data retrieval call binding the contract method 0x3dd14288.
-//
-// Solidity: function activeWithdrawalsForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) ActiveWithdrawalsForAt(duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsForAt(&_IVaultV2.CallOpts, duration, timestamp)
-}
-
-// ActiveWithdrawalsForAt is a free data retrieval call binding the contract method 0x3dd14288.
-//
-// Solidity: function activeWithdrawalsForAt(uint48 duration, uint48 timestamp) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) ActiveWithdrawalsForAt(duration *big.Int, timestamp *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.ActiveWithdrawalsForAt(&_IVaultV2.CallOpts, duration, timestamp)
-}
-
-// AdapterAllocated is a free data retrieval call binding the contract method 0xd06a84ba.
-//
-// Solidity: function adapterAllocated(address adapter) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) AdapterAllocated(opts *bind.CallOpts, adapter common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adapterAllocated", adapter)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// AdapterAllocated is a free data retrieval call binding the contract method 0xd06a84ba.
-//
-// Solidity: function adapterAllocated(address adapter) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) AdapterAllocated(adapter common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.AdapterAllocated(&_IVaultV2.CallOpts, adapter)
-}
-
-// AdapterAllocated is a free data retrieval call binding the contract method 0xd06a84ba.
-//
-// Solidity: function adapterAllocated(address adapter) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) AdapterAllocated(adapter common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.AdapterAllocated(&_IVaultV2.CallOpts, adapter)
-}
-
-// AdapterLimit is a free data retrieval call binding the contract method 0x6df6f7ab.
-//
-// Solidity: function adapterLimit(address adapter) view returns(uint208)
-func (_IVaultV2 *IVaultV2Caller) AdapterLimit(opts *bind.CallOpts, adapter common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adapterLimit", adapter)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// AdapterLimit is a free data retrieval call binding the contract method 0x6df6f7ab.
-//
-// Solidity: function adapterLimit(address adapter) view returns(uint208)
-func (_IVaultV2 *IVaultV2Session) AdapterLimit(adapter common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.AdapterLimit(&_IVaultV2.CallOpts, adapter)
-}
-
-// AdapterLimit is a free data retrieval call binding the contract method 0x6df6f7ab.
-//
-// Solidity: function adapterLimit(address adapter) view returns(uint208)
-func (_IVaultV2 *IVaultV2CallerSession) AdapterLimit(adapter common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.AdapterLimit(&_IVaultV2.CallOpts, adapter)
-}
-
-// Adapters is a free data retrieval call binding the contract method 0x4ef501ac.
-//
-// Solidity: function adapters(uint256 index) view returns(address)
-func (_IVaultV2 *IVaultV2Caller) Adapters(opts *bind.CallOpts, index *big.Int) (common.Address, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adapters", index)
-
-	if err != nil {
-		return *new(common.Address), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-
-	return out0, err
-
-}
-
-// Adapters is a free data retrieval call binding the contract method 0x4ef501ac.
-//
-// Solidity: function adapters(uint256 index) view returns(address)
-func (_IVaultV2 *IVaultV2Session) Adapters(index *big.Int) (common.Address, error) {
-	return _IVaultV2.Contract.Adapters(&_IVaultV2.CallOpts, index)
-}
-
-// Adapters is a free data retrieval call binding the contract method 0x4ef501ac.
-//
-// Solidity: function adapters(uint256 index) view returns(address)
-func (_IVaultV2 *IVaultV2CallerSession) Adapters(index *big.Int) (common.Address, error) {
-	return _IVaultV2.Contract.Adapters(&_IVaultV2.CallOpts, index)
-}
-
-// AdaptersAllocated is a free data retrieval call binding the contract method 0xa8e7f264.
-//
-// Solidity: function adaptersAllocated() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) AdaptersAllocated(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adaptersAllocated")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// AdaptersAllocated is a free data retrieval call binding the contract method 0xa8e7f264.
-//
-// Solidity: function adaptersAllocated() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) AdaptersAllocated() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersAllocated(&_IVaultV2.CallOpts)
-}
-
-// AdaptersAllocated is a free data retrieval call binding the contract method 0xa8e7f264.
-//
-// Solidity: function adaptersAllocated() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) AdaptersAllocated() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersAllocated(&_IVaultV2.CallOpts)
-}
-
-// AdaptersLength is a free data retrieval call binding the contract method 0x5aa22bc8.
-//
-// Solidity: function adaptersLength() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) AdaptersLength(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adaptersLength")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// AdaptersLength is a free data retrieval call binding the contract method 0x5aa22bc8.
-//
-// Solidity: function adaptersLength() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) AdaptersLength() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersLength(&_IVaultV2.CallOpts)
-}
-
-// AdaptersLength is a free data retrieval call binding the contract method 0x5aa22bc8.
-//
-// Solidity: function adaptersLength() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) AdaptersLength() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersLength(&_IVaultV2.CallOpts)
-}
-
-// AdaptersOwe is a free data retrieval call binding the contract method 0x44e70b33.
-//
-// Solidity: function adaptersOwe() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) AdaptersOwe(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "adaptersOwe")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// AdaptersOwe is a free data retrieval call binding the contract method 0x44e70b33.
-//
-// Solidity: function adaptersOwe() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) AdaptersOwe() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersOwe(&_IVaultV2.CallOpts)
-}
-
-// AdaptersOwe is a free data retrieval call binding the contract method 0x44e70b33.
-//
-// Solidity: function adaptersOwe() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) AdaptersOwe() (*big.Int, error) {
-	return _IVaultV2.Contract.AdaptersOwe(&_IVaultV2.CallOpts)
-}
-
-// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
-//
-// Solidity: function allocatable() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) Allocatable(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "allocatable")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
-//
-// Solidity: function allocatable() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) Allocatable() (*big.Int, error) {
-	return _IVaultV2.Contract.Allocatable(&_IVaultV2.CallOpts)
-}
-
-// Allocatable is a free data retrieval call binding the contract method 0x1d3b809a.
-//
-// Solidity: function allocatable() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) Allocatable() (*big.Int, error) {
-	return _IVaultV2.Contract.Allocatable(&_IVaultV2.CallOpts)
-}
-
-// Burner is a free data retrieval call binding the contract method 0x27810b6e.
-//
-// Solidity: function burner() view returns(address)
-func (_IVaultV2 *IVaultV2Caller) Burner(opts *bind.CallOpts) (common.Address, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "burner")
-
-	if err != nil {
-		return *new(common.Address), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-
-	return out0, err
-
-}
-
-// Burner is a free data retrieval call binding the contract method 0x27810b6e.
-//
-// Solidity: function burner() view returns(address)
-func (_IVaultV2 *IVaultV2Session) Burner() (common.Address, error) {
-	return _IVaultV2.Contract.Burner(&_IVaultV2.CallOpts)
-}
-
-// Burner is a free data retrieval call binding the contract method 0x27810b6e.
-//
-// Solidity: function burner() view returns(address)
-func (_IVaultV2 *IVaultV2CallerSession) Burner() (common.Address, error) {
-	return _IVaultV2.Contract.Burner(&_IVaultV2.CallOpts)
-}
-
-// Collateral is a free data retrieval call binding the contract method 0xd8dfeb45.
-//
-// Solidity: function collateral() view returns(address)
-func (_IVaultV2 *IVaultV2Caller) Collateral(opts *bind.CallOpts) (common.Address, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "collateral")
-
-	if err != nil {
-		return *new(common.Address), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-
-	return out0, err
-
-}
-
-// Collateral is a free data retrieval call binding the contract method 0xd8dfeb45.
-//
-// Solidity: function collateral() view returns(address)
-func (_IVaultV2 *IVaultV2Session) Collateral() (common.Address, error) {
-	return _IVaultV2.Contract.Collateral(&_IVaultV2.CallOpts)
-}
-
-// Collateral is a free data retrieval call binding the contract method 0xd8dfeb45.
-//
-// Solidity: function collateral() view returns(address)
-func (_IVaultV2 *IVaultV2CallerSession) Collateral() (common.Address, error) {
-	return _IVaultV2.Contract.Collateral(&_IVaultV2.CallOpts)
+// Solidity: function balanceOfAt(address account, uint48 timestamp) view returns(uint256 balance)
+func (_IVaultV2 *IVaultV2CallerSession) BalanceOfAt(account common.Address, timestamp *big.Int) (*big.Int, error) {
+	return _IVaultV2.Contract.BalanceOfAt(&_IVaultV2.CallOpts, account, timestamp)
 }
 
 // Delegator is a free data retrieval call binding the contract method 0xce9b7930.
 //
-// Solidity: function delegator() view returns(address)
+// Solidity: function delegator() view returns(address delegatorAddress)
 func (_IVaultV2 *IVaultV2Caller) Delegator(opts *bind.CallOpts) (common.Address, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "delegator")
@@ -1071,21 +279,21 @@ func (_IVaultV2 *IVaultV2Caller) Delegator(opts *bind.CallOpts) (common.Address,
 
 // Delegator is a free data retrieval call binding the contract method 0xce9b7930.
 //
-// Solidity: function delegator() view returns(address)
+// Solidity: function delegator() view returns(address delegatorAddress)
 func (_IVaultV2 *IVaultV2Session) Delegator() (common.Address, error) {
 	return _IVaultV2.Contract.Delegator(&_IVaultV2.CallOpts)
 }
 
 // Delegator is a free data retrieval call binding the contract method 0xce9b7930.
 //
-// Solidity: function delegator() view returns(address)
+// Solidity: function delegator() view returns(address delegatorAddress)
 func (_IVaultV2 *IVaultV2CallerSession) Delegator() (common.Address, error) {
 	return _IVaultV2.Contract.Delegator(&_IVaultV2.CallOpts)
 }
 
 // DepositLimit is a free data retrieval call binding the contract method 0xecf70858.
 //
-// Solidity: function depositLimit() view returns(uint256)
+// Solidity: function depositLimit() view returns(uint256 limit)
 func (_IVaultV2 *IVaultV2Caller) DepositLimit(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "depositLimit")
@@ -1102,21 +310,21 @@ func (_IVaultV2 *IVaultV2Caller) DepositLimit(opts *bind.CallOpts) (*big.Int, er
 
 // DepositLimit is a free data retrieval call binding the contract method 0xecf70858.
 //
-// Solidity: function depositLimit() view returns(uint256)
+// Solidity: function depositLimit() view returns(uint256 limit)
 func (_IVaultV2 *IVaultV2Session) DepositLimit() (*big.Int, error) {
 	return _IVaultV2.Contract.DepositLimit(&_IVaultV2.CallOpts)
 }
 
 // DepositLimit is a free data retrieval call binding the contract method 0xecf70858.
 //
-// Solidity: function depositLimit() view returns(uint256)
+// Solidity: function depositLimit() view returns(uint256 limit)
 func (_IVaultV2 *IVaultV2CallerSession) DepositLimit() (*big.Int, error) {
 	return _IVaultV2.Contract.DepositLimit(&_IVaultV2.CallOpts)
 }
 
 // DepositWhitelist is a free data retrieval call binding the contract method 0x48d3b775.
 //
-// Solidity: function depositWhitelist() view returns(bool)
+// Solidity: function depositWhitelist() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2Caller) DepositWhitelist(opts *bind.CallOpts) (bool, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "depositWhitelist")
@@ -1133,24 +341,24 @@ func (_IVaultV2 *IVaultV2Caller) DepositWhitelist(opts *bind.CallOpts) (bool, er
 
 // DepositWhitelist is a free data retrieval call binding the contract method 0x48d3b775.
 //
-// Solidity: function depositWhitelist() view returns(bool)
+// Solidity: function depositWhitelist() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2Session) DepositWhitelist() (bool, error) {
 	return _IVaultV2.Contract.DepositWhitelist(&_IVaultV2.CallOpts)
 }
 
 // DepositWhitelist is a free data retrieval call binding the contract method 0x48d3b775.
 //
-// Solidity: function depositWhitelist() view returns(bool)
+// Solidity: function depositWhitelist() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2CallerSession) DepositWhitelist() (bool, error) {
 	return _IVaultV2.Contract.DepositWhitelist(&_IVaultV2.CallOpts)
 }
 
-// EpochDuration is a free data retrieval call binding the contract method 0x4ff0876a.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function epochDuration() view returns(uint48)
-func (_IVaultV2 *IVaultV2Caller) EpochDuration(opts *bind.CallOpts) (*big.Int, error) {
+// Solidity: function freeAssets() view returns(uint256 assets)
+func (_IVaultV2 *IVaultV2Caller) FreeAssets(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "epochDuration")
+	err := _IVaultV2.contract.Call(opts, &out, "freeAssets")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -1162,23 +370,78 @@ func (_IVaultV2 *IVaultV2Caller) EpochDuration(opts *bind.CallOpts) (*big.Int, e
 
 }
 
-// EpochDuration is a free data retrieval call binding the contract method 0x4ff0876a.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function epochDuration() view returns(uint48)
-func (_IVaultV2 *IVaultV2Session) EpochDuration() (*big.Int, error) {
-	return _IVaultV2.Contract.EpochDuration(&_IVaultV2.CallOpts)
+// Solidity: function freeAssets() view returns(uint256 assets)
+func (_IVaultV2 *IVaultV2Session) FreeAssets() (*big.Int, error) {
+	return _IVaultV2.Contract.FreeAssets(&_IVaultV2.CallOpts)
 }
 
-// EpochDuration is a free data retrieval call binding the contract method 0x4ff0876a.
+// FreeAssets is a free data retrieval call binding the contract method 0x11f240ac.
 //
-// Solidity: function epochDuration() view returns(uint48)
-func (_IVaultV2 *IVaultV2CallerSession) EpochDuration() (*big.Int, error) {
-	return _IVaultV2.Contract.EpochDuration(&_IVaultV2.CallOpts)
+// Solidity: function freeAssets() view returns(uint256 assets)
+func (_IVaultV2 *IVaultV2CallerSession) FreeAssets() (*big.Int, error) {
+	return _IVaultV2.Contract.FreeAssets(&_IVaultV2.CallOpts)
+}
+
+// GetAccrueInterest is a free data retrieval call binding the contract method 0x0445a611.
+//
+// Solidity: function getAccrueInterest() view returns(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Caller) GetAccrueInterest(opts *bind.CallOpts) (struct {
+	NewTotalAssets       *big.Int
+	ManagementFeeShares  *big.Int
+	PerformanceFeeShares *big.Int
+	ProtocolFeeShares    *big.Int
+}, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "getAccrueInterest")
+
+	outstruct := new(struct {
+		NewTotalAssets       *big.Int
+		ManagementFeeShares  *big.Int
+		PerformanceFeeShares *big.Int
+		ProtocolFeeShares    *big.Int
+	})
+	if err != nil {
+		return *outstruct, err
+	}
+
+	outstruct.NewTotalAssets = *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+	outstruct.ManagementFeeShares = *abi.ConvertType(out[1], new(*big.Int)).(**big.Int)
+	outstruct.PerformanceFeeShares = *abi.ConvertType(out[2], new(*big.Int)).(**big.Int)
+	outstruct.ProtocolFeeShares = *abi.ConvertType(out[3], new(*big.Int)).(**big.Int)
+
+	return *outstruct, err
+
+}
+
+// GetAccrueInterest is a free data retrieval call binding the contract method 0x0445a611.
+//
+// Solidity: function getAccrueInterest() view returns(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Session) GetAccrueInterest() (struct {
+	NewTotalAssets       *big.Int
+	ManagementFeeShares  *big.Int
+	PerformanceFeeShares *big.Int
+	ProtocolFeeShares    *big.Int
+}, error) {
+	return _IVaultV2.Contract.GetAccrueInterest(&_IVaultV2.CallOpts)
+}
+
+// GetAccrueInterest is a free data retrieval call binding the contract method 0x0445a611.
+//
+// Solidity: function getAccrueInterest() view returns(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2CallerSession) GetAccrueInterest() (struct {
+	NewTotalAssets       *big.Int
+	ManagementFeeShares  *big.Int
+	PerformanceFeeShares *big.Int
+	ProtocolFeeShares    *big.Int
+}, error) {
+	return _IVaultV2.Contract.GetAccrueInterest(&_IVaultV2.CallOpts)
 }
 
 // IsDepositLimit is a free data retrieval call binding the contract method 0xa1b12202.
 //
-// Solidity: function isDepositLimit() view returns(bool)
+// Solidity: function isDepositLimit() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2Caller) IsDepositLimit(opts *bind.CallOpts) (bool, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "isDepositLimit")
@@ -1195,21 +458,21 @@ func (_IVaultV2 *IVaultV2Caller) IsDepositLimit(opts *bind.CallOpts) (bool, erro
 
 // IsDepositLimit is a free data retrieval call binding the contract method 0xa1b12202.
 //
-// Solidity: function isDepositLimit() view returns(bool)
+// Solidity: function isDepositLimit() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2Session) IsDepositLimit() (bool, error) {
 	return _IVaultV2.Contract.IsDepositLimit(&_IVaultV2.CallOpts)
 }
 
 // IsDepositLimit is a free data retrieval call binding the contract method 0xa1b12202.
 //
-// Solidity: function isDepositLimit() view returns(bool)
+// Solidity: function isDepositLimit() view returns(bool enabled)
 func (_IVaultV2 *IVaultV2CallerSession) IsDepositLimit() (bool, error) {
 	return _IVaultV2.Contract.IsDepositLimit(&_IVaultV2.CallOpts)
 }
 
 // IsDepositorWhitelisted is a free data retrieval call binding the contract method 0x794b15b7.
 //
-// Solidity: function isDepositorWhitelisted(address account) view returns(bool)
+// Solidity: function isDepositorWhitelisted(address account) view returns(bool whitelisted)
 func (_IVaultV2 *IVaultV2Caller) IsDepositorWhitelisted(opts *bind.CallOpts, account common.Address) (bool, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "isDepositorWhitelisted", account)
@@ -1226,21 +489,21 @@ func (_IVaultV2 *IVaultV2Caller) IsDepositorWhitelisted(opts *bind.CallOpts, acc
 
 // IsDepositorWhitelisted is a free data retrieval call binding the contract method 0x794b15b7.
 //
-// Solidity: function isDepositorWhitelisted(address account) view returns(bool)
+// Solidity: function isDepositorWhitelisted(address account) view returns(bool whitelisted)
 func (_IVaultV2 *IVaultV2Session) IsDepositorWhitelisted(account common.Address) (bool, error) {
 	return _IVaultV2.Contract.IsDepositorWhitelisted(&_IVaultV2.CallOpts, account)
 }
 
 // IsDepositorWhitelisted is a free data retrieval call binding the contract method 0x794b15b7.
 //
-// Solidity: function isDepositorWhitelisted(address account) view returns(bool)
+// Solidity: function isDepositorWhitelisted(address account) view returns(bool whitelisted)
 func (_IVaultV2 *IVaultV2CallerSession) IsDepositorWhitelisted(account common.Address) (bool, error) {
 	return _IVaultV2.Contract.IsDepositorWhitelisted(&_IVaultV2.CallOpts, account)
 }
 
 // IsInitialized is a free data retrieval call binding the contract method 0x392e53cd.
 //
-// Solidity: function isInitialized() view returns(bool)
+// Solidity: function isInitialized() view returns(bool initialized)
 func (_IVaultV2 *IVaultV2Caller) IsInitialized(opts *bind.CallOpts) (bool, error) {
 	var out []interface{}
 	err := _IVaultV2.contract.Call(opts, &out, "isInitialized")
@@ -1257,86 +520,24 @@ func (_IVaultV2 *IVaultV2Caller) IsInitialized(opts *bind.CallOpts) (bool, error
 
 // IsInitialized is a free data retrieval call binding the contract method 0x392e53cd.
 //
-// Solidity: function isInitialized() view returns(bool)
+// Solidity: function isInitialized() view returns(bool initialized)
 func (_IVaultV2 *IVaultV2Session) IsInitialized() (bool, error) {
 	return _IVaultV2.Contract.IsInitialized(&_IVaultV2.CallOpts)
 }
 
 // IsInitialized is a free data retrieval call binding the contract method 0x392e53cd.
 //
-// Solidity: function isInitialized() view returns(bool)
+// Solidity: function isInitialized() view returns(bool initialized)
 func (_IVaultV2 *IVaultV2CallerSession) IsInitialized() (bool, error) {
 	return _IVaultV2.Contract.IsInitialized(&_IVaultV2.CallOpts)
 }
 
-// IsWithdrawalsClaimed is a free data retrieval call binding the contract method 0xa5d03223.
+// LastProtocolFeeReceiver is a free data retrieval call binding the contract method 0xef9c691f.
 //
-// Solidity: function isWithdrawalsClaimed(uint256 index, address account) view returns(bool)
-func (_IVaultV2 *IVaultV2Caller) IsWithdrawalsClaimed(opts *bind.CallOpts, index *big.Int, account common.Address) (bool, error) {
+// Solidity: function lastProtocolFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Caller) LastProtocolFeeReceiver(opts *bind.CallOpts) (common.Address, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "isWithdrawalsClaimed", index, account)
-
-	if err != nil {
-		return *new(bool), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
-
-	return out0, err
-
-}
-
-// IsWithdrawalsClaimed is a free data retrieval call binding the contract method 0xa5d03223.
-//
-// Solidity: function isWithdrawalsClaimed(uint256 index, address account) view returns(bool)
-func (_IVaultV2 *IVaultV2Session) IsWithdrawalsClaimed(index *big.Int, account common.Address) (bool, error) {
-	return _IVaultV2.Contract.IsWithdrawalsClaimed(&_IVaultV2.CallOpts, index, account)
-}
-
-// IsWithdrawalsClaimed is a free data retrieval call binding the contract method 0xa5d03223.
-//
-// Solidity: function isWithdrawalsClaimed(uint256 index, address account) view returns(bool)
-func (_IVaultV2 *IVaultV2CallerSession) IsWithdrawalsClaimed(index *big.Int, account common.Address) (bool, error) {
-	return _IVaultV2.Contract.IsWithdrawalsClaimed(&_IVaultV2.CallOpts, index, account)
-}
-
-// MigrateTimestamp is a free data retrieval call binding the contract method 0x8a605ccd.
-//
-// Solidity: function migrateTimestamp() view returns(uint48 migrateTimestamp)
-func (_IVaultV2 *IVaultV2Caller) MigrateTimestamp(opts *bind.CallOpts) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "migrateTimestamp")
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// MigrateTimestamp is a free data retrieval call binding the contract method 0x8a605ccd.
-//
-// Solidity: function migrateTimestamp() view returns(uint48 migrateTimestamp)
-func (_IVaultV2 *IVaultV2Session) MigrateTimestamp() (*big.Int, error) {
-	return _IVaultV2.Contract.MigrateTimestamp(&_IVaultV2.CallOpts)
-}
-
-// MigrateTimestamp is a free data retrieval call binding the contract method 0x8a605ccd.
-//
-// Solidity: function migrateTimestamp() view returns(uint48 migrateTimestamp)
-func (_IVaultV2 *IVaultV2CallerSession) MigrateTimestamp() (*big.Int, error) {
-	return _IVaultV2.Contract.MigrateTimestamp(&_IVaultV2.CallOpts)
-}
-
-// Slasher is a free data retrieval call binding the contract method 0xb1344271.
-//
-// Solidity: function slasher() view returns(address)
-func (_IVaultV2 *IVaultV2Caller) Slasher(opts *bind.CallOpts) (common.Address, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "slasher")
+	err := _IVaultV2.contract.Call(opts, &out, "lastProtocolFeeReceiver")
 
 	if err != nil {
 		return *new(common.Address), err
@@ -1348,26 +549,26 @@ func (_IVaultV2 *IVaultV2Caller) Slasher(opts *bind.CallOpts) (common.Address, e
 
 }
 
-// Slasher is a free data retrieval call binding the contract method 0xb1344271.
+// LastProtocolFeeReceiver is a free data retrieval call binding the contract method 0xef9c691f.
 //
-// Solidity: function slasher() view returns(address)
-func (_IVaultV2 *IVaultV2Session) Slasher() (common.Address, error) {
-	return _IVaultV2.Contract.Slasher(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Session) LastProtocolFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.LastProtocolFeeReceiver(&_IVaultV2.CallOpts)
 }
 
-// Slasher is a free data retrieval call binding the contract method 0xb1344271.
+// LastProtocolFeeReceiver is a free data retrieval call binding the contract method 0xef9c691f.
 //
-// Solidity: function slasher() view returns(address)
-func (_IVaultV2 *IVaultV2CallerSession) Slasher() (common.Address, error) {
-	return _IVaultV2.Contract.Slasher(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2CallerSession) LastProtocolFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.LastProtocolFeeReceiver(&_IVaultV2.CallOpts)
 }
 
-// TotalStake is a free data retrieval call binding the contract method 0x8b0e9f3f.
+// LastProtocolManagementFee is a free data retrieval call binding the contract method 0x192fb170.
 //
-// Solidity: function totalStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) TotalStake(opts *bind.CallOpts) (*big.Int, error) {
+// Solidity: function lastProtocolManagementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Caller) LastProtocolManagementFee(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "totalStake")
+	err := _IVaultV2.contract.Call(opts, &out, "lastProtocolManagementFee")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -1379,26 +580,26 @@ func (_IVaultV2 *IVaultV2Caller) TotalStake(opts *bind.CallOpts) (*big.Int, erro
 
 }
 
-// TotalStake is a free data retrieval call binding the contract method 0x8b0e9f3f.
+// LastProtocolManagementFee is a free data retrieval call binding the contract method 0x192fb170.
 //
-// Solidity: function totalStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) TotalStake() (*big.Int, error) {
-	return _IVaultV2.Contract.TotalStake(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolManagementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Session) LastProtocolManagementFee() (*big.Int, error) {
+	return _IVaultV2.Contract.LastProtocolManagementFee(&_IVaultV2.CallOpts)
 }
 
-// TotalStake is a free data retrieval call binding the contract method 0x8b0e9f3f.
+// LastProtocolManagementFee is a free data retrieval call binding the contract method 0x192fb170.
 //
-// Solidity: function totalStake() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) TotalStake() (*big.Int, error) {
-	return _IVaultV2.Contract.TotalStake(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolManagementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2CallerSession) LastProtocolManagementFee() (*big.Int, error) {
+	return _IVaultV2.Contract.LastProtocolManagementFee(&_IVaultV2.CallOpts)
 }
 
-// Unclaimed is a free data retrieval call binding the contract method 0x669416b8.
+// LastProtocolPerformanceFee is a free data retrieval call binding the contract method 0xf56f1926.
 //
-// Solidity: function unclaimed() view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) Unclaimed(opts *bind.CallOpts) (*big.Int, error) {
+// Solidity: function lastProtocolPerformanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Caller) LastProtocolPerformanceFee(opts *bind.CallOpts) (*big.Int, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "unclaimed")
+	err := _IVaultV2.contract.Call(opts, &out, "lastProtocolPerformanceFee")
 
 	if err != nil {
 		return *new(*big.Int), err
@@ -1410,18 +611,204 @@ func (_IVaultV2 *IVaultV2Caller) Unclaimed(opts *bind.CallOpts) (*big.Int, error
 
 }
 
-// Unclaimed is a free data retrieval call binding the contract method 0x669416b8.
+// LastProtocolPerformanceFee is a free data retrieval call binding the contract method 0xf56f1926.
 //
-// Solidity: function unclaimed() view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) Unclaimed() (*big.Int, error) {
-	return _IVaultV2.Contract.Unclaimed(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolPerformanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Session) LastProtocolPerformanceFee() (*big.Int, error) {
+	return _IVaultV2.Contract.LastProtocolPerformanceFee(&_IVaultV2.CallOpts)
 }
 
-// Unclaimed is a free data retrieval call binding the contract method 0x669416b8.
+// LastProtocolPerformanceFee is a free data retrieval call binding the contract method 0xf56f1926.
 //
-// Solidity: function unclaimed() view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) Unclaimed() (*big.Int, error) {
-	return _IVaultV2.Contract.Unclaimed(&_IVaultV2.CallOpts)
+// Solidity: function lastProtocolPerformanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2CallerSession) LastProtocolPerformanceFee() (*big.Int, error) {
+	return _IVaultV2.Contract.LastProtocolPerformanceFee(&_IVaultV2.CallOpts)
+}
+
+// LastUpdate is a free data retrieval call binding the contract method 0xc0463711.
+//
+// Solidity: function lastUpdate() view returns(uint48 timestamp)
+func (_IVaultV2 *IVaultV2Caller) LastUpdate(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "lastUpdate")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// LastUpdate is a free data retrieval call binding the contract method 0xc0463711.
+//
+// Solidity: function lastUpdate() view returns(uint48 timestamp)
+func (_IVaultV2 *IVaultV2Session) LastUpdate() (*big.Int, error) {
+	return _IVaultV2.Contract.LastUpdate(&_IVaultV2.CallOpts)
+}
+
+// LastUpdate is a free data retrieval call binding the contract method 0xc0463711.
+//
+// Solidity: function lastUpdate() view returns(uint48 timestamp)
+func (_IVaultV2 *IVaultV2CallerSession) LastUpdate() (*big.Int, error) {
+	return _IVaultV2.Contract.LastUpdate(&_IVaultV2.CallOpts)
+}
+
+// ManagementFee is a free data retrieval call binding the contract method 0xa6f7f5d6.
+//
+// Solidity: function managementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Caller) ManagementFee(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "managementFee")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// ManagementFee is a free data retrieval call binding the contract method 0xa6f7f5d6.
+//
+// Solidity: function managementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Session) ManagementFee() (*big.Int, error) {
+	return _IVaultV2.Contract.ManagementFee(&_IVaultV2.CallOpts)
+}
+
+// ManagementFee is a free data retrieval call binding the contract method 0xa6f7f5d6.
+//
+// Solidity: function managementFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2CallerSession) ManagementFee() (*big.Int, error) {
+	return _IVaultV2.Contract.ManagementFee(&_IVaultV2.CallOpts)
+}
+
+// ManagementFeeReceiver is a free data retrieval call binding the contract method 0x43039947.
+//
+// Solidity: function managementFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Caller) ManagementFeeReceiver(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "managementFeeReceiver")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// ManagementFeeReceiver is a free data retrieval call binding the contract method 0x43039947.
+//
+// Solidity: function managementFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Session) ManagementFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.ManagementFeeReceiver(&_IVaultV2.CallOpts)
+}
+
+// ManagementFeeReceiver is a free data retrieval call binding the contract method 0x43039947.
+//
+// Solidity: function managementFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2CallerSession) ManagementFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.ManagementFeeReceiver(&_IVaultV2.CallOpts)
+}
+
+// PerformanceFee is a free data retrieval call binding the contract method 0x87788782.
+//
+// Solidity: function performanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Caller) PerformanceFee(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "performanceFee")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// PerformanceFee is a free data retrieval call binding the contract method 0x87788782.
+//
+// Solidity: function performanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2Session) PerformanceFee() (*big.Int, error) {
+	return _IVaultV2.Contract.PerformanceFee(&_IVaultV2.CallOpts)
+}
+
+// PerformanceFee is a free data retrieval call binding the contract method 0x87788782.
+//
+// Solidity: function performanceFee() view returns(uint96 fee)
+func (_IVaultV2 *IVaultV2CallerSession) PerformanceFee() (*big.Int, error) {
+	return _IVaultV2.Contract.PerformanceFee(&_IVaultV2.CallOpts)
+}
+
+// PerformanceFeeReceiver is a free data retrieval call binding the contract method 0x82cf16df.
+//
+// Solidity: function performanceFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Caller) PerformanceFeeReceiver(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "performanceFeeReceiver")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// PerformanceFeeReceiver is a free data retrieval call binding the contract method 0x82cf16df.
+//
+// Solidity: function performanceFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2Session) PerformanceFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.PerformanceFeeReceiver(&_IVaultV2.CallOpts)
+}
+
+// PerformanceFeeReceiver is a free data retrieval call binding the contract method 0x82cf16df.
+//
+// Solidity: function performanceFeeReceiver() view returns(address receiver)
+func (_IVaultV2 *IVaultV2CallerSession) PerformanceFeeReceiver() (common.Address, error) {
+	return _IVaultV2.Contract.PerformanceFeeReceiver(&_IVaultV2.CallOpts)
+}
+
+// TotalSupplyAt is a free data retrieval call binding the contract method 0xe9efd4cf.
+//
+// Solidity: function totalSupplyAt(uint48 timestamp) view returns(uint256 supply)
+func (_IVaultV2 *IVaultV2Caller) TotalSupplyAt(opts *bind.CallOpts, timestamp *big.Int) (*big.Int, error) {
+	var out []interface{}
+	err := _IVaultV2.contract.Call(opts, &out, "totalSupplyAt", timestamp)
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// TotalSupplyAt is a free data retrieval call binding the contract method 0xe9efd4cf.
+//
+// Solidity: function totalSupplyAt(uint48 timestamp) view returns(uint256 supply)
+func (_IVaultV2 *IVaultV2Session) TotalSupplyAt(timestamp *big.Int) (*big.Int, error) {
+	return _IVaultV2.Contract.TotalSupplyAt(&_IVaultV2.CallOpts, timestamp)
+}
+
+// TotalSupplyAt is a free data retrieval call binding the contract method 0xe9efd4cf.
+//
+// Solidity: function totalSupplyAt(uint48 timestamp) view returns(uint256 supply)
+func (_IVaultV2 *IVaultV2CallerSession) TotalSupplyAt(timestamp *big.Int) (*big.Int, error) {
+	return _IVaultV2.Contract.TotalSupplyAt(&_IVaultV2.CallOpts, timestamp)
 }
 
 // Version is a free data retrieval call binding the contract method 0x54fd4d50.
@@ -1455,347 +842,56 @@ func (_IVaultV2 *IVaultV2CallerSession) Version() (uint64, error) {
 	return _IVaultV2.Contract.Version(&_IVaultV2.CallOpts)
 }
 
-// WithdrawalBucket is a free data retrieval call binding the contract method 0x639fa397.
+// WithdrawalQueue is a free data retrieval call binding the contract method 0x37d5fe99.
 //
-// Solidity: function withdrawalBucket() view returns(uint208)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalBucket(opts *bind.CallOpts) (*big.Int, error) {
+// Solidity: function withdrawalQueue() view returns(address withdrawalQueueAddress)
+func (_IVaultV2 *IVaultV2Caller) WithdrawalQueue(opts *bind.CallOpts) (common.Address, error) {
 	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalBucket")
+	err := _IVaultV2.contract.Call(opts, &out, "withdrawalQueue")
 
 	if err != nil {
-		return *new(*big.Int), err
+		return *new(common.Address), err
 	}
 
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 
 	return out0, err
 
 }
 
-// WithdrawalBucket is a free data retrieval call binding the contract method 0x639fa397.
+// WithdrawalQueue is a free data retrieval call binding the contract method 0x37d5fe99.
 //
-// Solidity: function withdrawalBucket() view returns(uint208)
-func (_IVaultV2 *IVaultV2Session) WithdrawalBucket() (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalBucket(&_IVaultV2.CallOpts)
+// Solidity: function withdrawalQueue() view returns(address withdrawalQueueAddress)
+func (_IVaultV2 *IVaultV2Session) WithdrawalQueue() (common.Address, error) {
+	return _IVaultV2.Contract.WithdrawalQueue(&_IVaultV2.CallOpts)
 }
 
-// WithdrawalBucket is a free data retrieval call binding the contract method 0x639fa397.
+// WithdrawalQueue is a free data retrieval call binding the contract method 0x37d5fe99.
 //
-// Solidity: function withdrawalBucket() view returns(uint208)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalBucket() (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalBucket(&_IVaultV2.CallOpts)
+// Solidity: function withdrawalQueue() view returns(address withdrawalQueueAddress)
+func (_IVaultV2 *IVaultV2CallerSession) WithdrawalQueue() (common.Address, error) {
+	return _IVaultV2.Contract.WithdrawalQueue(&_IVaultV2.CallOpts)
 }
 
-// WithdrawalShares is a free data retrieval call binding the contract method 0xafba70ad.
+// AccrueInterest is a paid mutator transaction binding the contract method 0xa6afed95.
 //
-// Solidity: function withdrawalShares(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalShares(opts *bind.CallOpts, index *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalShares", index)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
+// Solidity: function accrueInterest() returns(uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Transactor) AccrueInterest(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "accrueInterest")
 }
 
-// WithdrawalShares is a free data retrieval call binding the contract method 0xafba70ad.
+// AccrueInterest is a paid mutator transaction binding the contract method 0xa6afed95.
 //
-// Solidity: function withdrawalShares(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) WithdrawalShares(index *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalShares(&_IVaultV2.CallOpts, index)
+// Solidity: function accrueInterest() returns(uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Session) AccrueInterest() (*types.Transaction, error) {
+	return _IVaultV2.Contract.AccrueInterest(&_IVaultV2.TransactOpts)
 }
 
-// WithdrawalShares is a free data retrieval call binding the contract method 0xafba70ad.
+// AccrueInterest is a paid mutator transaction binding the contract method 0xa6afed95.
 //
-// Solidity: function withdrawalShares(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalShares(index *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalShares(&_IVaultV2.CallOpts, index)
-}
-
-// WithdrawalSharesOf is a free data retrieval call binding the contract method 0xa3b54172.
-//
-// Solidity: function withdrawalSharesOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalSharesOf(opts *bind.CallOpts, index *big.Int, account common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalSharesOf", index, account)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// WithdrawalSharesOf is a free data retrieval call binding the contract method 0xa3b54172.
-//
-// Solidity: function withdrawalSharesOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) WithdrawalSharesOf(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalSharesOf(&_IVaultV2.CallOpts, index, account)
-}
-
-// WithdrawalSharesOf is a free data retrieval call binding the contract method 0xa3b54172.
-//
-// Solidity: function withdrawalSharesOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalSharesOf(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalSharesOf(&_IVaultV2.CallOpts, index, account)
-}
-
-// WithdrawalUnlockAt is a free data retrieval call binding the contract method 0xf7eee3ec.
-//
-// Solidity: function withdrawalUnlockAt(uint256 index, address account) view returns(uint48)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalUnlockAt(opts *bind.CallOpts, index *big.Int, account common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalUnlockAt", index, account)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// WithdrawalUnlockAt is a free data retrieval call binding the contract method 0xf7eee3ec.
-//
-// Solidity: function withdrawalUnlockAt(uint256 index, address account) view returns(uint48)
-func (_IVaultV2 *IVaultV2Session) WithdrawalUnlockAt(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalUnlockAt(&_IVaultV2.CallOpts, index, account)
-}
-
-// WithdrawalUnlockAt is a free data retrieval call binding the contract method 0xf7eee3ec.
-//
-// Solidity: function withdrawalUnlockAt(uint256 index, address account) view returns(uint48)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalUnlockAt(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalUnlockAt(&_IVaultV2.CallOpts, index, account)
-}
-
-// Withdrawals is a free data retrieval call binding the contract method 0x5cc07076.
-//
-// Solidity: function withdrawals(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) Withdrawals(opts *bind.CallOpts, index *big.Int) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawals", index)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// Withdrawals is a free data retrieval call binding the contract method 0x5cc07076.
-//
-// Solidity: function withdrawals(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) Withdrawals(index *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.Withdrawals(&_IVaultV2.CallOpts, index)
-}
-
-// Withdrawals is a free data retrieval call binding the contract method 0x5cc07076.
-//
-// Solidity: function withdrawals(uint256 index) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) Withdrawals(index *big.Int) (*big.Int, error) {
-	return _IVaultV2.Contract.Withdrawals(&_IVaultV2.CallOpts, index)
-}
-
-// WithdrawalsOf is a free data retrieval call binding the contract method 0xf5e7ee0f.
-//
-// Solidity: function withdrawalsOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalsOf(opts *bind.CallOpts, index *big.Int, account common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalsOf", index, account)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// WithdrawalsOf is a free data retrieval call binding the contract method 0xf5e7ee0f.
-//
-// Solidity: function withdrawalsOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) WithdrawalsOf(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalsOf(&_IVaultV2.CallOpts, index, account)
-}
-
-// WithdrawalsOf is a free data retrieval call binding the contract method 0xf5e7ee0f.
-//
-// Solidity: function withdrawalsOf(uint256 index, address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalsOf(index *big.Int, account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalsOf(&_IVaultV2.CallOpts, index, account)
-}
-
-// WithdrawalsOfLength is a free data retrieval call binding the contract method 0x71a93932.
-//
-// Solidity: function withdrawalsOfLength(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Caller) WithdrawalsOfLength(opts *bind.CallOpts, account common.Address) (*big.Int, error) {
-	var out []interface{}
-	err := _IVaultV2.contract.Call(opts, &out, "withdrawalsOfLength", account)
-
-	if err != nil {
-		return *new(*big.Int), err
-	}
-
-	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
-
-	return out0, err
-
-}
-
-// WithdrawalsOfLength is a free data retrieval call binding the contract method 0x71a93932.
-//
-// Solidity: function withdrawalsOfLength(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2Session) WithdrawalsOfLength(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalsOfLength(&_IVaultV2.CallOpts, account)
-}
-
-// WithdrawalsOfLength is a free data retrieval call binding the contract method 0x71a93932.
-//
-// Solidity: function withdrawalsOfLength(address account) view returns(uint256)
-func (_IVaultV2 *IVaultV2CallerSession) WithdrawalsOfLength(account common.Address) (*big.Int, error) {
-	return _IVaultV2.Contract.WithdrawalsOfLength(&_IVaultV2.CallOpts, account)
-}
-
-// AllocateAdapter is a paid mutator transaction binding the contract method 0xd7fab410.
-//
-// Solidity: function allocateAdapter(address adapter, uint256 amount) returns(uint256 allocated)
-func (_IVaultV2 *IVaultV2Transactor) AllocateAdapter(opts *bind.TransactOpts, adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "allocateAdapter", adapter, amount)
-}
-
-// AllocateAdapter is a paid mutator transaction binding the contract method 0xd7fab410.
-//
-// Solidity: function allocateAdapter(address adapter, uint256 amount) returns(uint256 allocated)
-func (_IVaultV2 *IVaultV2Session) AllocateAdapter(adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.AllocateAdapter(&_IVaultV2.TransactOpts, adapter, amount)
-}
-
-// AllocateAdapter is a paid mutator transaction binding the contract method 0xd7fab410.
-//
-// Solidity: function allocateAdapter(address adapter, uint256 amount) returns(uint256 allocated)
-func (_IVaultV2 *IVaultV2TransactorSession) AllocateAdapter(adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.AllocateAdapter(&_IVaultV2.TransactOpts, adapter, amount)
-}
-
-// Claim is a paid mutator transaction binding the contract method 0xaad3ec96.
-//
-// Solidity: function claim(address recipient, uint256 index) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2Transactor) Claim(opts *bind.TransactOpts, recipient common.Address, index *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "claim", recipient, index)
-}
-
-// Claim is a paid mutator transaction binding the contract method 0xaad3ec96.
-//
-// Solidity: function claim(address recipient, uint256 index) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2Session) Claim(recipient common.Address, index *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Claim(&_IVaultV2.TransactOpts, recipient, index)
-}
-
-// Claim is a paid mutator transaction binding the contract method 0xaad3ec96.
-//
-// Solidity: function claim(address recipient, uint256 index) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2TransactorSession) Claim(recipient common.Address, index *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Claim(&_IVaultV2.TransactOpts, recipient, index)
-}
-
-// ClaimBatch is a paid mutator transaction binding the contract method 0x7c04c80a.
-//
-// Solidity: function claimBatch(address recipient, uint256[] indexes) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2Transactor) ClaimBatch(opts *bind.TransactOpts, recipient common.Address, indexes []*big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "claimBatch", recipient, indexes)
-}
-
-// ClaimBatch is a paid mutator transaction binding the contract method 0x7c04c80a.
-//
-// Solidity: function claimBatch(address recipient, uint256[] indexes) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2Session) ClaimBatch(recipient common.Address, indexes []*big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.ClaimBatch(&_IVaultV2.TransactOpts, recipient, indexes)
-}
-
-// ClaimBatch is a paid mutator transaction binding the contract method 0x7c04c80a.
-//
-// Solidity: function claimBatch(address recipient, uint256[] indexes) returns(uint256 amount)
-func (_IVaultV2 *IVaultV2TransactorSession) ClaimBatch(recipient common.Address, indexes []*big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.ClaimBatch(&_IVaultV2.TransactOpts, recipient, indexes)
-}
-
-// DeallocateAdapter is a paid mutator transaction binding the contract method 0x37407957.
-//
-// Solidity: function deallocateAdapter(address adapter, uint256 amount) returns(uint256 deallocated)
-func (_IVaultV2 *IVaultV2Transactor) DeallocateAdapter(opts *bind.TransactOpts, adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "deallocateAdapter", adapter, amount)
-}
-
-// DeallocateAdapter is a paid mutator transaction binding the contract method 0x37407957.
-//
-// Solidity: function deallocateAdapter(address adapter, uint256 amount) returns(uint256 deallocated)
-func (_IVaultV2 *IVaultV2Session) DeallocateAdapter(adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.DeallocateAdapter(&_IVaultV2.TransactOpts, adapter, amount)
-}
-
-// DeallocateAdapter is a paid mutator transaction binding the contract method 0x37407957.
-//
-// Solidity: function deallocateAdapter(address adapter, uint256 amount) returns(uint256 deallocated)
-func (_IVaultV2 *IVaultV2TransactorSession) DeallocateAdapter(adapter common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.DeallocateAdapter(&_IVaultV2.TransactOpts, adapter, amount)
-}
-
-// DeallocateAdapters is a paid mutator transaction binding the contract method 0x81b63eac.
-//
-// Solidity: function deallocateAdapters() returns()
-func (_IVaultV2 *IVaultV2Transactor) DeallocateAdapters(opts *bind.TransactOpts) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "deallocateAdapters")
-}
-
-// DeallocateAdapters is a paid mutator transaction binding the contract method 0x81b63eac.
-//
-// Solidity: function deallocateAdapters() returns()
-func (_IVaultV2 *IVaultV2Session) DeallocateAdapters() (*types.Transaction, error) {
-	return _IVaultV2.Contract.DeallocateAdapters(&_IVaultV2.TransactOpts)
-}
-
-// DeallocateAdapters is a paid mutator transaction binding the contract method 0x81b63eac.
-//
-// Solidity: function deallocateAdapters() returns()
-func (_IVaultV2 *IVaultV2TransactorSession) DeallocateAdapters() (*types.Transaction, error) {
-	return _IVaultV2.Contract.DeallocateAdapters(&_IVaultV2.TransactOpts)
-}
-
-// Deposit is a paid mutator transaction binding the contract method 0x47e7ef24.
-//
-// Solidity: function deposit(address onBehalfOf, uint256 amount) returns(uint256 depositedAmount, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Transactor) Deposit(opts *bind.TransactOpts, onBehalfOf common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "deposit", onBehalfOf, amount)
-}
-
-// Deposit is a paid mutator transaction binding the contract method 0x47e7ef24.
-//
-// Solidity: function deposit(address onBehalfOf, uint256 amount) returns(uint256 depositedAmount, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Session) Deposit(onBehalfOf common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Deposit(&_IVaultV2.TransactOpts, onBehalfOf, amount)
-}
-
-// Deposit is a paid mutator transaction binding the contract method 0x47e7ef24.
-//
-// Solidity: function deposit(address onBehalfOf, uint256 amount) returns(uint256 depositedAmount, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2TransactorSession) Deposit(onBehalfOf common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Deposit(&_IVaultV2.TransactOpts, onBehalfOf, amount)
+// Solidity: function accrueInterest() returns(uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2TransactorSession) AccrueInterest() (*types.Transaction, error) {
+	return _IVaultV2.Contract.AccrueInterest(&_IVaultV2.TransactOpts)
 }
 
 // Initialize is a paid mutator transaction binding the contract method 0x57ec83cc.
@@ -1817,27 +913,6 @@ func (_IVaultV2 *IVaultV2Session) Initialize(initialVersion uint64, owner common
 // Solidity: function initialize(uint64 initialVersion, address owner, bytes data) returns()
 func (_IVaultV2 *IVaultV2TransactorSession) Initialize(initialVersion uint64, owner common.Address, data []byte) (*types.Transaction, error) {
 	return _IVaultV2.Contract.Initialize(&_IVaultV2.TransactOpts, initialVersion, owner, data)
-}
-
-// InstantWithdraw is a paid mutator transaction binding the contract method 0xa900ad6a.
-//
-// Solidity: function instantWithdraw(address recipient, uint256 amount) returns(uint256 withdrawnAssets, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2Transactor) InstantWithdraw(opts *bind.TransactOpts, recipient common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "instantWithdraw", recipient, amount)
-}
-
-// InstantWithdraw is a paid mutator transaction binding the contract method 0xa900ad6a.
-//
-// Solidity: function instantWithdraw(address recipient, uint256 amount) returns(uint256 withdrawnAssets, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2Session) InstantWithdraw(recipient common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.InstantWithdraw(&_IVaultV2.TransactOpts, recipient, amount)
-}
-
-// InstantWithdraw is a paid mutator transaction binding the contract method 0xa900ad6a.
-//
-// Solidity: function instantWithdraw(address recipient, uint256 amount) returns(uint256 withdrawnAssets, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2TransactorSession) InstantWithdraw(recipient common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.InstantWithdraw(&_IVaultV2.TransactOpts, recipient, amount)
 }
 
 // Migrate is a paid mutator transaction binding the contract method 0x2abe3048.
@@ -1882,46 +957,88 @@ func (_IVaultV2 *IVaultV2TransactorSession) Multicall(data [][]byte) (*types.Tra
 	return _IVaultV2.Contract.Multicall(&_IVaultV2.TransactOpts, data)
 }
 
-// Redeem is a paid mutator transaction binding the contract method 0x1e9a6950.
+// Pull is a paid mutator transaction binding the contract method 0x97b41a12.
 //
-// Solidity: function redeem(address claimer, uint256 shares) returns(uint256 withdrawnAssets, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Transactor) Redeem(opts *bind.TransactOpts, claimer common.Address, shares *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "redeem", claimer, shares)
+// Solidity: function pull(uint256 assets, address receiver) returns()
+func (_IVaultV2 *IVaultV2Transactor) Pull(opts *bind.TransactOpts, assets *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "pull", assets, receiver)
 }
 
-// Redeem is a paid mutator transaction binding the contract method 0x1e9a6950.
+// Pull is a paid mutator transaction binding the contract method 0x97b41a12.
 //
-// Solidity: function redeem(address claimer, uint256 shares) returns(uint256 withdrawnAssets, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Session) Redeem(claimer common.Address, shares *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Redeem(&_IVaultV2.TransactOpts, claimer, shares)
+// Solidity: function pull(uint256 assets, address receiver) returns()
+func (_IVaultV2 *IVaultV2Session) Pull(assets *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.Pull(&_IVaultV2.TransactOpts, assets, receiver)
 }
 
-// Redeem is a paid mutator transaction binding the contract method 0x1e9a6950.
+// Pull is a paid mutator transaction binding the contract method 0x97b41a12.
 //
-// Solidity: function redeem(address claimer, uint256 shares) returns(uint256 withdrawnAssets, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2TransactorSession) Redeem(claimer common.Address, shares *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Redeem(&_IVaultV2.TransactOpts, claimer, shares)
+// Solidity: function pull(uint256 assets, address receiver) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) Pull(assets *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.Pull(&_IVaultV2.TransactOpts, assets, receiver)
 }
 
-// SetAdapterLimit is a paid mutator transaction binding the contract method 0x7fd4aec4.
+// Push is a paid mutator transaction binding the contract method 0xc80fbe4e.
 //
-// Solidity: function setAdapterLimit(address adapter, uint208 limit) returns()
-func (_IVaultV2 *IVaultV2Transactor) SetAdapterLimit(opts *bind.TransactOpts, adapter common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "setAdapterLimit", adapter, limit)
+// Solidity: function push(uint256 assets, address owner) returns()
+func (_IVaultV2 *IVaultV2Transactor) Push(opts *bind.TransactOpts, assets *big.Int, owner common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "push", assets, owner)
 }
 
-// SetAdapterLimit is a paid mutator transaction binding the contract method 0x7fd4aec4.
+// Push is a paid mutator transaction binding the contract method 0xc80fbe4e.
 //
-// Solidity: function setAdapterLimit(address adapter, uint208 limit) returns()
-func (_IVaultV2 *IVaultV2Session) SetAdapterLimit(adapter common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.SetAdapterLimit(&_IVaultV2.TransactOpts, adapter, limit)
+// Solidity: function push(uint256 assets, address owner) returns()
+func (_IVaultV2 *IVaultV2Session) Push(assets *big.Int, owner common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.Push(&_IVaultV2.TransactOpts, assets, owner)
 }
 
-// SetAdapterLimit is a paid mutator transaction binding the contract method 0x7fd4aec4.
+// Push is a paid mutator transaction binding the contract method 0xc80fbe4e.
 //
-// Solidity: function setAdapterLimit(address adapter, uint208 limit) returns()
-func (_IVaultV2 *IVaultV2TransactorSession) SetAdapterLimit(adapter common.Address, limit *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.SetAdapterLimit(&_IVaultV2.TransactOpts, adapter, limit)
+// Solidity: function push(uint256 assets, address owner) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) Push(assets *big.Int, owner common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.Push(&_IVaultV2.TransactOpts, assets, owner)
+}
+
+// Redeemable is a paid mutator transaction binding the contract method 0x2d7ecd11.
+//
+// Solidity: function redeemable() returns(uint256 shares)
+func (_IVaultV2 *IVaultV2Transactor) Redeemable(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "redeemable")
+}
+
+// Redeemable is a paid mutator transaction binding the contract method 0x2d7ecd11.
+//
+// Solidity: function redeemable() returns(uint256 shares)
+func (_IVaultV2 *IVaultV2Session) Redeemable() (*types.Transaction, error) {
+	return _IVaultV2.Contract.Redeemable(&_IVaultV2.TransactOpts)
+}
+
+// Redeemable is a paid mutator transaction binding the contract method 0x2d7ecd11.
+//
+// Solidity: function redeemable() returns(uint256 shares)
+func (_IVaultV2 *IVaultV2TransactorSession) Redeemable() (*types.Transaction, error) {
+	return _IVaultV2.Contract.Redeemable(&_IVaultV2.TransactOpts)
+}
+
+// SetDelegator is a paid mutator transaction binding the contract method 0x83cd9cc3.
+//
+// Solidity: function setDelegator(address delegator) returns()
+func (_IVaultV2 *IVaultV2Transactor) SetDelegator(opts *bind.TransactOpts, delegator common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "setDelegator", delegator)
+}
+
+// SetDelegator is a paid mutator transaction binding the contract method 0x83cd9cc3.
+//
+// Solidity: function setDelegator(address delegator) returns()
+func (_IVaultV2 *IVaultV2Session) SetDelegator(delegator common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetDelegator(&_IVaultV2.TransactOpts, delegator)
+}
+
+// SetDelegator is a paid mutator transaction binding the contract method 0x83cd9cc3.
+//
+// Solidity: function setDelegator(address delegator) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) SetDelegator(delegator common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetDelegator(&_IVaultV2.TransactOpts, delegator)
 }
 
 // SetDepositLimit is a paid mutator transaction binding the contract method 0xbdc8144b.
@@ -2008,72 +1125,93 @@ func (_IVaultV2 *IVaultV2TransactorSession) SetIsDepositLimit(status bool) (*typ
 	return _IVaultV2.Contract.SetIsDepositLimit(&_IVaultV2.TransactOpts, status)
 }
 
-// SkimAdapters is a paid mutator transaction binding the contract method 0xed8938b3.
+// SetManagementFee is a paid mutator transaction binding the contract method 0xf5cd33d2.
 //
-// Solidity: function skimAdapters() returns()
-func (_IVaultV2 *IVaultV2Transactor) SkimAdapters(opts *bind.TransactOpts) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "skimAdapters")
+// Solidity: function setManagementFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2Transactor) SetManagementFee(opts *bind.TransactOpts, fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "setManagementFee", fee, receiver)
 }
 
-// SkimAdapters is a paid mutator transaction binding the contract method 0xed8938b3.
+// SetManagementFee is a paid mutator transaction binding the contract method 0xf5cd33d2.
 //
-// Solidity: function skimAdapters() returns()
-func (_IVaultV2 *IVaultV2Session) SkimAdapters() (*types.Transaction, error) {
-	return _IVaultV2.Contract.SkimAdapters(&_IVaultV2.TransactOpts)
+// Solidity: function setManagementFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2Session) SetManagementFee(fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetManagementFee(&_IVaultV2.TransactOpts, fee, receiver)
 }
 
-// SkimAdapters is a paid mutator transaction binding the contract method 0xed8938b3.
+// SetManagementFee is a paid mutator transaction binding the contract method 0xf5cd33d2.
 //
-// Solidity: function skimAdapters() returns()
-func (_IVaultV2 *IVaultV2TransactorSession) SkimAdapters() (*types.Transaction, error) {
-	return _IVaultV2.Contract.SkimAdapters(&_IVaultV2.TransactOpts)
+// Solidity: function setManagementFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) SetManagementFee(fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetManagementFee(&_IVaultV2.TransactOpts, fee, receiver)
 }
 
-// SwapAdapters is a paid mutator transaction binding the contract method 0x8ef5792a.
+// SetPerformanceFee is a paid mutator transaction binding the contract method 0xc4fef03e.
 //
-// Solidity: function swapAdapters(address adapter1, address adapter2) returns()
-func (_IVaultV2 *IVaultV2Transactor) SwapAdapters(opts *bind.TransactOpts, adapter1 common.Address, adapter2 common.Address) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "swapAdapters", adapter1, adapter2)
+// Solidity: function setPerformanceFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2Transactor) SetPerformanceFee(opts *bind.TransactOpts, fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "setPerformanceFee", fee, receiver)
 }
 
-// SwapAdapters is a paid mutator transaction binding the contract method 0x8ef5792a.
+// SetPerformanceFee is a paid mutator transaction binding the contract method 0xc4fef03e.
 //
-// Solidity: function swapAdapters(address adapter1, address adapter2) returns()
-func (_IVaultV2 *IVaultV2Session) SwapAdapters(adapter1 common.Address, adapter2 common.Address) (*types.Transaction, error) {
-	return _IVaultV2.Contract.SwapAdapters(&_IVaultV2.TransactOpts, adapter1, adapter2)
+// Solidity: function setPerformanceFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2Session) SetPerformanceFee(fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetPerformanceFee(&_IVaultV2.TransactOpts, fee, receiver)
 }
 
-// SwapAdapters is a paid mutator transaction binding the contract method 0x8ef5792a.
+// SetPerformanceFee is a paid mutator transaction binding the contract method 0xc4fef03e.
 //
-// Solidity: function swapAdapters(address adapter1, address adapter2) returns()
-func (_IVaultV2 *IVaultV2TransactorSession) SwapAdapters(adapter1 common.Address, adapter2 common.Address) (*types.Transaction, error) {
-	return _IVaultV2.Contract.SwapAdapters(&_IVaultV2.TransactOpts, adapter1, adapter2)
+// Solidity: function setPerformanceFee(uint96 fee, address receiver) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) SetPerformanceFee(fee *big.Int, receiver common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetPerformanceFee(&_IVaultV2.TransactOpts, fee, receiver)
 }
 
-// Withdraw is a paid mutator transaction binding the contract method 0xf3fef3a3.
+// SetSlasher is a paid mutator transaction binding the contract method 0xaabc2496.
 //
-// Solidity: function withdraw(address claimer, uint256 amount) returns(uint256 burnedShares, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Transactor) Withdraw(opts *bind.TransactOpts, claimer common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.contract.Transact(opts, "withdraw", claimer, amount)
+// Solidity: function setSlasher(address slasher) returns()
+func (_IVaultV2 *IVaultV2Transactor) SetSlasher(opts *bind.TransactOpts, slasher common.Address) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "setSlasher", slasher)
 }
 
-// Withdraw is a paid mutator transaction binding the contract method 0xf3fef3a3.
+// SetSlasher is a paid mutator transaction binding the contract method 0xaabc2496.
 //
-// Solidity: function withdraw(address claimer, uint256 amount) returns(uint256 burnedShares, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2Session) Withdraw(claimer common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Withdraw(&_IVaultV2.TransactOpts, claimer, amount)
+// Solidity: function setSlasher(address slasher) returns()
+func (_IVaultV2 *IVaultV2Session) SetSlasher(slasher common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetSlasher(&_IVaultV2.TransactOpts, slasher)
 }
 
-// Withdraw is a paid mutator transaction binding the contract method 0xf3fef3a3.
+// SetSlasher is a paid mutator transaction binding the contract method 0xaabc2496.
 //
-// Solidity: function withdraw(address claimer, uint256 amount) returns(uint256 burnedShares, uint256 mintedShares)
-func (_IVaultV2 *IVaultV2TransactorSession) Withdraw(claimer common.Address, amount *big.Int) (*types.Transaction, error) {
-	return _IVaultV2.Contract.Withdraw(&_IVaultV2.TransactOpts, claimer, amount)
+// Solidity: function setSlasher(address slasher) returns()
+func (_IVaultV2 *IVaultV2TransactorSession) SetSlasher(slasher common.Address) (*types.Transaction, error) {
+	return _IVaultV2.Contract.SetSlasher(&_IVaultV2.TransactOpts, slasher)
 }
 
-// IVaultV2AllocateIterator is returned from FilterAllocate and is used to iterate over the raw logs and unpacked data for Allocate events raised by the IVaultV2 contract.
-type IVaultV2AllocateIterator struct {
-	Event *IVaultV2Allocate // Event containing the contract specifics and raw log
+// Withdrawable is a paid mutator transaction binding the contract method 0x50188301.
+//
+// Solidity: function withdrawable() returns(uint256 assets)
+func (_IVaultV2 *IVaultV2Transactor) Withdrawable(opts *bind.TransactOpts) (*types.Transaction, error) {
+	return _IVaultV2.contract.Transact(opts, "withdrawable")
+}
+
+// Withdrawable is a paid mutator transaction binding the contract method 0x50188301.
+//
+// Solidity: function withdrawable() returns(uint256 assets)
+func (_IVaultV2 *IVaultV2Session) Withdrawable() (*types.Transaction, error) {
+	return _IVaultV2.Contract.Withdrawable(&_IVaultV2.TransactOpts)
+}
+
+// Withdrawable is a paid mutator transaction binding the contract method 0x50188301.
+//
+// Solidity: function withdrawable() returns(uint256 assets)
+func (_IVaultV2 *IVaultV2TransactorSession) Withdrawable() (*types.Transaction, error) {
+	return _IVaultV2.Contract.Withdrawable(&_IVaultV2.TransactOpts)
+}
+
+// IVaultV2AccrueInterestIterator is returned from FilterAccrueInterest and is used to iterate over the raw logs and unpacked data for AccrueInterest events raised by the IVaultV2 contract.
+type IVaultV2AccrueInterestIterator struct {
+	Event *IVaultV2AccrueInterest // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -2087,7 +1225,7 @@ type IVaultV2AllocateIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2AllocateIterator) Next() bool {
+func (it *IVaultV2AccrueInterestIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -2096,7 +1234,7 @@ func (it *IVaultV2AllocateIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2Allocate)
+			it.Event = new(IVaultV2AccrueInterest)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -2111,7 +1249,7 @@ func (it *IVaultV2AllocateIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2Allocate)
+		it.Event = new(IVaultV2AccrueInterest)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -2127,52 +1265,44 @@ func (it *IVaultV2AllocateIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2AllocateIterator) Error() error {
+func (it *IVaultV2AccrueInterestIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2AllocateIterator) Close() error {
+func (it *IVaultV2AccrueInterestIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2Allocate represents a Allocate event raised by the IVaultV2 contract.
-type IVaultV2Allocate struct {
-	Adapter common.Address
-	Amount  *big.Int
-	Raw     types.Log // Blockchain specific contextual infos
+// IVaultV2AccrueInterest represents a AccrueInterest event raised by the IVaultV2 contract.
+type IVaultV2AccrueInterest struct {
+	NewTotalAssets       *big.Int
+	ManagementFeeShares  *big.Int
+	PerformanceFeeShares *big.Int
+	ProtocolFeeShares    *big.Int
+	Raw                  types.Log // Blockchain specific contextual infos
 }
 
-// FilterAllocate is a free log retrieval operation binding the contract event 0x249d8eb76d5a22983620d741de2470148d1a9a26ab923aec4262770690d11ebc.
+// FilterAccrueInterest is a free log retrieval operation binding the contract event 0x4dec04e750ca11537cabcd8a9eab06494de08da3735bc8871cd41250e190bc04.
 //
-// Solidity: event Allocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) FilterAllocate(opts *bind.FilterOpts, adapter []common.Address) (*IVaultV2AllocateIterator, error) {
+// Solidity: event AccrueInterest(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Filterer) FilterAccrueInterest(opts *bind.FilterOpts) (*IVaultV2AccrueInterestIterator, error) {
 
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Allocate", adapterRule)
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "AccrueInterest")
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2AllocateIterator{contract: _IVaultV2.contract, event: "Allocate", logs: logs, sub: sub}, nil
+	return &IVaultV2AccrueInterestIterator{contract: _IVaultV2.contract, event: "AccrueInterest", logs: logs, sub: sub}, nil
 }
 
-// WatchAllocate is a free log subscription operation binding the contract event 0x249d8eb76d5a22983620d741de2470148d1a9a26ab923aec4262770690d11ebc.
+// WatchAccrueInterest is a free log subscription operation binding the contract event 0x4dec04e750ca11537cabcd8a9eab06494de08da3735bc8871cd41250e190bc04.
 //
-// Solidity: event Allocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) WatchAllocate(opts *bind.WatchOpts, sink chan<- *IVaultV2Allocate, adapter []common.Address) (event.Subscription, error) {
+// Solidity: event AccrueInterest(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Filterer) WatchAccrueInterest(opts *bind.WatchOpts, sink chan<- *IVaultV2AccrueInterest) (event.Subscription, error) {
 
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Allocate", adapterRule)
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "AccrueInterest")
 	if err != nil {
 		return nil, err
 	}
@@ -2182,8 +1312,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchAllocate(opts *bind.WatchOpts, sink chan
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Allocate)
-				if err := _IVaultV2.contract.UnpackLog(event, "Allocate", log); err != nil {
+				event := new(IVaultV2AccrueInterest)
+				if err := _IVaultV2.contract.UnpackLog(event, "AccrueInterest", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -2204,12 +1334,12 @@ func (_IVaultV2 *IVaultV2Filterer) WatchAllocate(opts *bind.WatchOpts, sink chan
 	}), nil
 }
 
-// ParseAllocate is a log parse operation binding the contract event 0x249d8eb76d5a22983620d741de2470148d1a9a26ab923aec4262770690d11ebc.
+// ParseAccrueInterest is a log parse operation binding the contract event 0x4dec04e750ca11537cabcd8a9eab06494de08da3735bc8871cd41250e190bc04.
 //
-// Solidity: event Allocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) ParseAllocate(log types.Log) (*IVaultV2Allocate, error) {
-	event := new(IVaultV2Allocate)
-	if err := _IVaultV2.contract.UnpackLog(event, "Allocate", log); err != nil {
+// Solidity: event AccrueInterest(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
+func (_IVaultV2 *IVaultV2Filterer) ParseAccrueInterest(log types.Log) (*IVaultV2AccrueInterest, error) {
+	event := new(IVaultV2AccrueInterest)
+	if err := _IVaultV2.contract.UnpackLog(event, "AccrueInterest", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -2285,28 +1415,28 @@ func (it *IVaultV2ClaimIterator) Close() error {
 
 // IVaultV2Claim represents a Claim event raised by the IVaultV2 contract.
 type IVaultV2Claim struct {
-	Claimer   common.Address
-	Recipient common.Address
-	Index     *big.Int
-	Amount    *big.Int
-	Raw       types.Log // Blockchain specific contextual infos
+	Claimer  common.Address
+	Receiver common.Address
+	TokenId  *big.Int
+	Assets   *big.Int
+	Raw      types.Log // Blockchain specific contextual infos
 }
 
 // FilterClaim is a free log retrieval operation binding the contract event 0x865ca08d59f5cb456e85cd2f7ef63664ea4f73327414e9d8152c4158b0e94645.
 //
-// Solidity: event Claim(address indexed claimer, address indexed recipient, uint256 index, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) FilterClaim(opts *bind.FilterOpts, claimer []common.Address, recipient []common.Address) (*IVaultV2ClaimIterator, error) {
+// Solidity: event Claim(address indexed claimer, address indexed receiver, uint256 tokenId, uint256 assets)
+func (_IVaultV2 *IVaultV2Filterer) FilterClaim(opts *bind.FilterOpts, claimer []common.Address, receiver []common.Address) (*IVaultV2ClaimIterator, error) {
 
 	var claimerRule []interface{}
 	for _, claimerItem := range claimer {
 		claimerRule = append(claimerRule, claimerItem)
 	}
-	var recipientRule []interface{}
-	for _, recipientItem := range recipient {
-		recipientRule = append(recipientRule, recipientItem)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Claim", claimerRule, recipientRule)
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Claim", claimerRule, receiverRule)
 	if err != nil {
 		return nil, err
 	}
@@ -2315,19 +1445,19 @@ func (_IVaultV2 *IVaultV2Filterer) FilterClaim(opts *bind.FilterOpts, claimer []
 
 // WatchClaim is a free log subscription operation binding the contract event 0x865ca08d59f5cb456e85cd2f7ef63664ea4f73327414e9d8152c4158b0e94645.
 //
-// Solidity: event Claim(address indexed claimer, address indexed recipient, uint256 index, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) WatchClaim(opts *bind.WatchOpts, sink chan<- *IVaultV2Claim, claimer []common.Address, recipient []common.Address) (event.Subscription, error) {
+// Solidity: event Claim(address indexed claimer, address indexed receiver, uint256 tokenId, uint256 assets)
+func (_IVaultV2 *IVaultV2Filterer) WatchClaim(opts *bind.WatchOpts, sink chan<- *IVaultV2Claim, claimer []common.Address, receiver []common.Address) (event.Subscription, error) {
 
 	var claimerRule []interface{}
 	for _, claimerItem := range claimer {
 		claimerRule = append(claimerRule, claimerItem)
 	}
-	var recipientRule []interface{}
-	for _, recipientItem := range recipient {
-		recipientRule = append(recipientRule, recipientItem)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Claim", claimerRule, recipientRule)
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Claim", claimerRule, receiverRule)
 	if err != nil {
 		return nil, err
 	}
@@ -2361,444 +1491,10 @@ func (_IVaultV2 *IVaultV2Filterer) WatchClaim(opts *bind.WatchOpts, sink chan<- 
 
 // ParseClaim is a log parse operation binding the contract event 0x865ca08d59f5cb456e85cd2f7ef63664ea4f73327414e9d8152c4158b0e94645.
 //
-// Solidity: event Claim(address indexed claimer, address indexed recipient, uint256 index, uint256 amount)
+// Solidity: event Claim(address indexed claimer, address indexed receiver, uint256 tokenId, uint256 assets)
 func (_IVaultV2 *IVaultV2Filterer) ParseClaim(log types.Log) (*IVaultV2Claim, error) {
 	event := new(IVaultV2Claim)
 	if err := _IVaultV2.contract.UnpackLog(event, "Claim", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2DeallocateIterator is returned from FilterDeallocate and is used to iterate over the raw logs and unpacked data for Deallocate events raised by the IVaultV2 contract.
-type IVaultV2DeallocateIterator struct {
-	Event *IVaultV2Deallocate // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2DeallocateIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2Deallocate)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2Deallocate)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2DeallocateIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2DeallocateIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2Deallocate represents a Deallocate event raised by the IVaultV2 contract.
-type IVaultV2Deallocate struct {
-	Adapter common.Address
-	Amount  *big.Int
-	Raw     types.Log // Blockchain specific contextual infos
-}
-
-// FilterDeallocate is a free log retrieval operation binding the contract event 0xd338c9f6c5eed79757e45cc8cc8b14bce8f5413e34e2dbbe362bc914bf6c439b.
-//
-// Solidity: event Deallocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) FilterDeallocate(opts *bind.FilterOpts, adapter []common.Address) (*IVaultV2DeallocateIterator, error) {
-
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Deallocate", adapterRule)
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2DeallocateIterator{contract: _IVaultV2.contract, event: "Deallocate", logs: logs, sub: sub}, nil
-}
-
-// WatchDeallocate is a free log subscription operation binding the contract event 0xd338c9f6c5eed79757e45cc8cc8b14bce8f5413e34e2dbbe362bc914bf6c439b.
-//
-// Solidity: event Deallocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) WatchDeallocate(opts *bind.WatchOpts, sink chan<- *IVaultV2Deallocate, adapter []common.Address) (event.Subscription, error) {
-
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Deallocate", adapterRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Deallocate)
-				if err := _IVaultV2.contract.UnpackLog(event, "Deallocate", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseDeallocate is a log parse operation binding the contract event 0xd338c9f6c5eed79757e45cc8cc8b14bce8f5413e34e2dbbe362bc914bf6c439b.
-//
-// Solidity: event Deallocate(address indexed adapter, uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) ParseDeallocate(log types.Log) (*IVaultV2Deallocate, error) {
-	event := new(IVaultV2Deallocate)
-	if err := _IVaultV2.contract.UnpackLog(event, "Deallocate", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2DepositIterator is returned from FilterDeposit and is used to iterate over the raw logs and unpacked data for Deposit events raised by the IVaultV2 contract.
-type IVaultV2DepositIterator struct {
-	Event *IVaultV2Deposit // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2DepositIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2Deposit)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2Deposit)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2DepositIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2DepositIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2Deposit represents a Deposit event raised by the IVaultV2 contract.
-type IVaultV2Deposit struct {
-	Depositor  common.Address
-	OnBehalfOf common.Address
-	Amount     *big.Int
-	Shares     *big.Int
-	Raw        types.Log // Blockchain specific contextual infos
-}
-
-// FilterDeposit is a free log retrieval operation binding the contract event 0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7.
-//
-// Solidity: event Deposit(address indexed depositor, address indexed onBehalfOf, uint256 amount, uint256 shares)
-func (_IVaultV2 *IVaultV2Filterer) FilterDeposit(opts *bind.FilterOpts, depositor []common.Address, onBehalfOf []common.Address) (*IVaultV2DepositIterator, error) {
-
-	var depositorRule []interface{}
-	for _, depositorItem := range depositor {
-		depositorRule = append(depositorRule, depositorItem)
-	}
-	var onBehalfOfRule []interface{}
-	for _, onBehalfOfItem := range onBehalfOf {
-		onBehalfOfRule = append(onBehalfOfRule, onBehalfOfItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Deposit", depositorRule, onBehalfOfRule)
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2DepositIterator{contract: _IVaultV2.contract, event: "Deposit", logs: logs, sub: sub}, nil
-}
-
-// WatchDeposit is a free log subscription operation binding the contract event 0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7.
-//
-// Solidity: event Deposit(address indexed depositor, address indexed onBehalfOf, uint256 amount, uint256 shares)
-func (_IVaultV2 *IVaultV2Filterer) WatchDeposit(opts *bind.WatchOpts, sink chan<- *IVaultV2Deposit, depositor []common.Address, onBehalfOf []common.Address) (event.Subscription, error) {
-
-	var depositorRule []interface{}
-	for _, depositorItem := range depositor {
-		depositorRule = append(depositorRule, depositorItem)
-	}
-	var onBehalfOfRule []interface{}
-	for _, onBehalfOfItem := range onBehalfOf {
-		onBehalfOfRule = append(onBehalfOfRule, onBehalfOfItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Deposit", depositorRule, onBehalfOfRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Deposit)
-				if err := _IVaultV2.contract.UnpackLog(event, "Deposit", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseDeposit is a log parse operation binding the contract event 0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7.
-//
-// Solidity: event Deposit(address indexed depositor, address indexed onBehalfOf, uint256 amount, uint256 shares)
-func (_IVaultV2 *IVaultV2Filterer) ParseDeposit(log types.Log) (*IVaultV2Deposit, error) {
-	event := new(IVaultV2Deposit)
-	if err := _IVaultV2.contract.UnpackLog(event, "Deposit", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2DonateIterator is returned from FilterDonate and is used to iterate over the raw logs and unpacked data for Donate events raised by the IVaultV2 contract.
-type IVaultV2DonateIterator struct {
-	Event *IVaultV2Donate // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2DonateIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2Donate)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2Donate)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2DonateIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2DonateIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2Donate represents a Donate event raised by the IVaultV2 contract.
-type IVaultV2Donate struct {
-	Amount *big.Int
-	Raw    types.Log // Blockchain specific contextual infos
-}
-
-// FilterDonate is a free log retrieval operation binding the contract event 0x33ac262747c8397a2c737ef15aa625b857fa57c6987e46fe8590677c9a3b7a2e.
-//
-// Solidity: event Donate(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) FilterDonate(opts *bind.FilterOpts) (*IVaultV2DonateIterator, error) {
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Donate")
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2DonateIterator{contract: _IVaultV2.contract, event: "Donate", logs: logs, sub: sub}, nil
-}
-
-// WatchDonate is a free log subscription operation binding the contract event 0x33ac262747c8397a2c737ef15aa625b857fa57c6987e46fe8590677c9a3b7a2e.
-//
-// Solidity: event Donate(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) WatchDonate(opts *bind.WatchOpts, sink chan<- *IVaultV2Donate) (event.Subscription, error) {
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Donate")
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Donate)
-				if err := _IVaultV2.contract.UnpackLog(event, "Donate", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseDonate is a log parse operation binding the contract event 0x33ac262747c8397a2c737ef15aa625b857fa57c6987e46fe8590677c9a3b7a2e.
-//
-// Solidity: event Donate(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) ParseDonate(log types.Log) (*IVaultV2Donate, error) {
-	event := new(IVaultV2Donate)
-	if err := _IVaultV2.contract.UnpackLog(event, "Donate", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -2878,9 +1574,9 @@ type IVaultV2Initialize struct {
 	Raw    types.Log // Blockchain specific contextual infos
 }
 
-// FilterInitialize is a free log retrieval operation binding the contract event 0x650f363dcf5a924b4ebf66a583f0646fb0cee5eacf4ed68a3404d167ff2df7c1.
+// FilterInitialize is a free log retrieval operation binding the contract event 0xbbf5a13edd1b1ed3dbe1bcabac683ad6bad3a11cdbec977dd2a462fde3805a14.
 //
-// Solidity: event Initialize((string,string,address,address,uint48,bool,address,bool,uint256,address,address,address,address,address,address,address,address,address) params)
+// Solidity: event Initialize((string,string,address,bool,address,uint256,bool,address,address,address,address,address,address,address) params)
 func (_IVaultV2 *IVaultV2Filterer) FilterInitialize(opts *bind.FilterOpts) (*IVaultV2InitializeIterator, error) {
 
 	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Initialize")
@@ -2890,9 +1586,9 @@ func (_IVaultV2 *IVaultV2Filterer) FilterInitialize(opts *bind.FilterOpts) (*IVa
 	return &IVaultV2InitializeIterator{contract: _IVaultV2.contract, event: "Initialize", logs: logs, sub: sub}, nil
 }
 
-// WatchInitialize is a free log subscription operation binding the contract event 0x650f363dcf5a924b4ebf66a583f0646fb0cee5eacf4ed68a3404d167ff2df7c1.
+// WatchInitialize is a free log subscription operation binding the contract event 0xbbf5a13edd1b1ed3dbe1bcabac683ad6bad3a11cdbec977dd2a462fde3805a14.
 //
-// Solidity: event Initialize((string,string,address,address,uint48,bool,address,bool,uint256,address,address,address,address,address,address,address,address,address) params)
+// Solidity: event Initialize((string,string,address,bool,address,uint256,bool,address,address,address,address,address,address,address) params)
 func (_IVaultV2 *IVaultV2Filterer) WatchInitialize(opts *bind.WatchOpts, sink chan<- *IVaultV2Initialize) (event.Subscription, error) {
 
 	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Initialize")
@@ -2927,9 +1623,9 @@ func (_IVaultV2 *IVaultV2Filterer) WatchInitialize(opts *bind.WatchOpts, sink ch
 	}), nil
 }
 
-// ParseInitialize is a log parse operation binding the contract event 0x650f363dcf5a924b4ebf66a583f0646fb0cee5eacf4ed68a3404d167ff2df7c1.
+// ParseInitialize is a log parse operation binding the contract event 0xbbf5a13edd1b1ed3dbe1bcabac683ad6bad3a11cdbec977dd2a462fde3805a14.
 //
-// Solidity: event Initialize((string,string,address,address,uint48,bool,address,bool,uint256,address,address,address,address,address,address,address,address,address) params)
+// Solidity: event Initialize((string,string,address,bool,address,uint256,bool,address,address,address,address,address,address,address) params)
 func (_IVaultV2 *IVaultV2Filterer) ParseInitialize(log types.Log) (*IVaultV2Initialize, error) {
 	event := new(IVaultV2Initialize)
 	if err := _IVaultV2.contract.UnpackLog(event, "Initialize", log); err != nil {
@@ -2939,9 +1635,9 @@ func (_IVaultV2 *IVaultV2Filterer) ParseInitialize(log types.Log) (*IVaultV2Init
 	return event, nil
 }
 
-// IVaultV2InstantWithdrawIterator is returned from FilterInstantWithdraw and is used to iterate over the raw logs and unpacked data for InstantWithdraw events raised by the IVaultV2 contract.
-type IVaultV2InstantWithdrawIterator struct {
-	Event *IVaultV2InstantWithdraw // Event containing the contract specifics and raw log
+// IVaultV2PullIterator is returned from FilterPull and is used to iterate over the raw logs and unpacked data for Pull events raised by the IVaultV2 contract.
+type IVaultV2PullIterator struct {
+	Event *IVaultV2Pull // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -2955,7 +1651,7 @@ type IVaultV2InstantWithdrawIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2InstantWithdrawIterator) Next() bool {
+func (it *IVaultV2PullIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -2964,7 +1660,7 @@ func (it *IVaultV2InstantWithdrawIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2InstantWithdraw)
+			it.Event = new(IVaultV2Pull)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -2979,7 +1675,7 @@ func (it *IVaultV2InstantWithdrawIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2InstantWithdraw)
+		it.Event = new(IVaultV2Pull)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -2995,53 +1691,52 @@ func (it *IVaultV2InstantWithdrawIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2InstantWithdrawIterator) Error() error {
+func (it *IVaultV2PullIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2InstantWithdrawIterator) Close() error {
+func (it *IVaultV2PullIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2InstantWithdraw represents a InstantWithdraw event raised by the IVaultV2 contract.
-type IVaultV2InstantWithdraw struct {
-	Withdrawer   common.Address
-	Amount       *big.Int
-	BurnedShares *big.Int
-	Raw          types.Log // Blockchain specific contextual infos
+// IVaultV2Pull represents a Pull event raised by the IVaultV2 contract.
+type IVaultV2Pull struct {
+	Assets   *big.Int
+	Receiver common.Address
+	Raw      types.Log // Blockchain specific contextual infos
 }
 
-// FilterInstantWithdraw is a free log retrieval operation binding the contract event 0xab2daf3c146ca6416cbccd2a86ed2ba995e171ef6319df14a38aef01403a9c96.
+// FilterPull is a free log retrieval operation binding the contract event 0xd732b38a108d3e36408cf50fc7a4c5223556e15155834fac3927a92363f2d78e.
 //
-// Solidity: event InstantWithdraw(address indexed withdrawer, uint256 amount, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2Filterer) FilterInstantWithdraw(opts *bind.FilterOpts, withdrawer []common.Address) (*IVaultV2InstantWithdrawIterator, error) {
+// Solidity: event Pull(uint256 assets, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) FilterPull(opts *bind.FilterOpts, receiver []common.Address) (*IVaultV2PullIterator, error) {
 
-	var withdrawerRule []interface{}
-	for _, withdrawerItem := range withdrawer {
-		withdrawerRule = append(withdrawerRule, withdrawerItem)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "InstantWithdraw", withdrawerRule)
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Pull", receiverRule)
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2InstantWithdrawIterator{contract: _IVaultV2.contract, event: "InstantWithdraw", logs: logs, sub: sub}, nil
+	return &IVaultV2PullIterator{contract: _IVaultV2.contract, event: "Pull", logs: logs, sub: sub}, nil
 }
 
-// WatchInstantWithdraw is a free log subscription operation binding the contract event 0xab2daf3c146ca6416cbccd2a86ed2ba995e171ef6319df14a38aef01403a9c96.
+// WatchPull is a free log subscription operation binding the contract event 0xd732b38a108d3e36408cf50fc7a4c5223556e15155834fac3927a92363f2d78e.
 //
-// Solidity: event InstantWithdraw(address indexed withdrawer, uint256 amount, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2Filterer) WatchInstantWithdraw(opts *bind.WatchOpts, sink chan<- *IVaultV2InstantWithdraw, withdrawer []common.Address) (event.Subscription, error) {
+// Solidity: event Pull(uint256 assets, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) WatchPull(opts *bind.WatchOpts, sink chan<- *IVaultV2Pull, receiver []common.Address) (event.Subscription, error) {
 
-	var withdrawerRule []interface{}
-	for _, withdrawerItem := range withdrawer {
-		withdrawerRule = append(withdrawerRule, withdrawerItem)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "InstantWithdraw", withdrawerRule)
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Pull", receiverRule)
 	if err != nil {
 		return nil, err
 	}
@@ -3051,8 +1746,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchInstantWithdraw(opts *bind.WatchOpts, si
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2InstantWithdraw)
-				if err := _IVaultV2.contract.UnpackLog(event, "InstantWithdraw", log); err != nil {
+				event := new(IVaultV2Pull)
+				if err := _IVaultV2.contract.UnpackLog(event, "Pull", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -3073,21 +1768,21 @@ func (_IVaultV2 *IVaultV2Filterer) WatchInstantWithdraw(opts *bind.WatchOpts, si
 	}), nil
 }
 
-// ParseInstantWithdraw is a log parse operation binding the contract event 0xab2daf3c146ca6416cbccd2a86ed2ba995e171ef6319df14a38aef01403a9c96.
+// ParsePull is a log parse operation binding the contract event 0xd732b38a108d3e36408cf50fc7a4c5223556e15155834fac3927a92363f2d78e.
 //
-// Solidity: event InstantWithdraw(address indexed withdrawer, uint256 amount, uint256 burnedShares)
-func (_IVaultV2 *IVaultV2Filterer) ParseInstantWithdraw(log types.Log) (*IVaultV2InstantWithdraw, error) {
-	event := new(IVaultV2InstantWithdraw)
-	if err := _IVaultV2.contract.UnpackLog(event, "InstantWithdraw", log); err != nil {
+// Solidity: event Pull(uint256 assets, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) ParsePull(log types.Log) (*IVaultV2Pull, error) {
+	event := new(IVaultV2Pull)
+	if err := _IVaultV2.contract.UnpackLog(event, "Pull", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
 	return event, nil
 }
 
-// IVaultV2MigrateIterator is returned from FilterMigrate and is used to iterate over the raw logs and unpacked data for Migrate events raised by the IVaultV2 contract.
-type IVaultV2MigrateIterator struct {
-	Event *IVaultV2Migrate // Event containing the contract specifics and raw log
+// IVaultV2PushIterator is returned from FilterPush and is used to iterate over the raw logs and unpacked data for Push events raised by the IVaultV2 contract.
+type IVaultV2PushIterator struct {
+	Event *IVaultV2Push // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -3101,7 +1796,7 @@ type IVaultV2MigrateIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2MigrateIterator) Next() bool {
+func (it *IVaultV2PushIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -3110,7 +1805,7 @@ func (it *IVaultV2MigrateIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2Migrate)
+			it.Event = new(IVaultV2Push)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -3125,7 +1820,7 @@ func (it *IVaultV2MigrateIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2Migrate)
+		it.Event = new(IVaultV2Push)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -3141,43 +1836,52 @@ func (it *IVaultV2MigrateIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2MigrateIterator) Error() error {
+func (it *IVaultV2PushIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2MigrateIterator) Close() error {
+func (it *IVaultV2PushIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2Migrate represents a Migrate event raised by the IVaultV2 contract.
-type IVaultV2Migrate struct {
-	Params       IVaultV2MigrateParams
-	NewDelegator common.Address
-	NewSlasher   common.Address
-	Raw          types.Log // Blockchain specific contextual infos
+// IVaultV2Push represents a Push event raised by the IVaultV2 contract.
+type IVaultV2Push struct {
+	Assets *big.Int
+	Owner  common.Address
+	Raw    types.Log // Blockchain specific contextual infos
 }
 
-// FilterMigrate is a free log retrieval operation binding the contract event 0x49bf37d2569e6fea435da3e11e30505b25a1bc332b6a5173b6e74476a81ac0cb.
+// FilterPush is a free log retrieval operation binding the contract event 0x7e983771788a1b65d6dc0ecdf3fbc77d2d354dc3748aec0a4dcb505a28295e2a.
 //
-// Solidity: event Migrate((string,string,address,address,address,address,address,bytes,bytes) params, address newDelegator, address newSlasher)
-func (_IVaultV2 *IVaultV2Filterer) FilterMigrate(opts *bind.FilterOpts) (*IVaultV2MigrateIterator, error) {
+// Solidity: event Push(uint256 assets, address indexed owner)
+func (_IVaultV2 *IVaultV2Filterer) FilterPush(opts *bind.FilterOpts, owner []common.Address) (*IVaultV2PushIterator, error) {
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Migrate")
+	var ownerRule []interface{}
+	for _, ownerItem := range owner {
+		ownerRule = append(ownerRule, ownerItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Push", ownerRule)
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2MigrateIterator{contract: _IVaultV2.contract, event: "Migrate", logs: logs, sub: sub}, nil
+	return &IVaultV2PushIterator{contract: _IVaultV2.contract, event: "Push", logs: logs, sub: sub}, nil
 }
 
-// WatchMigrate is a free log subscription operation binding the contract event 0x49bf37d2569e6fea435da3e11e30505b25a1bc332b6a5173b6e74476a81ac0cb.
+// WatchPush is a free log subscription operation binding the contract event 0x7e983771788a1b65d6dc0ecdf3fbc77d2d354dc3748aec0a4dcb505a28295e2a.
 //
-// Solidity: event Migrate((string,string,address,address,address,address,address,bytes,bytes) params, address newDelegator, address newSlasher)
-func (_IVaultV2 *IVaultV2Filterer) WatchMigrate(opts *bind.WatchOpts, sink chan<- *IVaultV2Migrate) (event.Subscription, error) {
+// Solidity: event Push(uint256 assets, address indexed owner)
+func (_IVaultV2 *IVaultV2Filterer) WatchPush(opts *bind.WatchOpts, sink chan<- *IVaultV2Push, owner []common.Address) (event.Subscription, error) {
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Migrate")
+	var ownerRule []interface{}
+	for _, ownerItem := range owner {
+		ownerRule = append(ownerRule, ownerItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Push", ownerRule)
 	if err != nil {
 		return nil, err
 	}
@@ -3187,8 +1891,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchMigrate(opts *bind.WatchOpts, sink chan<
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Migrate)
-				if err := _IVaultV2.contract.UnpackLog(event, "Migrate", log); err != nil {
+				event := new(IVaultV2Push)
+				if err := _IVaultV2.contract.UnpackLog(event, "Push", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -3209,292 +1913,12 @@ func (_IVaultV2 *IVaultV2Filterer) WatchMigrate(opts *bind.WatchOpts, sink chan<
 	}), nil
 }
 
-// ParseMigrate is a log parse operation binding the contract event 0x49bf37d2569e6fea435da3e11e30505b25a1bc332b6a5173b6e74476a81ac0cb.
+// ParsePush is a log parse operation binding the contract event 0x7e983771788a1b65d6dc0ecdf3fbc77d2d354dc3748aec0a4dcb505a28295e2a.
 //
-// Solidity: event Migrate((string,string,address,address,address,address,address,bytes,bytes) params, address newDelegator, address newSlasher)
-func (_IVaultV2 *IVaultV2Filterer) ParseMigrate(log types.Log) (*IVaultV2Migrate, error) {
-	event := new(IVaultV2Migrate)
-	if err := _IVaultV2.contract.UnpackLog(event, "Migrate", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2OnSlashIterator is returned from FilterOnSlash and is used to iterate over the raw logs and unpacked data for OnSlash events raised by the IVaultV2 contract.
-type IVaultV2OnSlashIterator struct {
-	Event *IVaultV2OnSlash // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2OnSlashIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2OnSlash)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2OnSlash)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2OnSlashIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2OnSlashIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2OnSlash represents a OnSlash event raised by the IVaultV2 contract.
-type IVaultV2OnSlash struct {
-	Amount        *big.Int
-	SlashedAmount *big.Int
-	Raw           types.Log // Blockchain specific contextual infos
-}
-
-// FilterOnSlash is a free log retrieval operation binding the contract event 0x2b99884293d551451b145cf48341a86d08a355a86be8e2f0b22cea964226a093.
-//
-// Solidity: event OnSlash(uint256 amount, uint256 slashedAmount)
-func (_IVaultV2 *IVaultV2Filterer) FilterOnSlash(opts *bind.FilterOpts) (*IVaultV2OnSlashIterator, error) {
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "OnSlash")
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2OnSlashIterator{contract: _IVaultV2.contract, event: "OnSlash", logs: logs, sub: sub}, nil
-}
-
-// WatchOnSlash is a free log subscription operation binding the contract event 0x2b99884293d551451b145cf48341a86d08a355a86be8e2f0b22cea964226a093.
-//
-// Solidity: event OnSlash(uint256 amount, uint256 slashedAmount)
-func (_IVaultV2 *IVaultV2Filterer) WatchOnSlash(opts *bind.WatchOpts, sink chan<- *IVaultV2OnSlash) (event.Subscription, error) {
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "OnSlash")
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2OnSlash)
-				if err := _IVaultV2.contract.UnpackLog(event, "OnSlash", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseOnSlash is a log parse operation binding the contract event 0x2b99884293d551451b145cf48341a86d08a355a86be8e2f0b22cea964226a093.
-//
-// Solidity: event OnSlash(uint256 amount, uint256 slashedAmount)
-func (_IVaultV2 *IVaultV2Filterer) ParseOnSlash(log types.Log) (*IVaultV2OnSlash, error) {
-	event := new(IVaultV2OnSlash)
-	if err := _IVaultV2.contract.UnpackLog(event, "OnSlash", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2SetAdapterLimitIterator is returned from FilterSetAdapterLimit and is used to iterate over the raw logs and unpacked data for SetAdapterLimit events raised by the IVaultV2 contract.
-type IVaultV2SetAdapterLimitIterator struct {
-	Event *IVaultV2SetAdapterLimit // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2SetAdapterLimitIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2SetAdapterLimit)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2SetAdapterLimit)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2SetAdapterLimitIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2SetAdapterLimitIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2SetAdapterLimit represents a SetAdapterLimit event raised by the IVaultV2 contract.
-type IVaultV2SetAdapterLimit struct {
-	Adapter common.Address
-	Limit   *big.Int
-	Raw     types.Log // Blockchain specific contextual infos
-}
-
-// FilterSetAdapterLimit is a free log retrieval operation binding the contract event 0xc46a0292f919e4ce9780bd4e410e91b531f9b883ebc6b8953c5ce7692fd5d312.
-//
-// Solidity: event SetAdapterLimit(address indexed adapter, uint208 limit)
-func (_IVaultV2 *IVaultV2Filterer) FilterSetAdapterLimit(opts *bind.FilterOpts, adapter []common.Address) (*IVaultV2SetAdapterLimitIterator, error) {
-
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SetAdapterLimit", adapterRule)
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2SetAdapterLimitIterator{contract: _IVaultV2.contract, event: "SetAdapterLimit", logs: logs, sub: sub}, nil
-}
-
-// WatchSetAdapterLimit is a free log subscription operation binding the contract event 0xc46a0292f919e4ce9780bd4e410e91b531f9b883ebc6b8953c5ce7692fd5d312.
-//
-// Solidity: event SetAdapterLimit(address indexed adapter, uint208 limit)
-func (_IVaultV2 *IVaultV2Filterer) WatchSetAdapterLimit(opts *bind.WatchOpts, sink chan<- *IVaultV2SetAdapterLimit, adapter []common.Address) (event.Subscription, error) {
-
-	var adapterRule []interface{}
-	for _, adapterItem := range adapter {
-		adapterRule = append(adapterRule, adapterItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SetAdapterLimit", adapterRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2SetAdapterLimit)
-				if err := _IVaultV2.contract.UnpackLog(event, "SetAdapterLimit", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseSetAdapterLimit is a log parse operation binding the contract event 0xc46a0292f919e4ce9780bd4e410e91b531f9b883ebc6b8953c5ce7692fd5d312.
-//
-// Solidity: event SetAdapterLimit(address indexed adapter, uint208 limit)
-func (_IVaultV2 *IVaultV2Filterer) ParseSetAdapterLimit(log types.Log) (*IVaultV2SetAdapterLimit, error) {
-	event := new(IVaultV2SetAdapterLimit)
-	if err := _IVaultV2.contract.UnpackLog(event, "SetAdapterLimit", log); err != nil {
+// Solidity: event Push(uint256 assets, address indexed owner)
+func (_IVaultV2 *IVaultV2Filterer) ParsePush(log types.Log) (*IVaultV2Push, error) {
+	event := new(IVaultV2Push)
+	if err := _IVaultV2.contract.UnpackLog(event, "Push", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
@@ -4192,9 +2616,9 @@ func (_IVaultV2 *IVaultV2Filterer) ParseSetIsDepositLimit(log types.Log) (*IVaul
 	return event, nil
 }
 
-// IVaultV2SetSlasherIterator is returned from FilterSetSlasher and is used to iterate over the raw logs and unpacked data for SetSlasher events raised by the IVaultV2 contract.
-type IVaultV2SetSlasherIterator struct {
-	Event *IVaultV2SetSlasher // Event containing the contract specifics and raw log
+// IVaultV2SetManagementFeeIterator is returned from FilterSetManagementFee and is used to iterate over the raw logs and unpacked data for SetManagementFee events raised by the IVaultV2 contract.
+type IVaultV2SetManagementFeeIterator struct {
+	Event *IVaultV2SetManagementFee // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -4208,7 +2632,7 @@ type IVaultV2SetSlasherIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2SetSlasherIterator) Next() bool {
+func (it *IVaultV2SetManagementFeeIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -4217,7 +2641,7 @@ func (it *IVaultV2SetSlasherIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2SetSlasher)
+			it.Event = new(IVaultV2SetManagementFee)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -4232,7 +2656,7 @@ func (it *IVaultV2SetSlasherIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2SetSlasher)
+		it.Event = new(IVaultV2SetManagementFee)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -4248,204 +2672,52 @@ func (it *IVaultV2SetSlasherIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2SetSlasherIterator) Error() error {
+func (it *IVaultV2SetManagementFeeIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2SetSlasherIterator) Close() error {
+func (it *IVaultV2SetManagementFeeIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2SetSlasher represents a SetSlasher event raised by the IVaultV2 contract.
-type IVaultV2SetSlasher struct {
-	Slasher common.Address
-	Raw     types.Log // Blockchain specific contextual infos
-}
-
-// FilterSetSlasher is a free log retrieval operation binding the contract event 0xe7e4c932e03abddfe20f83af42c33627e816115c7ec2b168441f65dc14bfc3ba.
-//
-// Solidity: event SetSlasher(address indexed slasher)
-func (_IVaultV2 *IVaultV2Filterer) FilterSetSlasher(opts *bind.FilterOpts, slasher []common.Address) (*IVaultV2SetSlasherIterator, error) {
-
-	var slasherRule []interface{}
-	for _, slasherItem := range slasher {
-		slasherRule = append(slasherRule, slasherItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SetSlasher", slasherRule)
-	if err != nil {
-		return nil, err
-	}
-	return &IVaultV2SetSlasherIterator{contract: _IVaultV2.contract, event: "SetSlasher", logs: logs, sub: sub}, nil
-}
-
-// WatchSetSlasher is a free log subscription operation binding the contract event 0xe7e4c932e03abddfe20f83af42c33627e816115c7ec2b168441f65dc14bfc3ba.
-//
-// Solidity: event SetSlasher(address indexed slasher)
-func (_IVaultV2 *IVaultV2Filterer) WatchSetSlasher(opts *bind.WatchOpts, sink chan<- *IVaultV2SetSlasher, slasher []common.Address) (event.Subscription, error) {
-
-	var slasherRule []interface{}
-	for _, slasherItem := range slasher {
-		slasherRule = append(slasherRule, slasherItem)
-	}
-
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SetSlasher", slasherRule)
-	if err != nil {
-		return nil, err
-	}
-	return event.NewSubscription(func(quit <-chan struct{}) error {
-		defer sub.Unsubscribe()
-		for {
-			select {
-			case log := <-logs:
-				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2SetSlasher)
-				if err := _IVaultV2.contract.UnpackLog(event, "SetSlasher", log); err != nil {
-					return err
-				}
-				event.Raw = log
-
-				select {
-				case sink <- event:
-				case err := <-sub.Err():
-					return err
-				case <-quit:
-					return nil
-				}
-			case err := <-sub.Err():
-				return err
-			case <-quit:
-				return nil
-			}
-		}
-	}), nil
-}
-
-// ParseSetSlasher is a log parse operation binding the contract event 0xe7e4c932e03abddfe20f83af42c33627e816115c7ec2b168441f65dc14bfc3ba.
-//
-// Solidity: event SetSlasher(address indexed slasher)
-func (_IVaultV2 *IVaultV2Filterer) ParseSetSlasher(log types.Log) (*IVaultV2SetSlasher, error) {
-	event := new(IVaultV2SetSlasher)
-	if err := _IVaultV2.contract.UnpackLog(event, "SetSlasher", log); err != nil {
-		return nil, err
-	}
-	event.Raw = log
-	return event, nil
-}
-
-// IVaultV2SwapAdaptersIterator is returned from FilterSwapAdapters and is used to iterate over the raw logs and unpacked data for SwapAdapters events raised by the IVaultV2 contract.
-type IVaultV2SwapAdaptersIterator struct {
-	Event *IVaultV2SwapAdapters // Event containing the contract specifics and raw log
-
-	contract *bind.BoundContract // Generic contract to use for unpacking event data
-	event    string              // Event name to use for unpacking event data
-
-	logs chan types.Log        // Log channel receiving the found contract events
-	sub  ethereum.Subscription // Subscription for errors, completion and termination
-	done bool                  // Whether the subscription completed delivering logs
-	fail error                 // Occurred error to stop iteration
-}
-
-// Next advances the iterator to the subsequent event, returning whether there
-// are any more events found. In case of a retrieval or parsing error, false is
-// returned and Error() can be queried for the exact failure.
-func (it *IVaultV2SwapAdaptersIterator) Next() bool {
-	// If the iterator failed, stop iterating
-	if it.fail != nil {
-		return false
-	}
-	// If the iterator completed, deliver directly whatever's available
-	if it.done {
-		select {
-		case log := <-it.logs:
-			it.Event = new(IVaultV2SwapAdapters)
-			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-				it.fail = err
-				return false
-			}
-			it.Event.Raw = log
-			return true
-
-		default:
-			return false
-		}
-	}
-	// Iterator still in progress, wait for either a data or an error event
-	select {
-	case log := <-it.logs:
-		it.Event = new(IVaultV2SwapAdapters)
-		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
-			it.fail = err
-			return false
-		}
-		it.Event.Raw = log
-		return true
-
-	case err := <-it.sub.Err():
-		it.done = true
-		it.fail = err
-		return it.Next()
-	}
-}
-
-// Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2SwapAdaptersIterator) Error() error {
-	return it.fail
-}
-
-// Close terminates the iteration process, releasing any pending underlying
-// resources.
-func (it *IVaultV2SwapAdaptersIterator) Close() error {
-	it.sub.Unsubscribe()
-	return nil
-}
-
-// IVaultV2SwapAdapters represents a SwapAdapters event raised by the IVaultV2 contract.
-type IVaultV2SwapAdapters struct {
-	Adapter1 common.Address
-	Adapter2 common.Address
+// IVaultV2SetManagementFee represents a SetManagementFee event raised by the IVaultV2 contract.
+type IVaultV2SetManagementFee struct {
+	Fee      *big.Int
+	Receiver common.Address
 	Raw      types.Log // Blockchain specific contextual infos
 }
 
-// FilterSwapAdapters is a free log retrieval operation binding the contract event 0x50230392019880e94081f70d0afa878bc16c64b62bfed1d012d5ed9f6f2d991d.
+// FilterSetManagementFee is a free log retrieval operation binding the contract event 0x7fdd7f02425820fbdb2857a5af2bcf61347a9dc00fb775254391a87d89dc3c22.
 //
-// Solidity: event SwapAdapters(address indexed adapter1, address indexed adapter2)
-func (_IVaultV2 *IVaultV2Filterer) FilterSwapAdapters(opts *bind.FilterOpts, adapter1 []common.Address, adapter2 []common.Address) (*IVaultV2SwapAdaptersIterator, error) {
+// Solidity: event SetManagementFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) FilterSetManagementFee(opts *bind.FilterOpts, receiver []common.Address) (*IVaultV2SetManagementFeeIterator, error) {
 
-	var adapter1Rule []interface{}
-	for _, adapter1Item := range adapter1 {
-		adapter1Rule = append(adapter1Rule, adapter1Item)
-	}
-	var adapter2Rule []interface{}
-	for _, adapter2Item := range adapter2 {
-		adapter2Rule = append(adapter2Rule, adapter2Item)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SwapAdapters", adapter1Rule, adapter2Rule)
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SetManagementFee", receiverRule)
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2SwapAdaptersIterator{contract: _IVaultV2.contract, event: "SwapAdapters", logs: logs, sub: sub}, nil
+	return &IVaultV2SetManagementFeeIterator{contract: _IVaultV2.contract, event: "SetManagementFee", logs: logs, sub: sub}, nil
 }
 
-// WatchSwapAdapters is a free log subscription operation binding the contract event 0x50230392019880e94081f70d0afa878bc16c64b62bfed1d012d5ed9f6f2d991d.
+// WatchSetManagementFee is a free log subscription operation binding the contract event 0x7fdd7f02425820fbdb2857a5af2bcf61347a9dc00fb775254391a87d89dc3c22.
 //
-// Solidity: event SwapAdapters(address indexed adapter1, address indexed adapter2)
-func (_IVaultV2 *IVaultV2Filterer) WatchSwapAdapters(opts *bind.WatchOpts, sink chan<- *IVaultV2SwapAdapters, adapter1 []common.Address, adapter2 []common.Address) (event.Subscription, error) {
+// Solidity: event SetManagementFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) WatchSetManagementFee(opts *bind.WatchOpts, sink chan<- *IVaultV2SetManagementFee, receiver []common.Address) (event.Subscription, error) {
 
-	var adapter1Rule []interface{}
-	for _, adapter1Item := range adapter1 {
-		adapter1Rule = append(adapter1Rule, adapter1Item)
-	}
-	var adapter2Rule []interface{}
-	for _, adapter2Item := range adapter2 {
-		adapter2Rule = append(adapter2Rule, adapter2Item)
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SwapAdapters", adapter1Rule, adapter2Rule)
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SetManagementFee", receiverRule)
 	if err != nil {
 		return nil, err
 	}
@@ -4455,8 +2727,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchSwapAdapters(opts *bind.WatchOpts, sink 
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2SwapAdapters)
-				if err := _IVaultV2.contract.UnpackLog(event, "SwapAdapters", log); err != nil {
+				event := new(IVaultV2SetManagementFee)
+				if err := _IVaultV2.contract.UnpackLog(event, "SetManagementFee", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -4477,21 +2749,21 @@ func (_IVaultV2 *IVaultV2Filterer) WatchSwapAdapters(opts *bind.WatchOpts, sink 
 	}), nil
 }
 
-// ParseSwapAdapters is a log parse operation binding the contract event 0x50230392019880e94081f70d0afa878bc16c64b62bfed1d012d5ed9f6f2d991d.
+// ParseSetManagementFee is a log parse operation binding the contract event 0x7fdd7f02425820fbdb2857a5af2bcf61347a9dc00fb775254391a87d89dc3c22.
 //
-// Solidity: event SwapAdapters(address indexed adapter1, address indexed adapter2)
-func (_IVaultV2 *IVaultV2Filterer) ParseSwapAdapters(log types.Log) (*IVaultV2SwapAdapters, error) {
-	event := new(IVaultV2SwapAdapters)
-	if err := _IVaultV2.contract.UnpackLog(event, "SwapAdapters", log); err != nil {
+// Solidity: event SetManagementFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) ParseSetManagementFee(log types.Log) (*IVaultV2SetManagementFee, error) {
+	event := new(IVaultV2SetManagementFee)
+	if err := _IVaultV2.contract.UnpackLog(event, "SetManagementFee", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
 	return event, nil
 }
 
-// IVaultV2SyncOwedSlashIterator is returned from FilterSyncOwedSlash and is used to iterate over the raw logs and unpacked data for SyncOwedSlash events raised by the IVaultV2 contract.
-type IVaultV2SyncOwedSlashIterator struct {
-	Event *IVaultV2SyncOwedSlash // Event containing the contract specifics and raw log
+// IVaultV2SetPerformanceFeeIterator is returned from FilterSetPerformanceFee and is used to iterate over the raw logs and unpacked data for SetPerformanceFee events raised by the IVaultV2 contract.
+type IVaultV2SetPerformanceFeeIterator struct {
+	Event *IVaultV2SetPerformanceFee // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -4505,7 +2777,7 @@ type IVaultV2SyncOwedSlashIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2SyncOwedSlashIterator) Next() bool {
+func (it *IVaultV2SetPerformanceFeeIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -4514,7 +2786,7 @@ func (it *IVaultV2SyncOwedSlashIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2SyncOwedSlash)
+			it.Event = new(IVaultV2SetPerformanceFee)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -4529,7 +2801,7 @@ func (it *IVaultV2SyncOwedSlashIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2SyncOwedSlash)
+		it.Event = new(IVaultV2SetPerformanceFee)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -4545,41 +2817,52 @@ func (it *IVaultV2SyncOwedSlashIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2SyncOwedSlashIterator) Error() error {
+func (it *IVaultV2SetPerformanceFeeIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2SyncOwedSlashIterator) Close() error {
+func (it *IVaultV2SetPerformanceFeeIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2SyncOwedSlash represents a SyncOwedSlash event raised by the IVaultV2 contract.
-type IVaultV2SyncOwedSlash struct {
-	Amount *big.Int
-	Raw    types.Log // Blockchain specific contextual infos
+// IVaultV2SetPerformanceFee represents a SetPerformanceFee event raised by the IVaultV2 contract.
+type IVaultV2SetPerformanceFee struct {
+	Fee      *big.Int
+	Receiver common.Address
+	Raw      types.Log // Blockchain specific contextual infos
 }
 
-// FilterSyncOwedSlash is a free log retrieval operation binding the contract event 0x3cea97cd4c5defe1459bcf2518350c9cb741392d1a028b99b49fad7ac3c47e86.
+// FilterSetPerformanceFee is a free log retrieval operation binding the contract event 0xb34da6bc684962bf7736edd02c9595d94cf7a469ab5df1e3edc693a7cb332d93.
 //
-// Solidity: event SyncOwedSlash(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) FilterSyncOwedSlash(opts *bind.FilterOpts) (*IVaultV2SyncOwedSlashIterator, error) {
+// Solidity: event SetPerformanceFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) FilterSetPerformanceFee(opts *bind.FilterOpts, receiver []common.Address) (*IVaultV2SetPerformanceFeeIterator, error) {
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SyncOwedSlash")
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SetPerformanceFee", receiverRule)
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2SyncOwedSlashIterator{contract: _IVaultV2.contract, event: "SyncOwedSlash", logs: logs, sub: sub}, nil
+	return &IVaultV2SetPerformanceFeeIterator{contract: _IVaultV2.contract, event: "SetPerformanceFee", logs: logs, sub: sub}, nil
 }
 
-// WatchSyncOwedSlash is a free log subscription operation binding the contract event 0x3cea97cd4c5defe1459bcf2518350c9cb741392d1a028b99b49fad7ac3c47e86.
+// WatchSetPerformanceFee is a free log subscription operation binding the contract event 0xb34da6bc684962bf7736edd02c9595d94cf7a469ab5df1e3edc693a7cb332d93.
 //
-// Solidity: event SyncOwedSlash(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) WatchSyncOwedSlash(opts *bind.WatchOpts, sink chan<- *IVaultV2SyncOwedSlash) (event.Subscription, error) {
+// Solidity: event SetPerformanceFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) WatchSetPerformanceFee(opts *bind.WatchOpts, sink chan<- *IVaultV2SetPerformanceFee, receiver []common.Address) (event.Subscription, error) {
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SyncOwedSlash")
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SetPerformanceFee", receiverRule)
 	if err != nil {
 		return nil, err
 	}
@@ -4589,8 +2872,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchSyncOwedSlash(opts *bind.WatchOpts, sink
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2SyncOwedSlash)
-				if err := _IVaultV2.contract.UnpackLog(event, "SyncOwedSlash", log); err != nil {
+				event := new(IVaultV2SetPerformanceFee)
+				if err := _IVaultV2.contract.UnpackLog(event, "SetPerformanceFee", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -4611,21 +2894,21 @@ func (_IVaultV2 *IVaultV2Filterer) WatchSyncOwedSlash(opts *bind.WatchOpts, sink
 	}), nil
 }
 
-// ParseSyncOwedSlash is a log parse operation binding the contract event 0x3cea97cd4c5defe1459bcf2518350c9cb741392d1a028b99b49fad7ac3c47e86.
+// ParseSetPerformanceFee is a log parse operation binding the contract event 0xb34da6bc684962bf7736edd02c9595d94cf7a469ab5df1e3edc693a7cb332d93.
 //
-// Solidity: event SyncOwedSlash(uint256 amount)
-func (_IVaultV2 *IVaultV2Filterer) ParseSyncOwedSlash(log types.Log) (*IVaultV2SyncOwedSlash, error) {
-	event := new(IVaultV2SyncOwedSlash)
-	if err := _IVaultV2.contract.UnpackLog(event, "SyncOwedSlash", log); err != nil {
+// Solidity: event SetPerformanceFee(uint256 fee, address indexed receiver)
+func (_IVaultV2 *IVaultV2Filterer) ParseSetPerformanceFee(log types.Log) (*IVaultV2SetPerformanceFee, error) {
+	event := new(IVaultV2SetPerformanceFee)
+	if err := _IVaultV2.contract.UnpackLog(event, "SetPerformanceFee", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
 	return event, nil
 }
 
-// IVaultV2WithdrawIterator is returned from FilterWithdraw and is used to iterate over the raw logs and unpacked data for Withdraw events raised by the IVaultV2 contract.
-type IVaultV2WithdrawIterator struct {
-	Event *IVaultV2Withdraw // Event containing the contract specifics and raw log
+// IVaultV2SetWithdrawalQueueIterator is returned from FilterSetWithdrawalQueue and is used to iterate over the raw logs and unpacked data for SetWithdrawalQueue events raised by the IVaultV2 contract.
+type IVaultV2SetWithdrawalQueueIterator struct {
+	Event *IVaultV2SetWithdrawalQueue // Event containing the contract specifics and raw log
 
 	contract *bind.BoundContract // Generic contract to use for unpacking event data
 	event    string              // Event name to use for unpacking event data
@@ -4639,7 +2922,7 @@ type IVaultV2WithdrawIterator struct {
 // Next advances the iterator to the subsequent event, returning whether there
 // are any more events found. In case of a retrieval or parsing error, false is
 // returned and Error() can be queried for the exact failure.
-func (it *IVaultV2WithdrawIterator) Next() bool {
+func (it *IVaultV2SetWithdrawalQueueIterator) Next() bool {
 	// If the iterator failed, stop iterating
 	if it.fail != nil {
 		return false
@@ -4648,7 +2931,7 @@ func (it *IVaultV2WithdrawIterator) Next() bool {
 	if it.done {
 		select {
 		case log := <-it.logs:
-			it.Event = new(IVaultV2Withdraw)
+			it.Event = new(IVaultV2SetWithdrawalQueue)
 			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 				it.fail = err
 				return false
@@ -4663,7 +2946,7 @@ func (it *IVaultV2WithdrawIterator) Next() bool {
 	// Iterator still in progress, wait for either a data or an error event
 	select {
 	case log := <-it.logs:
-		it.Event = new(IVaultV2Withdraw)
+		it.Event = new(IVaultV2SetWithdrawalQueue)
 		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
 			it.fail = err
 			return false
@@ -4679,64 +2962,51 @@ func (it *IVaultV2WithdrawIterator) Next() bool {
 }
 
 // Error returns any retrieval or parsing error occurred during filtering.
-func (it *IVaultV2WithdrawIterator) Error() error {
+func (it *IVaultV2SetWithdrawalQueueIterator) Error() error {
 	return it.fail
 }
 
 // Close terminates the iteration process, releasing any pending underlying
 // resources.
-func (it *IVaultV2WithdrawIterator) Close() error {
+func (it *IVaultV2SetWithdrawalQueueIterator) Close() error {
 	it.sub.Unsubscribe()
 	return nil
 }
 
-// IVaultV2Withdraw represents a Withdraw event raised by the IVaultV2 contract.
-type IVaultV2Withdraw struct {
-	Withdrawer   common.Address
-	Claimer      common.Address
-	Amount       *big.Int
-	BurnedShares *big.Int
-	MintedShares *big.Int
-	Index        *big.Int
-	Raw          types.Log // Blockchain specific contextual infos
+// IVaultV2SetWithdrawalQueue represents a SetWithdrawalQueue event raised by the IVaultV2 contract.
+type IVaultV2SetWithdrawalQueue struct {
+	WithdrawalQueue common.Address
+	Raw             types.Log // Blockchain specific contextual infos
 }
 
-// FilterWithdraw is a free log retrieval operation binding the contract event 0x7ff9a08662c21e17b8071f3aef03a9712ea9d3824dfb0139bba272915d59a919.
+// FilterSetWithdrawalQueue is a free log retrieval operation binding the contract event 0x754f348799e85fd8a8e2c9273d677d3e7275ca1e49dd980c9d5f5f0f0134e091.
 //
-// Solidity: event Withdraw(address indexed withdrawer, address indexed claimer, uint256 amount, uint256 burnedShares, uint256 mintedShares, uint256 index)
-func (_IVaultV2 *IVaultV2Filterer) FilterWithdraw(opts *bind.FilterOpts, withdrawer []common.Address, claimer []common.Address) (*IVaultV2WithdrawIterator, error) {
+// Solidity: event SetWithdrawalQueue(address indexed withdrawalQueue)
+func (_IVaultV2 *IVaultV2Filterer) FilterSetWithdrawalQueue(opts *bind.FilterOpts, withdrawalQueue []common.Address) (*IVaultV2SetWithdrawalQueueIterator, error) {
 
-	var withdrawerRule []interface{}
-	for _, withdrawerItem := range withdrawer {
-		withdrawerRule = append(withdrawerRule, withdrawerItem)
-	}
-	var claimerRule []interface{}
-	for _, claimerItem := range claimer {
-		claimerRule = append(claimerRule, claimerItem)
+	var withdrawalQueueRule []interface{}
+	for _, withdrawalQueueItem := range withdrawalQueue {
+		withdrawalQueueRule = append(withdrawalQueueRule, withdrawalQueueItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "Withdraw", withdrawerRule, claimerRule)
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "SetWithdrawalQueue", withdrawalQueueRule)
 	if err != nil {
 		return nil, err
 	}
-	return &IVaultV2WithdrawIterator{contract: _IVaultV2.contract, event: "Withdraw", logs: logs, sub: sub}, nil
+	return &IVaultV2SetWithdrawalQueueIterator{contract: _IVaultV2.contract, event: "SetWithdrawalQueue", logs: logs, sub: sub}, nil
 }
 
-// WatchWithdraw is a free log subscription operation binding the contract event 0x7ff9a08662c21e17b8071f3aef03a9712ea9d3824dfb0139bba272915d59a919.
+// WatchSetWithdrawalQueue is a free log subscription operation binding the contract event 0x754f348799e85fd8a8e2c9273d677d3e7275ca1e49dd980c9d5f5f0f0134e091.
 //
-// Solidity: event Withdraw(address indexed withdrawer, address indexed claimer, uint256 amount, uint256 burnedShares, uint256 mintedShares, uint256 index)
-func (_IVaultV2 *IVaultV2Filterer) WatchWithdraw(opts *bind.WatchOpts, sink chan<- *IVaultV2Withdraw, withdrawer []common.Address, claimer []common.Address) (event.Subscription, error) {
+// Solidity: event SetWithdrawalQueue(address indexed withdrawalQueue)
+func (_IVaultV2 *IVaultV2Filterer) WatchSetWithdrawalQueue(opts *bind.WatchOpts, sink chan<- *IVaultV2SetWithdrawalQueue, withdrawalQueue []common.Address) (event.Subscription, error) {
 
-	var withdrawerRule []interface{}
-	for _, withdrawerItem := range withdrawer {
-		withdrawerRule = append(withdrawerRule, withdrawerItem)
-	}
-	var claimerRule []interface{}
-	for _, claimerItem := range claimer {
-		claimerRule = append(claimerRule, claimerItem)
+	var withdrawalQueueRule []interface{}
+	for _, withdrawalQueueItem := range withdrawalQueue {
+		withdrawalQueueRule = append(withdrawalQueueRule, withdrawalQueueItem)
 	}
 
-	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "Withdraw", withdrawerRule, claimerRule)
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "SetWithdrawalQueue", withdrawalQueueRule)
 	if err != nil {
 		return nil, err
 	}
@@ -4746,8 +3016,8 @@ func (_IVaultV2 *IVaultV2Filterer) WatchWithdraw(opts *bind.WatchOpts, sink chan
 			select {
 			case log := <-logs:
 				// New log arrived, parse the event and forward to the user
-				event := new(IVaultV2Withdraw)
-				if err := _IVaultV2.contract.UnpackLog(event, "Withdraw", log); err != nil {
+				event := new(IVaultV2SetWithdrawalQueue)
+				if err := _IVaultV2.contract.UnpackLog(event, "SetWithdrawalQueue", log); err != nil {
 					return err
 				}
 				event.Raw = log
@@ -4768,12 +3038,158 @@ func (_IVaultV2 *IVaultV2Filterer) WatchWithdraw(opts *bind.WatchOpts, sink chan
 	}), nil
 }
 
-// ParseWithdraw is a log parse operation binding the contract event 0x7ff9a08662c21e17b8071f3aef03a9712ea9d3824dfb0139bba272915d59a919.
+// ParseSetWithdrawalQueue is a log parse operation binding the contract event 0x754f348799e85fd8a8e2c9273d677d3e7275ca1e49dd980c9d5f5f0f0134e091.
 //
-// Solidity: event Withdraw(address indexed withdrawer, address indexed claimer, uint256 amount, uint256 burnedShares, uint256 mintedShares, uint256 index)
-func (_IVaultV2 *IVaultV2Filterer) ParseWithdraw(log types.Log) (*IVaultV2Withdraw, error) {
-	event := new(IVaultV2Withdraw)
-	if err := _IVaultV2.contract.UnpackLog(event, "Withdraw", log); err != nil {
+// Solidity: event SetWithdrawalQueue(address indexed withdrawalQueue)
+func (_IVaultV2 *IVaultV2Filterer) ParseSetWithdrawalQueue(log types.Log) (*IVaultV2SetWithdrawalQueue, error) {
+	event := new(IVaultV2SetWithdrawalQueue)
+	if err := _IVaultV2.contract.UnpackLog(event, "SetWithdrawalQueue", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// IVaultV2UpdateProtocolFeeIterator is returned from FilterUpdateProtocolFee and is used to iterate over the raw logs and unpacked data for UpdateProtocolFee events raised by the IVaultV2 contract.
+type IVaultV2UpdateProtocolFeeIterator struct {
+	Event *IVaultV2UpdateProtocolFee // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *IVaultV2UpdateProtocolFeeIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(IVaultV2UpdateProtocolFee)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(IVaultV2UpdateProtocolFee)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *IVaultV2UpdateProtocolFeeIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *IVaultV2UpdateProtocolFeeIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// IVaultV2UpdateProtocolFee represents a UpdateProtocolFee event raised by the IVaultV2 contract.
+type IVaultV2UpdateProtocolFee struct {
+	Receiver       common.Address
+	ManagementFee  *big.Int
+	PerformanceFee *big.Int
+	Raw            types.Log // Blockchain specific contextual infos
+}
+
+// FilterUpdateProtocolFee is a free log retrieval operation binding the contract event 0xe0317d2dfc8a343ba6f58ba1ea66140c1bbda69c52250f8fd297e4d566c8d672.
+//
+// Solidity: event UpdateProtocolFee(address indexed receiver, uint96 managementFee, uint96 performanceFee)
+func (_IVaultV2 *IVaultV2Filterer) FilterUpdateProtocolFee(opts *bind.FilterOpts, receiver []common.Address) (*IVaultV2UpdateProtocolFeeIterator, error) {
+
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.FilterLogs(opts, "UpdateProtocolFee", receiverRule)
+	if err != nil {
+		return nil, err
+	}
+	return &IVaultV2UpdateProtocolFeeIterator{contract: _IVaultV2.contract, event: "UpdateProtocolFee", logs: logs, sub: sub}, nil
+}
+
+// WatchUpdateProtocolFee is a free log subscription operation binding the contract event 0xe0317d2dfc8a343ba6f58ba1ea66140c1bbda69c52250f8fd297e4d566c8d672.
+//
+// Solidity: event UpdateProtocolFee(address indexed receiver, uint96 managementFee, uint96 performanceFee)
+func (_IVaultV2 *IVaultV2Filterer) WatchUpdateProtocolFee(opts *bind.WatchOpts, sink chan<- *IVaultV2UpdateProtocolFee, receiver []common.Address) (event.Subscription, error) {
+
+	var receiverRule []interface{}
+	for _, receiverItem := range receiver {
+		receiverRule = append(receiverRule, receiverItem)
+	}
+
+	logs, sub, err := _IVaultV2.contract.WatchLogs(opts, "UpdateProtocolFee", receiverRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(IVaultV2UpdateProtocolFee)
+				if err := _IVaultV2.contract.UnpackLog(event, "UpdateProtocolFee", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseUpdateProtocolFee is a log parse operation binding the contract event 0xe0317d2dfc8a343ba6f58ba1ea66140c1bbda69c52250f8fd297e4d566c8d672.
+//
+// Solidity: event UpdateProtocolFee(address indexed receiver, uint96 managementFee, uint96 performanceFee)
+func (_IVaultV2 *IVaultV2Filterer) ParseUpdateProtocolFee(log types.Log) (*IVaultV2UpdateProtocolFee, error) {
+	event := new(IVaultV2UpdateProtocolFee)
+	if err := _IVaultV2.contract.UnpackLog(event, "UpdateProtocolFee", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

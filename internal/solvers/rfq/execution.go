@@ -44,17 +44,16 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID         int64
-	executor        common.Address
-	curatorRegistry common.Address
-	orderLimit      int
-	vaults          []common.Address
-	backend         orderBackend
-	store           *store
-	reader          *reader
-	txm             txSender
-	log             logr.Logger
-	now             func() time.Time
+	chainID    int64
+	executor   common.Address
+	orderLimit int
+	vaults     []recoveryVault
+	backend    orderBackend
+	store      *store
+	reader     *reader
+	txm        txSender
+	log        logr.Logger
+	now        func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -265,8 +264,8 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 	if err != nil {
 		return nil, err
 	}
-	// Direct inventories are filtered to vaults this executor is authorized to fill through.
-	inv, err := e.reader.readPermissionedVaultInventories(ctx, e.executor, e.curatorRegistry, order.Request.TokenIn, e.vaults)
+	// Direct inventories are filtered to adapters this executor is authorized to fill through.
+	inv, err := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
 	if err != nil {
 		return nil, err
 	}
@@ -278,8 +277,8 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 	if err != nil {
 		return nil, err
 	}
-	assets := matchingAssets(inv, outputToken)
-	oracle, err := e.reader.amountsOut(ctx, order.Request.TokenIn, assets, order.Request.AmountIn)
+	matching := matchingInventories(inv, outputToken)
+	oracle, err := e.reader.amountsOut(ctx, order.Request.TokenIn, matching, order.Request.AmountIn)
 	if err != nil {
 		return nil, err
 	}
@@ -385,11 +384,15 @@ func toDiscountSwapInput(
 	if err != nil {
 		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: protocolSignature: %w", err)
 	}
+	// Mirrors buildDiscountSwapInputs in discounts.ts: the outer adapter comes from the resolved
+	// discount's adapter, the inner Discount no longer carries the vault field, and the input drops
+	// amountOut.
 	return executor.IReactorDiscountSwapInput{
-		DiscountSwap: executor.IInstantRedemptionAdapterDiscountSwap{
-			Discount: executor.IInstantRedemptionAdapterDiscount{
-				Vault: common.HexToAddress(d.Adapter), TokenToRedeem: common.HexToAddress(d.TokenToRedeem),
-				Discount: discount, Signer: common.HexToAddress(d.Signer), Protocol: common.HexToAddress(d.Protocol),
+		Adapter: common.HexToAddress(d.Adapter),
+		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
+			Discount: executor.ILiquidLaneAdapterDiscount{
+				TokenToRedeem: common.HexToAddress(d.TokenToRedeem),
+				Discount:      discount, Signer: common.HexToAddress(d.Signer), Protocol: common.HexToAddress(d.Protocol),
 				Nonce: nonce, Deadline: big.NewInt(d.Deadline),
 			},
 			SignerSignature:  signerSig,
@@ -398,7 +401,6 @@ func toDiscountSwapInput(
 		ProtocolSignature: protocolSig,
 		Recipient:         recipient,
 		AmountIn:          new(big.Int).Set(leg.AmountIn),
-		AmountOut:         new(big.Int).Set(leg.AmountOut),
 	}, nil
 }
 

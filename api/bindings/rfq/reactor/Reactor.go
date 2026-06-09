@@ -29,9 +29,8 @@ var (
 	_ = abi.ConvertType
 )
 
-// IInstantRedemptionAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterDiscount struct {
-	Vault         common.Address
+// ILiquidLaneAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscount struct {
 	TokenToRedeem common.Address
 	Discount      *big.Int
 	Signer        common.Address
@@ -40,17 +39,16 @@ type IInstantRedemptionAdapterDiscount struct {
 	Deadline      *big.Int
 }
 
-// IInstantRedemptionAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterDiscountSwap struct {
-	Discount         IInstantRedemptionAdapterDiscount
+// ILiquidLaneAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscountSwap struct {
+	Discount         ILiquidLaneAdapterDiscount
 	SignerSignature  []byte
 	ProtocolDeadline *big.Int
 }
 
-// IInstantRedemptionAdapterSwap is an auto generated low-level Go binding around an user-defined struct.
-type IInstantRedemptionAdapterSwap struct {
+// ILiquidLaneAdapterSwap is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterSwap struct {
 	Recipient common.Address
-	Vault     common.Address
 	TokenIn   common.Address
 	AmountIn  *big.Int
 	AmountOut *big.Int
@@ -58,11 +56,11 @@ type IInstantRedemptionAdapterSwap struct {
 
 // IReactorDiscountSwapInput is an auto generated low-level Go binding around an user-defined struct.
 type IReactorDiscountSwapInput struct {
-	DiscountSwap      IInstantRedemptionAdapterDiscountSwap
+	Adapter           common.Address
+	DiscountSwap      ILiquidLaneAdapterDiscountSwap
 	ProtocolSignature []byte
 	Recipient         common.Address
 	AmountIn          *big.Int
-	AmountOut         *big.Int
 }
 
 // IReactorOrder is an auto generated low-level Go binding around an user-defined struct.
@@ -90,9 +88,15 @@ type IReactorRequest struct {
 	Protocol common.Address
 }
 
+// IReactorSwapInput is an auto generated low-level Go binding around an user-defined struct.
+type IReactorSwapInput struct {
+	Adapter common.Address
+	Swap    ILiquidLaneAdapterSwap
+}
+
 // ReactorMetaData contains all meta data concerning the Reactor contract.
 var ReactorMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"permit2\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIInstantRedemptionAdapter.Swap[]\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.Discount\",\"components\":[{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIInstantRedemptionAdapter.Swap[]\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structIInstantRedemptionAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vault\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"Fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"InvalidAmountIn\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidFiller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidOutput\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidProtocolSignature\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidTokenIn\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"liquidLaneAdapterFactory\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"LIQUID_LANE_ADAPTER_FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.SwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"discountSwapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.DiscountSwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.SwapInput[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapInput\",\"type\":\"tuple\",\"internalType\":\"structIReactor.SwapInput\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Swap\",\"components\":[{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]}]},{\"name\":\"executorData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"invalidateNonce\",\"inputs\":[{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isUsedNonce\",\"inputs\":[{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"used\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"EIP712DomainChanged\",\"inputs\":[],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Fill\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structIReactor.Order\",\"components\":[{\"name\":\"request\",\"type\":\"tuple\",\"internalType\":\"structIReactor.Request\",\"components\":[{\"name\":\"tokenIn\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structIReactor.Output[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"swapperSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"filler\",\"type\":\"address\",\"internalType\":\"address\"}]}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"InvalidateNonce\",\"inputs\":[{\"name\":\"swapper\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"ExpiredRequest\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"FailedCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientBalance\",\"inputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"needed\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"InvalidAdapter\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidAmountIn\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidFiller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidOutput\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidProtocolSignature\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidShortString\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidTokenIn\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NonceUsed\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"StringTooLong\",\"inputs\":[{\"name\":\"str\",\"type\":\"string\",\"internalType\":\"string\"}]}]",
 }
 
 // ReactorABI is the input ABI used to generate the binding from.
@@ -241,6 +245,37 @@ func (_Reactor *ReactorTransactorRaw) Transact(opts *bind.TransactOpts, method s
 	return _Reactor.Contract.contract.Transact(opts, method, params...)
 }
 
+// LIQUIDLANEADAPTERFACTORY is a free data retrieval call binding the contract method 0x2f1b87ff.
+//
+// Solidity: function LIQUID_LANE_ADAPTER_FACTORY() view returns(address)
+func (_Reactor *ReactorCaller) LIQUIDLANEADAPTERFACTORY(opts *bind.CallOpts) (common.Address, error) {
+	var out []interface{}
+	err := _Reactor.contract.Call(opts, &out, "LIQUID_LANE_ADAPTER_FACTORY")
+
+	if err != nil {
+		return *new(common.Address), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+
+	return out0, err
+
+}
+
+// LIQUIDLANEADAPTERFACTORY is a free data retrieval call binding the contract method 0x2f1b87ff.
+//
+// Solidity: function LIQUID_LANE_ADAPTER_FACTORY() view returns(address)
+func (_Reactor *ReactorSession) LIQUIDLANEADAPTERFACTORY() (common.Address, error) {
+	return _Reactor.Contract.LIQUIDLANEADAPTERFACTORY(&_Reactor.CallOpts)
+}
+
+// LIQUIDLANEADAPTERFACTORY is a free data retrieval call binding the contract method 0x2f1b87ff.
+//
+// Solidity: function LIQUID_LANE_ADAPTER_FACTORY() view returns(address)
+func (_Reactor *ReactorCallerSession) LIQUIDLANEADAPTERFACTORY() (common.Address, error) {
+	return _Reactor.Contract.LIQUIDLANEADAPTERFACTORY(&_Reactor.CallOpts)
+}
+
 // Eip712Domain is a free data retrieval call binding the contract method 0x84b0196e.
 //
 // Solidity: function eip712Domain() view returns(bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)
@@ -311,67 +346,119 @@ func (_Reactor *ReactorCallerSession) Eip712Domain() (struct {
 	return _Reactor.Contract.Eip712Domain(&_Reactor.CallOpts)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// IsUsedNonce is a free data retrieval call binding the contract method 0x0ee60fa7.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Reactor *ReactorTransactor) Fill(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function isUsedNonce(address swapper, uint256 nonce) view returns(bool used)
+func (_Reactor *ReactorCaller) IsUsedNonce(opts *bind.CallOpts, swapper common.Address, nonce *big.Int) (bool, error) {
+	var out []interface{}
+	err := _Reactor.contract.Call(opts, &out, "isUsedNonce", swapper, nonce)
+
+	if err != nil {
+		return *new(bool), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
+
+	return out0, err
+
+}
+
+// IsUsedNonce is a free data retrieval call binding the contract method 0x0ee60fa7.
+//
+// Solidity: function isUsedNonce(address swapper, uint256 nonce) view returns(bool used)
+func (_Reactor *ReactorSession) IsUsedNonce(swapper common.Address, nonce *big.Int) (bool, error) {
+	return _Reactor.Contract.IsUsedNonce(&_Reactor.CallOpts, swapper, nonce)
+}
+
+// IsUsedNonce is a free data retrieval call binding the contract method 0x0ee60fa7.
+//
+// Solidity: function isUsedNonce(address swapper, uint256 nonce) view returns(bool used)
+func (_Reactor *ReactorCallerSession) IsUsedNonce(swapper common.Address, nonce *big.Int) (bool, error) {
+	return _Reactor.Contract.IsUsedNonce(&_Reactor.CallOpts, swapper, nonce)
+}
+
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
+//
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Reactor *ReactorTransactor) Fill(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.contract.Transact(opts, "fill", order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Reactor *ReactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Reactor *ReactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.Contract.Fill(&_Reactor.TransactOpts, order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill is a paid mutator transaction binding the contract method 0x0a92fc9d.
+// Fill is a paid mutator transaction binding the contract method 0x2b137442.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, (((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[] discountSwapInputs, bytes executorData) returns()
-func (_Reactor *ReactorTransactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, (address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[] discountSwapInputs, bytes executorData) returns()
+func (_Reactor *ReactorTransactorSession) Fill(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, discountSwapInputs []IReactorDiscountSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.Contract.Fill(&_Reactor.TransactOpts, order, protocolSignature, swapInputs, discountSwapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Reactor *ReactorTransactor) Fill0(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Reactor *ReactorTransactor) Fill0(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.contract.Transact(opts, "fill0", order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Reactor *ReactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Reactor *ReactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.Contract.Fill0(&_Reactor.TransactOpts, order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill0 is a paid mutator transaction binding the contract method 0x3240cc69.
+// Fill0 is a paid mutator transaction binding the contract method 0x33891b08.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256)[] swapInputs, bytes executorData) returns()
-func (_Reactor *ReactorTransactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256))[] swapInputs, bytes executorData) returns()
+func (_Reactor *ReactorTransactorSession) Fill0(order IReactorOrder, protocolSignature []byte, swapInputs []IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
 	return _Reactor.Contract.Fill0(&_Reactor.TransactOpts, order, protocolSignature, swapInputs, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Reactor *ReactorTransactor) Fill1(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Reactor.contract.Transact(opts, "fill1", order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Reactor *ReactorTransactor) Fill1(opts *bind.TransactOpts, order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Reactor.contract.Transact(opts, "fill1", order, protocolSignature, swapInput, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Reactor *ReactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Reactor.Contract.Fill1(&_Reactor.TransactOpts, order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Reactor *ReactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Reactor.Contract.Fill1(&_Reactor.TransactOpts, order, protocolSignature, swapInput, executorData)
 }
 
-// Fill1 is a paid mutator transaction binding the contract method 0xf1a7b5bb.
+// Fill1 is a paid mutator transaction binding the contract method 0xc1c2b99f.
 //
-// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,address,address,uint256,uint256) swap, bytes executorData) returns()
-func (_Reactor *ReactorTransactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swap IInstantRedemptionAdapterSwap, executorData []byte) (*types.Transaction, error) {
-	return _Reactor.Contract.Fill1(&_Reactor.TransactOpts, order, protocolSignature, swap, executorData)
+// Solidity: function fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address) order, bytes protocolSignature, (address,(address,address,uint256,uint256)) swapInput, bytes executorData) returns()
+func (_Reactor *ReactorTransactorSession) Fill1(order IReactorOrder, protocolSignature []byte, swapInput IReactorSwapInput, executorData []byte) (*types.Transaction, error) {
+	return _Reactor.Contract.Fill1(&_Reactor.TransactOpts, order, protocolSignature, swapInput, executorData)
+}
+
+// InvalidateNonce is a paid mutator transaction binding the contract method 0xb70e36f0.
+//
+// Solidity: function invalidateNonce(uint256 nonce) returns()
+func (_Reactor *ReactorTransactor) InvalidateNonce(opts *bind.TransactOpts, nonce *big.Int) (*types.Transaction, error) {
+	return _Reactor.contract.Transact(opts, "invalidateNonce", nonce)
+}
+
+// InvalidateNonce is a paid mutator transaction binding the contract method 0xb70e36f0.
+//
+// Solidity: function invalidateNonce(uint256 nonce) returns()
+func (_Reactor *ReactorSession) InvalidateNonce(nonce *big.Int) (*types.Transaction, error) {
+	return _Reactor.Contract.InvalidateNonce(&_Reactor.TransactOpts, nonce)
+}
+
+// InvalidateNonce is a paid mutator transaction binding the contract method 0xb70e36f0.
+//
+// Solidity: function invalidateNonce(uint256 nonce) returns()
+func (_Reactor *ReactorTransactorSession) InvalidateNonce(nonce *big.Int) (*types.Transaction, error) {
+	return _Reactor.Contract.InvalidateNonce(&_Reactor.TransactOpts, nonce)
 }
 
 // Receive is a paid mutator transaction binding the contract receive function.
@@ -393,6 +480,139 @@ func (_Reactor *ReactorSession) Receive() (*types.Transaction, error) {
 // Solidity: receive() payable returns()
 func (_Reactor *ReactorTransactorSession) Receive() (*types.Transaction, error) {
 	return _Reactor.Contract.Receive(&_Reactor.TransactOpts)
+}
+
+// ReactorEIP712DomainChangedIterator is returned from FilterEIP712DomainChanged and is used to iterate over the raw logs and unpacked data for EIP712DomainChanged events raised by the Reactor contract.
+type ReactorEIP712DomainChangedIterator struct {
+	Event *ReactorEIP712DomainChanged // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *ReactorEIP712DomainChangedIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(ReactorEIP712DomainChanged)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(ReactorEIP712DomainChanged)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *ReactorEIP712DomainChangedIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *ReactorEIP712DomainChangedIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// ReactorEIP712DomainChanged represents a EIP712DomainChanged event raised by the Reactor contract.
+type ReactorEIP712DomainChanged struct {
+	Raw types.Log // Blockchain specific contextual infos
+}
+
+// FilterEIP712DomainChanged is a free log retrieval operation binding the contract event 0x0a6387c9ea3628b88a633bb4f3b151770f70085117a15f9bf3787cda53f13d31.
+//
+// Solidity: event EIP712DomainChanged()
+func (_Reactor *ReactorFilterer) FilterEIP712DomainChanged(opts *bind.FilterOpts) (*ReactorEIP712DomainChangedIterator, error) {
+
+	logs, sub, err := _Reactor.contract.FilterLogs(opts, "EIP712DomainChanged")
+	if err != nil {
+		return nil, err
+	}
+	return &ReactorEIP712DomainChangedIterator{contract: _Reactor.contract, event: "EIP712DomainChanged", logs: logs, sub: sub}, nil
+}
+
+// WatchEIP712DomainChanged is a free log subscription operation binding the contract event 0x0a6387c9ea3628b88a633bb4f3b151770f70085117a15f9bf3787cda53f13d31.
+//
+// Solidity: event EIP712DomainChanged()
+func (_Reactor *ReactorFilterer) WatchEIP712DomainChanged(opts *bind.WatchOpts, sink chan<- *ReactorEIP712DomainChanged) (event.Subscription, error) {
+
+	logs, sub, err := _Reactor.contract.WatchLogs(opts, "EIP712DomainChanged")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(ReactorEIP712DomainChanged)
+				if err := _Reactor.contract.UnpackLog(event, "EIP712DomainChanged", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseEIP712DomainChanged is a log parse operation binding the contract event 0x0a6387c9ea3628b88a633bb4f3b151770f70085117a15f9bf3787cda53f13d31.
+//
+// Solidity: event EIP712DomainChanged()
+func (_Reactor *ReactorFilterer) ParseEIP712DomainChanged(log types.Log) (*ReactorEIP712DomainChanged, error) {
+	event := new(ReactorEIP712DomainChanged)
+	if err := _Reactor.contract.UnpackLog(event, "EIP712DomainChanged", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
 }
 
 // ReactorFillIterator is returned from FilterFill and is used to iterate over the raw logs and unpacked data for Fill events raised by the Reactor contract.
@@ -523,6 +743,151 @@ func (_Reactor *ReactorFilterer) WatchFill(opts *bind.WatchOpts, sink chan<- *Re
 func (_Reactor *ReactorFilterer) ParseFill(log types.Log) (*ReactorFill, error) {
 	event := new(ReactorFill)
 	if err := _Reactor.contract.UnpackLog(event, "Fill", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// ReactorInvalidateNonceIterator is returned from FilterInvalidateNonce and is used to iterate over the raw logs and unpacked data for InvalidateNonce events raised by the Reactor contract.
+type ReactorInvalidateNonceIterator struct {
+	Event *ReactorInvalidateNonce // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *ReactorInvalidateNonceIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(ReactorInvalidateNonce)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(ReactorInvalidateNonce)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *ReactorInvalidateNonceIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *ReactorInvalidateNonceIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// ReactorInvalidateNonce represents a InvalidateNonce event raised by the Reactor contract.
+type ReactorInvalidateNonce struct {
+	Swapper common.Address
+	Nonce   *big.Int
+	Raw     types.Log // Blockchain specific contextual infos
+}
+
+// FilterInvalidateNonce is a free log retrieval operation binding the contract event 0x294baeb3162c5caef603a11b80be3b7422473c4380865fecc65e3422f1f8b4d6.
+//
+// Solidity: event InvalidateNonce(address indexed swapper, uint256 nonce)
+func (_Reactor *ReactorFilterer) FilterInvalidateNonce(opts *bind.FilterOpts, swapper []common.Address) (*ReactorInvalidateNonceIterator, error) {
+
+	var swapperRule []interface{}
+	for _, swapperItem := range swapper {
+		swapperRule = append(swapperRule, swapperItem)
+	}
+
+	logs, sub, err := _Reactor.contract.FilterLogs(opts, "InvalidateNonce", swapperRule)
+	if err != nil {
+		return nil, err
+	}
+	return &ReactorInvalidateNonceIterator{contract: _Reactor.contract, event: "InvalidateNonce", logs: logs, sub: sub}, nil
+}
+
+// WatchInvalidateNonce is a free log subscription operation binding the contract event 0x294baeb3162c5caef603a11b80be3b7422473c4380865fecc65e3422f1f8b4d6.
+//
+// Solidity: event InvalidateNonce(address indexed swapper, uint256 nonce)
+func (_Reactor *ReactorFilterer) WatchInvalidateNonce(opts *bind.WatchOpts, sink chan<- *ReactorInvalidateNonce, swapper []common.Address) (event.Subscription, error) {
+
+	var swapperRule []interface{}
+	for _, swapperItem := range swapper {
+		swapperRule = append(swapperRule, swapperItem)
+	}
+
+	logs, sub, err := _Reactor.contract.WatchLogs(opts, "InvalidateNonce", swapperRule)
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(ReactorInvalidateNonce)
+				if err := _Reactor.contract.UnpackLog(event, "InvalidateNonce", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseInvalidateNonce is a log parse operation binding the contract event 0x294baeb3162c5caef603a11b80be3b7422473c4380865fecc65e3422f1f8b4d6.
+//
+// Solidity: event InvalidateNonce(address indexed swapper, uint256 nonce)
+func (_Reactor *ReactorFilterer) ParseInvalidateNonce(log types.Log) (*ReactorInvalidateNonce, error) {
+	event := new(ReactorInvalidateNonce)
+	if err := _Reactor.contract.UnpackLog(event, "InvalidateNonce", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log

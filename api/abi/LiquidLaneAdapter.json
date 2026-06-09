@@ -3,17 +3,17 @@
     "type": "constructor",
     "inputs": [
       {
-        "name": "curatorRegistry",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "rewards",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "vaultFactory",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "adapterFactory",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "accountRegistry",
         "type": "address",
         "internalType": "address"
       }
@@ -22,7 +22,7 @@
   },
   {
     "type": "function",
-    "name": "PRIVATE_ACCOUNT_BEACON",
+    "name": "FACTORY",
     "inputs": [],
     "outputs": [
       {
@@ -35,20 +35,7 @@
   },
   {
     "type": "function",
-    "name": "VAULT_FACTORY",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "accountBeacons",
+    "name": "accounts",
     "inputs": [
       {
         "name": "tokenToRedeem",
@@ -58,7 +45,7 @@
     ],
     "outputs": [
       {
-        "name": "beacon",
+        "name": "account",
         "type": "address",
         "internalType": "address"
       }
@@ -67,14 +54,45 @@
   },
   {
     "type": "function",
-    "name": "allocatable",
+    "name": "acquireBalance",
     "inputs": [
       {
-        "name": "vault",
+        "name": "tokenToRedeem",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "marketMaker",
         "type": "address",
         "internalType": "address"
       }
     ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "addTokenToRedeem",
+    "inputs": [
+      {
+        "name": "tokenToRedeem",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "allocatable",
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -94,194 +112,6 @@
         "internalType": "uint256"
       }
     ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "allocated",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "claimCuratorAcquired",
-    "inputs": [
-      {
-        "name": "recipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "claimMarketMakerAcquired",
-    "inputs": [
-      {
-        "name": "recipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "convertRedemption",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "redemptionToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "redemptionAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "data",
-        "type": "bytes",
-        "internalType": "bytes"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "converters",
-    "inputs": [
-      {
-        "name": "redemptionToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "collateralToken",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "converter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "curatorAcquireBalance",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "deallocAdapters",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "deallocatable",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
     "outputs": [
       {
         "name": "",
@@ -289,21 +119,21 @@
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
     "name": "deallocate",
     "inputs": [
       {
-        "name": "amount",
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "deallocated",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -315,7 +145,7 @@
     "name": "depositToAcquire",
     "inputs": [
       {
-        "name": "vault",
+        "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
       },
@@ -373,24 +203,13 @@
   },
   {
     "type": "function",
-    "name": "getAccount",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "name": "freeAssets",
+    "inputs": [],
     "outputs": [
       {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
+        "name": "assets",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -400,12 +219,7 @@
     "name": "getAmountOut",
     "inputs": [
       {
-        "name": "tokenIn",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenOut",
+        "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
       },
@@ -426,89 +240,27 @@
   },
   {
     "type": "function",
-    "name": "getCuratorAccount",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getDeallocAdaptersLength",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getMarketMakerAccount",
-    "inputs": [
-      {
-        "name": "curMarketMaker",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "getMaxAssets",
     "inputs": [
       {
-        "name": "vault",
+        "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
       }
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "assets",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
     "name": "getMaxRate",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -527,63 +279,6 @@
   {
     "type": "function",
     "name": "getTokensToRedeemLength",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "globalAllocated",
-    "inputs": [
-      {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "globalLimit",
-    "inputs": [
-      {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "limit",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "globalMaxConvertDiscount",
     "inputs": [],
     "outputs": [
       {
@@ -597,18 +292,21 @@
   {
     "type": "function",
     "name": "initialize",
-    "inputs": [],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "initialize",
     "inputs": [
       {
-        "name": "newOwner",
+        "name": "initialVersion",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "owner_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -618,11 +316,6 @@
     "type": "function",
     "name": "invalidateNonce",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -663,32 +356,8 @@
   },
   {
     "type": "function",
-    "name": "isPaused",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "isUsedNonce",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -714,11 +383,6 @@
     "name": "limit",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
@@ -736,13 +400,7 @@
   {
     "type": "function",
     "name": "marketMaker",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -754,38 +412,8 @@
   },
   {
     "type": "function",
-    "name": "marketMakerAcquireBalances",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "marketMaker",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "marketMakerCanAcquire",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -797,13 +425,26 @@
   },
   {
     "type": "function",
-    "name": "minDiscount",
+    "name": "migrate",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
+        "name": "newVersion",
+        "type": "uint64",
+        "internalType": "uint64"
       },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "minDiscount",
+    "inputs": [
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -834,25 +475,6 @@
   },
   {
     "type": "function",
-    "name": "oracles",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "oracle",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -866,41 +488,64 @@
   },
   {
     "type": "function",
-    "name": "pairMaxConvertDiscount",
-    "inputs": [
-      {
-        "name": "tokenIn",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "tokenOut",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "name": "pause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "paused",
+    "inputs": [],
     "outputs": [
       {
-        "name": "ppm",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
   },
   {
     "type": "function",
-    "name": "recover",
-    "inputs": [
+    "name": "pauser",
+    "inputs": [],
+    "outputs": [
       {
-        "name": "vault",
+        "name": "",
         "type": "address",
         "internalType": "address"
-      },
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "receiver",
+    "inputs": [
       {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "who",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "removeTokenToRedeem",
+    "inputs": [
+      {
+        "name": "tokenToRedeem",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -915,58 +560,12 @@
   },
   {
     "type": "function",
-    "name": "setAccountBeacon",
+    "name": "requestDeallocate",
     "inputs": [
       {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "beacon",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setConversionAdapter",
-    "inputs": [
-      {
-        "name": "redemptionToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "collateralToken",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "conversionAdapter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setDeallocAdapters",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "newDeallocAdapters",
-        "type": "address[]",
-        "internalType": "address[]"
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -977,17 +576,12 @@
     "name": "setFiller",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "filler",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "isAuthorized",
+        "name": "status",
         "type": "bool",
         "internalType": "bool"
       }
@@ -997,44 +591,8 @@
   },
   {
     "type": "function",
-    "name": "setGlobalLimit",
-    "inputs": [
-      {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "limit",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setGlobalMaxDiscount",
-    "inputs": [
-      {
-        "name": "newGlobalMaxDiscount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "setLimit",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -1051,13 +609,8 @@
   },
   {
     "type": "function",
-    "name": "setMakerMaker",
+    "name": "setMarketMaker",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
       {
         "name": "newMarketMaker",
         "type": "address",
@@ -1077,11 +630,6 @@
     "name": "setMinDiscount",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
@@ -1097,15 +645,10 @@
   },
   {
     "type": "function",
-    "name": "setOracle",
+    "name": "setPauser",
     "inputs": [
       {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "oracle",
+        "name": "newPauser",
         "type": "address",
         "internalType": "address"
       }
@@ -1115,22 +658,12 @@
   },
   {
     "type": "function",
-    "name": "setPairMaxDiscount",
+    "name": "setReceiver",
     "inputs": [
       {
-        "name": "tokenIn",
+        "name": "newReceiver",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "tokenOut",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "newPairMaxDiscount",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -1138,17 +671,12 @@
   },
   {
     "type": "function",
-    "name": "setPauseStatus",
+    "name": "setUnpauser",
     "inputs": [
       {
-        "name": "vault",
+        "name": "newUnpauser",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "newPauseStatus",
-        "type": "bool",
-        "internalType": "bool"
       }
     ],
     "outputs": [],
@@ -1156,41 +684,38 @@
   },
   {
     "type": "function",
-    "name": "skim",
+    "name": "swap",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
+        "name": "swap",
+        "type": "tuple",
+        "internalType": "struct ILiquidLaneAdapter.Swap",
+        "components": [
+          {
+            "name": "recipient",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
       }
     ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "skimmable",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -1199,18 +724,13 @@
       {
         "name": "discountSwap",
         "type": "tuple",
-        "internalType": "struct IInstantRedemptionAdapter.DiscountSwap",
+        "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
         "components": [
           {
             "name": "discount",
             "type": "tuple",
-            "internalType": "struct IInstantRedemptionAdapter.Discount",
+            "internalType": "struct ILiquidLaneAdapter.Discount",
             "components": [
-              {
-                "name": "vault",
-                "type": "address",
-                "internalType": "address"
-              },
               {
                 "name": "tokenToRedeem",
                 "type": "address",
@@ -1269,54 +789,15 @@
         "name": "amountIn",
         "type": "uint256",
         "internalType": "uint256"
-      },
+      }
+    ],
+    "outputs": [
       {
         "name": "amountOut",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "swap",
-    "inputs": [
-      {
-        "name": "swap",
-        "type": "tuple",
-        "internalType": "struct IInstantRedemptionAdapter.Swap",
-        "components": [
-          {
-            "name": "recipient",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "tokenIn",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "amountIn",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "amountOut",
-            "type": "uint256",
-            "internalType": "uint256"
-          }
-        ]
-      }
-    ],
-    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -1326,15 +807,10 @@
       {
         "name": "signedSwap",
         "type": "tuple",
-        "internalType": "struct IInstantRedemptionAdapter.SignedSwap",
+        "internalType": "struct ILiquidLaneAdapter.SignedSwap",
         "components": [
           {
             "name": "recipient",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "vault",
             "type": "address",
             "internalType": "address"
           },
@@ -1370,8 +846,8 @@
           },
           {
             "name": "deadline",
-            "type": "uint256",
-            "internalType": "uint256"
+            "type": "uint48",
+            "internalType": "uint48"
           }
         ]
       },
@@ -1389,11 +865,6 @@
     "name": "tokensToRedeem",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
@@ -1404,6 +875,19 @@
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalAssets",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "assets",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1423,10 +907,56 @@
   },
   {
     "type": "function",
+    "name": "unpause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "unpauser",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "vault",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "version",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "withdrawToAcquire",
     "inputs": [
       {
-        "name": "vault",
+        "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
       },
@@ -1441,27 +971,8 @@
   },
   {
     "type": "event",
-    "name": "Allocate",
+    "name": "AddTokenToRedeem",
     "inputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ClaimCuratorAcquired",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -1469,85 +980,10 @@
         "internalType": "address"
       },
       {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ClaimMarketMakerAcquired",
-    "inputs": [
-      {
-        "name": "marketMaker",
+        "name": "account",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "ConvertRedemption",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "redemptionToken",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "redemptionAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "Deallocate",
-    "inputs": [
-      {
-        "name": "requestedAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "deallocated",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -1557,7 +993,13 @@
     "name": "DepositToAcquire",
     "inputs": [
       {
-        "name": "vault",
+        "name": "who",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokenToRedeem",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -1579,15 +1021,10 @@
         "name": "swap",
         "type": "tuple",
         "indexed": false,
-        "internalType": "struct IInstantRedemptionAdapter.Swap",
+        "internalType": "struct ILiquidLaneAdapter.Swap",
         "components": [
           {
             "name": "recipient",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "vault",
             "type": "address",
             "internalType": "address"
           },
@@ -1613,13 +1050,31 @@
   },
   {
     "type": "event",
+    "name": "EIP712DomainChanged",
+    "inputs": [],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Initialize",
     "inputs": [
       {
-        "name": "owner",
-        "type": "address",
+        "name": "params",
+        "type": "tuple",
         "indexed": false,
-        "internalType": "address"
+        "internalType": "struct ILiquidLaneAdapter.InitParams",
+        "components": [
+          {
+            "name": "pauser",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "unpauser",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
       }
     ],
     "anonymous": false
@@ -1641,12 +1096,6 @@
     "type": "event",
     "name": "InvalidateNonce",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -1683,82 +1132,26 @@
   },
   {
     "type": "event",
-    "name": "Recover",
+    "name": "Paused",
     "inputs": [
       {
-        "name": "vault",
+        "name": "account",
         "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
         "indexed": false,
-        "internalType": "uint256"
+        "internalType": "address"
       }
     ],
     "anonymous": false
   },
   {
     "type": "event",
-    "name": "SetAccountBeacon",
+    "name": "RemoveTokenToRedeem",
     "inputs": [
       {
         "name": "tokenToRedeem",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "beacon",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "SetConversionAdapter",
-    "inputs": [
-      {
-        "name": "redemptionToken",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "collateralToken",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "conversionAdapter",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "SetDeallocAdapters",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "newDeallocAdapters",
-        "type": "address[]",
-        "indexed": false,
-        "internalType": "address[]"
       }
     ],
     "anonymous": false
@@ -1767,12 +1160,6 @@
     "type": "event",
     "name": "SetFiller",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
       {
         "name": "marketMaker",
         "type": "address",
@@ -1796,46 +1183,8 @@
   },
   {
     "type": "event",
-    "name": "SetGlobalLimit",
-    "inputs": [
-      {
-        "name": "asset",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "limit",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "SetGlobalMaxDiscount",
-    "inputs": [
-      {
-        "name": "newGlobalMaxDiscount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "SetLimit",
     "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
       {
         "name": "tokenToRedeem",
         "type": "address",
@@ -1856,12 +1205,6 @@
     "name": "SetMarketMaker",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
         "name": "newMarketMaker",
         "type": "address",
         "indexed": true,
@@ -1881,12 +1224,6 @@
     "name": "SetMinDiscount",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
         "name": "tokenToRedeem",
         "type": "address",
         "indexed": true,
@@ -1903,16 +1240,10 @@
   },
   {
     "type": "event",
-    "name": "SetOracle",
+    "name": "SetPauser",
     "inputs": [
       {
-        "name": "token",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "oracle",
+        "name": "newPauser",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -1922,56 +1253,57 @@
   },
   {
     "type": "event",
-    "name": "SetPairMaxDiscount",
+    "name": "SetReceiver",
     "inputs": [
       {
-        "name": "tokenIn",
+        "name": "who",
         "type": "address",
         "indexed": true,
         "internalType": "address"
       },
       {
-        "name": "tokenOut",
+        "name": "receiver",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "newPairMaxDiscount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
   },
   {
     "type": "event",
-    "name": "SetPauseStatus",
+    "name": "SetUnpauser",
+    "inputs": [
+      {
+        "name": "newUnpauser",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SetVault",
     "inputs": [
       {
         "name": "vault",
         "type": "address",
         "indexed": true,
         "internalType": "address"
-      },
-      {
-        "name": "isPaused",
-        "type": "bool",
-        "indexed": false,
-        "internalType": "bool"
       }
     ],
     "anonymous": false
   },
   {
     "type": "event",
-    "name": "Skim",
+    "name": "Unpaused",
     "inputs": [
       {
-        "name": "vault",
+        "name": "account",
         "type": "address",
-        "indexed": true,
+        "indexed": false,
         "internalType": "address"
       }
     ],
@@ -1982,7 +1314,13 @@
     "name": "WithdrawToAcquire",
     "inputs": [
       {
-        "name": "vault",
+        "name": "who",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokenToRedeem",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -1998,6 +1336,16 @@
   },
   {
     "type": "error",
+    "name": "AccountHasAssets",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AlreadyInitialized",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "AlreadyUsedNonce",
     "inputs": []
   },
@@ -2008,12 +1356,22 @@
   },
   {
     "type": "error",
+    "name": "EnforcedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExpectedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ExpiredSwap",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "InsufficientAllocation",
+    "name": "InsufficientAllocate",
     "inputs": []
   },
   {
@@ -2023,17 +1381,7 @@
   },
   {
     "type": "error",
-    "name": "InvalidAccountBeacon",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "InvalidCaller",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidCollateralOut",
     "inputs": []
   },
   {
@@ -2048,22 +1396,17 @@
   },
   {
     "type": "error",
-    "name": "InvalidLimit",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "InvalidOracle",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "InvalidRedemptionToken",
+    "name": "InvalidReceiver",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "InvalidRwaAmount",
+    "name": "InvalidShortString",
     "inputs": []
   },
   {
@@ -2083,7 +1426,22 @@
   },
   {
     "type": "error",
-    "name": "NotCurator",
+    "name": "InvalidVault",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "LimitExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotFactory",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitialized",
     "inputs": []
   },
   {
@@ -2120,17 +1478,34 @@
   },
   {
     "type": "error",
-    "name": "Paused",
+    "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "SkimFailed",
-    "inputs": []
+    "name": "SafeERC20FailedOperation",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
-    "name": "ZeroAmount",
+    "name": "StringTooLong",
+    "inputs": [
+      {
+        "name": "str",
+        "type": "string",
+        "internalType": "string"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TooManyTokensToRedeem",
     "inputs": []
   }
 ]

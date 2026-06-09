@@ -3,16 +3,6 @@
     "type": "constructor",
     "inputs": [
       {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "rewards",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "requestWhitelist",
         "type": "address",
         "internalType": "address"
@@ -23,7 +13,7 @@
         "internalType": "address"
       },
       {
-        "name": "curatorRegistry",
+        "name": "adapterFactory",
         "type": "address",
         "internalType": "address"
       }
@@ -32,33 +22,20 @@
   },
   {
     "type": "function",
+    "name": "FACTORY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "REQUEST_WHITELIST",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "VAULT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "VAULT_FACTORY",
     "inputs": [],
     "outputs": [
       {
@@ -85,13 +62,7 @@
   {
     "type": "function",
     "name": "allocatable",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -111,19 +82,6 @@
         "internalType": "uint256"
       }
     ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "deallocatable",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
     "outputs": [
       {
         "name": "",
@@ -131,7 +89,7 @@
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -145,7 +103,7 @@
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "deallocated",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -154,36 +112,11 @@
   },
   {
     "type": "function",
-    "name": "globalAllocated",
-    "inputs": [
-      {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "name": "freeAssets",
+    "inputs": [],
     "outputs": [
       {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "globalLimit",
-    "inputs": [
-      {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "limit",
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -193,7 +126,23 @@
   {
     "type": "function",
     "name": "initialize",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "initialVersion",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "owner_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -220,6 +169,24 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "migrate",
+    "inputs": [
+      {
+        "name": "newVersion",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -309,6 +276,19 @@
   },
   {
     "type": "function",
+    "name": "outstandingPrincipal",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "owner",
     "inputs": [],
     "outputs": [
@@ -369,24 +349,6 @@
   },
   {
     "type": "function",
-    "name": "recover",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "redeem",
     "inputs": [
       {
@@ -407,15 +369,10 @@
   },
   {
     "type": "function",
-    "name": "setGlobalLimit",
+    "name": "requestDeallocate",
     "inputs": [
       {
-        "name": "collateral",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "limit",
+        "name": "amount",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -438,33 +395,8 @@
   },
   {
     "type": "function",
-    "name": "skim",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "skimmable",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "name": "totalAssets",
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -486,6 +418,32 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "vault",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "version",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "event",
@@ -571,44 +529,6 @@
   },
   {
     "type": "event",
-    "name": "Recover",
-    "inputs": [
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "SetGlobalLimit",
-    "inputs": [
-      {
-        "name": "asset",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "limit",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "SetOfferSigner",
     "inputs": [
       {
@@ -619,6 +539,24 @@
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "SetVault",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyInitialized",
+    "inputs": []
   },
   {
     "type": "error",
@@ -637,12 +575,22 @@
   },
   {
     "type": "error",
+    "name": "InvalidVault",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotAttested",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "NotCurator",
+    "name": "NotFactory",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitialized",
     "inputs": []
   },
   {
@@ -679,17 +627,18 @@
   },
   {
     "type": "error",
-    "name": "Reentrancy",
+    "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "SkimFailed",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "ZeroAmount",
-    "inputs": []
+    "name": "SafeERC20FailedOperation",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   }
 ]

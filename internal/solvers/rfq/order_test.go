@@ -12,10 +12,13 @@ import (
 )
 
 // fillSignature is the canonical signature of the mixed fill overload; pinning its selector guards
-// against accidentally encoding a different fill overload.
+// against accidentally encoding a different fill overload. It mirrors the selector string in the TS
+// filler's encodeExecutorFill (executor.ts): swapInputs carry (adapter, (recipient,tokenIn,amountIn,
+// amountOut)); discountSwapInputs carry (adapter, ((tokenToRedeem,discount,signer,protocol,nonce,
+// deadline),sig,protocolDeadline),protocolSig,recipient,amountIn).
 const fillSignature = "fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address)," +
-	"bytes,(address,address,address,uint256,uint256)[]," +
-	"(((address,address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256,uint256)[],bytes)"
+	"bytes,(address,(address,address,uint256,uint256))[]," +
+	"(address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[],bytes)"
 
 func sampleOrder() executor.IReactorOrder {
 	return executor.IReactorOrder{
@@ -78,7 +81,7 @@ func TestDirectSwaps_SkipsDiscountLegs(t *testing.T) {
 		{Adapter: vlt, AmountIn: big.NewInt(3), AmountOut: big.NewInt(4), DiscountID: &h}, // discount leg → skipped (P3)
 	}}
 	swaps := directSwaps(selected, tIn, common.HexToAddress("0x0000000000000000000000000000000000000010"))
-	if len(swaps) != 1 || swaps[0].AmountIn.Cmp(big.NewInt(1)) != 0 {
+	if len(swaps) != 1 || swaps[0].Swap.AmountIn.Cmp(big.NewInt(1)) != 0 || swaps[0].Adapter != vlt {
 		t.Fatalf("expected 1 direct swap, got %d", len(swaps))
 	}
 }

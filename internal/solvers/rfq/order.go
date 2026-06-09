@@ -70,11 +70,12 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	return *out, nil
 }
 
-// encodeFill builds Executor.fill(order, protocolSig, swaps, discountSwaps, executorData) calldata.
+// encodeFill builds Executor.fill(order, protocolSig, swapInputs, discountSwapInputs, executorData)
+// calldata for the mixed overload.
 func encodeFill(
 	order executor.IReactorOrder,
 	protocolSig []byte,
-	swaps []executor.IInstantRedemptionAdapterSwap,
+	swaps []executor.IReactorSwapInput,
 	discountSwaps []executor.IReactorDiscountSwapInput,
 	executorData []byte,
 ) ([]byte, error) {
@@ -85,20 +86,23 @@ func encodeFill(
 	return data, nil
 }
 
-// directSwaps maps a strategy's direct (non-discount) legs to the Executor's Swap inputs. The
-// executor itself is the swap recipient (it forwards outputs to the Reactor).
-func directSwaps(selected *strategyRecord, tokenIn, executorAddr common.Address) []executor.IInstantRedemptionAdapterSwap {
-	swaps := make([]executor.IInstantRedemptionAdapterSwap, 0, len(selected.Legs))
+// directSwaps maps a strategy's direct (non-discount) legs to the Executor's SwapInputs: each carries
+// its adapter and the per-adapter Swap tuple. The executor itself is the swap recipient (it forwards
+// outputs to the Reactor). Mirrors the swapInputs build in execution.ts (#submitOrder).
+func directSwaps(selected *strategyRecord, tokenIn, executorAddr common.Address) []executor.IReactorSwapInput {
+	swaps := make([]executor.IReactorSwapInput, 0, len(selected.Legs))
 	for _, leg := range selected.Legs {
 		if leg.DiscountID != nil {
-			continue // discount legs are built separately (P3)
+			continue // discount legs are built separately
 		}
-		swaps = append(swaps, executor.IInstantRedemptionAdapterSwap{
-			Recipient: executorAddr,
-			Vault:     leg.Adapter, // the on-chain Swap `vault` slot takes the leg's adapter address
-			TokenIn:   tokenIn,
-			AmountIn:  new(big.Int).Set(leg.AmountIn),
-			AmountOut: new(big.Int).Set(leg.AmountOut),
+		swaps = append(swaps, executor.IReactorSwapInput{
+			Adapter: leg.Adapter,
+			Swap: executor.ILiquidLaneAdapterSwap{
+				Recipient: executorAddr,
+				TokenIn:   tokenIn,
+				AmountIn:  new(big.Int).Set(leg.AmountIn),
+				AmountOut: new(big.Int).Set(leg.AmountOut),
+			},
 		})
 	}
 	return swaps

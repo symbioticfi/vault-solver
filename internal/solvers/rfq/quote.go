@@ -15,7 +15,7 @@ import (
 // interface so the quote/HTTP logic can be unit-tested without a chain backend.
 type priceReader interface {
 	tokenDecimals(ctx context.Context, token common.Address) (int, error)
-	amountsOut(ctx context.Context, tokenIn common.Address, assets []common.Address, amount *big.Int) (map[common.Address]*big.Int, error)
+	amountsOut(ctx context.Context, tokenIn common.Address, inventories []solverInventory, amount *big.Int) (map[common.Address]*big.Int, error)
 }
 
 // quoteService prices a backend RFQ request and persists the chosen strategy by quoteId. It is
@@ -49,9 +49,10 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, errors.Errorf("quote: tokenIn decimals: %w", err)
 	}
 
-	// Only asset == tokenOut is fillable, so we price exactly those.
-	assets := matchingAssets(inv, req.TokenOut)
-	oracle, err := qs.reader.amountsOut(ctx, req.TokenIn, assets, req.Amount)
+	// Only asset == tokenOut is fillable, so we price exactly those inventories (each priced through
+	// its asset-group's representative adapter — see reader.amountsOut).
+	matching := matchingInventories(inv, req.TokenOut)
+	oracle, err := qs.reader.amountsOut(ctx, req.TokenIn, matching, req.Amount)
 	if err != nil {
 		return nil, errors.Errorf("quote: adapter getAmountOut: %w", err)
 	}
@@ -80,17 +81,15 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}, nil
 }
 
-// matchingAssets returns the distinct assets among the inventories that equal tokenOut (the only
-// ones this filler can source), so the selector has exactly the oracle prices it needs.
-func matchingAssets(inv []solverInventory, tokenOut common.Address) []common.Address {
-	out := make([]common.Address, 0, 1)
-	seen := make(map[common.Address]bool)
+// matchingInventories returns the inventories whose asset equals tokenOut (the only ones this filler
+// can source), so the oracle prices exactly the asset-groups the selector will consider.
+func matchingInventories(inv []solverInventory, tokenOut common.Address) []solverInventory {
+	out := make([]solverInventory, 0, len(inv))
 	for _, v := range inv {
-		if v.Asset != tokenOut || seen[v.Asset] {
+		if v.Asset != tokenOut {
 			continue
 		}
-		seen[v.Asset] = true
-		out = append(out, v.Asset)
+		out = append(out, v)
 	}
 	return out
 }

@@ -7,7 +7,7 @@ import (
 // sizeInputs are the bounds that constrain how much principal the bot may offer for one Request.
 type sizeInputs struct {
 	perRequestMax   *big.Int // curator per-Request cap
-	fundable        *big.Int // vault.allocatable bounded by adapterLimit (chain read)
+	fundable        *big.Int // remaining room under the delegator's per-adapter cap (chain read)
 	amountRequested *big.Int // auction ask; nil if unknown
 	sleeveMax       *big.Int // curator total-sleeve cap
 	outstanding     *big.Int // live sleeve exposure (sum of open principals)
