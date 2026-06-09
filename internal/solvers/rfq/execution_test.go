@@ -43,6 +43,31 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 	return f.discounts, nil
 }
 
+// fakeRecoveryReader is the on-chain surface recoverStrategy needs. readPermissionedVaultInventories
+// is only invoked when vaults are configured; the discount-only path uses tokenDecimals + amountsOut.
+type fakeRecoveryReader struct {
+	decimals int
+	oracle   map[common.Address]*big.Int
+	permInv  []solverInventory
+	permErr  error
+}
+
+func (f *fakeRecoveryReader) readPermissionedVaultInventories(
+	context.Context, common.Address, common.Address, []recoveryVault,
+) ([]solverInventory, error) {
+	return f.permInv, f.permErr
+}
+
+func (f *fakeRecoveryReader) tokenDecimals(context.Context, common.Address) (int, error) {
+	return f.decimals, nil
+}
+
+func (f *fakeRecoveryReader) amountsOut(
+	context.Context, common.Address, []solverInventory, *big.Int,
+) (map[common.Address]*big.Int, error) {
+	return f.oracle, nil
+}
+
 type fakeTxm struct {
 	lastData []byte
 	result   txmanager.Result
@@ -146,6 +171,51 @@ func TestExecution_DiscountFill(t *testing.T) {
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
+	}
+	if be.resolveCalls != 1 {
+		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
+	}
+	if len(txm.lastData) < 4 {
+		t.Fatalf("no fill calldata sent")
+	}
+}
+
+// TestExecution_DiscountOnlyRecovery_EmptyVaults proves a discount-only solver (no configured vaults)
+// still recovers a strategy after a restart: recoverStrategy skips the direct (vault) read but consults
+// the backend's live discounts, rebuilds a discount-leg strategy, and fills. (Regression: the old
+// `len(vaults)==0` guard returned before the discount path ran.)
+func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
+	_, be := fillFixtures(t)
+	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store: no cached q1 → forces recovery
+
+	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
+	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+		Collateral: tOut.Hex(), CollateralDecimals: 6,
+		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
+	}}}
+	be.discount = &resolveDiscountResponse{
+		Discount: discountTerms{
+			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
+			Signer:   "0x00000000000000000000000000000000000000a1",
+			Protocol: "0x00000000000000000000000000000000000000a2",
+			Nonce:    "0x1", Deadline: 4_102_444_800,
+		},
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
+	}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+	// No vaults configured (discount-only solver); recovery reads decimals + oracle off the fake reader.
+	e.reader = &fakeRecoveryReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
+
+	e.syncOnce(context.Background())
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
+	}
+	if st.strategy("q1") == nil {
+		t.Fatalf("recovery did not persist a rebuilt strategy for q1")
 	}
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
