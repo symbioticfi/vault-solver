@@ -56,6 +56,15 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
   memory, goroutines, GC, and FDs. Net effect: the same metric names the filler exposed, surfaced on
   the shared observability port rather than a per-solver endpoint.
+- **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
+  request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the
+  handler context so quote logs carry it), an access log line (method/route/status/duration), the
+  metrics above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
+  Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
+- **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
+  framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on
+  shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
+  init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
   builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
 - **On-chain reads use `chain.Multicall`** (the adapter exposes many per-vault views per quote).
@@ -188,6 +197,10 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
   almost certainly copied the 2-arg shape of its neighbor `getMaxRate(vault, tokenToRedeem)` (which
   *is* 2-arg). Go calls the 1-arg form and is correct; we intentionally do **not** mirror the TS here
   (mirroring it would break inventory recovery). The TS should be fixed to 1 arg.
+- **OpenTelemetry — intentionally not ported.** The TS filler declares `@opentelemetry/*` packages in
+  `dependencies` but never initializes an SDK, tracer, or spans (no `opentelemetry.ts`, no `OTEL_*`
+  reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
+  is nothing to port; tracing is out of scope unless fleet-wide tracing is later required.
 
 ### Backend OpenAPI spec (vendored)
 

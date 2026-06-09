@@ -32,6 +32,7 @@ txManager:
 observability:
   addr: ":9090"                         # /metrics, /healthz, /readyz
   debug: false                          # debug-level logging; the --debug CLI flag overrides this
+  # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
 solver:
   name: 3f-bridge-facilitator           # registry key selecting the implementation
