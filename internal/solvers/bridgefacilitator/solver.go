@@ -254,7 +254,7 @@ func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []t
 		}
 		if !bid {
 			s.log.Info("skip auction: rate below configured return floor", "auctionId", auctionID,
-				"request", request.Hex(), "maxRateBps", derefRate(av.dto.MaxRate), "minReturnBps", s.cfg.MinReturnBps)
+				"request", request.Hex(), "maxRateBps", av.maxRate(), "minReturnBps", s.cfg.MinReturnBps)
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
@@ -328,12 +328,4 @@ func (s *Solver) resolveCollateral(ctx context.Context) {
 	t.Collateral = collateral
 	s.log.Info("resolved target collateral",
 		"vault", t.Vault.Hex(), "adapter", t.Adapter.Hex(), "collateral", collateral.Hex())
-}
-
-// derefRate returns *r as a float64, or 0 if nil (for logging the auction max rate).
-func derefRate(r *float32) float64 {
-	if r == nil {
-		return 0
-	}
-	return float64(*r)
 }

@@ -7,9 +7,11 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION        ?= v1.16.1
-OAPI_CODEGEN_VERSION  ?= v2.4.1
-GOLANGCI_LINT_VERSION ?= v2.11.4
+ABIGEN_VERSION           ?= v1.16.1
+GOLANGCI_LINT_VERSION    ?= v2.11.4
+# Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
+# it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
+OPENAPI_GENERATOR_VERSION ?= 7.12.0
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out
@@ -60,8 +62,8 @@ help: ## List available targets
 .PHONY: tools
 tools: ## Install pinned codegen + lint tools
 	go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
-	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@echo "OpenAPI clients use the Java openapi-generator via hack/openapi-generator-cli.sh (needs a JRE; jar auto-downloaded)."
 
 .PHONY: refresh-abi
 refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_OUT=..., CORE_MIRROR_OUT=...)
@@ -102,11 +104,29 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 		echo "generated api/bindings/$$rel/$$c.go"; \
 	done
 
+# Both OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,
+# which downloads the pinned jar on demand — needs a JRE). It is the only generator that ingests the RFQ
+# backend's OpenAPI 3.1 spec; we use it for the 3F (3.0) spec too for one toolchain. $(OPENAPI_GENERATOR_VERSION)
+# is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is stdlib-only (no go.mod change);
+# the recipes strip the generator's non-package cruft, keeping just the Go client.
+define gen_openapi_client
+	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
+		generate --enable-post-process-file -i ./$(1) -g go -o ./$(2) --package-name $(3)
+	cd $(2) && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+endef
+
+.PHONY: refresh-3f-client
+refresh-3f-client: ## Generate the 3F API client (openapi-generator, Go) from the vendored spec
+	@rm -f api/threef/*.go
+	$(call gen_openapi_client,openapi/3f-bf.openapi.json,api/threef,threef)
+
+.PHONY: refresh-rfq-client
+refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) from the vendored spec
+	@rm -f api/rfqbackend/*.go
+	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend)
+
 .PHONY: openapi-client
-openapi-client: ## Generate the 3F API client from the vendored spec
-	@mkdir -p api/threef
-	oapi-codegen -package threef -generate types,client \
-		-o api/threef/client.gen.go openapi/3f-bf.openapi.json
+openapi-client: refresh-3f-client refresh-rfq-client ## Generate both OpenAPI clients
 
 .PHONY: generate
 generate: bindings openapi-client ## Regenerate all committed codegen

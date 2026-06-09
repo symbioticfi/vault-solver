@@ -85,7 +85,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (pricing, discount, leg selection) |
 | `execution.ts` | `execution.go` (poll loop, order state machine, fill, recovery) |
 | `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
-| `backend.ts` + `discounts.ts` | `backend.go` (backend HTTP client: `/orders`, `/discounts`) |
+| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client: `/orders`, `/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
 | `domain.ts` | `store.go` types + `strategy.go` types (records, legs, inventories) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
@@ -116,7 +116,7 @@ solver:
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
 The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`), so no static
 list is needed for quoting. The `vaults` list is only consulted for post-restart **strategy recovery**
-(it bounds the candidate universe `readPermissionedVaultInventories` scans).
+(it bounds the candidate adapter universe the recovery multicall scans).
 
 ---
 
@@ -125,8 +125,9 @@ list is needed for quoting. The `vaults` list is only consulted for post-restart
 All three phases are committed scope — the goal is full parity with the TS filler, including discount
 legs. Phasing is about sequencing and reviewable increments, not dropping features.
 
-0. **(done)** Vendor RFQ ABIs from `../rfq/out` → `api/bindings/rfq/` (InstantRedemptionAdapter,
-   Executor, Reactor, ICuratorRegistry; IVaultV2 reused). CGO-free build holds.
+0. **(done)** Vendor RFQ ABIs: `Executor`/`Reactor` from `../rfq/out`, and `LiquidLaneAdapter`/
+   `UniversalDelegator`/`IVaultV2`/`IERC4626` from a standalone `core-mirror` build →
+   `api/bindings/rfq/` + `api/bindings/{delegator,vaultv2,erc4626}`. CGO-free build holds.
 1. **(done) Quote path** — `config.go`, bindings, multicall reads (`getAmountOut` batched, decimals
    cached), `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
    `/health`, `/openapi.json` + `/docs`, shared-secret auth), in-memory store. Unit-tested (pricing
@@ -134,9 +135,9 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
 2. **(done) Execution** — backend client (`/orders`), **poll-only** loop + order state machine
    (`queued→submitting→submitted→{filled|expired|failed}`), reactor-order decode + `Executor.fill`
    (mixed overload, golden selector test) via the shared txmanager (revert→failed), attempt tracking,
-   and on-chain **strategy recovery via a single `readPermissionedVaultInventories` multicall** over
-   the configured vault universe (per-vault adapter views + `marketMaker`/`getCurator` authorization
-   filter). Direct legs only. Unit-tested (state machine with fakes, backend httptest).
+   and on-chain **strategy recovery via a single multicall** over the configured per-vault adapters
+   (adapter views + `marketMaker`/`owner`/`isFiller` authorization filter). Direct legs only.
+   Unit-tested (state machine with fakes, backend httptest).
 3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and
@@ -144,7 +145,8 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    (discount-leg selection, discount fill resolves + encodes).
 
 **Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
-cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no per-read round-trips.
+cached `decimals`), and recovery issues one 5-views-per-adapter aggregate3 (`paused`, `vault`,
+`asset`, `getMaxAssets`, `getMaxRate`) — no per-read round-trips.
 
 ---
 
@@ -152,20 +154,16 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
 
 - **`CALLER_ROLE` on the `Executor`** — the bot EOA must be granted it before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
-- **Per-environment inputs needed to run**: backend base URL, `Executor` / `InstantRedemptionAdapter`
-  / `Reactor` / `CuratorRegistry` addresses, the backend shared secret, and the caller key (last two
-  via env). Hoodi addresses are known from the TS deployment manifest; local from the rfq-integration
-  local-stack deploy.
+- **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
+  per-vault `{address, adapter, asset}` list (for recovery), the backend shared secret, and the caller
+  key (last two via env). Hoodi addresses are known from the TS deployment manifest; local from the
+  rfq-integration local-stack deploy.
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- _(resolved)_ Recovery now filters direct vaults by executor authorization via
-  `readPermissionedVaultInventories` (`marketMaker`/`curatorRegistry.getCurator`
-  /`isFiller`). Quote-time inventories come from the backend (already authorized), so this only
-  affects post-restart recovery, where an unauthorized vault would surface as a reverting fill.
 - **Pricing is a faithful port for now** — same discount + greedy-leg selection as the TS
   `selectBestStrategy`; a richer quoting strategy is a later follow-up (mirrors the 3F pricing TODO).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
@@ -173,7 +171,27 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
   Keep it that way — don't add per-quote chain reads outside that one multicall.
 
-### 1:1 parity notes (refactored filler resync)
+### Parity with the current TS filler
+
+**Status (verified against the current TS `rfq-filler` working tree): full functional parity.** The
+pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
+endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
+and the recovery RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed
+hardenings the TS filler lacks** — an order-deadline check before fill, a strategy↔order
+`tokenIn`/`tokenOut`/`amountIn` binding, txHash validation on reconcile, a single-entry guard on the
+batch discount-resolve shape, and TTL eviction of stale strategy/order cache entries (TS maps grow
+unbounded). A few **intentional, non-fund-moving divergences** remain, by design:
+
+- **Quote-time oracle revert** — a reverting `getAmountOut` makes the Go quote *skip that asset and
+  price the rest* (multicall `allowFailure`), whereas the TS filler throws and fails the whole quote.
+  Go is "price what you can"; revisit if strict all-or-nothing quoting is wanted.
+- **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
+  (see §2). The reject is identical; only the code differs.
+- **Backend base-URL prefix** — the generated client embeds the spec's `/api/v1` prefix, so the Go
+  `backendUrl` is the backend **host root**; the TS filler's base URL already includes the path. Set
+  each deployment's `backendUrl` accordingly (mismatch ⇒ 404 on every backend call).
+- The `{adapter, tokenToRedeem}` discount-resolve selector exists in TS types but is unused by
+  execution (both sides resolve by `discountId`); Go omits it. Cosmetic.
 
 - **Poll-only** — the `/notify` push endpoint was removed from the TS filler; the Go port has no
   `/notify` route, no wake channel, and `source` is always `"poll"`.
@@ -202,8 +220,8 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
   amountOut) swap)[]` and discountSwapInputs `(address adapter, (discount{tokenToRedeem,…},sig,
   protocolDeadline), protocolSig, recipient, amountIn)[]` — the inner discount dropped its `vault`
   slot and the discount input dropped `amountOut`. Selector `0x2b137442` (pinned by the golden test).
-- **Quote discount removed** (mirrors filler `ac65587`): the quoted output is the adapter oracle
-  `getAmountOut` directly; `quoteDiscountBps`/`applyQuoteDiscount` are gone.
+- **Quote discount removed** — the quoted output is the adapter oracle `getAmountOut` directly;
+  `quoteDiscountBps`/`applyQuoteDiscount` are gone (matches the current TS filler).
 - **OpenTelemetry — intentionally not ported.** The TS filler declares `@opentelemetry/*` packages in
   `dependencies` but never initializes an SDK, tracer, or spans (no `opentelemetry.ts`, no `OTEL_*`
   reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
@@ -212,8 +230,8 @@ cached `decimals`), and recovery issues one 6-views-per-vault aggregate3 — no 
 ### Backend OpenAPI spec (vendored)
 
 The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generated at runtime). It is
-vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `backend.go` client
-structs are verified against, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
+vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is
+generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
 
 - **The temp railway deployment is stale.** As of this writing it is built from a commit *before* the
   backend renamed discount `vault`→`adapter` and order `signature`→`protocolSignature`, so its served
@@ -221,7 +239,13 @@ structs are verified against, and refreshed with `make refresh-rfq-openapi` (`RF
   generated from **current backend code**, not that deployment. Until the deployment is refreshed,
   regenerate the vendored spec from a backend running current code — e.g. `pnpm tsx
   scripts/dump-openapi.ts` in `rfq-backend` (builds the Hono app in-process, no DB, dumps the spec).
-- **No generated Go client** (unlike 3F's `make openapi-client`). hono-openapi inlines every schema
-  (no `components`/`$refs`, `anyOf` unions), so `oapi-codegen` would emit unusable anonymous types.
-  The hand-written `backend.go` client is intentionally kept and verified field-for-field against the
-  vendored spec instead.
+- **Generated Go client (`api/rfqbackend/`).** The spec now carries `components` schemas with `$ref`s
+  (the earlier hono-openapi all-inlined limitation is fixed), so the client is generated with the Java
+  **openapi-generator** (`make refresh-rfq-client`) — the only generator that ingests this OpenAPI 3.1
+  spec (`oapi-codegen`/kin-openapi and `ogen` both reject its numeric `exclusiveMinimum` + `type:[…,null]`
+  unions; see the Makefile note). `backend.go` is now a thin adapter that calls the generated client and
+  projects its models into the solver's internal domain rows. Two deliberate carry-overs: the generated
+  client embeds the spec's `/api/v1` path prefix (so `backendUrl` is the host root), and the
+  `ResolveDiscountResponse` `anyOf` union is consumed via its single shape (the batch shape is accepted
+  only when it contains exactly one entry — fail closed). `apitypes.go` is unchanged: it is the filler's
+  own inbound `/quote` server contract (Huma validation tags), not a backend-client type.

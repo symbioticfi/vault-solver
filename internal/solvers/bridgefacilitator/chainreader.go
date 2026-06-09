@@ -112,7 +112,7 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 
 // liquidityAndExposure reads everything the offer sizer needs and reduces it to:
 //
-//	fundable    = max(delegator.limitOf(adapter) - adapter.totalAssets(), 0)
+//	fundable    = max(min(delegator.limitOf(adapter) - adapter.totalAssets(), vault.withdrawable()), 0)
 //	outstanding = adapter.outstandingPrincipal()   // principal in live loans (clamped >= 0)
 //	openCount   = len(adapter.activeRequests())
 //
@@ -121,9 +121,13 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 //   - totalAssets()          = free assets + outstanding the adapter holds (what's already against the cap)
 //   - outstandingPrincipal() = principal currently out in live loans (the direct outstanding)
 //
-// Because a Multicall can't chain one call's result into another, the delegator address is resolved
-// first (cached on the reader; see vaultDelegator), then the cap + adapter totals are read in a
-// single batched multicall.
+// Funding is just-in-time: at consume time the adapter pulls the principal from the vault via the
+// delegator's allocateExact, which can raise at most the vault's withdrawable liquidity. So fundable
+// is bounded by BOTH the per-adapter cap headroom AND vault.withdrawable() — otherwise the bot could
+// sign an offer the JIT pull can't satisfy and the consume would revert (mirrors LiquidLane's
+// getMaxAssets). Because a Multicall can't chain one call's result into another, the delegator address
+// is resolved first (cached; see vaultDelegator), then the cap + vault liquidity + adapter totals are
+// read in a single batched multicall.
 //
 //nolint:revive // function-result-limit: (fundable, outstanding, openCount, err) reads clearer than a result struct.
 func (r *reader) liquidityAndExposure(
@@ -139,6 +143,7 @@ func (r *reader) liquidityAndExposure(
 		{Target: adapterAddr, Data: mustPack(adapterABI, "totalAssets")},
 		{Target: adapterAddr, Data: mustPack(adapterABI, "outstandingPrincipal")},
 		{Target: adapterAddr, Data: mustPack(adapterABI, "activeRequests")},
+		{Target: vault, Data: mustPack(vaultABI, "withdrawable")},
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
@@ -169,18 +174,25 @@ func (r *reader) liquidityAndExposure(
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	withdrawable, err := unpackBig(vaultABI, "withdrawable", res[4].ReturnData)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 
-	fundable, outstanding = deriveLiquidity(limit, held, outstandingPrincipal)
+	fundable, outstanding = deriveLiquidity(limit, held, outstandingPrincipal, withdrawable)
 	return fundable, outstanding, len(reqs), nil
 }
 
 // deriveLiquidity reduces the raw on-chain reads to the sizer's inputs. Split out as a pure helper so
 // the clamping is unit-testable without a chain backend:
 //
-//	fundable    = max(limit - held, 0)   // remaining room under the delegator's per-adapter cap
+//	fundable    = max(min(limit - held, withdrawable), 0)   // cap headroom AND vault JIT-pull liquidity
 //	outstanding = max(outstandingPrincipal, 0)
-func deriveLiquidity(limit, held, outstandingPrincipal *big.Int) (fundable, outstanding *big.Int) {
+func deriveLiquidity(limit, held, outstandingPrincipal, withdrawable *big.Int) (fundable, outstanding *big.Int) {
 	fundable = new(big.Int).Sub(limit, held)
+	if fundable.Cmp(withdrawable) > 0 {
+		fundable = new(big.Int).Set(withdrawable)
+	}
 	if fundable.Sign() < 0 {
 		fundable.SetInt64(0)
 	}
