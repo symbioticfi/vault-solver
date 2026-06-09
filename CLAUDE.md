@@ -92,8 +92,39 @@ GOTOOLCHAIN=go1.26.4 golangci-lint run            # make lint — must report 0 
   must have table-driven tests. EIP-712 signing has golden + `apitypes` parity tests — keep them green
   and extend them when you touch the digest. HTTP/on-chain paths should be tested against an
   `httptest` server / a simulated or forked chain backend.
-- Generated code (`api/bindings`, `api/threef`) is committed for hermetic builds; regenerate via
-  `make refresh-abi && make bindings` / `make refresh-openapi && make openapi-client`, never hand-edit.
+- Generated code (`api/bindings/**`, `api/threef`, `api/rfqbackend`) is committed for hermetic builds;
+  regenerate via the `make` targets, never hand-edit (see **Code generation** below).
+
+## Code generation: vendor the source, then generate
+
+We never hand-write the boilerplate for talking to a contract or a third-party HTTP API. Instead we
+**vendor the upstream interface artifact into the repo and generate typed Go from it.** This keeps the
+bot's view of an external surface honest (it comes from the source of truth, not a hand-transcription
+that silently drifts), keeps the build hermetic (generated code is committed, so a clean checkout
+builds with no network/toolchain surprises), and turns an upstream change into a reviewable diff.
+
+Two instances of the same pattern — **vendor → generate → commit, regenerated only via `make`:**
+
+- **Contract bindings (ABI → abigen).** Vendor the ABI JSON under `api/abi/` (from a `forge build`
+  out-dir; `make refresh-abi` extracts `.abi` from the build artifacts of `ABIS`/`CORE_MIRROR_ABIS`),
+  then `make bindings` runs `abigen` per contract into `api/bindings/<group>/` (one package per leaf
+  dir so shared ABI structs don't collide). An ABI that can't be sourced from a build (e.g. Multicall3,
+  or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile overload) is
+  hand-vendored into `api/abi/` with a comment saying why — still generated from, never hand-bound.
+- **API clients (OpenAPI spec → openapi-generator).** Vendor the spec under `openapi/` (`make
+  refresh-*-openapi` pulls it), then `make refresh-{3f,rfq}-client` runs the **Java openapi-generator**
+  (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
+  `api/<client>/`. `OPENAPI_GENERATOR_VERSION` is pinned and is the **floor**: it must ingest the spec
+  (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
+  `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
+  (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+
+Rules for both: the vendored artifact (ABI/spec) is the **contract of record** — when upstream changes,
+re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps
+the generated client/binding behind a thin adapter so generated types (nullable pointers, response
+wrappers) stay contained at the boundary and don't leak into solver logic. Reach for this pattern
+**whenever a new integration needs to call a contract or a typed HTTP API** — add the `make` target and
+commit the generated output; don't hand-roll request/response structs or `abi.Pack` calls.
 
 ## Security
 
