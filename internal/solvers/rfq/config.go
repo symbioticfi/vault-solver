@@ -18,7 +18,6 @@ type rawConfig struct {
 	Adapter                string   `yaml:"adapter"`
 	Reactor                string   `yaml:"reactor"`
 	CuratorRegistry        string   `yaml:"curatorRegistry"`
-	QuoteDiscountBps       uint64   `yaml:"quoteDiscountBps"`
 	PollIntervalMs         int      `yaml:"pollIntervalMs"`
 	OrderLimit             int      `yaml:"orderLimit"`
 	Vaults                 []string `yaml:"vaults"`
@@ -41,8 +40,6 @@ type Config struct {
 	Reactor common.Address
 	// CuratorRegistry resolves vault curators for permissioned/discount vaults (P3); optional.
 	CuratorRegistry common.Address
-	// QuoteDiscountBps is the discount applied to oracle pricing before quoting (basis points).
-	QuoteDiscountBps uint64
 	// PollInterval is how often the backend is polled for open orders (P2).
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll (P2).
@@ -55,7 +52,6 @@ type Config struct {
 // Defaults applied when a field is unset.
 const (
 	defaultListenAddr   = ":42073"
-	defaultDiscountBps  = 1000 // 10.00%
 	defaultPollInterval = 3 * time.Second
 	defaultOrderLimit   = 20
 )
@@ -80,9 +76,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw.QuoteDiscountBps > 10_000 {
-		return nil, errors.Errorf("quoteDiscountBps must be <= 10000, got %d", raw.QuoteDiscountBps)
-	}
 
 	cfg := &Config{
 		BackendURL:             raw.BackendURL,
@@ -90,12 +83,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		ListenAddr:             orStr(raw.ListenAddr, defaultListenAddr),
 		Executor:               executor,
 		Adapter:                adapter,
-		QuoteDiscountBps:       raw.QuoteDiscountBps,
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
-	}
-	if cfg.QuoteDiscountBps == 0 {
-		cfg.QuoteDiscountBps = defaultDiscountBps
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond

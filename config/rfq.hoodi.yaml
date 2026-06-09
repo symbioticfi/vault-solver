@@ -32,6 +32,5 @@ solvers:
       adapter: "0xf1088708ccd98a8bb3a686e6c4c12ff9bdea428c" # InstantRedemptionAdapter
       reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time (P2)
       curatorRegistry: "0xa0159c29ff365c478ba858b0da062ad096575c02" # discount/permission (P3)
-      quoteDiscountBps: 1000 # 10.00% discount applied to oracle pricing
       pollIntervalMs: 3000 # backend order poll cadence (P2)
       orderLimit: 20 # max open orders fetched per poll (P2)

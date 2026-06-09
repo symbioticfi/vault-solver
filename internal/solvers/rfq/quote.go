@@ -22,13 +22,12 @@ type priceReader interface {
 // safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the
 // reader cache and the store — are individually synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID     int64
-	executor    common.Address
-	discountBps uint64
-	reader      priceReader
-	store       *store
-	log         logr.Logger
-	now         func() time.Time
+	chainID  int64
+	executor common.Address
+	reader   priceReader
+	store    *store
+	log      logr.Logger
+	now      func() time.Time
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
@@ -57,7 +56,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, errors.Errorf("quote: adapter getAmountOut: %w", err)
 	}
 
-	best := selectBestStrategy(req, inv, tokenInDecimals, qs.discountBps, oracle, qs.now())
+	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, qs.now())
 	if best == nil {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil

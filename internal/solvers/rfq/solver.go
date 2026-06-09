@@ -55,20 +55,18 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	quotes := &quoteService{
-		chainID:     chainID,
-		executor:    cfg.Executor,
-		discountBps: cfg.QuoteDiscountBps,
-		reader:      rdr,
-		store:       st,
-		log:         log,
-		now:         time.Now,
+		chainID:  chainID,
+		executor: cfg.Executor,
+		reader:   rdr,
+		store:    st,
+		log:      log,
+		now:      time.Now,
 	}
 	exec := &executionService{
 		chainID:         chainID,
 		executor:        cfg.Executor,
 		curatorRegistry: cfg.CuratorRegistry,
 		orderLimit:      cfg.OrderLimit,
-		discountBps:     cfg.QuoteDiscountBps,
 		vaults:          cfg.Vaults,
 		backend:         newBackendClient(cfg.BackendURL),
 		store:           st,
@@ -102,7 +100,6 @@ func (s *Solver) Run(ctx context.Context) error {
 		"executor", s.cfg.Executor.Hex(),
 		"adapter", s.cfg.Adapter.Hex(),
 		"backendUrl", s.cfg.BackendURL,
-		"quoteDiscountBps", s.cfg.QuoteDiscountBps,
 	)
 
 	httpSrv := &http.Server{

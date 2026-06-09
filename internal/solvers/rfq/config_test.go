@@ -31,9 +31,6 @@ func TestParseConfig_Defaults(t *testing.T) {
 	if cfg.ListenAddr != defaultListenAddr {
 		t.Fatalf("listenAddr = %q, want %q", cfg.ListenAddr, defaultListenAddr)
 	}
-	if cfg.QuoteDiscountBps != defaultDiscountBps {
-		t.Fatalf("quoteDiscountBps = %d, want %d", cfg.QuoteDiscountBps, defaultDiscountBps)
-	}
 	if cfg.PollInterval != defaultPollInterval {
 		t.Fatalf("pollInterval = %s, want %s", cfg.PollInterval, defaultPollInterval)
 	}
@@ -45,7 +42,6 @@ func TestParseConfig_Defaults(t *testing.T) {
 func TestParseConfig_Overrides(t *testing.T) {
 	cfg, err := parse(t, minimalConfig+`
 listenAddr: ":9000"
-quoteDiscountBps: 250
 pollIntervalMs: 1500
 orderLimit: 5
 reactor: "0x0000000000000000000000000000000000000030"
@@ -53,7 +49,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
-	if cfg.ListenAddr != ":9000" || cfg.QuoteDiscountBps != 250 ||
+	if cfg.ListenAddr != ":9000" ||
 		cfg.PollInterval != 1500*time.Millisecond || cfg.OrderLimit != 5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
@@ -79,13 +75,6 @@ backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
 adapter: "0x0000000000000000000000000000000000000020"
-`,
-		"discount too high": `
-backendUrl: https://x
-backendSharedSecretEnv: S
-executor: "0x0000000000000000000000000000000000000010"
-adapter: "0x0000000000000000000000000000000000000020"
-quoteDiscountBps: 10001
 `,
 	}
 	for name, body := range cases {

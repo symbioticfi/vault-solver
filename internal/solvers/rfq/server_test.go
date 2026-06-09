@@ -45,13 +45,12 @@ func testServer() *server {
 	clk := func() time.Time { return time.Unix(0, 0) }
 	st := newStore(clk)
 	q := &quoteService{
-		chainID:     1,
-		executor:    execAddr,
-		discountBps: 1000,
-		reader:      fakeReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
-		store:       st,
-		log:         logr.Discard(),
-		now:         clk,
+		chainID:  1,
+		executor: execAddr,
+		reader:   fakeReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
+		store:    st,
+		log:      logr.Discard(),
+		now:      clk,
 	}
 	return &server{sharedSecret: testSecret, quotes: q, log: logr.Discard()}
 }
@@ -115,8 +114,8 @@ func TestServer_QuoteOK(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.AmountOut != "900000" { // 1.0 USDC oracle − 10% discount
-		t.Fatalf("amountOut = %s, want 900000", resp.AmountOut)
+	if resp.AmountOut != "1000000" { // 1.0 USDC oracle, no quote discount
+		t.Fatalf("amountOut = %s, want 1000000", resp.AmountOut)
 	}
 	if resp.Filler != "0x0000000000000000000000000000000000000010" {
 		t.Fatalf("filler = %s, want lowercased executor", resp.Filler)
