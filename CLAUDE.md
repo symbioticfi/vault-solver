@@ -32,7 +32,7 @@ To add a new integration (e.g. `rfq`):
 2. Self-register in `init()` via `solver.Register(Name, factory)`; blank-import the package from `main`.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).
-4. Decode your own config from the deferred `solver.config` YAML node — no framework edits.
+4. Decode your own config from the deferred `solvers[].config` YAML node — no framework edits.
 
 If you find yourself adding an `if integration == "3f"` branch or a protocol-specific field in the
 generic layer, stop — the abstraction is wrong. Generalize the mechanism instead of special-casing.
@@ -42,9 +42,12 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - **All configuration comes from the YAML config file** (and, at runtime, from the upstream API).
   Do not hardcode addresses, URLs, chain IDs, rates, intervals, or limits in Go. The bot is started
   with `run --config <path>`; there is no other source of operational config.
-- The generic layer decodes only `chain`, `signer`, `txManager`, `observability`, and `solver.name`,
-  and keeps `solver.config` as an opaque `yaml.Node` (two-stage decode). Each solver decodes that node
-  into its own typed, **validated** struct in `parseConfig`.
+- Config lists solvers under `solvers:` (one or more, at most one per type). The generic layer decodes
+  only `chain`, `signer`, `txManager`, `observability`, and each `solvers[].name`, and keeps each
+  `solvers[].config` as an opaque `yaml.Node` (two-stage decode); each solver decodes that node into
+  its own typed, **validated** struct in `parseConfig`. All solvers run in one process and share the
+  chain client, signer, and the single nonce-serialized `txManager` — which is why multiple solvers on
+  one EOA never race on nonces.
 - **Prefer values from the upstream source over constants.** When the 3F API (or any integration's
   source of truth) provides a value — e.g. the EIP-712 domain `name`/`version`/`chainId` — read it
   from there; use an in-code constant only as a *fallback* when the source omits it, and say so.
@@ -130,7 +133,7 @@ the high-level architecture, design decisions, and the live TODO list. They are 
 
 - Run gate: `make format && make test && make lint && go build ./...`
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
-  `api/bindings/<name>/` + a `solver.config` block. No framework changes.
+  `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
 - Keep the plan current: architecture/design or TODO changes must update `PLAN.md` / `docs/*-PLAN.md`
   in the same change.

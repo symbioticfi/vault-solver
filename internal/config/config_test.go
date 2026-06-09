@@ -22,11 +22,11 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
-solver:
-  name: 3f-bridge-facilitator
-  config:
-    apiBaseUrl: https://bf.dev.gcp.3f.xyz
-    answer: 42
+solvers:
+  - name: 3f-bridge-facilitator
+    config:
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      answer: 42
 `
 
 func TestLoad_ValidAppliesDefaults(t *testing.T) {
@@ -110,9 +110,9 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
-solver:
-  name: x
-  config: {}
+solvers:
+  - name: x
+    config: {}
 `
 	cfg, err := Load(writeTemp(t, body))
 	if err != nil {
@@ -134,10 +134,10 @@ func TestLoad_ExpandsEnvInSolverConfigBlock(t *testing.T) {
 	body := `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-solver:
-  name: x
-  config:
-    apiBaseUrl: ${TEST_API_URL}
+solvers:
+  - name: x
+    config:
+      apiBaseUrl: ${TEST_API_URL}
 `
 	cfg, err := Load(writeTemp(t, body))
 	if err != nil {
@@ -159,37 +159,37 @@ func TestLoad_RejectsInvalid(t *testing.T) {
 		"missing rpcUrl": `
 chain: {chainId: 1}
 signer: {keyEnv: K}
-solver: {name: x}
+solvers: [{name: x}]
 `,
 		"missing chainId": `
 chain: {rpcUrl: http://x}
 signer: {keyEnv: K}
-solver: {name: x}
+solvers: [{name: x}]
 `,
 		"no signer source": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {}
-solver: {name: x}
+solvers: [{name: x}]
 `,
 		"both signer sources": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K, keystorePath: ./k.json, passphraseEnv: P}
-solver: {name: x}
+solvers: [{name: x}]
 `,
 		"keystore without passphrase": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keystorePath: ./k.json}
-solver: {name: x}
+solvers: [{name: x}]
 `,
 		"missing solver name": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-solver: {}
+solvers: [{}]
 `,
 		"unknown field": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-solver: {name: x}
+solvers: [{name: x}]
 bogus: true
 `,
 	}
