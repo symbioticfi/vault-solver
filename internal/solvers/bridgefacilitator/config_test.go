@@ -23,7 +23,6 @@ const oneTarget = `
 apiBaseUrl: https://bf.example
 vault: "0x0000000000000000000000000000000000000001"
 adapter: "0x0000000000000000000000000000000000000002"
-exposure: {perRequestMaxUsdc: "1", totalSleeveMaxUsdc: "1", maxConcurrentLoans: 1}
 `
 
 func TestParseConfig_RedeemBatchSizeDefaults(t *testing.T) {

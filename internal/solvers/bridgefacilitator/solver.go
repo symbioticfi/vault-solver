@@ -187,15 +187,17 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 // matching auction. `committed`/`opened` accumulate this pass's offers so successive bids see the
 // reduced capacity — preserving the no-over-commit guarantee without re-reading per auction.
 func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []threef.AuctionDto) {
-	// One multicall fetches fundable liquidity, live exposure, and the open-loan count together.
-	fundable, outstanding, openCount, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
+	// One multicall fetches liquidity, live exposure, the open-loan count, and the adapter's caps.
+	st, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
 	if err != nil {
 		s.log.Error(err, "offer: liquidity/exposure", "adapter", target.Adapter.Hex())
 		return
 	}
 	s.log.V(1).Info("target liquidity",
 		"adapter", target.Adapter.Hex(), "vault", target.Vault.Hex(),
-		"fundable", fundable.String(), "outstanding", outstanding.String(), "openLoans", openCount)
+		"fundable", st.fundable.String(), "outstanding", st.outstanding.String(), "openLoans", st.openCount,
+		"perRequestMax", st.perRequestMax.String(), "totalMax", st.totalMax.String(),
+		"minYieldBps", st.minYieldBps.String(), "maxConcurrent", st.maxConcurrent)
 
 	committed := new(big.Int)
 	opened := 0
@@ -231,30 +233,30 @@ func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []t
 		}
 
 		principal, ok := sizeOffer(sizeInputs{
-			perRequestMax:   target.Exposure.PerRequestMax,
-			fundable:        new(big.Int).Sub(fundable, committed),
+			perRequestMax:   st.perRequestMax,
+			fundable:        new(big.Int).Sub(st.fundable, committed),
 			amountRequested: av.amountRequested(),
-			sleeveMax:       target.Exposure.TotalSleeveMax,
-			outstanding:     new(big.Int).Add(outstanding, committed),
-			openCount:       openCount + opened,
-			maxConcurrent:   target.Exposure.MaxConcurrentLoans,
+			sleeveMax:       st.totalMax,
+			outstanding:     new(big.Int).Add(st.outstanding, committed),
+			openCount:       st.openCount + opened,
+			maxConcurrent:   st.maxConcurrent,
 		})
 		if !ok {
 			s.log.Info("skip auction: not biddable under policy/liquidity", "auctionId", auctionID,
-				"request", request.Hex(), "fundableRemaining", new(big.Int).Sub(fundable, committed).String(),
-				"openLoans", openCount+opened, "maxConcurrent", target.Exposure.MaxConcurrentLoans)
+				"request", request.Hex(), "fundableRemaining", new(big.Int).Sub(st.fundable, committed).String(),
+				"openLoans", st.openCount+opened, "maxConcurrent", st.maxConcurrent)
 			continue
 		}
 
 		// The adapter configured for this target is the offer maker (validated via EIP-1271).
-		dto, bid, buildErr := s.buildSignedOffer(av, request, target.Adapter, principal)
+		dto, bid, buildErr := s.buildSignedOffer(av, request, target.Adapter, principal, st.minYieldBps)
 		if buildErr != nil {
 			s.log.Error(buildErr, "offer: build", "request", request.Hex())
 			continue
 		}
 		if !bid {
-			s.log.Info("skip auction: rate below configured return floor", "auctionId", auctionID,
-				"request", request.Hex(), "maxRateBps", av.maxRate(), "minReturnBps", s.cfg.MinReturnBps)
+			s.log.Info("skip auction: rate below on-chain return floor", "auctionId", auctionID,
+				"request", request.Hex(), "maxRateBps", av.maxRate(), "minYieldBps", st.minYieldBps.String())
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
@@ -301,13 +303,13 @@ func (s *Solver) redeemAll(ctx context.Context) {
 // reconcile reports the live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
 	target := s.cfg.Target
-	_, outstanding, openCount, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
+	st, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
 	if err != nil {
 		s.log.Error(err, "reconcile", "adapter", target.Adapter.Hex())
 		return
 	}
 	s.log.Info("reconcile", "adapter", target.Adapter.Hex(),
-		"openLoans", openCount, "outstandingPrincipal", outstanding.String())
+		"openLoans", st.openCount, "outstandingPrincipal", st.outstanding.String())
 }
 
 // nextNonce returns a strictly-increasing offer nonce.
