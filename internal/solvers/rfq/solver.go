@@ -76,12 +76,9 @@ func buildServices(
 ) (*quoteService, *executionService) {
 	// The whitelist is shared by quoting (drop non-whitelisted request adapters) and execution
 	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Vaults
-	// and are therefore whitelisted by construction.
+	// and are therefore whitelisted by construction. parseConfig rejects an enabled whitelist with
+	// no vaults, so an enabled whitelist is never empty here.
 	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Vaults)
-	if cfg.AdapterWhitelistEnabled && len(cfg.Vaults) == 0 {
-		log.Info("adapter whitelist is enabled with no vaults configured; every quote will be declined " +
-			"(add vaults entries or set adapterWhitelistEnabled: false)")
-	}
 
 	quotes := &quoteService{
 		chainID:   chainID,

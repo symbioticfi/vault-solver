@@ -121,8 +121,8 @@ list serves two purposes:
 - **Adapter whitelist** (`adapterWhitelistEnabled`, off by default — every adapter the backend
   advertises is accepted): when enabled, only the `vaults[].adapter` addresses are quoted and filled
   through. Non-whitelisted adapters in a `/quote` request are dropped (none left ⇒ 204), and backend
-  discounts with a non-whitelisted adapter are ignored during recovery. Fail closed: whitelist
-  enabled with an empty `vaults` list declines every quote (a startup log calls this out).
+  discounts with a non-whitelisted adapter are ignored during recovery. Enabling it with an empty
+  `vaults` list is a misconfiguration and is rejected at startup.
 - **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
   multicall scans (recovery's direct inventories are whitelisted by construction).
 
@@ -227,10 +227,10 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
   order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
   and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).
-  Two deliberate divergences: the Go default is **off** (the TS default is on — enable it explicitly
-  to enforce the whitelist; when enabled, an empty `vaults` list fails closed in both), and Go
-  rejects zero-address `vaults` entries at startup (the TS manifest schema does not), so a
-  placeholder config cannot put `address(0)` on the whitelist.
+  Deliberate divergences: the Go default is **off** (the TS default is on — enable it explicitly to
+  enforce the whitelist); an enabled whitelist with an empty `vaults` list is rejected at startup
+  (TS runs and quotes nothing); and Go rejects zero-address `vaults` entries at startup (the TS
+  manifest schema does not), so a placeholder config cannot put `address(0)` on the whitelist.
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.

@@ -76,7 +76,7 @@ both a request/response **quote server** and an order-filling **poller**:
   persists the chosen strategy by `quoteId`, and returns an `amountOut` (or `204` when it cannot
   quote — wrong chain, no whitelisted adapter, no matching asset, or no viable strategy). With
   `adapterWhitelistEnabled` (off by default), quoting and filling are restricted to the adapters of
-  the configured `vaults` (fail closed — enabled with an empty `vaults` list quotes nothing). The
+  the configured `vaults` (enabling it without `vaults` entries fails at startup). The
   HTTP surface is **code-first OpenAPI 3.1**: request validation and the spec served at
   `/openapi.json` + `/docs` are generated from the same typed structs; `/health` is public.
 - **Fill** — polls `GET /orders?filler=<executor>&orderStatus=open` every `pollIntervalMs`, then

@@ -43,11 +43,18 @@ func TestParseConfig_Defaults(t *testing.T) {
 }
 
 func TestParseConfig_AdapterWhitelistFlag(t *testing.T) {
+	// Enabling requires at least one vaults entry (parseConfig rejects an empty whitelist).
+	vaults := `
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "0x0000000000000000000000000000000000000042"
+    asset: "0x0000000000000000000000000000000000000043"
+`
 	cases := map[string]struct {
 		yaml string
 		want bool
 	}{
-		"explicit true":  {yaml: "adapterWhitelistEnabled: true", want: true},
+		"explicit true":  {yaml: "adapterWhitelistEnabled: true" + vaults, want: true},
 		"explicit false": {yaml: "adapterWhitelistEnabled: false", want: false},
 	}
 	for name, tc := range cases {
@@ -154,6 +161,9 @@ executor: "0x0000000000000000000000000000000000000010"
 backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
+`,
+		"whitelist enabled without vaults": minimalConfig + `
+adapterWhitelistEnabled: true
 `,
 	}
 	for name, body := range cases {

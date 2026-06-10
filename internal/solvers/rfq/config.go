@@ -48,8 +48,8 @@ type Config struct {
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
 	// AdapterWhitelistEnabled restricts quoting and filling to the adapters of the configured
-	// Vaults. Off by default: every adapter the backend advertises is accepted. While enabled, an
-	// empty Vaults list accepts no adapters at all — fail closed.
+	// Vaults. Off by default: every adapter the backend advertises is accepted. Enabling it
+	// requires at least one Vaults entry — parseConfig rejects an enabled, empty whitelist.
 	AdapterWhitelistEnabled bool
 	// Vaults is the configured vault/adapter universe: the whitelist source (see
 	// AdapterWhitelistEnabled) and the candidate universe used to rebuild a strategy on-chain when
@@ -109,6 +109,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, verr
 		}
 		cfg.Vaults = append(cfg.Vaults, rv)
+	}
+	// An enabled whitelist with nothing on it would decline every quote — a misconfiguration, not a
+	// runnable state.
+	if cfg.AdapterWhitelistEnabled && len(cfg.Vaults) == 0 {
+		return nil, errors.New("adapterWhitelistEnabled requires at least one vaults entry")
 	}
 	return cfg, nil
 }

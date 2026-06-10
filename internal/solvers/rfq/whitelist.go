@@ -5,7 +5,8 @@ import "github.com/ethereum/go-ethereum/common"
 // adapterWhitelist is the set of adapters this filler will quote and fill through, built from the
 // configured `vaults` list's LiquidLane adapters (the config analogue of the TS filler's deployment
 // manifest). nil means filtering is disabled: every adapter the backend advertises is accepted. A
-// non-nil empty set (whitelist enabled, no vaults configured) accepts no adapters at all — fail closed.
+// non-nil empty set accepts no adapters at all — fail closed as defense in depth; parseConfig
+// rejects the enabled-but-empty configuration outright, so it is unreachable from config.
 type adapterWhitelist map[common.Address]bool
 
 // buildAdapterWhitelist derives the whitelist from the configured vaults, or nil when disabled.

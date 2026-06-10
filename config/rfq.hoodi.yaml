@@ -34,7 +34,7 @@ solvers:
       orderLimit: 20 # max open orders fetched per poll
       # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
       #                               # accepted). Enable to only quote/fill through the adapters
-      #                               # listed in `vaults` (fail closed: enabled + empty vaults = no quotes).
+      #                               # listed in `vaults` (requires ≥1 entry; rejected at startup otherwise).
       # Per-vault LiquidLane adapters: the candidate universe for on-chain strategy recovery (e.g.
       # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
       # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
