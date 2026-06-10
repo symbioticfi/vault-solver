@@ -4,34 +4,39 @@ import (
 	"math/big"
 )
 
-// sizeInputs are the bounds that constrain how much principal the bot may offer for one Request.
+// sizeInputs are the bounds that constrain how much principal the bot may offer for one Request. The
+// caps mirror the adapter's authoritative on-chain exposure limits (each 0 = disabled).
 type sizeInputs struct {
-	perRequestMax   *big.Int // curator per-Request cap
-	fundable        *big.Int // remaining room under the delegator's per-adapter cap (chain read)
+	perRequestMax   *big.Int // adapter perRequestMaxCollateral (0 = no limit)
+	fundable        *big.Int // delegator-cap + vault-liquidity headroom (chain read)
 	amountRequested *big.Int // auction ask; nil if unknown
-	sleeveMax       *big.Int // curator total-sleeve cap
+	sleeveMax       *big.Int // adapter totalMaxCollateral (0 = no limit)
 	outstanding     *big.Int // live sleeve exposure (sum of open principals)
 
 	openCount     int
-	maxConcurrent int
+	maxConcurrent int // adapter maxConcurrentLoans (0 = no limit)
 }
 
-// sizeOffer returns the principal to offer and whether to bid at all. It bids only when within
-// concurrency + sleeve headroom, then caps the amount to the binding minimum of every limit.
-// Committing more than `fundable` would make the just-in-time allocation inside the consume
-// callback revert, so it is a hard cap. Request authorization is enforced on-chain by the 3F
-// whitelist at consume time, so the bot applies only its own risk caps here.
+// sizeOffer returns the principal to offer and whether to bid at all. `fundable` is always a hard cap —
+// committing more would make the just-in-time allocation inside the consume callback revert. The
+// per-Request, sleeve, and concurrency caps apply only when set (0 = disabled). Request authorization
+// is enforced on-chain by the 3F whitelist at consume time, so the bot applies only these risk caps.
 func sizeOffer(in sizeInputs) (*big.Int, bool) {
-	if in.openCount >= in.maxConcurrent {
-		return nil, false
-	}
-	sleeveRoom := new(big.Int).Sub(in.sleeveMax, in.outstanding)
-	if sleeveRoom.Sign() <= 0 {
+	if in.maxConcurrent > 0 && in.openCount >= in.maxConcurrent {
 		return nil, false
 	}
 
-	amount := minBig(in.perRequestMax, in.fundable)
-	amount = minBig(amount, sleeveRoom)
+	amount := new(big.Int).Set(in.fundable)
+	if in.perRequestMax != nil && in.perRequestMax.Sign() > 0 {
+		amount = minBig(amount, in.perRequestMax)
+	}
+	if in.sleeveMax != nil && in.sleeveMax.Sign() > 0 {
+		sleeveRoom := new(big.Int).Sub(in.sleeveMax, in.outstanding)
+		if sleeveRoom.Sign() <= 0 {
+			return nil, false
+		}
+		amount = minBig(amount, sleeveRoom)
+	}
 	if in.amountRequested != nil && in.amountRequested.Sign() > 0 {
 		amount = minBig(amount, in.amountRequested)
 	}
