@@ -5,8 +5,7 @@ import (
 )
 
 // sizeInputs are the bounds that constrain how much principal the bot may offer for one Request. The
-// caps mirror the adapter's on-chain exposure limits (perRequestMax / sleeveMax / maxConcurrent), each
-// 0 = disabled; the contract enforces them authoritatively at consume time and the bot pre-screens here.
+// caps mirror the adapter's authoritative on-chain exposure limits (each 0 = disabled).
 type sizeInputs struct {
 	perRequestMax   *big.Int // adapter perRequestMaxCollateral (0 = no limit)
 	fundable        *big.Int // delegator-cap + vault-liquidity headroom (chain read)
@@ -20,9 +19,8 @@ type sizeInputs struct {
 
 // sizeOffer returns the principal to offer and whether to bid at all. `fundable` is always a hard cap —
 // committing more would make the just-in-time allocation inside the consume callback revert. The
-// per-Request, sleeve, and concurrency caps come from the adapter on-chain and apply only when set
-// (0 = disabled). Request authorization is enforced on-chain by the 3F whitelist at consume time, so
-// the bot applies only these risk caps here.
+// per-Request, sleeve, and concurrency caps apply only when set (0 = disabled). Request authorization
+// is enforced on-chain by the 3F whitelist at consume time, so the bot applies only these risk caps.
 func sizeOffer(in sizeInputs) (*big.Int, bool) {
 	if in.maxConcurrent > 0 && in.openCount >= in.maxConcurrent {
 		return nil, false

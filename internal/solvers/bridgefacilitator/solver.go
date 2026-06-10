@@ -187,8 +187,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 // matching auction. `committed`/`opened` accumulate this pass's offers so successive bids see the
 // reduced capacity — preserving the no-over-commit guarantee without re-reading per auction.
 func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []threef.AuctionDto) {
-	// One multicall fetches fundable liquidity, live exposure, the open-loan count, and the adapter's
-	// on-chain exposure caps together.
+	// One multicall fetches liquidity, live exposure, the open-loan count, and the adapter's caps.
 	st, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
 	if err != nil {
 		s.log.Error(err, "offer: liquidity/exposure", "adapter", target.Adapter.Hex())
@@ -249,8 +248,7 @@ func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []t
 			continue
 		}
 
-		// The adapter configured for this target is the offer maker (validated via EIP-1271). The yield
-		// floor is the adapter's on-chain minRequestYieldBps (enforced again at consume time).
+		// The adapter configured for this target is the offer maker (validated via EIP-1271).
 		dto, bid, buildErr := s.buildSignedOffer(av, request, target.Adapter, principal, st.minYieldBps)
 		if buildErr != nil {
 			s.log.Error(buildErr, "offer: build", "request", request.Hex())

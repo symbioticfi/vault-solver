@@ -111,10 +111,9 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 	return d, nil
 }
 
-// exposureState bundles the per-target liquidity and the adapter's on-chain exposure caps the offer
-// sizer needs, all from one multicall. The four caps are the adapter's authoritative risk limits set
-// via setExposureLimits (each 0 = disabled); the bot reads them to pre-screen offers before the
-// contract enforces them at consume time.
+// exposureState bundles the per-target liquidity and the adapter's exposure caps the offer sizer needs.
+// The four caps are the adapter's authoritative on-chain risk limits (setExposureLimits, each 0 =
+// disabled); the bot reads them to pre-screen offers before the contract enforces them at consume time.
 type exposureState struct {
 	fundable      *big.Int // max(min(limitOf - totalAssets, vault.withdrawable), 0)
 	outstanding   *big.Int // outstandingPrincipal (live sleeve exposure), clamped >= 0
@@ -125,21 +124,13 @@ type exposureState struct {
 	maxConcurrent int      // maxConcurrentLoans (0 = no limit; an unrepresentable value is treated as none)
 }
 
-// liquidityAndExposure reads, in one multicall, the JIT-funding headroom plus the adapter's exposure
-// caps:
-//
-//	fundable    = max(min(delegator.limitOf(adapter) - adapter.totalAssets(), vault.withdrawable()), 0)
-//	outstanding = adapter.outstandingPrincipal()   // principal in live loans (clamped >= 0)
-//	openCount   = len(adapter.activeRequests())
-//	+ the four setExposureLimits caps (perRequestMaxCollateral / totalMaxCollateral /
-//	  minRequestYieldBps / maxConcurrentLoans)
-//
-// Funding is just-in-time: at consume time the adapter pulls the principal from the vault via the
-// delegator's allocateExact, which can raise at most the vault's withdrawable liquidity. So fundable
-// is bounded by BOTH the per-adapter cap headroom AND vault.withdrawable() — otherwise the bot could
-// sign an offer the JIT pull can't satisfy and the consume would revert (mirrors LiquidLane's
-// getMaxAssets). Because a Multicall can't chain one call's result into another, the delegator address
-// is resolved first (cached; see vaultDelegator), then everything is read in a single batched multicall.
+// liquidityAndExposure reads the JIT-funding headroom plus the adapter's exposure caps in one multicall.
+// Funding is just-in-time: at consume time the adapter pulls the principal via the delegator's
+// allocateExact, which can raise at most the vault's withdrawable liquidity. So fundable is bounded by
+// BOTH the per-adapter cap headroom AND vault.withdrawable() — otherwise the bot could sign an offer the
+// JIT pull can't satisfy and the consume would revert (mirrors LiquidLane's getMaxAssets). A Multicall
+// can't chain one call's result into another, so the delegator address is resolved first (cached; see
+// vaultDelegator), then everything is read in a single batched multicall.
 func (r *reader) liquidityAndExposure(
 	ctx context.Context, vault, adapterAddr common.Address,
 ) (exposureState, error) {

@@ -22,10 +22,10 @@ const offerTTL = 30 * time.Minute
 // to it) a long-lived key. Either way, reactive regeneration on a 401/403 covers revoke/expire.
 const generateKeyDeadline = 100 * 365 * 24 * time.Hour
 
-// buildSignedOffer prices and signs an offer for `request` at `principal`, with `maker` (the
-// adapter) as the on-chain maker. `minYieldBps` is the adapter's on-chain minimum-return floor (0 =
-// none); it returns ok=false (no error) when the auction's rate is below it, i.e. when the bot should
-// simply not bid (the contract enforces the same floor at consume time).
+// buildSignedOffer prices and signs an offer for `request` at `principal`, with `maker` (the adapter)
+// as the on-chain maker. `minYieldBps` is the adapter's on-chain return floor (0 = none); it returns
+// ok=false (no error) when the auction's rate is below it, so the bot doesn't bid (the contract
+// enforces the same floor at consume time).
 func (s *Solver) buildSignedOffer(
 	av auctionView, request, maker common.Address, principal, minYieldBps *big.Int,
 ) (threef.CreateOfferDto, bool, error) {
