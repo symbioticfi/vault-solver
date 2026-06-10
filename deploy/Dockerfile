@@ -30,7 +30,7 @@ RUN go build \
 
 # ─────────────── runtime stage ───────────────
 # Distroless static + nonroot: no shell, no package manager, runs as uid 65532.
-FROM gcr.io/distroless/static-debian13:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot AS final
 
 COPY --from=build /out/vault-solver /usr/local/bin/vault-solver
 
