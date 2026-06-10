@@ -3,7 +3,7 @@ name: Deploy stage
 on:
   push:
     branches:
-      - 'stage'
+      - 'cicd'
 
 jobs:
   docker-build-node:
