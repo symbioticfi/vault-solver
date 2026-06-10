@@ -109,14 +109,22 @@ solver:
     reactor:              "0x…"
     pollIntervalMs: 3000
     orderLimit: 20
-    vaults:                                             # per-vault LiquidLane adapters (recovery only)
+    # adapterWhitelistEnabled: true                     # default false (accept every adapter)
+    vaults:                                             # per-vault LiquidLane adapters (whitelist + recovery)
       - { address: "0x…vault", adapter: "0x…liquidLaneAdapter", asset: "0x…collateral" }
 ```
 
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
-The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`), so no static
-list is needed for quoting. The `vaults` list is only consulted for post-restart **strategy recovery**
-(it bounds the candidate adapter universe the recovery multicall scans).
+The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `vaults`
+list serves two purposes:
+
+- **Adapter whitelist** (`adapterWhitelistEnabled`, off by default — every adapter the backend
+  advertises is accepted): when enabled, only the `vaults[].adapter` addresses are quoted and filled
+  through. Non-whitelisted adapters in a `/quote` request are dropped (none left ⇒ 204), and backend
+  discounts with a non-whitelisted adapter are ignored during recovery. Fail closed: whitelist
+  enabled with an empty `vaults` list declines every quote (a startup log calls this out).
+- **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
+  multicall scans (recovery's direct inventories are whitelisted by construction).
 
 ---
 
@@ -143,6 +151,14 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and
    discount inventories in recovery. Direct + discount fills now match the TS filler. Unit-tested
    (discount-leg selection, discount fill resolves + encodes).
+4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
+   configured `vaults[].adapter` set (`adapterWhitelistEnabled`, off by default — see §3),
+   recovery discounts filtered by the same set, and a fill-time guard that fails the order when a
+   backend-resolved discount's adapter differs from the quoted strategy leg's adapter (no tx is
+   sent; a still-open order is re-armed and re-evaluated next poll, matching the TS lifecycle).
+   Unit-tested (whitelist build/filter, config flag + zero-address rejection, factory wiring, quote
+   200/204 paths incl. disabled toggle, recovery discount filter, mismatch → failed order with no
+   tx).
 
 **Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
 cached `decimals`), and recovery issues one 5-views-per-adapter aggregate3 (`paused`, `vault`,
@@ -155,7 +171,8 @@ cached `decimals`), and recovery issues one 5-views-per-adapter aggregate3 (`pau
 - **`CALLER_ROLE` on the `Executor`** — the bot EOA must be granted it before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
 - **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
-  per-vault `{address, adapter, asset}` list (for recovery), the backend shared secret, and the caller
+  per-vault `{address, adapter, asset}` list (adapter whitelist + recovery — with the whitelist
+  enabled, its default, an empty list declines every quote), the backend shared secret, and the caller
   key (last two via env). Hoodi addresses are known from the TS deployment manifest; local from the
   rfq-integration local-stack deploy.
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
@@ -200,9 +217,20 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   (not `vault`): `discountTerms`/`discountListItem` parse `json:"adapter"`; the on-chain
   `Discount.vault` slot is then filled from that adapter address (positional binding name unchanged).
   A wrong tag here silently zero-fills and breaks every fill, so these are pinned by tests.
-- **Discount-recovery filter** — matches TS exactly: keep discounts where `tokenToRedeem == tokenIn`
-  and the adapter is not already permissioned; the `asset == tokenOut` check is left to the strategy
-  evaluator (no extra collateral pre-filter).
+- **Discount-recovery filter** — matches TS exactly: keep discounts where the adapter is
+  whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
+  `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
+- **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
+  (the Go config analogue of the TS deployment manifest's `vaults`), gated by
+  `adapterWhitelistEnabled` (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env). Same three
+  enforcement points: `/quote` adapter filtering (none left ⇒ 204), recovery discount filtering, and
+  the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
+  order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
+  and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).
+  Two deliberate divergences: the Go default is **off** (the TS default is on — enable it explicitly
+  to enforce the whitelist; when enabled, an empty `vaults` list fails closed in both), and Go
+  rejects zero-address `vaults` entries at startup (the TS manifest schema does not), so a
+  placeholder config cannot put `address(0)` on the whitelist.
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.

@@ -41,7 +41,7 @@ running them together is safe. Each entry's `config` block is typed and validate
 |---|---|---|---|
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | Live on Sepolia dev | [`docs/3F-PLAN.md`](docs/3F-PLAN.md) |
 | `rfq-filler` | RFQ quoting + order filling | Implemented (quote · fill · discounts) | [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) |
-| _(planned)_ `redstone-oev` | Redstone / OEV | Planned | — |
+| _(planned)_ `redstone-oev` | RedStone OEV liquidations | Planned (spec'd) | [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) |
 
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
@@ -67,16 +67,18 @@ list: [`docs/3F-PLAN.md`](docs/3F-PLAN.md).
 
 ### RFQ Filler — `rfq-filler`
 
-An externally-owned solver/executor for Symbiotic RFQ on top of an `InstantRedemptionAdapter`. It is
+An externally-owned solver/executor for Symbiotic RFQ on top of per-vault `LiquidLaneAdapter`s. It is
 both a request/response **quote server** and an order-filling **poller**:
 
 - **Quote** — serves `POST /quote` (gated by an `x-rfq-shared-secret` header from the backend peer):
-  it prices the requested swap off the adapter's on-chain `getAmountOut`, applies a configured
-  discount (`quoteDiscountBps`), selects the best adapter legs across the inventory in the request,
+  it prices the requested swap directly off the adapter's on-chain `getAmountOut` (the oracle rate,
+  quoted as-is), selects the best adapter legs across the inventory in the request,
   persists the chosen strategy by `quoteId`, and returns an `amountOut` (or `204` when it cannot
-  quote — wrong chain, no matching asset, or no viable strategy). The HTTP surface is **code-first
-  OpenAPI 3.1**: request validation and the spec served at `/openapi.json` + `/docs` are generated
-  from the same typed structs; `/health` is public.
+  quote — wrong chain, no whitelisted adapter, no matching asset, or no viable strategy). With
+  `adapterWhitelistEnabled` (off by default), quoting and filling are restricted to the adapters of
+  the configured `vaults` (fail closed — enabled with an empty `vaults` list quotes nothing). The
+  HTTP surface is **code-first OpenAPI 3.1**: request validation and the spec served at
+  `/openapi.json` + `/docs` are generated from the same typed structs; `/health` is public.
 - **Fill** — polls `GET /orders?filler=<executor>&orderStatus=open` every `pollIntervalMs`, then
   drives each awarded order through `queued → submitting → submitted → {filled | expired | failed}`,
   building `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and submitting it
@@ -84,19 +86,20 @@ both a request/response **quote server** and an order-filling **poller**:
   Terminal status is reconciled back from the backend. Order discovery is **poll-only**.
 - **Strategy recovery** — when the quote-time strategy isn't cached (e.g. after a restart), it rebuilds
   one from current on-chain state across the configured `vaults`, restricted to those the executor is
-  authorized to fill through (vault `marketMaker`, `curatorRegistry` curator, or delegated `isFiller`),
-  plus any currently-offered discounts.
+  authorized to fill through (adapter `marketMaker`, adapter `owner`, or delegated `isFiller`),
+  plus any currently-offered discounts through whitelisted adapters.
 - **Leg types** — **direct** legs (the public adapter rate) and **discount** legs (a signature-gated
   private rate resolved fresh from the backend's `/discounts` flow at fill time).
 
 Reads are Multicall3-batched (a warm quote is a single `getAmountOut` multicall; `tokenIn` decimals
 are cached). State is in-memory only — strategies, orders, attempts — and TTL-swept so it stays
 bounded over long runs. The caller EOA must hold `CALLER_ROLE` on the `Executor`. The on-chain
-`Executor`, `InstantRedemptionAdapter`, `Reactor`, and `ICuratorRegistry` live in the sibling `rfq`
-repo, consumed via `api/bindings/rfq/`; the backend contract is pinned by a vendored OpenAPI spec
-(`openapi/rfq-backend.openapi.json`). Config block: `backendUrl`, `backendSharedSecretEnv`,
-`listenAddr`, `executor`, `adapter`, `reactor`, `curatorRegistry`, `quoteDiscountBps`,
-`pollIntervalMs`, `orderLimit`, `vaults` — see [`config/rfq.hoodi.yaml`](config/rfq.hoodi.yaml).
+`Executor` and `Reactor` live in the sibling `rfq` repo and the `LiquidLaneAdapter` in its
+`core-mirror` submodule, all consumed via `api/bindings/rfq/`; the backend contract is pinned by a
+vendored OpenAPI spec (`openapi/rfq-backend.openapi.json`). Config block: `backendUrl`,
+`backendSharedSecretEnv`, `listenAddr`, `executor`, `reactor`, `pollIntervalMs`, `orderLimit`,
+`adapterWhitelistEnabled`, `vaults` — see
+[`config/rfq.hoodi.yaml`](config/rfq.hoodi.yaml).
 Design, decisions, and the live TODO list: [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md).
 
 ## Requirements

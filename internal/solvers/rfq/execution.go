@@ -48,6 +48,7 @@ type executionService struct {
 	executor   common.Address
 	orderLimit int
 	vaults     []recoveryVault
+	whitelist  adapterWhitelist // nil disables adapter filtering
 	backend    orderBackend
 	store      *store
 	reader     recoveryReader
@@ -193,6 +194,14 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
 	discountSwaps, err := e.buildDiscountSwapInputs(ctx, selected)
 	if err != nil {
+		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
+		// order instead of submitting. While the backend still lists the order open, the next poll
+		// re-arms it and re-resolves the discount, so a transient mis-resolution self-heals without
+		// ever sending a tx through the wrong adapter (mirrors the TS filler's lifecycle).
+		if errors.Is(err, errDiscountAdapterMismatch) {
+			e.fail(orderID, err.Error())
+			return
+		}
 		// A discount resolve is a live backend call; treat its failure as transient (leave the order
 		// in submitting and retry next cycle) rather than terminal. Once the order is no longer open
 		// the executable lookup returns nil and reconciliation marks it expired/filled.
@@ -332,8 +341,9 @@ func (e *executionService) buildDiscountSwapInputs(
 }
 
 // discountInventories fetches offered discounts and, for strategy recovery, turns those redeemable
-// against tokenIn into discount-leg candidates: keep discounts whose tokenToRedeem == tokenIn and
-// whose adapter is not already permissioned (the asset==tokenOut check is left to the evaluator).
+// against tokenIn into discount-leg candidates: keep discounts whose adapter is whitelisted, whose
+// tokenToRedeem == tokenIn, and whose adapter is not already permissioned (the asset==tokenOut check
+// is left to the evaluator).
 func (e *executionService) discountInventories(
 	ctx context.Context, tokenIn common.Address, direct []solverInventory,
 ) []solverInventory {
@@ -355,6 +365,9 @@ func (e *executionService) discountInventories(
 			continue
 		}
 		adapter := common.HexToAddress(d.Adapter)
+		if !e.whitelist.allows(adapter) {
+			continue
+		}
 		if seen[adapter] {
 			continue
 		}
@@ -372,6 +385,11 @@ func (e *executionService) discountInventories(
 	return out
 }
 
+// errDiscountAdapterMismatch marks a backend-resolved discount whose adapter differs from the
+// strategy leg it was quoted for. The leg's adapter was whitelist-filtered at selection time, so a
+// mismatch means the backend swapped the adapter under us — never fill through it.
+var errDiscountAdapterMismatch = errors.New("resolved discount adapter does not match the strategy leg adapter")
+
 // toDiscountSwapInput converts a resolved signed discount + its strategy leg into the Executor input.
 func toDiscountSwapInput(
 	r *resolveDiscountResponse, leg strategyLeg, recipient common.Address,
@@ -381,6 +399,10 @@ func toDiscountSwapInput(
 		if !common.IsHexAddress(a) {
 			return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid address %q", a)
 		}
+	}
+	if common.HexToAddress(d.Adapter) != leg.Adapter {
+		return executor.IReactorDiscountSwapInput{}, errors.Errorf(
+			"%w: resolved %s, leg %s", errDiscountAdapterMismatch, d.Adapter, leg.Adapter.Hex())
 	}
 	discount, ok := new(big.Int).SetString(d.Discount, 10)
 	if !ok {

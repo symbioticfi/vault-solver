@@ -54,27 +54,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}
 
-	quotes := &quoteService{
-		chainID:  chainID,
-		executor: cfg.Executor,
-		reader:   rdr,
-		store:    st,
-		log:      log,
-		now:      time.Now,
-	}
-	exec := &executionService{
-		chainID:    chainID,
-		executor:   cfg.Executor,
-		orderLimit: cfg.OrderLimit,
-		vaults:     cfg.Vaults,
-		backend:    newBackendClient(cfg.BackendURL),
-		store:      st,
-		reader:     rdr,
-		txm:        deps.TxManager,
-		log:        log,
-		now:        time.Now,
-		inflight:   make(map[string]bool),
-	}
+	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, log)
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,
@@ -88,6 +68,47 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}, nil
 }
 
+// buildServices wires the quote and execution services from the parsed config and shared deps.
+// Split from factory so the config → service wiring (notably the adapter whitelist reaching both
+// services) is unit-testable without a chain client.
+func buildServices(
+	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
+) (*quoteService, *executionService) {
+	// The whitelist is shared by quoting (drop non-whitelisted request adapters) and execution
+	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Vaults
+	// and are therefore whitelisted by construction.
+	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Vaults)
+	if cfg.AdapterWhitelistEnabled && len(cfg.Vaults) == 0 {
+		log.Info("adapter whitelist is enabled with no vaults configured; every quote will be declined " +
+			"(add vaults entries or set adapterWhitelistEnabled: false)")
+	}
+
+	quotes := &quoteService{
+		chainID:   chainID,
+		executor:  cfg.Executor,
+		whitelist: whitelist,
+		reader:    rdr,
+		store:     st,
+		log:       log,
+		now:       time.Now,
+	}
+	exec := &executionService{
+		chainID:    chainID,
+		executor:   cfg.Executor,
+		orderLimit: cfg.OrderLimit,
+		vaults:     cfg.Vaults,
+		whitelist:  whitelist,
+		backend:    newBackendClient(cfg.BackendURL),
+		store:      st,
+		reader:     rdr,
+		txm:        txm,
+		log:        log,
+		now:        time.Now,
+		inflight:   make(map[string]bool),
+	}
+	return quotes, exec
+}
+
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
@@ -97,7 +118,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
-		"recoveryVaults", len(s.cfg.Vaults),
+		"vaults", len(s.cfg.Vaults),
+		"adapterWhitelistEnabled", s.cfg.AdapterWhitelistEnabled,
 		"backendUrl", s.cfg.BackendURL,
 	)
 

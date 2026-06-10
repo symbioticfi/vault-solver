@@ -11,18 +11,19 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string     `yaml:"backendUrl"`
-	BackendSharedSecretEnv string     `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string     `yaml:"listenAddr"`
-	Executor               string     `yaml:"executor"`
-	Reactor                string     `yaml:"reactor"`
-	PollIntervalMs         int        `yaml:"pollIntervalMs"`
-	OrderLimit             int        `yaml:"orderLimit"`
-	Vaults                 []rawVault `yaml:"vaults"`
+	BackendURL              string     `yaml:"backendUrl"`
+	BackendSharedSecretEnv  string     `yaml:"backendSharedSecretEnv"`
+	ListenAddr              string     `yaml:"listenAddr"`
+	Executor                string     `yaml:"executor"`
+	Reactor                 string     `yaml:"reactor"`
+	PollIntervalMs          int        `yaml:"pollIntervalMs"`
+	OrderLimit              int        `yaml:"orderLimit"`
+	AdapterWhitelistEnabled bool       `yaml:"adapterWhitelistEnabled"`
+	Vaults                  []rawVault `yaml:"vaults"`
 }
 
-// rawVault mirrors one entry of the recovery `vaults` list: a vault, its LiquidLane adapter, and the
-// vault's collateral asset.
+// rawVault mirrors one entry of the `vaults` list (adapter whitelist + recovery universe): a vault,
+// its LiquidLane adapter, and the vault's collateral asset.
 type rawVault struct {
 	Address string `yaml:"address"`
 	Adapter string `yaml:"adapter"`
@@ -46,9 +47,14 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// Vaults is an optional candidate universe used to rebuild a strategy on-chain when the
-	// quote-time strategy isn't cached (e.g. after a restart). Each entry pins a vault, its LiquidLane
-	// adapter, and the expected collateral asset. Empty disables recovery.
+	// AdapterWhitelistEnabled restricts quoting and filling to the adapters of the configured
+	// Vaults. Off by default: every adapter the backend advertises is accepted. While enabled, an
+	// empty Vaults list accepts no adapters at all — fail closed.
+	AdapterWhitelistEnabled bool
+	// Vaults is the configured vault/adapter universe: the whitelist source (see
+	// AdapterWhitelistEnabled) and the candidate universe used to rebuild a strategy on-chain when
+	// the quote-time strategy isn't cached (e.g. after a restart). Each entry pins a vault, its
+	// LiquidLane adapter, and the expected collateral asset. Empty disables recovery.
 	Vaults []recoveryVault
 }
 
@@ -77,12 +83,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 
 	cfg := &Config{
-		BackendURL:             raw.BackendURL,
-		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
-		ListenAddr:             orStr(raw.ListenAddr, defaultListenAddr),
-		Executor:               executor,
-		PollInterval:           defaultPollInterval,
-		OrderLimit:             defaultOrderLimit,
+		BackendURL:              raw.BackendURL,
+		BackendSharedSecretEnv:  raw.BackendSharedSecretEnv,
+		ListenAddr:              orStr(raw.ListenAddr, defaultListenAddr),
+		Executor:                executor,
+		PollInterval:            defaultPollInterval,
+		OrderLimit:              defaultOrderLimit,
+		AdapterWhitelistEnabled: raw.AdapterWhitelistEnabled,
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
@@ -106,18 +113,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	return cfg, nil
 }
 
-// parse validates one recovery vault entry into the typed form.
+// parse validates one vaults entry into the typed form. The zero address is rejected: these
+// addresses feed the adapter whitelist and on-chain recovery reads, so a placeholder left in a
+// config must fail at startup rather than weaken the whitelist.
 func (v rawVault) parse(i int) (recoveryVault, error) {
 	prefix := "vaults[" + strconv.Itoa(i) + "]."
-	addr, err := parseAddress(v.Address, prefix+"address")
+	addr, err := parseNonZeroAddress(v.Address, prefix+"address")
 	if err != nil {
 		return recoveryVault{}, err
 	}
-	adapterAddr, err := parseAddress(v.Adapter, prefix+"adapter")
+	adapterAddr, err := parseNonZeroAddress(v.Adapter, prefix+"adapter")
 	if err != nil {
 		return recoveryVault{}, err
 	}
-	asset, err := parseAddress(v.Asset, prefix+"asset")
+	asset, err := parseNonZeroAddress(v.Asset, prefix+"asset")
 	if err != nil {
 		return recoveryVault{}, err
 	}
@@ -129,6 +138,17 @@ func parseAddress(s, field string) (common.Address, error) {
 		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
 	}
 	return common.HexToAddress(s), nil
+}
+
+func parseNonZeroAddress(s, field string) (common.Address, error) {
+	addr, err := parseAddress(s, field)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if addr == (common.Address{}) {
+		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
+	}
+	return addr, nil
 }
 
 func orStr(v, fallback string) string {
