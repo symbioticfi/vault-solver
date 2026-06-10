@@ -1,0 +1,27 @@
+name: Deploy
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: 'namespace'
+        required: true
+        type: 'string'
+      digest:
+        description: 'image digest'
+        required: true
+        type: 'string'
+
+jobs:
+  daemon:
+    name: Deploy vault-solver daemon
+    uses: symbioticfi/github-workflows-common/.github/workflows/deploy.yml@main
+    secrets: inherit
+    with:
+      NAME: vault-solver
+      NAMESPACE: '${{ inputs.namespace }}'
+      OPTIONS: >-
+          -f .github/chart/common.yaml
+          -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
+          --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
+          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"

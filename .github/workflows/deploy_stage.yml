@@ -1,0 +1,30 @@
+name: Deploy stage
+
+on:
+  push:
+    branches:
+      - 'stage'
+
+jobs:
+  docker-build-node:
+    uses: symbioticfi/github-workflows-common/.github/workflows/docker-build.yml@main
+    with:
+      file: deploy/Dockerfile
+      target: 'final'
+      name: ${{ github.event.repository.name }}/node
+
+  deploy:
+    name: Deploy ${{ matrix.network }}.gprptest.net
+    needs:
+      - docker-build-node
+    strategy:
+      fail-fast: false
+      matrix:
+        network:
+          - hoodi
+          - sepolia
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      namespace: '${{ matrix.network }}-gprptest-net'
+      digest: ${{ needs.docker-build-node.outputs.digest }}
