@@ -23,10 +23,11 @@ const offerTTL = 30 * time.Minute
 const generateKeyDeadline = 100 * 365 * 24 * time.Hour
 
 // buildSignedOffer prices and signs an offer for `request` at `principal`, with `maker` (the
-// adapter) as the on-chain maker. It returns ok=false (no error) when the auction's rate is below
-// the configured return floor, i.e. when the bot should simply not bid.
+// adapter) as the on-chain maker. `minYieldBps` is the adapter's on-chain minimum-return floor (0 =
+// none); it returns ok=false (no error) when the auction's rate is below it, i.e. when the bot should
+// simply not bid (the contract enforces the same floor at consume time).
 func (s *Solver) buildSignedOffer(
-	av auctionView, request, maker common.Address, principal *big.Int,
+	av auctionView, request, maker common.Address, principal, minYieldBps *big.Int,
 ) (threef.CreateOfferDto, bool, error) {
 	auction := av.dto
 	maxRate, ok := auction.GetMaxRateOk()
@@ -34,8 +35,8 @@ func (s *Solver) buildSignedOffer(
 		return threef.CreateOfferDto{}, false, nil
 	}
 	rateBps := float64(*maxRate)
-	if rateBps < s.cfg.MinReturnBps {
-		return threef.CreateOfferDto{}, false, nil // below our return floor
+	if minYieldBps != nil && minYieldBps.Sign() > 0 && rateBps < bpsToFloat(minYieldBps) {
+		return threef.CreateOfferDto{}, false, nil // below the adapter's on-chain return floor
 	}
 
 	expectedReturn := offerExpectedReturn(principal, rateBps)

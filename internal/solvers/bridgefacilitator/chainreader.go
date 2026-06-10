@@ -3,6 +3,7 @@ package bridgefacilitator
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 
@@ -110,32 +111,41 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 	return d, nil
 }
 
-// liquidityAndExposure reads everything the offer sizer needs and reduces it to:
+// exposureState bundles the per-target liquidity and the adapter's on-chain exposure caps the offer
+// sizer needs, all from one multicall. The four caps are the adapter's authoritative risk limits set
+// via setExposureLimits (each 0 = disabled); the bot reads them to pre-screen offers before the
+// contract enforces them at consume time.
+type exposureState struct {
+	fundable      *big.Int // max(min(limitOf - totalAssets, vault.withdrawable), 0)
+	outstanding   *big.Int // outstandingPrincipal (live sleeve exposure), clamped >= 0
+	openCount     int      // len(activeRequests)
+	perRequestMax *big.Int // perRequestMaxCollateral (0 = no limit)
+	totalMax      *big.Int // totalMaxCollateral (0 = no limit)
+	minYieldBps   *big.Int // minRequestYieldBps (0 = no floor)
+	maxConcurrent int      // maxConcurrentLoans (0 = no limit; an unrepresentable value is treated as none)
+}
+
+// liquidityAndExposure reads, in one multicall, the JIT-funding headroom plus the adapter's exposure
+// caps:
 //
 //	fundable    = max(min(delegator.limitOf(adapter) - adapter.totalAssets(), vault.withdrawable()), 0)
 //	outstanding = adapter.outstandingPrincipal()   // principal in live loans (clamped >= 0)
 //	openCount   = len(adapter.activeRequests())
-//
-// In the redesigned core-mirror model the per-adapter cap lives on the vault's delegator
-// (UniversalDelegator.limitOf), not on the vault, and the adapter exposes its own running totals:
-//   - totalAssets()          = free assets + outstanding the adapter holds (what's already against the cap)
-//   - outstandingPrincipal() = principal currently out in live loans (the direct outstanding)
+//	+ the four setExposureLimits caps (perRequestMaxCollateral / totalMaxCollateral /
+//	  minRequestYieldBps / maxConcurrentLoans)
 //
 // Funding is just-in-time: at consume time the adapter pulls the principal from the vault via the
 // delegator's allocateExact, which can raise at most the vault's withdrawable liquidity. So fundable
 // is bounded by BOTH the per-adapter cap headroom AND vault.withdrawable() — otherwise the bot could
 // sign an offer the JIT pull can't satisfy and the consume would revert (mirrors LiquidLane's
 // getMaxAssets). Because a Multicall can't chain one call's result into another, the delegator address
-// is resolved first (cached; see vaultDelegator), then the cap + vault liquidity + adapter totals are
-// read in a single batched multicall.
-//
-//nolint:revive // function-result-limit: (fundable, outstanding, openCount, err) reads clearer than a result struct.
+// is resolved first (cached; see vaultDelegator), then everything is read in a single batched multicall.
 func (r *reader) liquidityAndExposure(
 	ctx context.Context, vault, adapterAddr common.Address,
-) (fundable, outstanding *big.Int, openCount int, err error) {
+) (exposureState, error) {
 	delegatorAddr, err := r.vaultDelegator(ctx, vault)
 	if err != nil {
-		return nil, nil, 0, errors.Errorf("resolve vault delegator: %w", err)
+		return exposureState{}, errors.Errorf("resolve vault delegator: %w", err)
 	}
 
 	calls := []chain.Call{
@@ -144,43 +154,82 @@ func (r *reader) liquidityAndExposure(
 		{Target: adapterAddr, Data: mustPack(adapterABI, "outstandingPrincipal")},
 		{Target: adapterAddr, Data: mustPack(adapterABI, "activeRequests")},
 		{Target: vault, Data: mustPack(vaultABI, "withdrawable")},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "perRequestMaxCollateral")},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "totalMaxCollateral")},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "minRequestYieldBps")},
+		{Target: adapterAddr, Data: mustPack(adapterABI, "maxConcurrentLoans")},
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
 	}
 	if len(res) != len(calls) {
-		return nil, nil, 0, errors.Errorf("multicall returned %d results, want %d", len(res), len(calls))
+		return exposureState{}, errors.Errorf("multicall returned %d results, want %d", len(res), len(calls))
 	}
 	for i, rr := range res {
 		if !rr.Success {
-			return nil, nil, 0, errors.Errorf("liquidity multicall: sub-call %d reverted", i)
+			return exposureState{}, errors.Errorf("liquidity multicall: sub-call %d reverted", i)
 		}
 	}
 
 	limit, err := unpackBig(delegatorABI, "limitOf", res[0].ReturnData)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
 	}
 	held, err := unpackBig(adapterABI, "totalAssets", res[1].ReturnData)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
 	}
 	outstandingPrincipal, err := unpackBig(adapterABI, "outstandingPrincipal", res[2].ReturnData)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
 	}
 	reqs, err := unpackAddresses(adapterABI, "activeRequests", res[3].ReturnData)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
 	}
 	withdrawable, err := unpackBig(vaultABI, "withdrawable", res[4].ReturnData)
 	if err != nil {
-		return nil, nil, 0, err
+		return exposureState{}, err
+	}
+	perRequestMax, err := unpackBig(adapterABI, "perRequestMaxCollateral", res[5].ReturnData)
+	if err != nil {
+		return exposureState{}, err
+	}
+	totalMax, err := unpackBig(adapterABI, "totalMaxCollateral", res[6].ReturnData)
+	if err != nil {
+		return exposureState{}, err
+	}
+	minYieldBps, err := unpackBig(adapterABI, "minRequestYieldBps", res[7].ReturnData)
+	if err != nil {
+		return exposureState{}, err
+	}
+	maxConcurrent, err := unpackBig(adapterABI, "maxConcurrentLoans", res[8].ReturnData)
+	if err != nil {
+		return exposureState{}, err
 	}
 
-	fundable, outstanding = deriveLiquidity(limit, held, outstandingPrincipal, withdrawable)
-	return fundable, outstanding, len(reqs), nil
+	fundable, outstanding := deriveLiquidity(limit, held, outstandingPrincipal, withdrawable)
+	return exposureState{
+		fundable:      fundable,
+		outstanding:   outstanding,
+		openCount:     len(reqs),
+		perRequestMax: perRequestMax,
+		totalMax:      totalMax,
+		minYieldBps:   minYieldBps,
+		maxConcurrent: loanCount(maxConcurrent),
+	}, nil
+}
+
+// loanCount converts the on-chain maxConcurrentLoans uint256 to the sizer's int. 0 (disabled) and any
+// value too large to represent both mean "no concurrency limit".
+func loanCount(n *big.Int) int {
+	if n.IsInt64() {
+		if v := n.Int64(); v > 0 && v <= math.MaxInt32 {
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // deriveLiquidity reduces the raw on-chain reads to the sizer's inputs. Split out as a pure helper so

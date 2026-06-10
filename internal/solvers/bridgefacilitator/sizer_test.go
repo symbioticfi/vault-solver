@@ -60,6 +60,24 @@ func TestSizeOffer(t *testing.T) {
 			mutate: func(in *sizeInputs) { in.outstanding = bi(1_000_000) },
 			wantOK: false,
 		},
+		{
+			name:   "perRequestMax disabled (0): fundable binds",
+			mutate: func(in *sizeInputs) { in.perRequestMax = bi(0) },
+			wantOK: true,
+			want:   bi(500_000),
+		},
+		{
+			name:   "sleeveMax disabled (0): sleeve ignored even when outstanding is high",
+			mutate: func(in *sizeInputs) { in.sleeveMax = bi(0); in.outstanding = bi(900_000) },
+			wantOK: true,
+			want:   bi(250_000), // perRequestMax binds; no sleeve cap
+		},
+		{
+			name:   "maxConcurrent disabled (0): no concurrency limit",
+			mutate: func(in *sizeInputs) { in.maxConcurrent = 0; in.openCount = 100 },
+			wantOK: true,
+			want:   bi(250_000),
+		},
 	}
 
 	for _, tc := range tests {

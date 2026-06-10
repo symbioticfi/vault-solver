@@ -41,7 +41,7 @@ type Offer struct {
 
 // BridgeFacilitatorAdapterMetaData contains all meta data concerning the BridgeFacilitatorAdapter contract.
 var BridgeFacilitatorAdapterMetaData = &bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapterFactory\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeRequests\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"deallocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"outstandingPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"positions\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"principal\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"ytExpected\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"openedAt\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"redeemed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"realizedPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"requests\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestDeallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"vault\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionOpened\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionRedeemed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetVault\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AssetMismatch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientLiquidity\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAttested\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapterFactory\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeRequests\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"deallocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"maxConcurrentLoans\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"minRequestYieldBps\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"outstandingPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"perRequestMaxCollateral\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"positions\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"principal\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"ytExpected\",\"type\":\"uint128\",\"internalType\":\"uint128\"},{\"name\":\"openedAt\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"redeemed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"realizedPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"requests\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestDeallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setExposureLimits\",\"inputs\":[{\"name\":\"perRequestMaxCollateral_\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"totalMaxCollateral_\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"minRequestYieldBps_\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"maxConcurrentLoans_\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"totalMaxCollateral\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"vault\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionOpened\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionRedeemed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yield\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetExposureLimits\",\"inputs\":[{\"name\":\"perRequestMaxCollateral\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"totalMaxCollateral\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"minRequestYieldBps\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"maxConcurrentLoans\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetVault\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AssetMismatch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientLiquidity\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAttested\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"PerRequestCapExceeded\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SleeveCapExceeded\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooManyConcurrentLoans\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"YieldTooLow\",\"inputs\":[]}]",
 }
 
 // BridgeFacilitatorAdapterABI is the input ABI used to generate the binding from.
@@ -376,6 +376,68 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) IsValidS
 	return _BridgeFacilitatorAdapter.Contract.IsValidSignature(&_BridgeFacilitatorAdapter.CallOpts, hash, signature)
 }
 
+// MaxConcurrentLoans is a free data retrieval call binding the contract method 0x0fa715c7.
+//
+// Solidity: function maxConcurrentLoans() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) MaxConcurrentLoans(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "maxConcurrentLoans")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// MaxConcurrentLoans is a free data retrieval call binding the contract method 0x0fa715c7.
+//
+// Solidity: function maxConcurrentLoans() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) MaxConcurrentLoans() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.MaxConcurrentLoans(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// MaxConcurrentLoans is a free data retrieval call binding the contract method 0x0fa715c7.
+//
+// Solidity: function maxConcurrentLoans() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) MaxConcurrentLoans() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.MaxConcurrentLoans(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// MinRequestYieldBps is a free data retrieval call binding the contract method 0x6762571b.
+//
+// Solidity: function minRequestYieldBps() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) MinRequestYieldBps(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "minRequestYieldBps")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// MinRequestYieldBps is a free data retrieval call binding the contract method 0x6762571b.
+//
+// Solidity: function minRequestYieldBps() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) MinRequestYieldBps() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.MinRequestYieldBps(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// MinRequestYieldBps is a free data retrieval call binding the contract method 0x6762571b.
+//
+// Solidity: function minRequestYieldBps() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) MinRequestYieldBps() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.MinRequestYieldBps(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
 // OfferSigner is a free data retrieval call binding the contract method 0x566bd6c3.
 //
 // Solidity: function offerSigner() view returns(address)
@@ -467,6 +529,37 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) Owner() (commo
 // Solidity: function owner() view returns(address)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) Owner() (common.Address, error) {
 	return _BridgeFacilitatorAdapter.Contract.Owner(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// PerRequestMaxCollateral is a free data retrieval call binding the contract method 0xca1f1576.
+//
+// Solidity: function perRequestMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) PerRequestMaxCollateral(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "perRequestMaxCollateral")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// PerRequestMaxCollateral is a free data retrieval call binding the contract method 0xca1f1576.
+//
+// Solidity: function perRequestMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) PerRequestMaxCollateral() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.PerRequestMaxCollateral(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// PerRequestMaxCollateral is a free data retrieval call binding the contract method 0xca1f1576.
+//
+// Solidity: function perRequestMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) PerRequestMaxCollateral() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.PerRequestMaxCollateral(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // Positions is a free data retrieval call binding the contract method 0x55f57510.
@@ -584,6 +677,37 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) TotalAssets() 
 // Solidity: function totalAssets() view returns(uint256)
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) TotalAssets() (*big.Int, error) {
 	return _BridgeFacilitatorAdapter.Contract.TotalAssets(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// TotalMaxCollateral is a free data retrieval call binding the contract method 0xe5a81bbc.
+//
+// Solidity: function totalMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCaller) TotalMaxCollateral(opts *bind.CallOpts) (*big.Int, error) {
+	var out []interface{}
+	err := _BridgeFacilitatorAdapter.contract.Call(opts, &out, "totalMaxCollateral")
+
+	if err != nil {
+		return *new(*big.Int), err
+	}
+
+	out0 := *abi.ConvertType(out[0], new(*big.Int)).(**big.Int)
+
+	return out0, err
+
+}
+
+// TotalMaxCollateral is a free data retrieval call binding the contract method 0xe5a81bbc.
+//
+// Solidity: function totalMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) TotalMaxCollateral() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.TotalMaxCollateral(&_BridgeFacilitatorAdapter.CallOpts)
+}
+
+// TotalMaxCollateral is a free data retrieval call binding the contract method 0xe5a81bbc.
+//
+// Solidity: function totalMaxCollateral() view returns(uint256)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterCallerSession) TotalMaxCollateral() (*big.Int, error) {
+	return _BridgeFacilitatorAdapter.Contract.TotalMaxCollateral(&_BridgeFacilitatorAdapter.CallOpts)
 }
 
 // Vault is a free data retrieval call binding the contract method 0xfbfa77cf.
@@ -835,6 +959,27 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) RequestDealloc
 // Solidity: function requestDeallocate(uint256 amount) returns()
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) RequestDeallocate(amount *big.Int) (*types.Transaction, error) {
 	return _BridgeFacilitatorAdapter.Contract.RequestDeallocate(&_BridgeFacilitatorAdapter.TransactOpts, amount)
+}
+
+// SetExposureLimits is a paid mutator transaction binding the contract method 0xe05d0a0c.
+//
+// Solidity: function setExposureLimits(uint256 perRequestMaxCollateral_, uint256 totalMaxCollateral_, uint256 minRequestYieldBps_, uint256 maxConcurrentLoans_) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactor) SetExposureLimits(opts *bind.TransactOpts, perRequestMaxCollateral_ *big.Int, totalMaxCollateral_ *big.Int, minRequestYieldBps_ *big.Int, maxConcurrentLoans_ *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.contract.Transact(opts, "setExposureLimits", perRequestMaxCollateral_, totalMaxCollateral_, minRequestYieldBps_, maxConcurrentLoans_)
+}
+
+// SetExposureLimits is a paid mutator transaction binding the contract method 0xe05d0a0c.
+//
+// Solidity: function setExposureLimits(uint256 perRequestMaxCollateral_, uint256 totalMaxCollateral_, uint256 minRequestYieldBps_, uint256 maxConcurrentLoans_) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterSession) SetExposureLimits(perRequestMaxCollateral_ *big.Int, totalMaxCollateral_ *big.Int, minRequestYieldBps_ *big.Int, maxConcurrentLoans_ *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.SetExposureLimits(&_BridgeFacilitatorAdapter.TransactOpts, perRequestMaxCollateral_, totalMaxCollateral_, minRequestYieldBps_, maxConcurrentLoans_)
+}
+
+// SetExposureLimits is a paid mutator transaction binding the contract method 0xe05d0a0c.
+//
+// Solidity: function setExposureLimits(uint256 perRequestMaxCollateral_, uint256 totalMaxCollateral_, uint256 minRequestYieldBps_, uint256 maxConcurrentLoans_) returns()
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterTransactorSession) SetExposureLimits(perRequestMaxCollateral_ *big.Int, totalMaxCollateral_ *big.Int, minRequestYieldBps_ *big.Int, maxConcurrentLoans_ *big.Int) (*types.Transaction, error) {
+	return _BridgeFacilitatorAdapter.Contract.SetExposureLimits(&_BridgeFacilitatorAdapter.TransactOpts, perRequestMaxCollateral_, totalMaxCollateral_, minRequestYieldBps_, maxConcurrentLoans_)
 }
 
 // SetOfferSigner is a paid mutator transaction binding the contract method 0x868adcae.
@@ -1452,6 +1597,143 @@ func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchPosition
 func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParsePositionRedeemed(log types.Log) (*BridgeFacilitatorAdapterPositionRedeemed, error) {
 	event := new(BridgeFacilitatorAdapterPositionRedeemed)
 	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "PositionRedeemed", log); err != nil {
+		return nil, err
+	}
+	event.Raw = log
+	return event, nil
+}
+
+// BridgeFacilitatorAdapterSetExposureLimitsIterator is returned from FilterSetExposureLimits and is used to iterate over the raw logs and unpacked data for SetExposureLimits events raised by the BridgeFacilitatorAdapter contract.
+type BridgeFacilitatorAdapterSetExposureLimitsIterator struct {
+	Event *BridgeFacilitatorAdapterSetExposureLimits // Event containing the contract specifics and raw log
+
+	contract *bind.BoundContract // Generic contract to use for unpacking event data
+	event    string              // Event name to use for unpacking event data
+
+	logs chan types.Log        // Log channel receiving the found contract events
+	sub  ethereum.Subscription // Subscription for errors, completion and termination
+	done bool                  // Whether the subscription completed delivering logs
+	fail error                 // Occurred error to stop iteration
+}
+
+// Next advances the iterator to the subsequent event, returning whether there
+// are any more events found. In case of a retrieval or parsing error, false is
+// returned and Error() can be queried for the exact failure.
+func (it *BridgeFacilitatorAdapterSetExposureLimitsIterator) Next() bool {
+	// If the iterator failed, stop iterating
+	if it.fail != nil {
+		return false
+	}
+	// If the iterator completed, deliver directly whatever's available
+	if it.done {
+		select {
+		case log := <-it.logs:
+			it.Event = new(BridgeFacilitatorAdapterSetExposureLimits)
+			if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+				it.fail = err
+				return false
+			}
+			it.Event.Raw = log
+			return true
+
+		default:
+			return false
+		}
+	}
+	// Iterator still in progress, wait for either a data or an error event
+	select {
+	case log := <-it.logs:
+		it.Event = new(BridgeFacilitatorAdapterSetExposureLimits)
+		if err := it.contract.UnpackLog(it.Event, it.event, log); err != nil {
+			it.fail = err
+			return false
+		}
+		it.Event.Raw = log
+		return true
+
+	case err := <-it.sub.Err():
+		it.done = true
+		it.fail = err
+		return it.Next()
+	}
+}
+
+// Error returns any retrieval or parsing error occurred during filtering.
+func (it *BridgeFacilitatorAdapterSetExposureLimitsIterator) Error() error {
+	return it.fail
+}
+
+// Close terminates the iteration process, releasing any pending underlying
+// resources.
+func (it *BridgeFacilitatorAdapterSetExposureLimitsIterator) Close() error {
+	it.sub.Unsubscribe()
+	return nil
+}
+
+// BridgeFacilitatorAdapterSetExposureLimits represents a SetExposureLimits event raised by the BridgeFacilitatorAdapter contract.
+type BridgeFacilitatorAdapterSetExposureLimits struct {
+	PerRequestMaxCollateral *big.Int
+	TotalMaxCollateral      *big.Int
+	MinRequestYieldBps      *big.Int
+	MaxConcurrentLoans      *big.Int
+	Raw                     types.Log // Blockchain specific contextual infos
+}
+
+// FilterSetExposureLimits is a free log retrieval operation binding the contract event 0x32619ec3660c3c554b2e041bb295e0f9b06d8213852d4f704dfa2bb6291272e6.
+//
+// Solidity: event SetExposureLimits(uint256 perRequestMaxCollateral, uint256 totalMaxCollateral, uint256 minRequestYieldBps, uint256 maxConcurrentLoans)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) FilterSetExposureLimits(opts *bind.FilterOpts) (*BridgeFacilitatorAdapterSetExposureLimitsIterator, error) {
+
+	logs, sub, err := _BridgeFacilitatorAdapter.contract.FilterLogs(opts, "SetExposureLimits")
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeFacilitatorAdapterSetExposureLimitsIterator{contract: _BridgeFacilitatorAdapter.contract, event: "SetExposureLimits", logs: logs, sub: sub}, nil
+}
+
+// WatchSetExposureLimits is a free log subscription operation binding the contract event 0x32619ec3660c3c554b2e041bb295e0f9b06d8213852d4f704dfa2bb6291272e6.
+//
+// Solidity: event SetExposureLimits(uint256 perRequestMaxCollateral, uint256 totalMaxCollateral, uint256 minRequestYieldBps, uint256 maxConcurrentLoans)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) WatchSetExposureLimits(opts *bind.WatchOpts, sink chan<- *BridgeFacilitatorAdapterSetExposureLimits) (event.Subscription, error) {
+
+	logs, sub, err := _BridgeFacilitatorAdapter.contract.WatchLogs(opts, "SetExposureLimits")
+	if err != nil {
+		return nil, err
+	}
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		defer sub.Unsubscribe()
+		for {
+			select {
+			case log := <-logs:
+				// New log arrived, parse the event and forward to the user
+				event := new(BridgeFacilitatorAdapterSetExposureLimits)
+				if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetExposureLimits", log); err != nil {
+					return err
+				}
+				event.Raw = log
+
+				select {
+				case sink <- event:
+				case err := <-sub.Err():
+					return err
+				case <-quit:
+					return nil
+				}
+			case err := <-sub.Err():
+				return err
+			case <-quit:
+				return nil
+			}
+		}
+	}), nil
+}
+
+// ParseSetExposureLimits is a log parse operation binding the contract event 0x32619ec3660c3c554b2e041bb295e0f9b06d8213852d4f704dfa2bb6291272e6.
+//
+// Solidity: event SetExposureLimits(uint256 perRequestMaxCollateral, uint256 totalMaxCollateral, uint256 minRequestYieldBps, uint256 maxConcurrentLoans)
+func (_BridgeFacilitatorAdapter *BridgeFacilitatorAdapterFilterer) ParseSetExposureLimits(log types.Log) (*BridgeFacilitatorAdapterSetExposureLimits, error) {
+	event := new(BridgeFacilitatorAdapterSetExposureLimits)
+	if err := _BridgeFacilitatorAdapter.contract.UnpackLog(event, "SetExposureLimits", log); err != nil {
 		return nil, err
 	}
 	event.Raw = log
