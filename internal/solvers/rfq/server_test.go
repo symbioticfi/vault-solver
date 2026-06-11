@@ -162,3 +162,64 @@ func TestServer_QuoteWrongChainNoContent(t *testing.T) {
 		t.Fatalf("wrong-chain quote = %d, want 204", rr.Code)
 	}
 }
+
+func TestServer_QuoteWhitelist(t *testing.T) {
+	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	rogueAdapter := quoteAdapter{
+		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
+		MaxAssets: "10000000", MaxRate: "2000000000000000000",
+	}
+	cases := map[string]struct {
+		whitelist   adapterWhitelist
+		adapters    []quoteAdapter // nil keeps validQuoteBody's single vlt adapter
+		wantCode    int
+		wantAdapter common.Address // the stored strategy's single leg (200 only)
+	}{
+		"drops non-whitelisted adapters": {
+			whitelist:   buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}}),
+			adapters:    append(validQuoteBody().Adapters, rogueAdapter),
+			wantCode:    http.StatusOK,
+			wantAdapter: vlt,
+		},
+		"no whitelisted adapter declines": {
+			whitelist: buildAdapterWhitelist(true, []recoveryVault{{Adapter: rogue}}),
+			wantCode:  http.StatusNoContent,
+		},
+		"enabled with no vaults declines everything": { // fail closed
+			whitelist: buildAdapterWhitelist(true, nil),
+			wantCode:  http.StatusNoContent,
+		},
+		"disabled keeps all adapters": {
+			whitelist:   buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}}),
+			adapters:    []quoteAdapter{rogueAdapter}, // only a non-configured adapter: still quoted
+			wantCode:    http.StatusOK,
+			wantAdapter: rogue,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := testServer()
+			srv.quotes.whitelist = tc.whitelist
+			body := validQuoteBody()
+			if tc.adapters != nil {
+				body.Adapters = tc.adapters
+			}
+
+			rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("quote = %d, want %d (body %s)", rr.Code, tc.wantCode, rr.Body.String())
+			}
+
+			stored := srv.quotes.store.strategy(body.QuoteID)
+			if tc.wantCode == http.StatusNoContent {
+				if stored != nil {
+					t.Fatalf("no strategy should be stored for a declined quote, got %+v", stored)
+				}
+				return
+			}
+			if stored == nil || len(stored.Legs) != 1 || stored.Legs[0].Adapter != tc.wantAdapter {
+				t.Fatalf("stored strategy = %+v, want a single leg through %s", stored, tc.wantAdapter.Hex())
+			}
+		})
+	}
+}

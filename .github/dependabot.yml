@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Enable version updates for github-actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "app-holesky-gprptest-net"
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "symbioticfi/github-workflows-common"
+    assignees:
+      - alexey-symbiotic
+      - arturSymbiotic
+
+  # Enable version updates for npm
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    assignees:
+      - oxsteins
+    target-branch: "app-holesky-gprptest-net"
+    groups:
+      go:
+        patterns:
+          - "*"
+
+  # Enable version updates for Docker
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "app-holesky-gprptest-net"
+    open-pull-requests-limit: 5
+    assignees:
+      - oxsteins
+      - alexey-symbiotic
+      - arturSymbiotic

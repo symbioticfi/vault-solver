@@ -94,6 +94,13 @@ func offerExpectedReturn(principal *big.Int, rateBps float64) *big.Int {
 	return out
 }
 
+// bpsToFloat converts an on-chain bps value to float64 for comparison against the auction's float
+// maxRate. An absurdly large floor yields +Inf, which fail-closes (no rate clears it → no bid).
+func bpsToFloat(n *big.Int) float64 {
+	f, _ := new(big.Float).SetInt(n).Float64()
+	return f
+}
+
 // RateDenominatorBps converts a basis-point rate to a fraction (10_000 = 100%).
 const RateDenominatorBps = 10_000.0
 
