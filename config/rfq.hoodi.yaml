@@ -38,6 +38,5 @@ solvers:
       # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g. after
       # a restart) and, when the whitelist is enabled, the source of allowed adapters; the quote path's
       # inventory snapshot still comes from the backend request. Empty disables recovery.
-      adapters: # placeholder below must be replaced — the zero address is rejected at startup
-        - "0x0000000000000000000000000000000000000000" # LiquidLane adapter
-
+      adapters:
+        - "0x9158695D91E131d6c33033dE4ACD4c7Acb02c29c" # LiquidLane adapter
