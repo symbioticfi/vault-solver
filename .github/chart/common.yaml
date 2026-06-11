@@ -1,0 +1,106 @@
+---
+global:
+  container:
+    securityContext:
+      runAsGroup: 65532
+      runAsUser: 65532
+
+service:
+  ports:
+    - 9090
+    - 42073
+
+podAnnotations:
+  prometheus.io/scrape: 'true'
+  prometheus.io/path: /metrics
+  prometheus.io/port: '9090'
+  prometheus.io/scheme: http
+  vault.security.banzaicloud.io/vault-addr: 'https://vault.vault.svc.cluster.local:8200'
+  vault.security.banzaicloud.io/vault-tls-secret: 'vault-ca-pub'
+  vault.security.banzaicloud.io/vault-path: 'kubernetes'
+  vault.security.banzaicloud.io/run-as-non-root: 'true'
+  vault.security.banzaicloud.io/run-as-user: '65534'
+  vault.security.banzaicloud.io/readonly-root-fs: 'true'
+  vault.security.banzaicloud.io/registry-skip-verify: 'true'
+  vault.security.banzaicloud.io/vault-skip-verify: 'false'
+  vault.security.banzaicloud.io/vault-role: 'fromci'  # TODO
+  vault.security.banzaicloud.io/vault-env-from-path: 'fromci'  # TODO
+
+deployment:
+  containers:
+    vault-solver:
+      image:
+        registry: registry.gprptest.net
+        repository: vault-solver/node
+        tag: dummy
+      command:
+        - /usr/local/bin/vault-solver
+      args:
+        - run
+        - --config=/etc/vault-solver/config.yaml
+      env:
+        # Override from vault 
+        # RFQ_BACKEND_SHARED_SECRET:
+        #   value: dummy 
+        RFQ_BACKEND_URL:
+          value: http://rfq-backend:42072
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1000Mi
+        requests:
+          cpu: 30m
+          memory: 256Mi
+      startupProbe:
+        httpGet:
+          path: /healthz
+          port: 9090
+        successThreshold: 1
+        failureThreshold: 20
+        periodSeconds: 5
+        timeoutSeconds: 2
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 9090
+        successThreshold: 1
+        failureThreshold: 2
+        periodSeconds: 3
+        timeoutSeconds: 2
+      readinessProbe:
+        httpGet:
+          path: /readyz
+          port: 9090
+        successThreshold: 1
+        failureThreshold: 2
+        periodSeconds: 3
+        timeoutSeconds: 2
+
+networkPolicy:
+  vault:
+    egress:
+      selector: vault
+      nsSelect: vault
+      ports:
+        - 8200
+  sentry-relay:
+    egress:
+      selector: relay
+      nsSelect: sentry
+      ports:
+        - 3000
+  erpc:
+    egress:
+      selector: erpc
+      nsSelect: haproxy
+      ports:
+        - 4000
+  rfq-backend:
+    ingress:
+      selector: rfq-backend
+      ports:
+        - 42073
+    egress:
+      selector: rfq-backend
+      ports:
+        - 42072

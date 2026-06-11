@@ -1,0 +1,7 @@
+---
+deployment:
+  containers:
+    vault-solver:
+      env:
+        RFQ_FILLER_DEPLOYMENT_ENV:
+          value: hoodi

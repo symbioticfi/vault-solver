@@ -1,0 +1,24 @@
+---
+tolerations:
+  - effect: NoSchedule
+    key: node-region.kubernetes.io/FSN1
+  - effect: NoSchedule
+    key: node-region.kubernetes.io/HEL1
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/region
+              operator: In
+              values:
+                - HEL1
+                - FSN1
+
+deployment:
+  containers:
+    vault-solver:
+      env:
+        RFQ_FILLER_DEPLOYMENT_ENV:
+          value: sepolia
