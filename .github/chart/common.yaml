@@ -42,8 +42,6 @@ deployment:
         # Override from vault 
         # RFQ_BACKEND_SHARED_SECRET:
         #   value: dummy 
-        RFQ_BACKEND_URL:
-          value: http://rfq-backend:42072
       resources:
         limits:
           cpu: 1000m

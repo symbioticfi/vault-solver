@@ -25,6 +25,7 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:
+      network: ${{ matrix.network }}
       namespace: '${{ matrix.network }}-symbiotic-fi'
       digest: ${{ needs.docker-build.outputs.digest }}
 
@@ -36,5 +37,6 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:
+      network: mainnet
       namespace: 'symbiotic-fi'
       digest: ${{ needs.docker-build.outputs.digest }}

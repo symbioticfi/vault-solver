@@ -26,5 +26,6 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:
+      network: ${{ matrix.network }}
       namespace: '${{ matrix.network }}-gprptest-net'
       digest: ${{ needs.docker-build.outputs.digest }}

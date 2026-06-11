@@ -6,6 +6,10 @@ on:
         description: 'namespace'
         required: true
         type: 'string'
+      network:
+        description: 'network'
+        required: true
+        type: 'string'
       digest:
         description: 'image digest'
         required: true
@@ -21,6 +25,7 @@ jobs:
       NAMESPACE: '${{ inputs.namespace }}'
       OPTIONS: >-
           -f .github/chart/common.yaml
+          -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
