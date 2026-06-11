@@ -1,0 +1,7 @@
+name: Close stale PRs
+on:
+  schedule:
+    - cron: '30 3 * * *'
+jobs:
+  close-stale-PRs:
+    uses: symbioticfi/github-workflows-common/.github/workflows/stale.yml@main
