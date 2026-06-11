@@ -31,13 +31,13 @@ deployment:
     vault-solver:
       image:
         registry: registry.gprptest.net
-        repository: vault-solver/node
+        repository: vault-solver
         tag: dummy
       command:
         - /usr/local/bin/vault-solver
       args:
         - run
-        - --config=/etc/vault-solver/config.yaml
+        - --config=/etc/app/config.yaml
       env:
         # Override from vault 
         # RFQ_BACKEND_SHARED_SECRET:

@@ -6,17 +6,17 @@ on:
       - 'cicd'
 
 jobs:
-  docker-build-node:
+  docker-build:
     uses: symbioticfi/github-workflows-common/.github/workflows/docker-build.yml@main
     with:
       file: deploy/Dockerfile
       target: 'final'
-      name: ${{ github.event.repository.name }}/node
+      name: ${{ github.event.repository.name }}
 
   deploy:
     name: Deploy ${{ matrix.network }}.gprptest.net
     needs:
-      - docker-build-node
+      - docker-build
     strategy:
       fail-fast: false
       matrix:
@@ -27,4 +27,4 @@ jobs:
     secrets: inherit
     with:
       namespace: '${{ matrix.network }}-gprptest-net'
-      digest: ${{ needs.docker-build-node.outputs.digest }}
+      digest: ${{ needs.docker-build.outputs.digest }}

@@ -6,16 +6,16 @@ on:
       - 'main'
 
 jobs:
-  docker-build-node:
+  docker-build:
     uses: symbioticfi/github-workflows-common/.github/workflows/docker-build.yml@main
     with:
       target: 'final'
-      name: ${{ github.event.repository.name }}/node
+      name: ${{ github.event.repository.name }}
 
   deploy-public-stage:
     name: Deploy ${{ matrix.network }}-symbiotic-fi
     needs:
-      - docker-build-node
+      - docker-build
     strategy:
       fail-fast: false
       matrix:
@@ -26,15 +26,15 @@ jobs:
     secrets: inherit
     with:
       namespace: '${{ matrix.network }}-symbiotic-fi'
-      digest: ${{ needs.docker-build-node.outputs.digest }}
+      digest: ${{ needs.docker-build.outputs.digest }}
 
   deploy-prod:
     name: Deploy symbiotic-fi
     needs:
-      - docker-build-node
+      - docker-build
       - deploy-public-stage
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
     with:
       namespace: 'symbiotic-fi'
-      digest: ${{ needs.docker-build-node.outputs.digest }}
+      digest: ${{ needs.docker-build.outputs.digest }}
