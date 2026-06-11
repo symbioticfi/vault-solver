@@ -38,10 +38,6 @@ deployment:
       args:
         - run
         - --config=/etc/app/config.yaml
-      env:
-        # Override from vault 
-        # RFQ_BACKEND_SHARED_SECRET:
-        #   value: dummy 
       resources:
         limits:
           cpu: 1000m
