@@ -41,7 +41,7 @@ running them together is safe. Each entry's `config` block is typed and validate
 |---|---|---|---|
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | Live on Sepolia dev | [`docs/3F-PLAN.md`](docs/3F-PLAN.md) |
 | `rfq-filler` | RFQ quoting + order filling | Implemented (quote · fill · discounts) | [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) |
-| _(planned)_ `redstone-oev` | RedStone OEV liquidations | Planned (spec'd) | [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) |
+| _(planned)_ `redstone-oev` | Redstone / OEV | Planned | — |
 
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
