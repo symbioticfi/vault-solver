@@ -22,17 +22,18 @@ type priceReader interface {
 // safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the
 // reader cache and the store — are individually synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID  int64
-	executor common.Address
-	reader   priceReader
-	store    *store
-	log      logr.Logger
-	now      func() time.Time
+	chainID   int64
+	executor  common.Address
+	whitelist adapterWhitelist // nil disables adapter filtering
+	reader    priceReader
+	store     *store
+	log       logr.Logger
+	now       func() time.Time
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
-// can't quote it (wrong type/chain, no matching asset, or no viable strategy). An error is returned
-// only for malformed input or a failed chain read.
+// can't quote it (wrong type/chain, no whitelisted adapter, no matching asset, or no viable
+// strategy). An error is returned only for malformed input or a failed chain read.
 func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteResponse, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
@@ -42,7 +43,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
 		return nil, nil
 	}
-	req, inv := parsed.req, parsed.inv
+	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
+	if len(inv) == 0 {
+		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
+		return nil, nil
+	}
 
 	tokenInDecimals, err := qs.reader.tokenDecimals(ctx, req.TokenIn)
 	if err != nil {
