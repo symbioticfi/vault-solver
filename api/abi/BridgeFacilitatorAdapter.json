@@ -172,6 +172,19 @@
   },
   {
     "type": "function",
+    "name": "maxConcurrentLoans",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "migrate",
     "inputs": [
       {
@@ -187,6 +200,19 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "minRequestYieldBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -302,6 +328,19 @@
   },
   {
     "type": "function",
+    "name": "perRequestMaxCollateral",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "positions",
     "inputs": [
       {
@@ -382,6 +421,34 @@
   },
   {
     "type": "function",
+    "name": "setExposureLimits",
+    "inputs": [
+      {
+        "name": "perRequestMaxCollateral_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "totalMaxCollateral_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minRequestYieldBps_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxConcurrentLoans_",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setOfferSigner",
     "inputs": [
       {
@@ -396,6 +463,19 @@
   {
     "type": "function",
     "name": "totalAssets",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "totalMaxCollateral",
     "inputs": [],
     "outputs": [
       {
@@ -529,6 +609,37 @@
   },
   {
     "type": "event",
+    "name": "SetExposureLimits",
+    "inputs": [
+      {
+        "name": "perRequestMaxCollateral",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "totalMaxCollateral",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "minRequestYieldBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxConcurrentLoans",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SetOfferSigner",
     "inputs": [
       {
@@ -627,8 +738,29 @@
   },
   {
     "type": "error",
+    "name": "PerRequestCapExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SafeCastOverflowedUintDowncast",
+    "inputs": [
+      {
+        "name": "bits",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "value",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
@@ -640,5 +772,20 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "SleeveCapExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TooManyConcurrentLoans",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "YieldTooLow",
+    "inputs": []
   }
 ]

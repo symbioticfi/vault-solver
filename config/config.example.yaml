@@ -43,16 +43,14 @@ solvers:
       apiBaseUrl: https://bf.dev.gcp.3f.xyz
       # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
                                             # generates one at startup (EIP-712) and re-auths on 401/403.
-      minReturnBps: 100                     # don't bid below this yield (basis points)
       redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
       # The single vault+adapter pair this facilitator serves. 3F registers exactly one offer-address
       # per facilitator, so this solver is single-pair by construction.
       vault: "0x0000000000000000000000000000000000000000"
       adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
-      exposure:                             # amounts are USDC base units (6 decimals): "250000" = 0.25 USDC
-        perRequestMaxUsdc: "250000"
-        totalSleeveMaxUsdc: "1000000"
-        maxConcurrentLoans: 10
+      # Exposure/return caps (perRequestMaxCollateral, totalMaxCollateral, minRequestYieldBps,
+      # maxConcurrentLoans) are NOT config: they live on the adapter (setExposureLimits) and the bot
+      # reads them on-chain each poll. The contract enforces them authoritatively at consume time.
       intervals:
         discover: 1h
         redeemPoll: 5m

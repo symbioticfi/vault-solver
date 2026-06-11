@@ -1,7 +1,6 @@
 package bridgefacilitator
 
 import (
-	"math/big"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -15,18 +14,10 @@ import (
 type rawConfig struct {
 	APIBaseURL      string       `yaml:"apiBaseUrl"`
 	APIKeyEnv       string       `yaml:"apiKeyEnv"`
-	MinReturnBps    float64      `yaml:"minReturnBps"`
 	RedeemBatchSize int          `yaml:"redeemBatchSize"`
 	Vault           string       `yaml:"vault"`
 	Adapter         string       `yaml:"adapter"`
-	Exposure        rawExposure  `yaml:"exposure"`
 	Intervals       rawIntervals `yaml:"intervals"`
-}
-
-type rawExposure struct {
-	PerRequestMaxUsdc  string `yaml:"perRequestMaxUsdc"`
-	TotalSleeveMaxUsdc string `yaml:"totalSleeveMaxUsdc"`
-	MaxConcurrentLoans int    `yaml:"maxConcurrentLoans"`
 }
 
 type rawIntervals struct {
@@ -40,8 +31,6 @@ type Config struct {
 	APIBaseURL string
 	// APIKeyEnv is the env var holding a pre-generated 3F API key (sent as the x-api-key header).
 	APIKeyEnv string
-	// MinReturnBps is the minimum acceptable yield rate (basis points) for the bot to bid.
-	MinReturnBps float64
 	// RedeemBatchSize caps how many Requests are redeemed in a single redeem() call (gas bound).
 	RedeemBatchSize int
 	// Target is the single vault+adapter pair this facilitator serves. 3F allows exactly one
@@ -50,21 +39,14 @@ type Config struct {
 	Intervals Intervals
 }
 
-// Target is the vault+adapter the bot facilitates, with its exposure caps.
+// Target is the vault+adapter the bot facilitates. The exposure/return caps are no longer config: they
+// live on the adapter (setExposureLimits) and the bot reads them on-chain each poll.
 type Target struct {
 	Vault   common.Address
 	Adapter common.Address
 	// Collateral is the vault's collateral token, resolved on-chain at startup. Auctions are matched
 	// to this target by their deposit asset equalling Collateral.
 	Collateral common.Address
-	Exposure   Exposure
-}
-
-// Exposure bounds risk per Request, per sleeve, and by concurrent open loans.
-type Exposure struct {
-	PerRequestMax      *big.Int
-	TotalSleeveMax     *big.Int
-	MaxConcurrentLoans int
 }
 
 // Intervals controls the solver's loop cadences.
@@ -107,7 +89,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
 		APIKeyEnv:       raw.APIKeyEnv,
-		MinReturnBps:    raw.MinReturnBps,
 		RedeemBatchSize: redeemBatch,
 		Target:          target,
 		Intervals: Intervals{
@@ -127,26 +108,7 @@ func parseTarget(raw rawConfig) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	perReq, err := parseBigInt(raw.Exposure.PerRequestMaxUsdc, "exposure.perRequestMaxUsdc")
-	if err != nil {
-		return Target{}, err
-	}
-	sleeve, err := parseBigInt(raw.Exposure.TotalSleeveMaxUsdc, "exposure.totalSleeveMaxUsdc")
-	if err != nil {
-		return Target{}, err
-	}
-	if raw.Exposure.MaxConcurrentLoans <= 0 {
-		return Target{}, errors.New("exposure.maxConcurrentLoans must be > 0")
-	}
-	return Target{
-		Vault:   vault,
-		Adapter: adapter,
-		Exposure: Exposure{
-			PerRequestMax:      perReq,
-			TotalSleeveMax:     sleeve,
-			MaxConcurrentLoans: raw.Exposure.MaxConcurrentLoans,
-		},
-	}, nil
+	return Target{Vault: vault, Adapter: adapter}, nil
 }
 
 func parseAddress(s, field string) (common.Address, error) {
@@ -154,14 +116,6 @@ func parseAddress(s, field string) (common.Address, error) {
 		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
 	}
 	return common.HexToAddress(s), nil
-}
-
-func parseBigInt(s, field string) (*big.Int, error) {
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid non-negative integer %q", field, s)
-	}
-	return n, nil
 }
 
 func parseDurationOr(s string, fallback time.Duration) time.Duration {
