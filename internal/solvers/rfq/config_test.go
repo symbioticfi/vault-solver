@@ -37,6 +37,37 @@ func TestParseConfig_Defaults(t *testing.T) {
 	if cfg.OrderLimit != defaultOrderLimit {
 		t.Fatalf("orderLimit = %d, want %d", cfg.OrderLimit, defaultOrderLimit)
 	}
+	if cfg.AdapterWhitelistEnabled {
+		t.Fatal("adapterWhitelistEnabled should default to false")
+	}
+}
+
+func TestParseConfig_AdapterWhitelistFlag(t *testing.T) {
+	// Enabling requires at least one vaults entry (parseConfig rejects an empty whitelist).
+	vaults := `
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "0x0000000000000000000000000000000000000042"
+    asset: "0x0000000000000000000000000000000000000043"
+`
+	cases := map[string]struct {
+		yaml string
+		want bool
+	}{
+		"explicit true":  {yaml: "adapterWhitelistEnabled: true" + vaults, want: true},
+		"explicit false": {yaml: "adapterWhitelistEnabled: false", want: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
+			if err != nil {
+				t.Fatalf("parseConfig: %v", err)
+			}
+			if cfg.AdapterWhitelistEnabled != tc.want {
+				t.Fatalf("adapterWhitelistEnabled = %v, want %v", cfg.AdapterWhitelistEnabled, tc.want)
+			}
+		})
+	}
 }
 
 func TestParseConfig_Overrides(t *testing.T) {
@@ -80,14 +111,39 @@ vaults:
 }
 
 func TestParseConfig_BadVault(t *testing.T) {
-	_, err := parse(t, minimalConfig+`
+	cases := map[string]string{
+		"bad adapter address": `
 vaults:
   - address: "0x0000000000000000000000000000000000000041"
     adapter: "not-an-address"
     asset: "0x0000000000000000000000000000000000000043"
-`)
-	if err == nil {
-		t.Fatal("expected an error for a bad vault adapter address")
+`,
+		// Zero addresses feed the adapter whitelist; a placeholder must fail at startup.
+		"zero adapter address": `
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "0x0000000000000000000000000000000000000000"
+    asset: "0x0000000000000000000000000000000000000043"
+`,
+		"zero vault address": `
+vaults:
+  - address: "0x0000000000000000000000000000000000000000"
+    adapter: "0x0000000000000000000000000000000000000042"
+    asset: "0x0000000000000000000000000000000000000043"
+`,
+		"zero asset address": `
+vaults:
+  - address: "0x0000000000000000000000000000000000000041"
+    adapter: "0x0000000000000000000000000000000000000042"
+    asset: "0x0000000000000000000000000000000000000000"
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parse(t, minimalConfig+body); err == nil {
+				t.Fatalf("expected an error for %q", name)
+			}
+		})
 	}
 }
 
@@ -105,6 +161,9 @@ executor: "0x0000000000000000000000000000000000000010"
 backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
+`,
+		"whitelist enabled without vaults": minimalConfig + `
+adapterWhitelistEnabled: true
 `,
 	}
 	for name, body := range cases {

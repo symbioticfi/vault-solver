@@ -3,6 +3,7 @@ package rfq
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,84 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}
 	if len(txm.lastData) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+}
+
+func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
+	st, be := fillFixtures(t)
+	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
+	// different adapter — the fill must be aborted without a tx.
+	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
+	st.putStrategy(&strategyRecord{
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
+		Legs:      []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
+		CreatedAt: time.Unix(0, 0), // matches the frozen test clock so sweep keeps it across cycles
+	})
+	be.discount = &resolveDiscountResponse{
+		Discount: discountTerms{
+			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
+			TokenToRedeem: tIn.Hex(), Discount: "500",
+			Signer:   "0x00000000000000000000000000000000000000a1",
+			Protocol: "0x00000000000000000000000000000000000000a2",
+			Nonce:    "0x1", Deadline: 4_102_444_800,
+		},
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
+	}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+
+	rec := st.order("o1")
+	if rec == nil || rec.Status != statusFailed {
+		t.Fatalf("status = %v, want failed", rec)
+	}
+	if !strings.Contains(rec.LastError, errDiscountAdapterMismatch.Error()) {
+		t.Fatalf("lastError = %q, want adapter-mismatch reason", rec.LastError)
+	}
+	if txm.lastData != nil {
+		t.Fatalf("should not have sent a fill for a mismatched discount adapter")
+	}
+
+	// The order is still open, so the next poll re-arms it and re-evaluates the discount (it could
+	// resolve correctly by then — mirrors the TS filler); a persisting mismatch re-fails with no tx.
+	e.syncOnce(context.Background())
+	if be.resolveCalls != 2 {
+		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
+	}
+	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
+		t.Fatalf("second cycle status = %v, want failed again", rec)
+	}
+	if txm.lastData != nil {
+		t.Fatalf("second cycle must not send a fill either")
+	}
+}
+
+func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
+	listedID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
+	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
+	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+			CollateralDecimals: 6, MaxRate: "1000000000000000000", MaxAssets: "10000000"},
+		{DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+			CollateralDecimals: 6, MaxRate: "2000000000000000000", MaxAssets: "10000000"},
+	}}}
+	st := newStore(func() time.Time { return time.Unix(0, 0) })
+
+	e := newExec(t, st, be, &fakeTxm{})
+	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
+	out := e.discountInventories(context.Background(), tIn, nil)
+	if len(out) != 1 || out[0].Adapter != vlt {
+		t.Fatalf("whitelisted discountInventories = %+v, want only the listed adapter", out)
+	}
+
+	// Disabled via config (nil whitelist): both discounts survive.
+	e.whitelist = buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}})
+	out = e.discountInventories(context.Background(), tIn, nil)
+	if len(out) != 2 {
+		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
 	}
 }
 

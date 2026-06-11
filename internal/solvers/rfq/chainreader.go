@@ -61,8 +61,9 @@ func newReader(c *chain.Client, log logr.Logger) *reader {
 	return &reader{chain: c, log: log, decimals: make(map[common.Address]int)}
 }
 
-// recoveryVault is one configured recovery candidate: a LiquidLane adapter, its vault, and the
-// expected collateral hint. Mirrors InventorySource in inventories.ts.
+// recoveryVault is one configured vaults entry: a LiquidLane adapter, its vault, and the expected
+// collateral hint. The entries double as the adapter whitelist source (see buildAdapterWhitelist)
+// and the recovery candidate universe. Mirrors InventorySource in inventories.ts.
 type recoveryVault struct {
 	Adapter   common.Address
 	Vault     common.Address
