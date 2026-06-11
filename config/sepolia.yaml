@@ -23,8 +23,7 @@ solvers:
   - name: 3f-bridge-facilitator
     config:
       apiBaseUrl: https://bf.dev.gcp.3f.xyz
-      vault: "0x0000000000000000000000000000000000000000"      # TODO: deployed test VaultV2
-      adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter
+      adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter (vault + collateral derived from it at startup)
       # Exposure/return caps live on the adapter (setExposureLimits), read on-chain — not config.
       intervals:
         discover: 1h

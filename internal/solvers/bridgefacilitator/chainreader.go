@@ -66,6 +66,19 @@ func (r *reader) adapterCaller(addr common.Address) (*adapter.BridgeFacilitatorA
 	return caller, nil
 }
 
+// adapterVault returns the vault the adapter funds (bound once at adapter initialize), so config
+// carries only the adapter address and the bot derives the vault at startup.
+func (r *reader) adapterVault(ctx context.Context, adapterAddr common.Address) (common.Address, error) {
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: mustPack(adapterABI, "vault")}})
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(res) != 1 || !res[0].Success {
+		return common.Address{}, errors.New("adapter.vault() reverted")
+	}
+	return unpackAddress(adapterABI, "vault", res[0].ReturnData)
+}
+
 // vaultAsset returns the vault's collateral token, used to match auctions (by deposit asset) to this
 // funding vault. In the core-mirror VaultV2 the deposit/collateral token is the ERC-4626 asset, so
 // this reads IERC4626(vault).asset() (the old vault.collateral() no longer exists).

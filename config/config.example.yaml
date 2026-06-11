@@ -44,9 +44,9 @@ solvers:
       # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
                                             # generates one at startup (EIP-712) and re-auths on 401/403.
       redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
-      # The single vault+adapter pair this facilitator serves. 3F registers exactly one offer-address
-      # per facilitator, so this solver is single-pair by construction.
-      vault: "0x0000000000000000000000000000000000000000"
+      # The single adapter this facilitator serves (3F registers exactly one offer-address per
+      # facilitator, so this solver is single-pair). The vault and collateral are derived from the
+      # adapter on-chain at startup (adapter.vault() + vault.asset()), not configured here.
       adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
       # Exposure/return caps (perRequestMaxCollateral, totalMaxCollateral, minRequestYieldBps,
       # maxConcurrentLoans) are NOT config: they live on the adapter (setExposureLimits) and the bot

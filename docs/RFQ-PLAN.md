@@ -110,19 +110,19 @@ solver:
     pollIntervalMs: 3000
     orderLimit: 20
     # adapterWhitelistEnabled: true                     # default false (accept every adapter)
-    vaults:                                             # per-vault LiquidLane adapters (whitelist + recovery)
-      - { address: "0x…vault", adapter: "0x…liquidLaneAdapter", asset: "0x…collateral" }
+    adapters:                                           # LiquidLane adapter addresses (whitelist + recovery)
+      - "0x…liquidLaneAdapter"                          # vault + collateral resolved on-chain at startup
 ```
 
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
-The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `vaults`
+The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `adapters`
 list serves two purposes:
 
 - **Adapter whitelist** (`adapterWhitelistEnabled`, off by default — every adapter the backend
-  advertises is accepted): when enabled, only the `vaults[].adapter` addresses are quoted and filled
+  advertises is accepted): when enabled, only the configured `adapters` addresses are quoted and filled
   through. Non-whitelisted adapters in a `/quote` request are dropped (none left ⇒ 204), and backend
   discounts with a non-whitelisted adapter are ignored during recovery. Enabling it with an empty
-  `vaults` list is a misconfiguration and is rejected at startup.
+  `adapters` list is a misconfiguration and is rejected at startup.
 - **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
   multicall scans (recovery's direct inventories are whitelisted by construction).
 
@@ -161,8 +161,9 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    tx).
 
 **Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
-cached `decimals`), and recovery issues one 5-views-per-adapter aggregate3 (`paused`, `vault`,
-`asset`, `getMaxAssets`, `getMaxRate`) — no per-read round-trips.
+cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`paused`, `getMaxAssets`,
+`getMaxRate`) — each adapter's `vault` and collateral `asset` are resolved once at startup (from
+`adapter.vault()` / `vault.asset()`), not re-read per recovery, so there are no per-read round-trips.
 
 ---
 
@@ -171,10 +172,10 @@ cached `decimals`), and recovery issues one 5-views-per-adapter aggregate3 (`pau
 - **`CALLER_ROLE` on the `Executor`** — the bot EOA must be granted it before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
 - **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
-  per-vault `{address, adapter, asset}` list (adapter whitelist + recovery — with the whitelist
-  enabled, its default, an empty list declines every quote), the backend shared secret, and the caller
-  key (last two via env). Hoodi addresses are known from the TS deployment manifest; local from the
-  rfq-integration local-stack deploy.
+  LiquidLane adapter address list (`vaults`; adapter whitelist + recovery — each adapter's vault and
+  collateral are resolved on-chain at startup; with the whitelist enabled an empty list declines every
+  quote), the backend shared secret, and the caller key (last two via env). Hoodi addresses are known
+  from the TS deployment manifest; local from the rfq-integration local-stack deploy.
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a

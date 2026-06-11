@@ -68,6 +68,9 @@ type recoveryReader interface {
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
+	// resolveVaults returns the config entries with Vault/Asset resolved from the adapter at startup
+	// (config carries only adapter addresses).
+	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
 }
 
 func (e *executionService) run(ctx context.Context, interval time.Duration) {

@@ -28,8 +28,9 @@ var (
 )
 
 // readsPerAdapter is the number of Multicall3 sub-calls readVaultInventories issues per adapter
-// (paused, vault, asset, getMaxAssets, getMaxRate) — mirrors readAdapterInventories in inventories.ts.
-const readsPerAdapter = 5
+// (paused, getMaxAssets, getMaxRate). vault() and the vault's asset() are resolved once at startup
+// (see resolveVaults), not re-read here.
+const readsPerAdapter = 3
 
 func mustABI(md *bind.MetaData) abi.ABI {
 	parsed, err := md.GetAbi()
@@ -61,13 +62,14 @@ func newReader(c *chain.Client, log logr.Logger) *reader {
 	return &reader{chain: c, log: log, decimals: make(map[common.Address]int)}
 }
 
-// recoveryVault is one configured vaults entry: a LiquidLane adapter, its vault, and the expected
-// collateral hint. The entries double as the adapter whitelist source (see buildAdapterWhitelist)
-// and the recovery candidate universe. Mirrors InventorySource in inventories.ts.
+// recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
+// carries only Adapter; Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at
+// startup (see resolveVaults) and are fixed for the adapter's lifetime. The entries double as the
+// adapter whitelist source (see buildAdapterWhitelist) and the recovery candidate universe.
 type recoveryVault struct {
-	Adapter   common.Address
-	Vault     common.Address
-	AssetHint common.Address
+	Adapter common.Address
+	Vault   common.Address
+	Asset   common.Address
 }
 
 // tokenDecimals returns the ERC-20 decimals for token, caching the result.
@@ -157,12 +159,10 @@ func (r *reader) amountsOut(
 	return out, nil
 }
 
-// readVaultInventories reads, per adapter in ONE multicall, the LiquidLane views the strategy
-// selector needs (paused, vault, IERC4626(vault).asset, getMaxAssets(tokenIn), getMaxRate(tokenIn)),
-// and resolves asset decimals (cached). Used for strategy recovery when the quote-time strategy isn't
-// cached (e.g. after a restart). Paused / failing / zero-liquidity adapters, and any whose vault()
-// doesn't match the configured vault, are dropped. Direct legs only (DiscountID nil). Mirrors
-// readAdapterInventories in inventories.ts.
+// readVaultInventories reads each adapter's recovery views (paused, getMaxAssets(tokenIn),
+// getMaxRate(tokenIn)) in one multicall, using the startup-resolved Vault/Asset (decimals cached). Used
+// to rebuild a strategy when the quote-time one isn't cached (e.g. after a restart). Paused / failing /
+// zero-liquidity adapters are dropped; direct legs only. Mirrors readAdapterInventories in inventories.ts.
 func (r *reader) readVaultInventories(
 	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
@@ -174,8 +174,6 @@ func (r *reader) readVaultInventories(
 	for _, v := range vaults {
 		calls = append(calls,
 			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "paused")},
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "vault")},
-			chain.Call{Target: v.Vault, AllowFailure: true, Data: mustPack(vaultABI, "asset")},
 			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxAssets", tokenIn)},
 			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxRate", tokenIn)},
 		)
@@ -191,35 +189,79 @@ func (r *reader) readVaultInventories(
 	out := make([]solverInventory, 0, len(vaults))
 	for i, v := range vaults {
 		base := i * readsPerAdapter
-		paused, vaultAddr, assetRes := res[base], res[base+1], res[base+2]
-		maxA, mr := res[base+3], res[base+4]
-		if !vaultAddr.Success || !assetRes.Success || !maxA.Success || !mr.Success {
+		paused, maxA, mr := res[base], res[base+1], res[base+2]
+		if !maxA.Success || !mr.Success {
 			continue
 		}
 		if p, perr := unpackBool(adapterABI, "paused", paused.ReturnData); paused.Success && perr == nil && p {
 			continue
 		}
-		gotVault, verr := unpackAddress(adapterABI, "vault", vaultAddr.ReturnData)
-		if verr != nil || gotVault != v.Vault {
-			continue
-		}
-		asset, aerr := unpackAddress(vaultABI, "asset", assetRes.ReturnData)
 		maxAssets, e1 := unpackBig(adapterABI, "getMaxAssets", maxA.ReturnData)
 		maxRate, e2 := unpackBig(adapterABI, "getMaxRate", mr.ReturnData)
-		if aerr != nil || e1 != nil || e2 != nil {
+		if e1 != nil || e2 != nil {
 			continue
 		}
 		if maxAssets.Sign() <= 0 || maxRate.Sign() <= 0 {
 			continue
 		}
-		decimals, derr := r.tokenDecimals(ctx, asset)
+		decimals, derr := r.tokenDecimals(ctx, v.Asset)
 		if derr != nil {
 			continue
 		}
 		out = append(out, solverInventory{
-			Adapter: v.Adapter, Asset: asset, AssetDecimals: decimals,
+			Adapter: v.Adapter, Asset: v.Asset, AssetDecimals: decimals,
 			MaxAssets: maxAssets, MaxRate: maxRate, DiscountID: nil,
 		})
+	}
+	return out, nil
+}
+
+// resolveVaults returns a copy of the configured entries with each Vault (adapter.vault()) and Asset
+// (vault.asset()) resolved from chain at startup — config carries only adapter addresses, both fixed
+// for the adapter's lifetime. Returning a fresh slice (rather than mutating the input) keeps the
+// resolved recovery universe independent of the config slice. Two batched multicalls (adapters'
+// vault(), then those vaults' asset()); an entry whose reads revert is left zero and skipped by
+// recovery (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
+func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
+	out := make([]recoveryVault, len(vaults))
+	for i := range vaults {
+		out[i].Adapter = vaults[i].Adapter
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	vcalls := make([]chain.Call, len(out))
+	for i := range out {
+		vcalls[i] = chain.Call{Target: out[i].Adapter, AllowFailure: true, Data: mustPack(adapterABI, "vault")}
+	}
+	vres, err := r.chain.Multicall(ctx, vcalls)
+	if err != nil {
+		return nil, err
+	}
+	acalls := make([]chain.Call, len(out))
+	for i := range out {
+		if i < len(vres) && vres[i].Success {
+			if vault, verr := unpackAddress(adapterABI, "vault", vres[i].ReturnData); verr == nil {
+				out[i].Vault = vault
+			}
+		}
+		// asset() reads the resolved vault; a zero target reverts (AllowFailure) and is skipped.
+		acalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: mustPack(vaultABI, "asset")}
+	}
+	ares, err := r.chain.Multicall(ctx, acalls)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if i < len(ares) && ares[i].Success {
+			if asset, aerr := unpackAddress(vaultABI, "asset", ares[i].ReturnData); aerr == nil {
+				out[i].Asset = asset
+			}
+		}
+		if out[i].Vault == (common.Address{}) || out[i].Asset == (common.Address{}) {
+			r.log.Error(errors.New("adapter vault/asset unresolved"), "recovery entry skipped until restart",
+				"adapter", out[i].Adapter.Hex())
+		}
 	}
 	return out, nil
 }

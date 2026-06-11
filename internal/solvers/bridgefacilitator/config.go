@@ -15,7 +15,6 @@ type rawConfig struct {
 	APIBaseURL      string       `yaml:"apiBaseUrl"`
 	APIKeyEnv       string       `yaml:"apiKeyEnv"`
 	RedeemBatchSize int          `yaml:"redeemBatchSize"`
-	Vault           string       `yaml:"vault"`
 	Adapter         string       `yaml:"adapter"`
 	Intervals       rawIntervals `yaml:"intervals"`
 }
@@ -39,13 +38,13 @@ type Config struct {
 	Intervals Intervals
 }
 
-// Target is the vault+adapter the bot facilitates. The exposure/return caps are no longer config: they
-// live on the adapter (setExposureLimits) and the bot reads them on-chain each poll.
+// Target is the adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
+// Collateral (vault.asset()) are resolved on-chain at startup (see Solver.resolveTarget) and fixed for
+// the adapter's lifetime. Exposure/return caps also live on-chain (setExposureLimits), read each poll.
 type Target struct {
-	Vault   common.Address
 	Adapter common.Address
-	// Collateral is the vault's collateral token, resolved on-chain at startup. Auctions are matched
-	// to this target by their deposit asset equalling Collateral.
+	// Auctions are matched to this target by their deposit asset equalling Collateral.
+	Vault      common.Address
 	Collateral common.Address
 }
 
@@ -100,15 +99,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 }
 
 func parseTarget(raw rawConfig) (Target, error) {
-	vault, err := parseAddress(raw.Vault, "vault")
-	if err != nil {
-		return Target{}, err
-	}
 	adapter, err := parseAddress(raw.Adapter, "adapter")
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{Vault: vault, Adapter: adapter}, nil
+	return Target{Adapter: adapter}, nil
 }
 
 func parseAddress(s, field string) (common.Address, error) {
