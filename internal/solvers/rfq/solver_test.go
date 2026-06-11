@@ -17,7 +17,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	cfg := &Config{
 		BackendURL: "https://rfq-backend.example",
 		Executor:   common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		Vaults:     []recoveryVault{{Adapter: listed}},
+		Adapters:   []recoveryVault{{Adapter: listed}},
 	}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 

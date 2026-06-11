@@ -80,17 +80,15 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
+	// Resolve the target's vault and collateral from the adapter once at startup (see resolveTarget).
+	s.resolveTarget(ctx)
+
 	s.log.Info("starting",
-		"vault", s.cfg.Target.Vault.Hex(),
 		"adapter", s.cfg.Target.Adapter.Hex(),
+		"vault", s.cfg.Target.Vault.Hex(),
 		"apiBaseUrl", s.cfg.APIBaseURL,
 		"discover", s.cfg.Intervals.Discover.String(),
 	)
-
-	// Resolve the target vault's collateral on-chain; auctions are matched to it by deposit
-	// asset == collateral. If collateral can't be read it's left zero and matches no auction
-	// (logged per-auction), but redemption/reconciliation still run.
-	s.resolveCollateral(ctx)
 
 	// Onboard once at startup. On failure the bot runs redeem-only (offers disabled) until restart;
 	// redemption and reconciliation are on-chain and need no API auth.
@@ -317,17 +315,23 @@ func (s *Solver) nextNonce() uint64 {
 	return s.nonceSeq.Add(1)
 }
 
-// resolveCollateral reads the target vault's collateral token on-chain and caches it on the Target,
-// so discovery can match auctions by deposit asset. A read failure leaves Collateral zero (no auction
-// then matches) but doesn't stop redemption/reconciliation.
-func (s *Solver) resolveCollateral(ctx context.Context) {
+// resolveTarget reads the adapter's vault and the vault's collateral asset once at startup. Both are
+// fixed for the adapter's lifetime, so config only carries the adapter address. On a read failure the
+// fields stay zero (no auction matches; offers disabled) but redemption still runs off the adapter.
+func (s *Solver) resolveTarget(ctx context.Context) {
 	t := &s.cfg.Target
-	collateral, err := s.reader.vaultAsset(ctx, t.Vault)
+	vault, err := s.reader.adapterVault(ctx, t.Adapter)
 	if err != nil {
-		s.log.Error(err, "resolve collateral; will match no auctions until restart", "vault", t.Vault.Hex())
+		s.log.Error(err, "resolve adapter vault; will match no auctions until restart", "adapter", t.Adapter.Hex())
+		return
+	}
+	t.Vault = vault
+	collateral, err := s.reader.vaultAsset(ctx, vault)
+	if err != nil {
+		s.log.Error(err, "resolve collateral; will match no auctions until restart", "vault", vault.Hex())
 		return
 	}
 	t.Collateral = collateral
-	s.log.Info("resolved target collateral",
-		"vault", t.Vault.Hex(), "adapter", t.Adapter.Hex(), "collateral", collateral.Hex())
+	s.log.Info("resolved target",
+		"adapter", t.Adapter.Hex(), "vault", vault.Hex(), "collateral", collateral.Hex())
 }

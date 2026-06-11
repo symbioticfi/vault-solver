@@ -11,23 +11,15 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL              string     `yaml:"backendUrl"`
-	BackendSharedSecretEnv  string     `yaml:"backendSharedSecretEnv"`
-	ListenAddr              string     `yaml:"listenAddr"`
-	Executor                string     `yaml:"executor"`
-	Reactor                 string     `yaml:"reactor"`
-	PollIntervalMs          int        `yaml:"pollIntervalMs"`
-	OrderLimit              int        `yaml:"orderLimit"`
-	AdapterWhitelistEnabled bool       `yaml:"adapterWhitelistEnabled"`
-	Vaults                  []rawVault `yaml:"vaults"`
-}
-
-// rawVault mirrors one entry of the `vaults` list (adapter whitelist + recovery universe): a vault,
-// its LiquidLane adapter, and the vault's collateral asset.
-type rawVault struct {
-	Address string `yaml:"address"`
-	Adapter string `yaml:"adapter"`
-	Asset   string `yaml:"asset"`
+	BackendURL              string   `yaml:"backendUrl"`
+	BackendSharedSecretEnv  string   `yaml:"backendSharedSecretEnv"`
+	ListenAddr              string   `yaml:"listenAddr"`
+	Executor                string   `yaml:"executor"`
+	Reactor                 string   `yaml:"reactor"`
+	PollIntervalMs          int      `yaml:"pollIntervalMs"`
+	OrderLimit              int      `yaml:"orderLimit"`
+	AdapterWhitelistEnabled bool     `yaml:"adapterWhitelistEnabled"`
+	Adapters                []string `yaml:"adapters"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -47,15 +39,16 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// AdapterWhitelistEnabled restricts quoting and filling to the adapters of the configured
-	// Vaults. Off by default: every adapter the backend advertises is accepted. Enabling it
-	// requires at least one Vaults entry — parseConfig rejects an enabled, empty whitelist.
+	// AdapterWhitelistEnabled restricts quoting and filling to the configured Adapters. Off by default:
+	// every adapter the backend advertises is accepted. Enabling it requires at least one Adapters entry
+	// — parseConfig rejects an enabled, empty whitelist.
 	AdapterWhitelistEnabled bool
-	// Vaults is the configured vault/adapter universe: the whitelist source (see
-	// AdapterWhitelistEnabled) and the candidate universe used to rebuild a strategy on-chain when
-	// the quote-time strategy isn't cached (e.g. after a restart). Each entry pins a vault, its
-	// LiquidLane adapter, and the expected collateral asset. Empty disables recovery.
-	Vaults []recoveryVault
+	// Adapters is the configured LiquidLane adapter universe: the whitelist source (see
+	// AdapterWhitelistEnabled) and the candidate universe used to rebuild a strategy on-chain when the
+	// quote-time strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
+	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
+	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables recovery.
+	Adapters []recoveryVault
 }
 
 // Defaults applied when a field is unset.
@@ -103,39 +96,21 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, err
 		}
 	}
-	for i, v := range raw.Vaults {
-		rv, verr := v.parse(i)
+	for i, a := range raw.Adapters {
+		// The zero address is rejected so a placeholder fails at startup rather than weakening the
+		// whitelist. Vault + Asset are resolved on-chain at startup.
+		adapterAddr, verr := parseNonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
 		if verr != nil {
 			return nil, verr
 		}
-		cfg.Vaults = append(cfg.Vaults, rv)
+		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapterAddr})
 	}
 	// An enabled whitelist with nothing on it would decline every quote — a misconfiguration, not a
 	// runnable state.
-	if cfg.AdapterWhitelistEnabled && len(cfg.Vaults) == 0 {
-		return nil, errors.New("adapterWhitelistEnabled requires at least one vaults entry")
+	if cfg.AdapterWhitelistEnabled && len(cfg.Adapters) == 0 {
+		return nil, errors.New("adapterWhitelistEnabled requires at least one adapters entry")
 	}
 	return cfg, nil
-}
-
-// parse validates one vaults entry into the typed form. The zero address is rejected: these
-// addresses feed the adapter whitelist and on-chain recovery reads, so a placeholder left in a
-// config must fail at startup rather than weaken the whitelist.
-func (v rawVault) parse(i int) (recoveryVault, error) {
-	prefix := "vaults[" + strconv.Itoa(i) + "]."
-	addr, err := parseNonZeroAddress(v.Address, prefix+"address")
-	if err != nil {
-		return recoveryVault{}, err
-	}
-	adapterAddr, err := parseNonZeroAddress(v.Adapter, prefix+"adapter")
-	if err != nil {
-		return recoveryVault{}, err
-	}
-	asset, err := parseNonZeroAddress(v.Asset, prefix+"asset")
-	if err != nil {
-		return recoveryVault{}, err
-	}
-	return recoveryVault{Adapter: adapterAddr, Vault: addr, AssetHint: asset}, nil
 }
 
 func parseAddress(s, field string) (common.Address, error) {

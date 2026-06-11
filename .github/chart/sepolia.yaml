@@ -1,7 +1,7 @@
 configMap:
   data:
     config.yaml: |
-      # vault-solver — RFQ filler, Sepolia testnet (chainId 560048) profile.
+      # vault-solver — RFQ filler, Sepolia testnet (chainId 11155111) profile.
       #
       # Addresses are the Sepolia deployment of the RFQ contracts. Provide secrets via env:
       #   SOLVER_PRIVATE_KEY            — the caller EOA (must hold CALLER_ROLE on the Executor)
@@ -35,11 +35,9 @@ configMap:
             orderLimit: 20 # max open orders fetched per poll
             # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
             #                               # accepted). Enable to only quote/fill through the adapters
-            #                               # listed in `vaults` (requires ≥1 entry; rejected at startup otherwise).
-            # Per-vault LiquidLane adapters: the candidate universe for on-chain strategy recovery (e.g.
+            #                               # listed in `adapters` (requires >=1 entry; rejected at startup otherwise).
+            # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
             # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
             # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
-            vaults: # placeholders below must be replaced — zero addresses are rejected at startup
-              - address: "0x873331D0Ea4d23405d2D681066Ae9e17Bfeb63EC" # Symbiotic vault
-                adapter: "0xe44DeE43EFCC9466031Eb51F363699A6bB15d13B" # its LiquidLane adapter
-                asset:   "0xe7ff5177215d0AEDd21147311F48C4d93c9729EA" # vault collateral (asset hint)
+            adapters:
+              - "0xe44DeE43EFCC9466031Eb51F363699A6bB15d13B" # LiquidLane adapter
