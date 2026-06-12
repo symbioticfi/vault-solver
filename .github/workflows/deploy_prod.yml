@@ -1,0 +1,42 @@
+name: Deploy prod
+
+on:
+  push:
+    branches:
+      - 'main'
+
+jobs:
+  docker-build:
+    uses: symbioticfi/github-workflows-common/.github/workflows/docker-build.yml@main
+    with:
+      target: 'final'
+      name: ${{ github.event.repository.name }}
+
+  deploy-public-stage:
+    name: Deploy ${{ matrix.network }}-symbiotic-fi
+    needs:
+      - docker-build
+    strategy:
+      fail-fast: false
+      matrix:
+        network:
+          - hoodi
+          - sepolia
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      network: ${{ matrix.network }}
+      namespace: '${{ matrix.network }}-symbiotic-fi'
+      digest: ${{ needs.docker-build.outputs.digest }}
+
+  deploy-prod:
+    name: Deploy symbiotic-fi
+    needs:
+      - docker-build
+      - deploy-public-stage
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      network: mainnet
+      namespace: 'symbiotic-fi'
+      digest: ${{ needs.docker-build.outputs.digest }}

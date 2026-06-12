@@ -1,0 +1,43 @@
+configMap:
+  data:
+    config.yaml: |
+      # vault-solver — RFQ filler, Sepolia testnet (chainId 11155111) profile.
+      #
+      # Addresses are the Sepolia deployment of the RFQ contracts. Provide secrets via env:
+      #   SOLVER_PRIVATE_KEY            — the caller EOA (must hold CALLER_ROLE on the Executor)
+      #   BACKEND_SHARED_SECRET     — shared secret authenticating the backend peer on /quote
+      # ${VAR} fields are expanded from the environment at load time.
+
+      chain:
+        rpcUrl: ${ETH_RPC_URL} # primary; expanded from env; do not commit a real URL
+        chainId: 11155111
+
+      signer:
+        keyEnv: SOLVER_PRIVATE_KEY # the CALLER_ROLE EOA that submits Executor.fill (P2)
+
+      txManager:
+        confirmations: 2
+
+      observability:
+        addr: ":9090" # /metrics, /healthz, /readyz (separate from the quote server below)
+        # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+
+      solvers:
+        - name: rfq-filler
+          config:
+            backendUrl: http://rfq-backend:42072
+            backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+            listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
+            # Sepolia RFQ deployment:
+            executor: "0x46a95b97f5FFE5Abd7aB199b75307a7D06A06394"
+            reactor: "0x57F4cA7219F82652205CB59fb02ad9A30EeDb9B6" # used at execution time
+            pollIntervalMs: 333 # backend order poll cadence
+            orderLimit: 20 # max open orders fetched per poll
+            # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
+            #                               # accepted). Enable to only quote/fill through the adapters
+            #                               # listed in `adapters` (requires >=1 entry; rejected at startup otherwise).
+            # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
+            # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
+            # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
+            adapters:
+              - "0xe44DeE43EFCC9466031Eb51F363699A6bB15d13B" # LiquidLane adapter

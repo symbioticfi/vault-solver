@@ -43,18 +43,16 @@ func TestParseConfig_Defaults(t *testing.T) {
 }
 
 func TestParseConfig_AdapterWhitelistFlag(t *testing.T) {
-	// Enabling requires at least one vaults entry (parseConfig rejects an empty whitelist).
-	vaults := `
-vaults:
-  - address: "0x0000000000000000000000000000000000000041"
-    adapter: "0x0000000000000000000000000000000000000042"
-    asset: "0x0000000000000000000000000000000000000043"
+	// Enabling requires at least one adapters entry (parseConfig rejects an empty whitelist).
+	adapters := `
+adapters:
+  - "0x0000000000000000000000000000000000000042"
 `
 	cases := map[string]struct {
 		yaml string
 		want bool
 	}{
-		"explicit true":  {yaml: "adapterWhitelistEnabled: true" + vaults, want: true},
+		"explicit true":  {yaml: "adapterWhitelistEnabled: true" + adapters, want: true},
 		"explicit false": {yaml: "adapterWhitelistEnabled: false", want: false},
 	}
 	for name, tc := range cases {
@@ -89,53 +87,37 @@ reactor: "0x0000000000000000000000000000000000000030"
 	}
 }
 
-func TestParseConfig_Vaults(t *testing.T) {
+func TestParseConfig_Adapters(t *testing.T) {
 	cfg, err := parse(t, minimalConfig+`
-vaults:
-  - address: "0x0000000000000000000000000000000000000041"
-    adapter: "0x0000000000000000000000000000000000000042"
-    asset: "0x0000000000000000000000000000000000000043"
+adapters:
+  - "0x0000000000000000000000000000000000000042"
 `)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
-	if len(cfg.Vaults) != 1 {
-		t.Fatalf("vaults = %d, want 1", len(cfg.Vaults))
+	if len(cfg.Adapters) != 1 {
+		t.Fatalf("adapters = %d, want 1", len(cfg.Adapters))
 	}
-	v := cfg.Vaults[0]
-	if v.Vault != common.HexToAddress("0x0000000000000000000000000000000000000041") ||
-		v.Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") ||
-		v.AssetHint != common.HexToAddress("0x0000000000000000000000000000000000000043") {
-		t.Fatalf("vault entry not parsed: %+v", v)
+	v := cfg.Adapters[0]
+	// Only Adapter comes from config; Vault/Asset are resolved on-chain at startup (zero here).
+	if v.Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") {
+		t.Fatalf("adapter entry not parsed: %+v", v)
+	}
+	if v.Vault != (common.Address{}) || v.Asset != (common.Address{}) {
+		t.Fatalf("vault/asset should be unresolved before startup: %+v", v)
 	}
 }
 
-func TestParseConfig_BadVault(t *testing.T) {
+func TestParseConfig_BadAdapter(t *testing.T) {
 	cases := map[string]string{
 		"bad adapter address": `
-vaults:
-  - address: "0x0000000000000000000000000000000000000041"
-    adapter: "not-an-address"
-    asset: "0x0000000000000000000000000000000000000043"
+adapters:
+  - "not-an-address"
 `,
-		// Zero addresses feed the adapter whitelist; a placeholder must fail at startup.
+		// A zero adapter feeds the whitelist; a placeholder must fail at startup.
 		"zero adapter address": `
-vaults:
-  - address: "0x0000000000000000000000000000000000000041"
-    adapter: "0x0000000000000000000000000000000000000000"
-    asset: "0x0000000000000000000000000000000000000043"
-`,
-		"zero vault address": `
-vaults:
-  - address: "0x0000000000000000000000000000000000000000"
-    adapter: "0x0000000000000000000000000000000000000042"
-    asset: "0x0000000000000000000000000000000000000043"
-`,
-		"zero asset address": `
-vaults:
-  - address: "0x0000000000000000000000000000000000000041"
-    adapter: "0x0000000000000000000000000000000000000042"
-    asset: "0x0000000000000000000000000000000000000000"
+adapters:
+  - "0x0000000000000000000000000000000000000000"
 `,
 	}
 	for name, body := range cases {
@@ -162,7 +144,7 @@ backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
 `,
-		"whitelist enabled without vaults": minimalConfig + `
+		"whitelist enabled without adapters": minimalConfig + `
 adapterWhitelistEnabled: true
 `,
 	}

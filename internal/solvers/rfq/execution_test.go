@@ -69,6 +69,10 @@ func (f *fakeRecoveryReader) amountsOut(
 	return f.oracle, nil
 }
 
+func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
+	return vaults, nil
+}
+
 type fakeTxm struct {
 	lastData []byte
 	result   txmanager.Result

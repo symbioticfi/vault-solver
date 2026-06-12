@@ -34,11 +34,9 @@ solvers:
       orderLimit: 20 # max open orders fetched per poll
       # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
       #                               # accepted). Enable to only quote/fill through the adapters
-      #                               # listed in `vaults` (requires ≥1 entry; rejected at startup otherwise).
-      # Per-vault LiquidLane adapters: the candidate universe for on-chain strategy recovery (e.g.
-      # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
-      # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
-      vaults: # placeholders below must be replaced — zero addresses are rejected at startup
-        - address: "0x0000000000000000000000000000000000000000" # Symbiotic vault
-          adapter: "0x0000000000000000000000000000000000000000" # its LiquidLane adapter
-          asset:   "0x0000000000000000000000000000000000000000" # vault collateral (asset hint)
+      #                               # listed in `adapters` (requires ≥1 entry; rejected at startup otherwise).
+      # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g. after
+      # a restart) and, when the whitelist is enabled, the source of allowed adapters; the quote path's
+      # inventory snapshot still comes from the backend request. Empty disables recovery.
+      adapters:
+        - "0x9158695D91E131d6c33033dE4ACD4c7Acb02c29c" # LiquidLane adapter

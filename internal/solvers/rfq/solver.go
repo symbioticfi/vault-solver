@@ -75,10 +75,10 @@ func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
 ) (*quoteService, *executionService) {
 	// The whitelist is shared by quoting (drop non-whitelisted request adapters) and execution
-	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Vaults
-	// and are therefore whitelisted by construction. parseConfig rejects an enabled whitelist with
-	// no vaults, so an enabled whitelist is never empty here.
-	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Vaults)
+	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Adapters
+	// and are therefore whitelisted by construction. parseConfig rejects an enabled whitelist with no
+	// adapters, so an enabled whitelist is never empty here.
+	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Adapters)
 
 	quotes := &quoteService{
 		chainID:   chainID,
@@ -93,7 +93,7 @@ func buildServices(
 		chainID:    chainID,
 		executor:   cfg.Executor,
 		orderLimit: cfg.OrderLimit,
-		vaults:     cfg.Vaults,
+		vaults:     cfg.Adapters,
 		whitelist:  whitelist,
 		backend:    newBackendClient(cfg.BackendURL),
 		store:      st,
@@ -115,10 +115,22 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
-		"vaults", len(s.cfg.Vaults),
+		"adapters", len(s.cfg.Adapters),
 		"adapterWhitelistEnabled", s.cfg.AdapterWhitelistEnabled,
 		"backendUrl", s.cfg.BackendURL,
 	)
+
+	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
+	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
+	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
+	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
+	if len(s.cfg.Adapters) > 0 {
+		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
+		if err != nil {
+			return errors.Errorf("rfq: resolve recovery vaults: %w", err)
+		}
+		s.exec.vaults = resolved
+	}
 
 	httpSrv := &http.Server{
 		Addr:              s.cfg.ListenAddr,
