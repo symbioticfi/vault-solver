@@ -9,6 +9,7 @@ jobs:
   docker-build:
     uses: symbioticfi/github-workflows-common/.github/workflows/docker-build.yml@main
     with:
+      file: deploy/Dockerfile
       target: 'final'
       name: ${{ github.event.repository.name }}
 
