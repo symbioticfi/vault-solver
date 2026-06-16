@@ -22,7 +22,7 @@ described under [Solvers](#solvers) below.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
   Multicall3 reads, a pluggable signer, and a nonce-serialized transaction sender shared across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen, grouped per integration) and protocol
-  API clients (e.g. the 3F `threef/` client via oapi-codegen), each refreshable from upstream.
+  API clients (e.g. the 3F `threef/` client via the Java openapi-generator), each refreshable from upstream.
 
 State is intentionally minimal: open positions, redemption readiness, and liquidity are read from
 on-chain views and the relevant protocol API on each tick — no database. See
@@ -105,7 +105,8 @@ Design, decisions, and the live TODO list: [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md
 ## Requirements
 
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
-- For regenerating codegen: `make tools` (installs pinned `abigen`, `oapi-codegen`, `golangci-lint`).
+- For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
+  the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
 - A reachable EVM RPC endpoint and a signing key (see Configuration).
 
 ## Quickstart
