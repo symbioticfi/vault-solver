@@ -7,6 +7,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
@@ -61,8 +63,8 @@ const (
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := node.Decode(&raw); err != nil {
-		return nil, errors.Errorf("decode solver config: %w", err)
+	if err := solver.DecodeStrict(node, &raw); err != nil {
+		return nil, err
 	}
 	if raw.BackendURL == "" {
 		return nil, errors.New("backendUrl is required")

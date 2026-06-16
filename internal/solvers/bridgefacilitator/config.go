@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse(). 3F registers
@@ -68,8 +70,8 @@ const defaultRedeemBatchSize = 10
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := node.Decode(&raw); err != nil {
-		return nil, errors.Errorf("decode solver config: %w", err)
+	if err := solver.DecodeStrict(node, &raw); err != nil {
+		return nil, err
 	}
 	if raw.APIBaseURL == "" {
 		return nil, errors.New("apiBaseUrl is required")
@@ -85,16 +87,25 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	discover, err := parseDuration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
+	if err != nil {
+		return nil, err
+	}
+	redeemPoll, err := parseDuration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
+	if err != nil {
+		return nil, err
+	}
+	reconcile, err := parseDuration(raw.Intervals.Reconcile, defaultReconcile, "intervals.reconcile")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
 		APIKeyEnv:       raw.APIKeyEnv,
 		RedeemBatchSize: redeemBatch,
 		Target:          target,
-		Intervals: Intervals{
-			Discover:   parseDurationOr(raw.Intervals.Discover, defaultDiscover),
-			RedeemPoll: parseDurationOr(raw.Intervals.RedeemPoll, defaultRedeemPoll),
-			Reconcile:  parseDurationOr(raw.Intervals.Reconcile, defaultReconcile),
-		},
+		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 	}, nil
 }
 
@@ -126,13 +137,19 @@ func parseNonZeroAddress(s, field string) (common.Address, error) {
 	return addr, nil
 }
 
-func parseDurationOr(s string, fallback time.Duration) time.Duration {
+// parseDuration returns fallback when s is empty, but a present-but-invalid or non-positive value is
+// an error rather than a silent fall back to the default — a typo'd interval should fail, not run at
+// some surprising cadence.
+func parseDuration(s string, fallback time.Duration, field string) (time.Duration, error) {
 	if s == "" {
-		return fallback
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return fallback
+	if err != nil {
+		return 0, errors.Errorf("%s: invalid duration %q: %w", field, s, err)
 	}
-	return d
+	if d <= 0 {
+		return 0, errors.Errorf("%s: duration must be positive, got %q", field, s)
+	}
+	return d, nil
 }

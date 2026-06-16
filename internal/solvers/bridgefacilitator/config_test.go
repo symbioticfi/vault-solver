@@ -38,6 +38,26 @@ func TestParseConfig_RedeemBatchSizeOverride(t *testing.T) {
 	}
 }
 
+func TestParseConfig_UnknownKeyRejected(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(oneTarget+"redeemBatchSiez: 3\n"), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, err := parseConfig(*doc.Content[0]); err == nil {
+		t.Fatal("expected a typo'd key to be rejected")
+	}
+}
+
+func TestParseConfig_InvalidDurationRejected(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(oneTarget+"intervals:\n  discover: \"1 hour\"\n"), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, err := parseConfig(*doc.Content[0]); err == nil {
+		t.Fatal("expected an invalid duration to be rejected")
+	}
+}
+
 func TestParseConfig_ZeroAdapterRejected(t *testing.T) {
 	body := `
 apiBaseUrl: https://bf.example
