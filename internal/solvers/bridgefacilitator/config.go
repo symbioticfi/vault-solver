@@ -18,6 +18,7 @@ type rawConfig struct {
 	APIKeyEnv       string       `yaml:"apiKeyEnv"`
 	RedeemBatchSize int          `yaml:"redeemBatchSize"`
 	Adapter         string       `yaml:"adapter"`
+	HTTPTimeout     string       `yaml:"httpTimeout"`
 	Intervals       rawIntervals `yaml:"intervals"`
 }
 
@@ -34,6 +35,9 @@ type Config struct {
 	APIKeyEnv string
 	// RedeemBatchSize caps how many Requests are redeemed in a single redeem() call (gas bound).
 	RedeemBatchSize int
+	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
+	// (including redemption scans). Applied as the 3F http.Client timeout.
+	HTTPTimeout time.Duration
 	// Target is the single vault+adapter pair this facilitator serves. 3F allows exactly one
 	// offer-address per facilitator, so this solver is single-pair by construction.
 	Target    Target
@@ -66,6 +70,9 @@ const (
 
 // defaultRedeemBatchSize caps the Requests redeemed per redeem() call when unset.
 const defaultRedeemBatchSize = 10
+
+// defaultHTTPTimeout bounds each 3F API call when httpTimeout is unset.
+const defaultHTTPTimeout = 30 * time.Second
 
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
@@ -100,10 +107,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	httpTimeout, err := parseDuration(raw.HTTPTimeout, defaultHTTPTimeout, "httpTimeout")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
 		APIKeyEnv:       raw.APIKeyEnv,
 		RedeemBatchSize: redeemBatch,
+		HTTPTimeout:     httpTimeout,
 		Target:          target,
 		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 	}, nil
