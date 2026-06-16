@@ -99,7 +99,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 }
 
 func parseTarget(raw rawConfig) (Target, error) {
-	adapter, err := parseAddress(raw.Adapter, "adapter")
+	// The zero address is rejected so an unreplaced placeholder fails at startup rather than being
+	// registered as the 3F offer-address (the committed configs ship a zero adapter as a TODO).
+	adapter, err := parseNonZeroAddress(raw.Adapter, "adapter")
 	if err != nil {
 		return Target{}, err
 	}
@@ -111,6 +113,17 @@ func parseAddress(s, field string) (common.Address, error) {
 		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
 	}
 	return common.HexToAddress(s), nil
+}
+
+func parseNonZeroAddress(s, field string) (common.Address, error) {
+	addr, err := parseAddress(s, field)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if addr == (common.Address{}) {
+		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
+	}
+	return addr, nil
 }
 
 func parseDurationOr(s string, fallback time.Duration) time.Duration {
