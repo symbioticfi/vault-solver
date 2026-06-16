@@ -51,10 +51,12 @@ func Dial(ctx context.Context, rpcURLs []string, multicallAddr string, log logr.
 	return &Client{Client: ec, chainID: id, multicall: common.HexToAddress(multicallAddr)}, nil
 }
 
-// dialClient builds the ethclient: a plain dial for a single endpoint, or an HTTP client backed by
-// the fallback transport when more than one endpoint is configured.
+// dialClient builds the ethclient. A single non-HTTP endpoint (ws/ipc) keeps a plain dial, since the
+// fallback transport — which carries the per-call rpcAttemptTimeout — only supports http(s). Every
+// http(s) endpoint, even a single one, goes through that transport so a hung node call times out
+// instead of blocking the caller (e.g. the txmanager worker) forever.
 func dialClient(ctx context.Context, rpcURLs []string, log logr.Logger) (*ethclient.Client, error) {
-	if len(rpcURLs) == 1 {
+	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
 		ec, err := ethclient.DialContext(ctx, rpcURLs[0])
 		if err != nil {
 			return nil, errors.Errorf("chain: dial: %w", err)
