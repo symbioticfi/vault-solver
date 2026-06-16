@@ -84,7 +84,7 @@ vault-solver/
 │   │   └── vaultv2/               # shared Symbiotic core, reused by every integration
 │   └── threef/                    # openapi-generator (Java) output (committed)
 ├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
-├── config/{config.example.yaml,sepolia.yaml}
+├── config/{config.example.yaml,3f.sepolia.example.yaml}
 ├── deploy/{Dockerfile,docker-compose.yml}
 ├── .github/workflows/ci.yml
 ├── .golangci.yml  Makefile  go.mod  README.md  .gitignore

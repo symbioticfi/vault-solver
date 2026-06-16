@@ -124,7 +124,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 func parseTarget(raw rawConfig) (Target, error) {
 	// The zero address is rejected so an unreplaced placeholder fails at startup rather than being
-	// registered as the 3F offer-address (the committed configs ship a zero adapter as a TODO).
+	// registered as the 3F offer-address.
 	adapter, err := parseNonZeroAddress(raw.Adapter, "adapter")
 	if err != nil {
 		return Target{}, err

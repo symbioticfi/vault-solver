@@ -99,7 +99,7 @@ bounded over long runs. The caller EOA must hold `CALLER_ROLE` on the `Executor`
 vendored OpenAPI spec (`openapi/rfq-backend.openapi.json`). Config block: `backendUrl`,
 `backendSharedSecretEnv`, `listenAddr`, `executor`, `reactor`, `pollIntervalMs`, `orderLimit`,
 `adapterWhitelistEnabled`, `vaults` — see
-[`config/rfq.hoodi.yaml`](config/rfq.hoodi.yaml).
+[`config/rfq.hoodi.example.yaml`](config/rfq.hoodi.example.yaml).
 Design, decisions, and the live TODO list: [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md).
 
 ## Requirements
@@ -116,7 +116,7 @@ make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
 make lint             # golangci-lint
-./bin/vault-solver run --config config/sepolia.yaml
+./bin/vault-solver run --config config/3f.sepolia.example.yaml
 ```
 
 The CLI is built with [Cobra](https://github.com/spf13/cobra); run `vault-solver --help` for the
@@ -124,7 +124,7 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 `observability.debug: true` in config or the `--debug` flag (the flag wins):
 
 ```bash
-./bin/vault-solver run --config config/sepolia.yaml --debug
+./bin/vault-solver run --config config/3f.sepolia.example.yaml --debug
 ```
 
 ## Configuration
