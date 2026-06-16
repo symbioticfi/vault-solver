@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # allow deploy workflows to gate on build/test/lint before shipping
 
 permissions:
   contents: read

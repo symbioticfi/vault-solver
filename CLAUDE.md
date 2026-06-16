@@ -13,7 +13,8 @@ The first implementation is the **3F (Grunt) Bridge Facilitator**. The repositor
 structured so additional integrations — **RFQ, Redstone/OEV, and others** — can be added *without
 touching the generic framework*. Keeping that boundary clean is the single most important design goal.
 
-See `PLAN.md` for the architecture, decisions, and the live TODO list (§10).
+See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) for the architecture,
+decisions, and the live TODO lists (§10).
 
 ## The modularity rule (most important)
 
@@ -148,14 +149,14 @@ Write defensively; this bot holds a signing key and moves funds.
 
 ## Keep the plan in sync — required
 
-`PLAN.md` (and the per-solver plans under `docs/`, e.g. `docs/RFQ-PLAN.md`) are the source of truth for
-the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
+The per-solver plans under `docs/` (e.g. `docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) are the source of truth
+for the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
 
 - **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
   a changed data flow, a new/removed integration, an interface or external-contract change, a
   deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
 - **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
-  TODO list (§10 of `PLAN.md` / the solver plan)** so it always reflects reality.
+  TODO list (§10 of the relevant solver plan)** so it always reflects reality.
 - A code change that alters architecture/design but leaves the plan stale is **incomplete**. If a
   change is purely local (a bug fix, a refactor with no design impact), no plan update is needed —
   use judgement, but err toward recording anything a future reader would be surprised to discover.
@@ -166,5 +167,5 @@ the high-level architecture, design decisions, and the live TODO list. They are 
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the plan current: architecture/design or TODO changes must update `PLAN.md` / `docs/*-PLAN.md`
+- Keep the plan current: architecture/design or TODO changes must update `docs/*-PLAN.md`
   in the same change.

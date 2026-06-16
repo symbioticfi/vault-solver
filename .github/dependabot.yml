@@ -5,7 +5,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    target-branch: "app-holesky-gprptest-net"
+    target-branch: "stage"
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: "symbioticfi/github-workflows-common"
@@ -18,10 +18,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    target-branch: "stage"
     open-pull-requests-limit: 10
     assignees:
       - oxsteins
-    target-branch: "app-holesky-gprptest-net"
     groups:
       go:
         patterns:
@@ -32,7 +32,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    target-branch: "app-holesky-gprptest-net"
+    target-branch: "stage"
     open-pull-requests-limit: 5
     assignees:
       - oxsteins

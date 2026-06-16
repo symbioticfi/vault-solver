@@ -225,6 +225,49 @@ func (b *revertingBackend) SendTransaction(_ context.Context, tx *types.Transact
 	return nil
 }
 
+// blockingBackend parks inside SendTransaction until released, so a test can cancel the caller's
+// context while a transaction is mid-broadcast on the worker.
+type blockingBackend struct {
+	*mockBackend
+
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingBackend) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	close(b.entered)
+	<-b.release
+	return b.mockBackend.SendTransaction(ctx, tx)
+}
+
+// TestSend_CallerCancelAfterEnqueueStillReturnsResult guards the fund-moving invariant: once a
+// request is enqueued the worker broadcasts it on the manager's context, so Send must report that
+// real outcome. Cancelling the caller's context after enqueue must NOT make Send return a
+// cancellation while the tx still lands on-chain (which would read as "not sent").
+func TestSend_CallerCancelAfterEnqueueStillReturnsResult(t *testing.T) {
+	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	go m.Start(t.Context()) // manager context lives until test cleanup; the caller's is cancelled below
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	resCh := make(chan Result, 1)
+	go func() {
+		resCh <- m.Send(callerCtx, Request{To: common.HexToAddress("0xabc"), GasLimit: 21000, Label: "fill"})
+	}()
+
+	<-bb.entered   // worker has dequeued the job and is broadcasting
+	cancelCaller() // caller gives up now, mid-broadcast
+	close(bb.release)
+
+	res := <-resCh
+	if res.Err != nil {
+		t.Fatalf("tx was broadcast but Send reported %v; caller cancellation must not mask a sent tx", res.Err)
+	}
+	if bb.lastSent() == nil {
+		t.Fatal("expected the transaction to be broadcast")
+	}
+}
+
 func mustSigner(t *testing.T) signer.Signer {
 	t.Helper()
 	s, err := signer.NewFromHexKey(testKey)

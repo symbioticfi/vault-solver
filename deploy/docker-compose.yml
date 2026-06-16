@@ -22,7 +22,7 @@ services:
       - ../.env
     # Operator config. Defaults to the committed Sepolia template; point CONFIG_FILE at your own.
     volumes:
-      - ${CONFIG_FILE:-../config/sepolia.yaml}:/etc/vault-solver/config.yaml:ro
+      - ${CONFIG_FILE:-../config/3f.sepolia.example.yaml}:/etc/vault-solver/config.yaml:ro
     command: ["run", "--config", "/etc/vault-solver/config.yaml"]
     ports:
       - "9090:9090" # /metrics, /healthz, /readyz
