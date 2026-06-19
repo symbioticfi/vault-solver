@@ -109,9 +109,17 @@ Two instances of the same pattern — **vendor → generate → commit, regenera
 - **Contract bindings (ABI → abigen).** Vendor the ABI JSON under `api/abi/` (from a `forge build`
   out-dir; `make refresh-abi` extracts `.abi` from the build artifacts of `ABIS`/`CORE_MIRROR_ABIS`),
   then `make bindings` runs `abigen` per contract into `api/bindings/<group>/` (one package per leaf
-  dir so shared ABI structs don't collide). An ABI that can't be sourced from a build (e.g. Multicall3,
-  or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile overload) is
-  hand-vendored into `api/abi/` with a comment saying why — still generated from, never hand-bound.
+  dir so shared ABI structs don't collide). Leaf contracts use **abigen `--v2`** (`BINDINGS_V2`): it
+  emits typed, backend-free `PackXxx(args) []byte` / `UnpackXxx(data) (T, error)` helpers, and the
+  on-chain read paths build their Multicall3 sub-calls and decode the returns through those — so a
+  renamed method or changed signature in a refreshed ABI breaks the build at the call site instead of
+  panicking at runtime. **Never reintroduce stringly-typed `abi.Pack("method", …)`/`abi.Unpack` in
+  solver code** — use the generated `Pack`/`Unpack` (or `TryPack` for the error-returning variant).
+  Multicall3 stays on v1 (`BINDINGS_V1`): it's the transport (`chain.Multicall` binds its `Aggregate3`
+  caller), where v2's pure helpers buy nothing. An ABI that can't be sourced from a build (e.g.
+  Multicall3, or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile
+  overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
+  hand-bound.
 - **API clients (OpenAPI spec → openapi-generator).** Vendor the spec under `openapi/` (`make
   refresh-*-openapi` pulls it), then `make refresh-{3f,rfq}-client` runs the **Java openapi-generator**
   (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
