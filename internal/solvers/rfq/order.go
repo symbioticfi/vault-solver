@@ -10,10 +10,22 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
-// executorABI is the parsed Executor ABI. fill() is overloaded 3×; abigen/go-ethereum name the first
-// (the mixed order+swaps+discountSwaps overload) "fill", which is the one we build. The golden
-// selector test pins that we encode the intended overload.
-var executorABI = mustABI(executor.ExecutorMetaData)
+// executorBinding (abigen --v2) packs fill() via TryPackFill; executorABI is parsed only for tuple
+// reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
+// overloaded 3×; PackFill is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
+// golden selector test pins it.
+var (
+	executorBinding = executor.NewExecutor()
+	executorABI     = mustExecutorABI()
+)
+
+func mustExecutorABI() abi.ABI {
+	parsed, err := executor.ExecutorMetaData.ParseABI()
+	if err != nil {
+		panic("rfq: parse executor ABI: " + err.Error())
+	}
+	return *parsed
+}
 
 // orderTupleArgs decodes the backend's `encodedOrder` — an ABI-encoded single Order tuple, identical
 // to fill()'s first argument type.
@@ -79,7 +91,7 @@ func encodeFill(
 	discountSwaps []executor.IReactorDiscountSwapInput,
 	executorData []byte,
 ) ([]byte, error) {
-	data, err := executorABI.Pack("fill", order, protocolSig, swaps, discountSwaps, executorData)
+	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)
 	}
