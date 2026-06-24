@@ -88,6 +88,13 @@ func (c *cancelOnClose) Close() error {
 	return err
 }
 
+// isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the
+// per-call rpcAttemptTimeout) supports.
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+}
+
 // parseHTTPEndpoints validates that every URL is HTTP(S) (the only scheme the fallback transport
 // supports) and returns the parsed endpoints in order, dropping duplicates so the same endpoint is
 // never tried twice in a fallover sweep.

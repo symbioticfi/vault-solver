@@ -56,7 +56,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	// The facilitator (API-key owner) is the signing EOA; offers carry the per-target adapter as
 	// maker, registered as the facilitator offer-address at startup.
-	api, err := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Signer.Address(), fallbackKey, deps.Log.WithName(Name))
+	api, err := newAPIClient(cfg.APIBaseURL, cfg.HTTPTimeout, deps.Signer, deps.Signer.Address(), fallbackKey, deps.Log.WithName(Name))
 	if err != nil {
 		return nil, err
 	}

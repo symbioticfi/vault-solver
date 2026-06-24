@@ -110,8 +110,15 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 }
 
-// Send enqueues a transaction and blocks until it is confirmed, fails, or ctx is cancelled.
-// Safe for concurrent callers; all requests are serialized through the single worker.
+// Send enqueues a transaction and blocks until it is confirmed or fails. Safe for concurrent
+// callers; all requests are serialized through the single worker.
+//
+// ctx governs the enqueue only. Before the request is enqueued, a cancelled ctx aborts cleanly with
+// no transaction sent. Once enqueued, the worker broadcasts the tx on the manager's own long-lived
+// context, so Send waits for and returns that real outcome — it must not report a cancellation while
+// the transaction still lands on-chain, which a caller would read as "not sent" (the caller's ctx is
+// typically an errgroup child that cancels the instant any sibling solver errors, well before
+// shutdown). The worker always delivers exactly one Result, so this wait cannot hang.
 func (m *Manager) Send(ctx context.Context, req Request) Result {
 	res := make(chan Result, 1)
 	select {
@@ -119,12 +126,7 @@ func (m *Manager) Send(ctx context.Context, req Request) Result {
 	case <-ctx.Done():
 		return Result{Err: ctx.Err()}
 	}
-	select {
-	case r := <-res:
-		return r
-	case <-ctx.Done():
-		return Result{Err: ctx.Err()}
-	}
+	return <-res
 }
 
 // execute runs on the worker goroutine only, so nonce access is single-threaded here; the mutex

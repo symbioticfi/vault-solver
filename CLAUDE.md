@@ -13,7 +13,8 @@ The first implementation is the **3F (Grunt) Bridge Facilitator**. The repositor
 structured so additional integrations — **RFQ, Redstone/OEV, and others** — can be added *without
 touching the generic framework*. Keeping that boundary clean is the single most important design goal.
 
-See `PLAN.md` for the architecture, decisions, and the live TODO list (§10).
+See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) for the architecture,
+decisions, and the live TODO lists (§10).
 
 ## The modularity rule (most important)
 
@@ -108,9 +109,17 @@ Two instances of the same pattern — **vendor → generate → commit, regenera
 - **Contract bindings (ABI → abigen).** Vendor the ABI JSON under `api/abi/` (from a `forge build`
   out-dir; `make refresh-abi` extracts `.abi` from the build artifacts of `ABIS`/`CORE_MIRROR_ABIS`),
   then `make bindings` runs `abigen` per contract into `api/bindings/<group>/` (one package per leaf
-  dir so shared ABI structs don't collide). An ABI that can't be sourced from a build (e.g. Multicall3,
-  or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile overload) is
-  hand-vendored into `api/abi/` with a comment saying why — still generated from, never hand-bound.
+  dir so shared ABI structs don't collide). Leaf contracts use **abigen `--v2`** (`BINDINGS_V2`): it
+  emits typed, backend-free `PackXxx(args) []byte` / `UnpackXxx(data) (T, error)` helpers, and the
+  on-chain read paths build their Multicall3 sub-calls and decode the returns through those — so a
+  renamed method or changed signature in a refreshed ABI breaks the build at the call site instead of
+  panicking at runtime. **Never reintroduce stringly-typed `abi.Pack("method", …)`/`abi.Unpack` in
+  solver code** — use the generated `Pack`/`Unpack` (or `TryPack` for the error-returning variant).
+  Multicall3 stays on v1 (`BINDINGS_V1`): it's the transport (`chain.Multicall` binds its `Aggregate3`
+  caller), where v2's pure helpers buy nothing. An ABI that can't be sourced from a build (e.g.
+  Multicall3, or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile
+  overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
+  hand-bound.
 - **API clients (OpenAPI spec → openapi-generator).** Vendor the spec under `openapi/` (`make
   refresh-*-openapi` pulls it), then `make refresh-{3f,rfq}-client` runs the **Java openapi-generator**
   (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
@@ -148,14 +157,14 @@ Write defensively; this bot holds a signing key and moves funds.
 
 ## Keep the plan in sync — required
 
-`PLAN.md` (and the per-solver plans under `docs/`, e.g. `docs/RFQ-PLAN.md`) are the source of truth for
-the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
+The per-solver plans under `docs/` (e.g. `docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) are the source of truth
+for the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
 
 - **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
   a changed data flow, a new/removed integration, an interface or external-contract change, a
   deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
 - **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
-  TODO list (§10 of `PLAN.md` / the solver plan)** so it always reflects reality.
+  TODO list (§10 of the relevant solver plan)** so it always reflects reality.
 - A code change that alters architecture/design but leaves the plan stale is **incomplete**. If a
   change is purely local (a bug fix, a refactor with no design impact), no plan update is needed —
   use judgement, but err toward recording anything a future reader would be surprised to discover.
@@ -166,5 +175,5 @@ the high-level architecture, design decisions, and the live TODO list. They are 
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the plan current: architecture/design or TODO changes must update `PLAN.md` / `docs/*-PLAN.md`
+- Keep the plan current: architecture/design or TODO changes must update `docs/*-PLAN.md`
   in the same change.

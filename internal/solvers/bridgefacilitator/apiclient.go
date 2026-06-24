@@ -44,13 +44,16 @@ type apiClient struct {
 }
 
 func newAPIClient(
-	baseURL string, sgnr signer.Signer, facilitator common.Address, fallbackKey string, log logr.Logger,
+	baseURL string, timeout time.Duration, sgnr signer.Signer, facilitator common.Address, fallbackKey string, log logr.Logger,
 ) (*apiClient, error) {
 	if baseURL == "" {
 		return nil, errors.New("3f api: base URL is required")
 	}
 	cfg := threef.NewConfiguration()
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
+	// Bound every call: the generated client otherwise falls back to http.DefaultClient (no timeout),
+	// so a hung request would stall the single solver loop, redemption scans included.
+	cfg.HTTPClient = &http.Client{Timeout: timeout}
 	ac := &apiClient{
 		c:           threef.NewAPIClient(cfg),
 		sgnr:        sgnr,

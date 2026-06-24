@@ -42,6 +42,12 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+func TestParseConfig_UnknownKeyRejected(t *testing.T) {
+	if _, err := parse(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
+		t.Fatal("expected a typo'd key to be rejected")
+	}
+}
+
 func TestParseConfig_AdapterWhitelistFlag(t *testing.T) {
 	// Enabling requires at least one adapters entry (parseConfig rejects an empty whitelist).
 	adapters := `

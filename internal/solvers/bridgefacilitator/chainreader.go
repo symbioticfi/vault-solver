@@ -2,15 +2,12 @@ package bridgefacilitator
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/big"
 	"sync"
 
 	"github.com/go-errors/errors"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/adapter"
@@ -21,26 +18,20 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-// Parsed ABIs for packing/decoding Multicall3 sub-calls. adapterABI is defined in redeemer.go.
+// Contract bindings (abigen --v2): typed Pack/Unpack helpers for the Multicall3 sub-calls below, so an
+// ABI change fails at compile time (see CLAUDE.md "Code generation").
 //
-// In the redesigned core-mirror model the funding cap and asset live on different contracts than
-// the vault: the collateral token is read via IERC4626(vault).asset(), and the per-adapter cap via
-// UniversalDelegator(vault.delegator()).limitOf(adapter). vaultABI is therefore only used for the
-// vault.delegator() lookup.
+// In the redesigned core-mirror model the funding cap and asset live on different contracts than the
+// vault: the collateral token is read via IERC4626(vault).asset(), and the per-adapter cap via
+// UniversalDelegator(vault.delegator()).limitOf(adapter). vaultV2 is therefore only used for the
+// vault.delegator() and vault.withdrawable() lookups.
 var (
-	vaultABI     = mustABI(vaultv2.IVaultV2MetaData)
-	vcABI        = mustABI(vaultcontroller.IVaultControllerMetaData)
-	erc4626ABI   = mustABI(erc4626.IERC4626MetaData)
-	delegatorABI = mustABI(delegator.UniversalDelegatorMetaData)
+	bfAdapter = adapter.NewBridgeFacilitatorAdapter()
+	vaultV2   = vaultv2.NewIVaultV2()
+	vc        = vaultcontroller.NewIVaultController()
+	erc4626b  = erc4626.NewIERC4626()
+	deleg     = delegator.NewUniversalDelegator()
 )
-
-func mustABI(md *bind.MetaData) abi.ABI {
-	parsed, err := md.GetAbi()
-	if err != nil {
-		panic(fmt.Sprintf("bridgefacilitator: parse ABI: %v", err))
-	}
-	return *parsed
-}
 
 // reader performs the adapter- and Request-side on-chain reads the solver relies on, batching via
 // Multicall3 where calls are independent.
@@ -58,39 +49,31 @@ func newReader(c *chain.Client) *reader {
 	return &reader{chain: c, delegatorCache: make(map[common.Address]common.Address)}
 }
 
-func (r *reader) adapterCaller(addr common.Address) (*adapter.BridgeFacilitatorAdapterCaller, error) {
-	caller, err := adapter.NewBridgeFacilitatorAdapterCaller(addr, r.chain.Client)
-	if err != nil {
-		return nil, errors.Errorf("bind adapter %s: %w", addr, err)
-	}
-	return caller, nil
-}
-
 // adapterVault returns the vault the adapter funds (bound once at adapter initialize), so config
 // carries only the adapter address and the bot derives the vault at startup.
 func (r *reader) adapterVault(ctx context.Context, adapterAddr common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: mustPack(adapterABI, "vault")}})
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackVault()}})
 	if err != nil {
 		return common.Address{}, err
 	}
 	if len(res) != 1 || !res[0].Success {
 		return common.Address{}, errors.New("adapter.vault() reverted")
 	}
-	return unpackAddress(adapterABI, "vault", res[0].ReturnData)
+	return bfAdapter.UnpackVault(res[0].ReturnData)
 }
 
 // vaultAsset returns the vault's collateral token, used to match auctions (by deposit asset) to this
 // funding vault. In the core-mirror VaultV2 the deposit/collateral token is the ERC-4626 asset, so
 // this reads IERC4626(vault).asset() (the old vault.collateral() no longer exists).
 func (r *reader) vaultAsset(ctx context.Context, vault common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: mustPack(erc4626ABI, "asset")}})
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: erc4626b.PackAsset()}})
 	if err != nil {
 		return common.Address{}, err
 	}
 	if len(res) != 1 || !res[0].Success {
 		return common.Address{}, errors.New("vault.asset() reverted")
 	}
-	return unpackAddress(erc4626ABI, "asset", res[0].ReturnData)
+	return erc4626b.UnpackAsset(res[0].ReturnData)
 }
 
 // vaultDelegator resolves the vault's delegator address (the contract that holds the per-adapter
@@ -106,14 +89,14 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 	}
 	r.delegatorMu.Unlock()
 
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: mustPack(vaultABI, "delegator")}})
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: vaultV2.PackDelegator()}})
 	if err != nil {
 		return common.Address{}, err
 	}
 	if len(res) != 1 || !res[0].Success {
 		return common.Address{}, errors.New("vault.delegator() reverted")
 	}
-	d, err := unpackAddress(vaultABI, "delegator", res[0].ReturnData)
+	d, err := vaultV2.UnpackDelegator(res[0].ReturnData)
 	if err != nil {
 		return common.Address{}, err
 	}
@@ -153,15 +136,15 @@ func (r *reader) liquidityAndExposure(
 	}
 
 	calls := []chain.Call{
-		{Target: delegatorAddr, Data: mustPack(delegatorABI, "limitOf", adapterAddr)},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "totalAssets")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "outstandingPrincipal")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "activeRequests")},
-		{Target: vault, Data: mustPack(vaultABI, "withdrawable")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "perRequestMaxCollateral")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "totalMaxCollateral")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "minRequestYieldBps")},
-		{Target: adapterAddr, Data: mustPack(adapterABI, "maxConcurrentLoans")},
+		{Target: delegatorAddr, Data: deleg.PackLimitOf(adapterAddr)},
+		{Target: adapterAddr, Data: bfAdapter.PackTotalAssets()},
+		{Target: adapterAddr, Data: bfAdapter.PackOutstandingPrincipal()},
+		{Target: adapterAddr, Data: bfAdapter.PackActiveRequests()},
+		{Target: vault, Data: vaultV2.PackWithdrawable()},
+		{Target: adapterAddr, Data: bfAdapter.PackPerRequestMaxCollateral()},
+		{Target: adapterAddr, Data: bfAdapter.PackTotalMaxCollateral()},
+		{Target: adapterAddr, Data: bfAdapter.PackMinRequestYieldBps()},
+		{Target: adapterAddr, Data: bfAdapter.PackMaxConcurrentLoans()},
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
@@ -176,39 +159,39 @@ func (r *reader) liquidityAndExposure(
 		}
 	}
 
-	limit, err := unpackBig(delegatorABI, "limitOf", res[0].ReturnData)
+	limit, err := deleg.UnpackLimitOf(res[0].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	held, err := unpackBig(adapterABI, "totalAssets", res[1].ReturnData)
+	held, err := bfAdapter.UnpackTotalAssets(res[1].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	outstandingPrincipal, err := unpackBig(adapterABI, "outstandingPrincipal", res[2].ReturnData)
+	outstandingPrincipal, err := bfAdapter.UnpackOutstandingPrincipal(res[2].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	reqs, err := unpackAddresses(adapterABI, "activeRequests", res[3].ReturnData)
+	reqs, err := bfAdapter.UnpackActiveRequests(res[3].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	withdrawable, err := unpackBig(vaultABI, "withdrawable", res[4].ReturnData)
+	withdrawable, err := vaultV2.UnpackWithdrawable(res[4].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	perRequestMax, err := unpackBig(adapterABI, "perRequestMaxCollateral", res[5].ReturnData)
+	perRequestMax, err := bfAdapter.UnpackPerRequestMaxCollateral(res[5].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	totalMax, err := unpackBig(adapterABI, "totalMaxCollateral", res[6].ReturnData)
+	totalMax, err := bfAdapter.UnpackTotalMaxCollateral(res[6].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	minYieldBps, err := unpackBig(adapterABI, "minRequestYieldBps", res[7].ReturnData)
+	minYieldBps, err := bfAdapter.UnpackMinRequestYieldBps(res[7].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	maxConcurrent, err := unpackBig(adapterABI, "maxConcurrentLoans", res[8].ReturnData)
+	maxConcurrent, err := bfAdapter.UnpackMaxConcurrentLoans(res[8].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
@@ -259,11 +242,14 @@ func deriveLiquidity(limit, held, outstandingPrincipal, withdrawable *big.Int) (
 // readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads the
 // active set (one call) then batches every canWithdraw() into a single multicall.
 func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, error) {
-	caller, err := r.adapterCaller(adapterAddr)
+	areq, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackActiveRequests()}})
 	if err != nil {
 		return nil, err
 	}
-	reqs, err := caller.ActiveRequests(&bind.CallOpts{Context: ctx})
+	if len(areq) != 1 || !areq[0].Success {
+		return nil, errors.New("adapter.activeRequests() reverted")
+	}
+	reqs, err := bfAdapter.UnpackActiveRequests(areq[0].ReturnData)
 	if err != nil {
 		return nil, errors.Errorf("adapter.activeRequests(): %w", err)
 	}
@@ -274,7 +260,7 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 	calls := make([]chain.Call, len(reqs))
 	for i, req := range reqs {
 		// AllowFailure: a single malformed Request must not break the whole batch.
-		calls[i] = chain.Call{Target: req, AllowFailure: true, Data: mustPack(vcABI, "canWithdraw")}
+		calls[i] = chain.Call{Target: req, AllowFailure: true, Data: vc.PackCanWithdraw()}
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
@@ -286,7 +272,7 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 		if !rr.Success {
 			continue
 		}
-		ok, derr := unpackBool(vcABI, "canWithdraw", rr.ReturnData)
+		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)
 		if derr != nil {
 			continue
 		}
@@ -295,63 +281,4 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 		}
 	}
 	return ready, nil
-}
-
-/* ───────── ABI pack/unpack helpers for multicall ───────── */
-
-// mustPack packs a static method call; a failure is a programming error (wrong method/args).
-func mustPack(a abi.ABI, method string, args ...interface{}) []byte {
-	data, err := a.Pack(method, args...)
-	if err != nil {
-		panic(fmt.Sprintf("bridgefacilitator: pack %s: %v", method, err))
-	}
-	return data
-}
-
-func unpackBig(a abi.ABI, method string, data []byte) (*big.Int, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return nil, errors.Errorf("unpack %s: %w", method, err)
-	}
-	n, ok := vals[0].(*big.Int)
-	if !ok {
-		return nil, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return n, nil
-}
-
-func unpackBool(a abi.ABI, method string, data []byte) (bool, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return false, errors.Errorf("unpack %s: %w", method, err)
-	}
-	b, ok := vals[0].(bool)
-	if !ok {
-		return false, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return b, nil
-}
-
-func unpackAddress(a abi.ABI, method string, data []byte) (common.Address, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return common.Address{}, errors.Errorf("unpack %s: %w", method, err)
-	}
-	addr, ok := vals[0].(common.Address)
-	if !ok {
-		return common.Address{}, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return addr, nil
-}
-
-func unpackAddresses(a abi.ABI, method string, data []byte) ([]common.Address, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return nil, errors.Errorf("unpack %s: %w", method, err)
-	}
-	addrs, ok := vals[0].([]common.Address)
-	if !ok {
-		return nil, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return addrs, nil
 }

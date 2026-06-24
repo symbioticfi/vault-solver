@@ -4,6 +4,7 @@
 package solver
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"sync"
@@ -39,6 +40,23 @@ type Solver interface {
 // Factory builds a Solver from its opaque config block (decoded by the solver into its own type)
 // and the shared dependencies.
 type Factory func(raw yaml.Node, deps Deps) (Solver, error)
+
+// DecodeStrict decodes a deferred solvers[].config node into out, rejecting unknown keys so typos in
+// a solver's config fail fast — matching the strict top-level config decode. The framework keeps
+// each solver's config opaque (yaml.Node has no KnownFields option of its own), so solvers call this
+// from parseConfig instead of node.Decode to get the same typo protection.
+func DecodeStrict(node yaml.Node, out any) error {
+	b, err := yaml.Marshal(&node)
+	if err != nil {
+		return errors.Errorf("re-encode solver config: %w", err)
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		return errors.Errorf("decode solver config: %w", err)
+	}
+	return nil
+}
 
 var (
 	mu       sync.RWMutex
