@@ -30,3 +30,25 @@ jobs:
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"
+
+  vault-solver:
+    name: Deploy ${{ matrix.name }}
+    uses: symbioticfi/github-workflows-common/.github/workflows/deploy.yml@main
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - vault-solver-first
+          - vault-solver-second
+          - vault-solver-third
+    with:
+      NAME: ${{ matrix.name }}
+      NAMESPACE: '${{ inputs.namespace }}'
+      OPTIONS: >-
+          -f .github/chart/common.yaml
+          -f .github/chart/${{ inputs.network }}.yaml
+          -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
+          --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-${{ matrix.name }}"
+          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}\,secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}-keys"
