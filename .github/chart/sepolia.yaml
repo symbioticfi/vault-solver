@@ -33,9 +33,8 @@ configMap:
             reactor: "0x57F4cA7219F82652205CB59fb02ad9A30EeDb9B6" # used at execution time
             pollIntervalMs: 333 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
-            # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
-            #                               # accepted). Enable to only quote/fill through the adapters
-            #                               # listed in `adapters` (requires >=1 entry; rejected at startup otherwise).
+            # solverMode: external # "external" (default) | "internal". external skips the internal-only
+            #                      # discounts API and scopes to `adapters`; internal uses public discounts on all.
             # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
             # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
             # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.

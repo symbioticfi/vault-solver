@@ -74,11 +74,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
 ) (*quoteService, *executionService) {
-	// The whitelist is shared by quoting (drop non-whitelisted request adapters) and execution
-	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Adapters
-	// and are therefore whitelisted by construction. parseConfig rejects an enabled whitelist with no
-	// adapters, so an enabled whitelist is never empty here.
-	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Adapters)
+	// Shared by quoting (drop out-of-scope request adapters) and execution (drop out-of-scope recovery
+	// discounts). restrictsToAdapters() implies non-empty Adapters, so a wired whitelist is never empty.
+	whitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
 		chainID:   chainID,
@@ -90,18 +88,19 @@ func buildServices(
 		now:       time.Now,
 	}
 	exec := &executionService{
-		chainID:    chainID,
-		executor:   cfg.Executor,
-		orderLimit: cfg.OrderLimit,
-		vaults:     cfg.Adapters,
-		whitelist:  whitelist,
-		backend:    newBackendClient(cfg.BackendURL),
-		store:      st,
-		reader:     rdr,
-		txm:        txm,
-		log:        log,
-		now:        time.Now,
-		inflight:   make(map[string]bool),
+		chainID:          chainID,
+		executor:         cfg.Executor,
+		orderLimit:       cfg.OrderLimit,
+		vaults:           cfg.Adapters,
+		whitelist:        whitelist,
+		discountsEnabled: cfg.usesDiscounts(),
+		backend:          newBackendClient(cfg.BackendURL),
+		store:            st,
+		reader:           rdr,
+		txm:              txm,
+		log:              log,
+		now:              time.Now,
+		inflight:         make(map[string]bool),
 	}
 	return quotes, exec
 }
@@ -115,8 +114,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
+		"solverMode", s.cfg.SolverMode,
 		"adapters", len(s.cfg.Adapters),
-		"adapterWhitelistEnabled", s.cfg.AdapterWhitelistEnabled,
 		"backendUrl", s.cfg.BackendURL,
 	)
 
