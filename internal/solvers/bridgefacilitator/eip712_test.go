@@ -119,8 +119,8 @@ func TestAPIKeyDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 
 func TestGetOffersDigest_Golden(t *testing.T) {
 	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
-	got := GetOffersDigest(maker, big.NewInt(4102444800)).Hex()
-	// GOLDEN: pinned from TestGetOffersDigest_MatchesApitypes cross-check.
+	got := GetOffersDigest(maker, big.NewInt(4102444800), big.NewInt(apiKeyDomainChainID)).Hex()
+	// GOLDEN: pinned from TestGetOffersDigest_MatchesApitypes cross-check (chainId 1).
 	want := "0x9d4c2e5ccaaeb6884d2d2fd8e306e57cf781ef424db9e8801c703eac794fa6a5"
 	if got != want {
 		t.Fatalf("digest = %s, want %s", got, want)
@@ -134,7 +134,7 @@ func TestGetOffersDigest_MatchesApitypes(t *testing.T) {
 	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	deadline := big.NewInt(4102444800)
 
-	got := GetOffersDigest(maker, deadline)
+	got := GetOffersDigest(maker, deadline, big.NewInt(apiKeyDomainChainID))
 
 	typed := apitypes.TypedData{
 		Types: apitypes.Types{
@@ -192,8 +192,12 @@ func TestGetOffersDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 	}
 	maker := crypto.PubkeyToAddress(key.PublicKey)
 	deadline := big.NewInt(4_102_444_800)
+	chainID := big.NewInt(11155111) // Sepolia; the grunt-api domain + query chainId must agree
+	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
+		chainID, _ = new(big.Int).SetString(v, 10)
+	}
 
-	sig, err := crypto.Sign(GetOffersDigest(maker, deadline).Bytes(), key)
+	sig, err := crypto.Sign(GetOffersDigest(maker, deadline, chainID).Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -204,7 +208,8 @@ func TestGetOffersDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 		baseURL = "https://bf.dev.gcp.3f.xyz"
 	}
 
-	url := fmt.Sprintf("%s/v1/offer?maker=%s&deadline=%s", baseURL, strings.ToLower(maker.Hex()), deadline.String())
+	url := fmt.Sprintf("%s/v1/offer?maker=%s&chainId=%s&deadline=%s",
+		baseURL, strings.ToLower(maker.Hex()), chainID.String(), deadline.String())
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil) //nolint:gosec // G704: URL is operator-supplied via SOLVER_3F_BASE_URL in this live integration test
 	if err != nil {
 		t.Fatalf("build request: %v", err)

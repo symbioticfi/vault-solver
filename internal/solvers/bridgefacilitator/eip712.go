@@ -104,10 +104,8 @@ func bpsToFloat(n *big.Int) float64 {
 // RateDenominatorBps converts a basis-point rate to a fraction (10_000 = 100%).
 const RateDenominatorBps = 10_000.0
 
-// API-key generation EIP-712, validated against the live 3F dev API (a correctly-formed signature
-// is accepted; an un-onboarded facilitator returns 403, not a signature error). The domain omits
-// verifyingContract and pins chainId = 1 even on testnets ("current implementation only accepts
-// chainId = 1", per the spec).
+// grunt-api EIP-712 domain (no verifyingContract). chainId is per-flow: the (test-only) API-key
+// generation domain uses 1; the GetOffers listing domain uses the bot's operating chain.
 const (
 	apiKeyDomainName    = "grunt-api"
 	apiKeyDomainVersion = "1"
@@ -121,27 +119,30 @@ var (
 		[]byte("EIP712Domain(string name,string version,uint256 chainId)"))
 )
 
-// gruntAPIDomainSeparator is the EIP-712 domain separator shared by every grunt-api request
-// (name/version/chainId=1, no verifyingContract). Computed once.
-var gruntAPIDomainSeparator = crypto.Keccak256Hash(
-	apiKeyDomainTypeHash.Bytes(),
-	crypto.Keccak256([]byte(apiKeyDomainName)),
-	crypto.Keccak256([]byte(apiKeyDomainVersion)),
-	word(big.NewInt(apiKeyDomainChainID).Bytes()),
-)
+// gruntAPIDomainSeparator builds the grunt-api domain separator (name/version, no verifyingContract)
+// for chainID; the 3F server rebuilds it from the request's chainId query param to verify the signature.
+func gruntAPIDomainSeparator(chainID *big.Int) common.Hash {
+	return crypto.Keccak256Hash(
+		apiKeyDomainTypeHash.Bytes(),
+		crypto.Keccak256([]byte(apiKeyDomainName)),
+		crypto.Keccak256([]byte(apiKeyDomainVersion)),
+		word(chainID.Bytes()),
+	)
+}
 
 // getOffersTypeHash is the EIP-712 type the maker signs to list its offers via the Authorization
 // header; the field set is checked against the live 3F API in the GetOffers golden test.
 var getOffersTypeHash = crypto.Keccak256Hash([]byte("GetOffers(address maker,uint256 deadline)"))
 
-// GetOffersDigest computes the EIP-712 digest signed for an authenticated GET /v1/offer (maker=adapter).
-func GetOffersDigest(maker common.Address, deadline *big.Int) common.Hash {
+// GetOffersDigest computes the EIP-712 digest signed for an authenticated GET /v1/offer (maker=adapter)
+// over the grunt-api domain at chainID (the bot's operating chain).
+func GetOffersDigest(maker common.Address, deadline, chainID *big.Int) common.Hash {
 	sh := crypto.Keccak256Hash(getOffersTypeHash.Bytes(), word(maker.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator.Bytes(), sh.Bytes())
+	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
 }
 
-// APIKeyDigest computes the EIP-712 digest a facilitator signs to generate a 3F API key.
+// APIKeyDigest computes the EIP-712 digest a facilitator signs to generate a 3F API key (chainId 1).
 func APIKeyDigest(facilitator common.Address, deadline *big.Int) common.Hash {
 	sh := crypto.Keccak256Hash(apiKeyTypeHash.Bytes(), word(facilitator.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator.Bytes(), sh.Bytes())
+	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(big.NewInt(apiKeyDomainChainID)).Bytes(), sh.Bytes())
 }

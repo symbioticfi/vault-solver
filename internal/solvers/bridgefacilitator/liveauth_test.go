@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"math/big"
 	"os"
 	"strings"
 	"testing"
@@ -33,7 +34,11 @@ func TestLiveListOffers(t *testing.T) {
 		baseURL = "https://bf.dev.gcp.3f.xyz"
 	}
 
-	ac := newAPIClient(baseURL, sgnr, 30*time.Second, logr.Discard())
+	chainID := big.NewInt(11155111) // Sepolia; override for another chain
+	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
+		chainID, _ = new(big.Int).SetString(v, 10)
+	}
+	ac := newAPIClient(baseURL, sgnr, chainID, 30*time.Second, logr.Discard())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

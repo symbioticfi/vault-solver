@@ -24,21 +24,23 @@ const getOffersDeadlineWindow = 5 * time.Minute
 //
 // All methods are called from the single solver Run goroutine; no locking is required.
 type apiClient struct {
-	c    *threef.APIClient
-	sgnr signer.Signer
-	log  logr.Logger
+	c       *threef.APIClient
+	sgnr    signer.Signer
+	chainID *big.Int // operating chain; the grunt-api signing domain and the listOffers chainId query
+	log     logr.Logger
 }
 
-func newAPIClient(baseURL string, sgnr signer.Signer, timeout time.Duration, log logr.Logger) *apiClient {
+func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration, log logr.Logger) *apiClient {
 	cfg := threef.NewConfiguration()
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
 	// request would stall the single solver loop, redemption scans included.
 	cfg.HTTPClient = &http.Client{Timeout: timeout}
 	return &apiClient{
-		c:    threef.NewAPIClient(cfg),
-		sgnr: sgnr,
-		log:  log,
+		c:       threef.NewAPIClient(cfg),
+		sgnr:    sgnr,
+		chainID: chainID,
+		log:     log,
 	}
 }
 
@@ -47,7 +49,7 @@ func (ac *apiClient) listAuctions(ctx context.Context) ([]threef.AuctionDto, err
 	auctions, httpResp, err := ac.c.AuctionAPI.AuctionControllerListV1(ctx).Domain(true).Execute()
 	closeResp(httpResp)
 	if err != nil {
-		return nil, errors.Errorf("3f api: list auctions: %s: %w", statusOf(httpResp), err)
+		return nil, apiErr("list auctions", httpResp, err)
 	}
 	return auctions, nil
 }
@@ -57,7 +59,7 @@ func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto)
 	_, httpResp, e := ac.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResp(httpResp)
 	if e != nil {
-		return errors.Errorf("3f api: create offer: %s: %w", statusOf(httpResp), e)
+		return apiErr("create offer", httpResp, e)
 	}
 	return nil
 }
@@ -66,18 +68,21 @@ func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto)
 // GetOffers signature in the Authorization: Bearer header — no API key required.
 func (ac *apiClient) listOffers(ctx context.Context, adapter common.Address) ([]threef.OfferDto, error) {
 	deadline := big.NewInt(time.Now().Add(getOffersDeadlineWindow).Unix())
-	sig, err := ac.sgnr.SignHash(GetOffersDigest(adapter, deadline))
+	sig, err := ac.sgnr.SignHash(GetOffersDigest(adapter, deadline, ac.chainID))
 	if err != nil {
 		return nil, errors.Errorf("3f api: sign GetOffers: %w", err)
 	}
 	o, httpResp, e := ac.c.OfferAPI.OfferControllerGetV1(ctx).
 		Maker(lowerAddr(adapter)).
+		// chainId is the operating chain; the server rebuilds the grunt-api signing domain from it to
+		// verify the signature and routes the EIP-1271 check to that chain.
+		ChainId(float32(ac.chainID.Int64())).
 		Deadline(deadline.String()).
 		Authorization("Bearer 0x" + common.Bytes2Hex(sig)).
 		Execute()
 	closeResp(httpResp)
 	if e != nil {
-		return nil, errors.Errorf("3f api: list offers: %s: %w", statusOf(httpResp), e)
+		return nil, apiErr("list offers", httpResp, e)
 	}
 	return o, nil
 }
@@ -88,6 +93,18 @@ func closeResp(resp *http.Response) {
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
+}
+
+// apiErr wraps a failed 3F call with its HTTP status and the server's response body — the client's own
+// error is only the status line, but 3F returns the validation detail in the body.
+func apiErr(what string, resp *http.Response, err error) error {
+	var genErr *threef.GenericOpenAPIError
+	if errors.As(err, &genErr) {
+		if body := strings.TrimSpace(string(genErr.Body())); body != "" {
+			return errors.Errorf("3f api: %s: %s: %s: %w", what, statusOf(resp), body, err)
+		}
+	}
+	return errors.Errorf("3f api: %s: %s: %w", what, statusOf(resp), err)
 }
 
 // statusOf renders an HTTP response's status for error context ("no response" if there was none).

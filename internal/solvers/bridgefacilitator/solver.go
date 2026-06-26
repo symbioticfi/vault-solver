@@ -44,7 +44,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
-	api := newAPIClient(cfg.APIBaseURL, deps.Signer, cfg.HTTPTimeout, deps.Log.WithName(Name))
+	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout, deps.Log.WithName(Name))
 
 	s := &Solver{
 		cfg:        cfg,
