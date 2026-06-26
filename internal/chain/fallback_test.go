@@ -127,6 +127,47 @@ func TestParseHTTPEndpoints_RejectsNonHTTP(t *testing.T) {
 	}
 }
 
+func TestIsHTTPURL(t *testing.T) {
+	cases := map[string]bool{
+		"http://node.example":  true,
+		"https://node.example": true,
+		"ws://node.example":    false,
+		"wss://node.example":   false,
+		"/tmp/geth.ipc":        false,
+		"":                     false,
+	}
+	for raw, want := range cases {
+		if got := isHTTPURL(raw); got != want {
+			t.Errorf("isHTTPURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestDial_SingleHTTPEndpointServesChainID confirms a lone http(s) endpoint is dialed through the
+// bounded fallback transport (not the timeout-less plain dial), so its RPC calls are time-bounded.
+func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID json.RawMessage `json:"id"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":"0x7a69"}`)) // 31337
+	}))
+	defer srv.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{srv.URL}, multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial single http endpoint: %v", err)
+	}
+	defer c.Close()
+	if got := c.ChainID().Uint64(); got != 31337 {
+		t.Fatalf("chainID = %d, want 31337", got)
+	}
+}
+
 // TestDial_FallbackServesChainID exercises the full wiring: a down primary and a JSON-RPC fallback
 // that answers eth_chainId, so Dial succeeds via the fallback endpoint.
 func TestDial_FallbackServesChainID(t *testing.T) {

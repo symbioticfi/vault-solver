@@ -3,13 +3,8 @@ package bridgefacilitator
 import (
 	"context"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/3f/adapter"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
-
-// adapterABI is the parsed BridgeFacilitatorAdapter ABI, used to pack redeem() calldata and the
-// multicall sub-calls in chainreader.go. (mustABI is defined in chainreader.go.)
-var adapterABI = mustABI(adapter.BridgeFacilitatorAdapterMetaData)
 
 // redeemReady finds the target's redeemable Requests (batched canWithdraw via multicall) and submits
 // a single bounded redeem through the shared txmanager.
@@ -30,7 +25,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target) {
 		ready = ready[:s.cfg.RedeemBatchSize]
 	}
 
-	data, err := adapterABI.Pack("redeem", ready)
+	data, err := bfAdapter.TryPackRedeem(ready)
 	if err != nil {
 		s.log.Error(err, "redeem: pack calldata")
 		return

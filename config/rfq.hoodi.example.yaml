@@ -28,15 +28,15 @@ solvers:
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
       listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
       # Hoodi RFQ deployment:
-      executor: "0x6f862a9b5cd2f08e29a92558699b2863dcedc160"
-      reactor: "0xead015d4c3bf576bc1d3cad8294f3dc92dae0d93" # used at execution time
+      executor: "0x8F32D7195fD1B99ba64BC9780f580db2A7055990"
+      reactor: "0xC1b4A404288F049785Be4aB424589E743456338D" # used at execution time
       pollIntervalMs: 3000 # backend order poll cadence
       orderLimit: 20 # max open orders fetched per poll
-      # adapterWhitelistEnabled: true # default false (every adapter the backend advertises is
-      #                               # accepted). Enable to only quote/fill through the adapters
-      #                               # listed in `adapters` (requires ≥1 entry; rejected at startup otherwise).
-      # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g. after
-      # a restart) and, when the whitelist is enabled, the source of allowed adapters; the quote path's
-      # inventory snapshot still comes from the backend request. Empty disables recovery.
+      # solverMode: "external" (default) | "internal".
+      #   external — no discounts API; `adapters` REQUIRED and scope quoting/filling (empty = startup error).
+      #   internal — public discounts + every advertised adapter; `adapters` optional (extra recovery inventory).
+      solverMode: external
+      # LiquidLane adapters: external = required quoting/filling scope + recovery universe; internal = optional extras.
       adapters:
-        - "0x9158695D91E131d6c33033dE4ACD4c7Acb02c29c" # LiquidLane adapter
+        - "0x8DCC2515dE40c62d09125db5551de02603C70190" # USDC LiquidLane adapter
+        - "0x797390393A8a5b65e93A0E4E4A5fCDe06B94Bd3F" # aUSD LiquidLane adapter

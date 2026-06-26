@@ -22,7 +22,7 @@ described under [Solvers](#solvers) below.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
   Multicall3 reads, a pluggable signer, and a nonce-serialized transaction sender shared across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen, grouped per integration) and protocol
-  API clients (e.g. the 3F `threef/` client via oapi-codegen), each refreshable from upstream.
+  API clients (e.g. the 3F `threef/` client via the Java openapi-generator), each refreshable from upstream.
 
 State is intentionally minimal: open positions, redemption readiness, and liquidity are read from
 on-chain views and the relevant protocol API on each tick — no database. See
@@ -74,9 +74,10 @@ both a request/response **quote server** and an order-filling **poller**:
   it prices the requested swap directly off the adapter's on-chain `getAmountOut` (the oracle rate,
   quoted as-is), selects the best adapter legs across the inventory in the request,
   persists the chosen strategy by `quoteId`, and returns an `amountOut` (or `204` when it cannot
-  quote — wrong chain, no whitelisted adapter, no matching asset, or no viable strategy). With
-  `adapterWhitelistEnabled` (off by default), quoting and filling are restricted to the adapters of
-  the configured `vaults` (enabling it without `vaults` entries fails at startup). The
+  quote — wrong chain, no in-scope adapter, no matching asset, or no viable strategy). In the default
+  `external` `solverMode`, quoting and filling are scoped to the configured `adapters` — **at least one
+  is required** (an external solver has no discounts fallback). `internal` mode accepts every advertised
+  adapter and uses public discounts; its `adapters` are optional extra inventory. The
   HTTP surface is **code-first OpenAPI 3.1**: request validation and the spec served at
   `/openapi.json` + `/docs` are generated from the same typed structs; `/health` is public.
 - **Fill** — polls `GET /orders?filler=<executor>&orderStatus=open` every `pollIntervalMs`, then
@@ -87,7 +88,7 @@ both a request/response **quote server** and an order-filling **poller**:
 - **Strategy recovery** — when the quote-time strategy isn't cached (e.g. after a restart), it rebuilds
   one from current on-chain state across the configured `vaults`, restricted to those the executor is
   authorized to fill through (adapter `marketMaker`, adapter `owner`, or delegated `isFiller`),
-  plus any currently-offered discounts through whitelisted adapters.
+  plus — in `internal` mode only — any currently-offered backend discounts.
 - **Leg types** — **direct** legs (the public adapter rate) and **discount** legs (a signature-gated
   private rate resolved fresh from the backend's `/discounts` flow at fill time).
 
@@ -98,14 +99,15 @@ bounded over long runs. The caller EOA must hold `CALLER_ROLE` on the `Executor`
 `core-mirror` submodule, all consumed via `api/bindings/rfq/`; the backend contract is pinned by a
 vendored OpenAPI spec (`openapi/rfq-backend.openapi.json`). Config block: `backendUrl`,
 `backendSharedSecretEnv`, `listenAddr`, `executor`, `reactor`, `pollIntervalMs`, `orderLimit`,
-`adapterWhitelistEnabled`, `vaults` — see
-[`config/rfq.hoodi.yaml`](config/rfq.hoodi.yaml).
+`solverMode`, `adapters` — see
+[`config/rfq.hoodi.example.yaml`](config/rfq.hoodi.example.yaml).
 Design, decisions, and the live TODO list: [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md).
 
 ## Requirements
 
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
-- For regenerating codegen: `make tools` (installs pinned `abigen`, `oapi-codegen`, `golangci-lint`).
+- For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
+  the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
 - A reachable EVM RPC endpoint and a signing key (see Configuration).
 
 ## Quickstart
@@ -115,7 +117,7 @@ make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
 make lint             # golangci-lint
-./bin/vault-solver run --config config/sepolia.yaml
+./bin/vault-solver run --config config/3f.sepolia.example.yaml
 ```
 
 The CLI is built with [Cobra](https://github.com/spf13/cobra); run `vault-solver --help` for the
@@ -123,7 +125,7 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 `observability.debug: true` in config or the `--debug` flag (the flag wins):
 
 ```bash
-./bin/vault-solver run --config config/sepolia.yaml --debug
+./bin/vault-solver run --config config/3f.sepolia.example.yaml --debug
 ```
 
 ## Configuration

@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse(). 3F registers
@@ -16,6 +18,7 @@ type rawConfig struct {
 	APIKeyEnv       string       `yaml:"apiKeyEnv"`
 	RedeemBatchSize int          `yaml:"redeemBatchSize"`
 	Adapter         string       `yaml:"adapter"`
+	HTTPTimeout     string       `yaml:"httpTimeout"`
 	Intervals       rawIntervals `yaml:"intervals"`
 }
 
@@ -32,6 +35,9 @@ type Config struct {
 	APIKeyEnv string
 	// RedeemBatchSize caps how many Requests are redeemed in a single redeem() call (gas bound).
 	RedeemBatchSize int
+	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
+	// (including redemption scans). Applied as the 3F http.Client timeout.
+	HTTPTimeout time.Duration
 	// Target is the single vault+adapter pair this facilitator serves. 3F allows exactly one
 	// offer-address per facilitator, so this solver is single-pair by construction.
 	Target    Target
@@ -65,11 +71,14 @@ const (
 // defaultRedeemBatchSize caps the Requests redeemed per redeem() call when unset.
 const defaultRedeemBatchSize = 10
 
+// defaultHTTPTimeout bounds each 3F API call when httpTimeout is unset.
+const defaultHTTPTimeout = 30 * time.Second
+
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := node.Decode(&raw); err != nil {
-		return nil, errors.Errorf("decode solver config: %w", err)
+	if err := solver.DecodeStrict(node, &raw); err != nil {
+		return nil, err
 	}
 	if raw.APIBaseURL == "" {
 		return nil, errors.New("apiBaseUrl is required")
@@ -85,21 +94,38 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	discover, err := parseDuration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
+	if err != nil {
+		return nil, err
+	}
+	redeemPoll, err := parseDuration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
+	if err != nil {
+		return nil, err
+	}
+	reconcile, err := parseDuration(raw.Intervals.Reconcile, defaultReconcile, "intervals.reconcile")
+	if err != nil {
+		return nil, err
+	}
+
+	httpTimeout, err := parseDuration(raw.HTTPTimeout, defaultHTTPTimeout, "httpTimeout")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
 		APIKeyEnv:       raw.APIKeyEnv,
 		RedeemBatchSize: redeemBatch,
+		HTTPTimeout:     httpTimeout,
 		Target:          target,
-		Intervals: Intervals{
-			Discover:   parseDurationOr(raw.Intervals.Discover, defaultDiscover),
-			RedeemPoll: parseDurationOr(raw.Intervals.RedeemPoll, defaultRedeemPoll),
-			Reconcile:  parseDurationOr(raw.Intervals.Reconcile, defaultReconcile),
-		},
+		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 	}, nil
 }
 
 func parseTarget(raw rawConfig) (Target, error) {
-	adapter, err := parseAddress(raw.Adapter, "adapter")
+	// The zero address is rejected so an unreplaced placeholder fails at startup rather than being
+	// registered as the 3F offer-address.
+	adapter, err := parseNonZeroAddress(raw.Adapter, "adapter")
 	if err != nil {
 		return Target{}, err
 	}
@@ -113,13 +139,30 @@ func parseAddress(s, field string) (common.Address, error) {
 	return common.HexToAddress(s), nil
 }
 
-func parseDurationOr(s string, fallback time.Duration) time.Duration {
+func parseNonZeroAddress(s, field string) (common.Address, error) {
+	addr, err := parseAddress(s, field)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if addr == (common.Address{}) {
+		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
+	}
+	return addr, nil
+}
+
+// parseDuration returns fallback when s is empty, but a present-but-invalid or non-positive value is
+// an error rather than a silent fall back to the default — a typo'd interval should fail, not run at
+// some surprising cadence.
+func parseDuration(s string, fallback time.Duration, field string) (time.Duration, error) {
 	if s == "" {
-		return fallback
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return fallback
+	if err != nil {
+		return 0, errors.Errorf("%s: invalid duration %q: %w", field, s, err)
 	}
-	return d
+	if d <= 0 {
+		return 0, errors.Errorf("%s: duration must be positive, got %q", field, s)
+	}
+	return d, nil
 }

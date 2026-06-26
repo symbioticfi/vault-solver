@@ -22,6 +22,7 @@ type fakeBackend struct {
 	discount     *resolveDiscountResponse
 	discounts    *discountsResponse
 	resolveCalls int
+	listCalls    int
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
@@ -38,6 +39,7 @@ func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscount
 }
 
 func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+	f.listCalls++
 	if f.discounts == nil {
 		return &discountsResponse{}, nil
 	}
@@ -86,11 +88,13 @@ func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Resul
 func strPtr(s string) *string { return &s }
 func i64Ptr(i int64) *int64   { return &i }
 
+// newExec builds an internal-solver service (discountsEnabled: true); the external path is covered by
+// the TestExecution_DiscountsDisabled* tests, which flip the field.
 func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionService {
 	t.Helper()
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		orderLimit: 20, backend: be, store: st, txm: txm,
+		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
 		log: logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}

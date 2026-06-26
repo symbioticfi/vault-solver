@@ -2,13 +2,9 @@ package rfq
 
 import (
 	"context"
-	"fmt"
 	"math/big"
-	"strings"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -18,35 +14,19 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-// Parsed ABIs for packing Multicall3 sub-calls.
+// Contract bindings (abigen --v2): typed Pack/Unpack helpers for the Multicall3 sub-calls below, so an
+// ABI change fails at compile time (see CLAUDE.md "Code generation").
 var (
-	adapterABI = mustABI(adapter.LiquidLaneAdapterMetaData)
-	vaultABI   = mustABI(erc4626.IERC4626MetaData)
-	// erc20DecimalsABI is a minimal ERC-20 fragment — the quote path only needs decimals().
-	erc20DecimalsABI = mustParseABI(`[{"inputs":[],"name":"decimals","outputs":[{"type":"uint8"}],` +
-		`"stateMutability":"view","type":"function"}]`)
+	llAdapter = adapter.NewLiquidLaneAdapter()
+	// erc4626b serves both the vault's asset() and the asset token's decimals(): IERC4626 is an
+	// ERC-20, and a method's selector/return shape is fixed by the ABI regardless of target.
+	erc4626b = erc4626.NewIERC4626()
 )
 
 // readsPerAdapter is the number of Multicall3 sub-calls readVaultInventories issues per adapter
 // (paused, getMaxAssets, getMaxRate). vault() and the vault's asset() are resolved once at startup
 // (see resolveVaults), not re-read here.
 const readsPerAdapter = 3
-
-func mustABI(md *bind.MetaData) abi.ABI {
-	parsed, err := md.GetAbi()
-	if err != nil {
-		panic(fmt.Sprintf("rfq: parse ABI: %v", err))
-	}
-	return *parsed
-}
-
-func mustParseABI(j string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(j))
-	if err != nil {
-		panic(fmt.Sprintf("rfq: parse ABI json: %v", err))
-	}
-	return parsed
-}
 
 // reader performs the on-chain reads, batching via Multicall3. Token decimals are cached; the HTTP
 // server serves quotes concurrently, so the cache is mutex-guarded.
@@ -81,20 +61,16 @@ func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, 
 	}
 	r.mu.Unlock()
 
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: token, Data: mustPack(erc20DecimalsABI, "decimals")}})
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: token, Data: erc4626b.PackDecimals()}})
 	if err != nil {
 		return 0, err
 	}
 	if len(res) != 1 || !res[0].Success {
 		return 0, errors.Errorf("erc20.decimals() reverted for %s", token)
 	}
-	vals, err := erc20DecimalsABI.Unpack("decimals", res[0].ReturnData)
+	d, err := erc4626b.UnpackDecimals(res[0].ReturnData)
 	if err != nil {
 		return 0, errors.Errorf("unpack decimals: %w", err)
-	}
-	d, ok := vals[0].(uint8)
-	if !ok {
-		return 0, errors.Errorf("decimals: unexpected type %T", vals[0])
 	}
 	r.mu.Lock()
 	r.decimals[token] = int(d)
@@ -133,7 +109,7 @@ func (r *reader) amountsOut(
 		calls[i] = chain.Call{
 			Target:       g.adapter,
 			AllowFailure: true,
-			Data:         mustPack(adapterABI, "getAmountOut", tokenIn, amount),
+			Data:         llAdapter.PackGetAmountOut(tokenIn, amount),
 		}
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -149,7 +125,7 @@ func (r *reader) amountsOut(
 			r.log.V(1).Info("getAmountOut reverted; asset left unpriced", "asset", groups[i].asset.Hex())
 			continue
 		}
-		amt, derr := unpackBig(adapterABI, "getAmountOut", rr.ReturnData)
+		amt, derr := llAdapter.UnpackGetAmountOut(rr.ReturnData)
 		if derr != nil {
 			r.log.V(1).Error(derr, "getAmountOut decode failed; asset left unpriced", "asset", groups[i].asset.Hex())
 			continue
@@ -173,9 +149,9 @@ func (r *reader) readVaultInventories(
 	calls := make([]chain.Call, 0, len(vaults)*readsPerAdapter)
 	for _, v := range vaults {
 		calls = append(calls,
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "paused")},
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxAssets", tokenIn)},
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "getMaxRate", tokenIn)},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxAssets(tokenIn)},
+			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxRate(tokenIn)},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -193,11 +169,11 @@ func (r *reader) readVaultInventories(
 		if !maxA.Success || !mr.Success {
 			continue
 		}
-		if p, perr := unpackBool(adapterABI, "paused", paused.ReturnData); paused.Success && perr == nil && p {
+		if p, perr := llAdapter.UnpackPaused(paused.ReturnData); paused.Success && perr == nil && p {
 			continue
 		}
-		maxAssets, e1 := unpackBig(adapterABI, "getMaxAssets", maxA.ReturnData)
-		maxRate, e2 := unpackBig(adapterABI, "getMaxRate", mr.ReturnData)
+		maxAssets, e1 := llAdapter.UnpackGetMaxAssets(maxA.ReturnData)
+		maxRate, e2 := llAdapter.UnpackGetMaxRate(mr.ReturnData)
 		if e1 != nil || e2 != nil {
 			continue
 		}
@@ -232,7 +208,7 @@ func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]r
 	}
 	vcalls := make([]chain.Call, len(out))
 	for i := range out {
-		vcalls[i] = chain.Call{Target: out[i].Adapter, AllowFailure: true, Data: mustPack(adapterABI, "vault")}
+		vcalls[i] = chain.Call{Target: out[i].Adapter, AllowFailure: true, Data: llAdapter.PackVault()}
 	}
 	vres, err := r.chain.Multicall(ctx, vcalls)
 	if err != nil {
@@ -241,12 +217,12 @@ func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]r
 	acalls := make([]chain.Call, len(out))
 	for i := range out {
 		if i < len(vres) && vres[i].Success {
-			if vault, verr := unpackAddress(adapterABI, "vault", vres[i].ReturnData); verr == nil {
+			if vault, verr := llAdapter.UnpackVault(vres[i].ReturnData); verr == nil {
 				out[i].Vault = vault
 			}
 		}
 		// asset() reads the resolved vault; a zero target reverts (AllowFailure) and is skipped.
-		acalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: mustPack(vaultABI, "asset")}
+		acalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: erc4626b.PackAsset()}
 	}
 	ares, err := r.chain.Multicall(ctx, acalls)
 	if err != nil {
@@ -254,7 +230,7 @@ func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]r
 	}
 	for i := range out {
 		if i < len(ares) && ares[i].Success {
-			if asset, aerr := unpackAddress(vaultABI, "asset", ares[i].ReturnData); aerr == nil {
+			if asset, aerr := erc4626b.UnpackAsset(ares[i].ReturnData); aerr == nil {
 				out[i].Asset = asset
 			}
 		}
@@ -283,8 +259,8 @@ func (r *reader) readPermissionedVaultInventories(
 	calls := make([]chain.Call, 0, len(base)*2)
 	for _, inv := range base {
 		calls = append(calls,
-			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "marketMaker")},
-			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: mustPack(adapterABI, "owner")},
+			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
+			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -306,8 +282,8 @@ func (r *reader) readPermissionedVaultInventories(
 		if !mm.Success || !ow.Success {
 			continue
 		}
-		marketMaker, e1 := unpackAddress(adapterABI, "marketMaker", mm.ReturnData)
-		owner, e2 := unpackAddress(adapterABI, "owner", ow.ReturnData)
+		marketMaker, e1 := llAdapter.UnpackMarketMaker(mm.ReturnData)
+		owner, e2 := llAdapter.UnpackOwner(ow.ReturnData)
 		if e1 != nil || e2 != nil {
 			continue
 		}
@@ -322,7 +298,7 @@ func (r *reader) readPermissionedVaultInventories(
 	if len(fillerChecks) > 0 {
 		fcalls := make([]chain.Call, len(fillerChecks))
 		for j, i := range fillerChecks {
-			fcalls[j] = chain.Call{Target: base[i].Adapter, AllowFailure: true, Data: mustPack(adapterABI, "isFiller", auths[i].marketMaker, executor)}
+			fcalls[j] = chain.Call{Target: base[i].Adapter, AllowFailure: true, Data: llAdapter.PackIsFiller(auths[i].marketMaker, executor)}
 		}
 		fres, ferr := r.chain.Multicall(ctx, fcalls)
 		if ferr != nil {
@@ -330,7 +306,7 @@ func (r *reader) readPermissionedVaultInventories(
 		}
 		for j, i := range fillerChecks {
 			if j < len(fres) && fres[j].Success {
-				if ok, derr := unpackBool(adapterABI, "isFiller", fres[j].ReturnData); derr == nil && ok {
+				if ok, derr := llAdapter.UnpackIsFiller(fres[j].ReturnData); derr == nil && ok {
 					delegated[i] = true
 				}
 			}
@@ -360,50 +336,4 @@ func dedupeVaultsByAdapter(in []recoveryVault) []recoveryVault {
 		out = append(out, v)
 	}
 	return out
-}
-
-/* ───────── ABI pack/unpack helpers for multicall ───────── */
-
-func mustPack(a abi.ABI, method string, args ...interface{}) []byte {
-	data, err := a.Pack(method, args...)
-	if err != nil {
-		panic(fmt.Sprintf("rfq: pack %s: %v", method, err))
-	}
-	return data
-}
-
-func unpackBig(a abi.ABI, method string, data []byte) (*big.Int, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return nil, errors.Errorf("unpack %s: %w", method, err)
-	}
-	n, ok := vals[0].(*big.Int)
-	if !ok {
-		return nil, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return n, nil
-}
-
-func unpackBool(a abi.ABI, method string, data []byte) (bool, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return false, errors.Errorf("unpack %s: %w", method, err)
-	}
-	b, ok := vals[0].(bool)
-	if !ok {
-		return false, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return b, nil
-}
-
-func unpackAddress(a abi.ABI, method string, data []byte) (common.Address, error) {
-	vals, err := a.Unpack(method, data)
-	if err != nil {
-		return common.Address{}, errors.Errorf("unpack %s: %w", method, err)
-	}
-	addr, ok := vals[0].(common.Address)
-	if !ok {
-		return common.Address{}, errors.Errorf("unpack %s: unexpected type %T", method, vals[0])
-	}
-	return addr, nil
 }

@@ -7,19 +7,21 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL              string   `yaml:"backendUrl"`
-	BackendSharedSecretEnv  string   `yaml:"backendSharedSecretEnv"`
-	ListenAddr              string   `yaml:"listenAddr"`
-	Executor                string   `yaml:"executor"`
-	Reactor                 string   `yaml:"reactor"`
-	PollIntervalMs          int      `yaml:"pollIntervalMs"`
-	OrderLimit              int      `yaml:"orderLimit"`
-	AdapterWhitelistEnabled bool     `yaml:"adapterWhitelistEnabled"`
-	Adapters                []string `yaml:"adapters"`
+	BackendURL             string   `yaml:"backendUrl"`
+	BackendSharedSecretEnv string   `yaml:"backendSharedSecretEnv"`
+	ListenAddr             string   `yaml:"listenAddr"`
+	Executor               string   `yaml:"executor"`
+	Reactor                string   `yaml:"reactor"`
+	PollIntervalMs         int      `yaml:"pollIntervalMs"`
+	OrderLimit             int      `yaml:"orderLimit"`
+	SolverMode             string   `yaml:"solverMode"`
+	Adapters               []string `yaml:"adapters"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -39,30 +41,38 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// AdapterWhitelistEnabled restricts quoting and filling to the configured Adapters. Off by default:
-	// every adapter the backend advertises is accepted. Enabling it requires at least one Adapters entry
-	// — parseConfig rejects an enabled, empty whitelist.
-	AdapterWhitelistEnabled bool
-	// Adapters is the configured LiquidLane adapter universe: the whitelist source (see
-	// AdapterWhitelistEnabled) and the candidate universe used to rebuild a strategy on-chain when the
-	// quote-time strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
+	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
+	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters):
+	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting/filling.
+	//   - internal: uses public discounts; adapters are optional extra recovery inventory (deduped vs discounts).
+	SolverMode string
+	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
+	// scoped to, and the candidate universe used to rebuild a strategy on-chain when the quote-time
+	// strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
 	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables recovery.
 	Adapters []recoveryVault
 }
+
+// Solver-mode profiles (see Config.SolverMode).
+const (
+	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
+	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
+)
 
 // Defaults applied when a field is unset.
 const (
 	defaultListenAddr   = ":42073"
 	defaultPollInterval = 3 * time.Second
 	defaultOrderLimit   = 20
+	defaultSolverMode   = solverModeExternal
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := node.Decode(&raw); err != nil {
-		return nil, errors.Errorf("decode solver config: %w", err)
+	if err := solver.DecodeStrict(node, &raw); err != nil {
+		return nil, err
 	}
 	if raw.BackendURL == "" {
 		return nil, errors.New("backendUrl is required")
@@ -74,15 +84,19 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	mode := orStr(raw.SolverMode, defaultSolverMode)
+	if mode != solverModeExternal && mode != solverModeInternal {
+		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
+	}
 
 	cfg := &Config{
-		BackendURL:              raw.BackendURL,
-		BackendSharedSecretEnv:  raw.BackendSharedSecretEnv,
-		ListenAddr:              orStr(raw.ListenAddr, defaultListenAddr),
-		Executor:                executor,
-		PollInterval:            defaultPollInterval,
-		OrderLimit:              defaultOrderLimit,
-		AdapterWhitelistEnabled: raw.AdapterWhitelistEnabled,
+		BackendURL:             raw.BackendURL,
+		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
+		ListenAddr:             orStr(raw.ListenAddr, defaultListenAddr),
+		Executor:               executor,
+		PollInterval:           defaultPollInterval,
+		OrderLimit:             defaultOrderLimit,
+		SolverMode:             mode,
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
@@ -105,12 +119,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapterAddr})
 	}
-	// An enabled whitelist with nothing on it would decline every quote — a misconfiguration, not a
-	// runnable state.
-	if cfg.AdapterWhitelistEnabled && len(cfg.Adapters) == 0 {
-		return nil, errors.New("adapterWhitelistEnabled requires at least one adapters entry")
+	// External has no discounts fallback, so with no adapters it could quote/recover nothing — fail fast.
+	if mode == solverModeExternal && len(cfg.Adapters) == 0 {
+		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
 	return cfg, nil
+}
+
+// usesDiscounts reports whether this solver may call the internal-only discounts API (internal mode only).
+func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
+
+// restrictsToAdapters reports whether quoting/filling is scoped to the configured Adapters: external mode
+// with ≥1 adapter. parseConfig requires external to have adapters; the len check guards hand-built Configs.
+func (c *Config) restrictsToAdapters() bool {
+	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
 }
 
 func parseAddress(s, field string) (common.Address, error) {

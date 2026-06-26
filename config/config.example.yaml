@@ -44,6 +44,7 @@ solvers:
       # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
                                             # generates one at startup (EIP-712) and re-auths on 401/403.
       redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
+      # httpTimeout: 30s                     # per-call timeout for 3F API requests (default 30s)
       # The single adapter this facilitator serves (3F registers exactly one offer-address per
       # facilitator, so this solver is single-pair). The vault and collateral are derived from the
       # adapter on-chain at startup (adapter.vault() + vault.asset()), not configured here.

@@ -23,8 +23,11 @@ backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET
 executor: "0x0000000000000000000000000000000000000010"
 `
 
+// oneAdapter is appended to make an external-mode config valid — external requires at least one adapter.
+const oneAdapter = "adapters:\n  - \"0x0000000000000000000000000000000000000042\"\n"
+
 func TestParseConfig_Defaults(t *testing.T) {
-	cfg, err := parse(t, minimalConfig)
+	cfg, err := parse(t, minimalConfig+oneAdapter)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
@@ -37,34 +40,60 @@ func TestParseConfig_Defaults(t *testing.T) {
 	if cfg.OrderLimit != defaultOrderLimit {
 		t.Fatalf("orderLimit = %d, want %d", cfg.OrderLimit, defaultOrderLimit)
 	}
-	if cfg.AdapterWhitelistEnabled {
-		t.Fatal("adapterWhitelistEnabled should default to false")
+	if cfg.SolverMode != solverModeExternal {
+		t.Fatalf("solverMode = %q, want %q (default)", cfg.SolverMode, solverModeExternal)
+	}
+	if !cfg.restrictsToAdapters() {
+		t.Fatal("external mode with a configured adapter should restrict to adapters")
+	}
+	if cfg.usesDiscounts() {
+		t.Fatal("usesDiscounts should default to false (external mode: discounts API is internal-only)")
 	}
 }
 
-func TestParseConfig_AdapterWhitelistFlag(t *testing.T) {
-	// Enabling requires at least one adapters entry (parseConfig rejects an empty whitelist).
-	adapters := `
-adapters:
-  - "0x0000000000000000000000000000000000000042"
-`
+func TestParseConfig_SolverMode(t *testing.T) {
+	a := "\n" + oneAdapter
 	cases := map[string]struct {
-		yaml string
-		want bool
+		yaml                              string
+		wantMode                          string
+		wantWhitelist, wantDiscounts, err bool
 	}{
-		"explicit true":  {yaml: "adapterWhitelistEnabled: true" + adapters, want: true},
-		"explicit false": {yaml: "adapterWhitelistEnabled: false", want: false},
+		"external + adapters → restrict, no discounts":    {yaml: "solverMode: external" + a, wantMode: "external", wantWhitelist: true, wantDiscounts: false},
+		"external, no adapters → error":                   {yaml: "solverMode: external", err: true},
+		"internal + adapters → discounts on, no restrict": {yaml: "solverMode: internal" + a, wantMode: "internal", wantWhitelist: false, wantDiscounts: true},
+		"internal, no adapters → discounts on (optional)": {yaml: "solverMode: internal", wantMode: "internal", wantWhitelist: false, wantDiscounts: true},
+		"default (unset) + adapters → external":           {yaml: a, wantMode: "external", wantWhitelist: true, wantDiscounts: false},
+		"default (unset), no adapters → error":            {yaml: "", err: true},
+		"invalid mode → error":                            {yaml: "solverMode: hybrid", err: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
+			if tc.err {
+				if err == nil {
+					t.Fatal("expected the config to be rejected")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("parseConfig: %v", err)
 			}
-			if cfg.AdapterWhitelistEnabled != tc.want {
-				t.Fatalf("adapterWhitelistEnabled = %v, want %v", cfg.AdapterWhitelistEnabled, tc.want)
+			if cfg.SolverMode != tc.wantMode {
+				t.Fatalf("solverMode = %q, want %q", cfg.SolverMode, tc.wantMode)
+			}
+			if cfg.restrictsToAdapters() != tc.wantWhitelist {
+				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantWhitelist)
+			}
+			if cfg.usesDiscounts() != tc.wantDiscounts {
+				t.Fatalf("usesDiscounts() = %v, want %v", cfg.usesDiscounts(), tc.wantDiscounts)
 			}
 		})
+	}
+}
+
+func TestParseConfig_UnknownKeyRejected(t *testing.T) {
+	if _, err := parse(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
+		t.Fatal("expected a typo'd key to be rejected")
 	}
 }
 
@@ -74,7 +103,7 @@ listenAddr: ":9000"
 pollIntervalMs: 1500
 orderLimit: 5
 reactor: "0x0000000000000000000000000000000000000030"
-`)
+`+oneAdapter)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
@@ -144,9 +173,12 @@ backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
 `,
-		"whitelist enabled without adapters": minimalConfig + `
-adapterWhitelistEnabled: true
-`,
+		// External mode (the default) has no discounts fallback, so an empty adapter list is rejected.
+		"external mode (default) requires adapters":  minimalConfig,
+		"external mode (explicit) requires adapters": minimalConfig + "solverMode: external\n",
+		// Old flags folded into solverMode — a config still carrying them must fail (unknown key).
+		"removed adapterWhitelistEnabled key rejected": minimalConfig + "adapterWhitelistEnabled: true\n",
+		"removed discountsEnabled key rejected":        minimalConfig + "discountsEnabled: true\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

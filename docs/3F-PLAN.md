@@ -30,9 +30,9 @@ repo root) §4 for the functional blueprint of the 3F solver.
 | Language / toolchain | **Go 1.26** (module declares `go 1.26`; toolchain auto-fetch) |
 | Logging | **`logr.Logger`** interface throughout, backed by **zap** via `zapr`; only `main` wires the backend |
 | Metrics | Prometheus (`/metrics`); `logr` keeps the logging dependency swappable |
-| License | **BSL-1.1** (matches the contract side; Licensor `GPRP`, Change License GPLv2+) |
+| License | _TBD — not yet added_ |
 | Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
-| API client | **oapi-codegen** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
+| API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open positions come from `adapter.activeRequests()`; redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). |
 | Multi-solver shape | 3F logic fully encapsulated in its own package; `main` initializes one solver today. A name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
@@ -82,12 +82,12 @@ vault-solver/
 │   ├── bindings/                  # abigen output (committed), grouped per integration:
 │   │   ├── 3f/{adapter,request,vaultcontroller,whitelist}/  # 3F-specific (future: rfq/, oev/)
 │   │   └── vaultv2/               # shared Symbiotic core, reused by every integration
-│   └── threef/                    # oapi-codegen output (committed)
+│   └── threef/                    # openapi-generator (Java) output (committed)
 ├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
-├── config/{config.example.yaml,sepolia.yaml}
+├── config/{config.example.yaml,3f.sepolia.example.yaml}
 ├── deploy/{Dockerfile,docker-compose.yml}
 ├── .github/workflows/ci.yml
-├── .golangci.yml  Makefile  go.mod  README.md  LICENSE  .gitignore  PLAN.md
+├── .golangci.yml  Makefile  go.mod  README.md  .gitignore
 ```
 
 ---
@@ -162,11 +162,11 @@ solver:
 
 | Target | Action |
 |---|---|
-| `make tools` | install pinned `abigen`, `oapi-codegen`, `golangci-lint` |
+| `make tools` | install pinned `abigen`, `golangci-lint` (OpenAPI uses the Java openapi-generator, downloaded on demand) |
 | `make refresh-abi` | copy ABIs from `FORGE_OUT=` (jq-extract `.abi` from `out/*.json`) into `api/abi/` — manual |
 | `make refresh-openapi` | curl the live spec → `openapi/` — manual |
 | `make bindings` | `abigen` over `api/abi/*.json` → `api/bindings/*.go` |
-| `make openapi-client` | `oapi-codegen` over the vendored spec → `api/threef/client.gen.go` |
+| `make openapi-client` | Java openapi-generator over the vendored spec → `api/threef/` |
 | `make generate` | bindings + openapi-client |
 | `make lint` / `test` / `build` / `docker` | golangci-lint; `go test -race -cover ./...`; build; image |
 
@@ -180,7 +180,7 @@ on demand. ABIs required: `BridgeFacilitatorAdapter`, `IRequest`/`IVaultControll
 
 Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `rfq` repo (`src/3f/`), 25 tests, ABI vendored here. This is what the bot binds against.
 
-0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, BSL LICENSE, README, version pkg.
+0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
 3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (fundable-liquidity + curator exposure caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` → pack `redeem` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.

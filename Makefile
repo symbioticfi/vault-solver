@@ -38,12 +38,19 @@ CORE_MIRROR_ABIS := LiquidLaneAdapter IVaultV2 IERC4626
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.
 # Adapter-specific bindings are grouped per integration (3f/, and later rfq/, oev/); shared
 # infra (vaultv2, multicall3) stays top-level so every integration reuses it.
-# Note: api/abi/Multicall3.json is hand-vendored (not a Foundry contract), so Multicall3 is in
-# BINDINGS but not ABIS. aggregate3 is marked `view` there so abigen binds it as a Caller.
-BINDINGS := BridgeFacilitatorAdapter:3f/adapter IRequest:3f/request \
+# Leaf-contract bindings use abigen --v2, which emits typed, backend-free PackXxx/UnpackXxx helpers.
+# The on-chain read paths build their Multicall3 sub-calls and decode the return blobs through those
+# helpers (see the chainreaders), so an ABI change that renames a method or alters a signature breaks
+# the build at the call site instead of panicking at runtime — no stringly-typed abi.Pack("method").
+BINDINGS_V2 := BridgeFacilitatorAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             LiquidLaneAdapter:rfq/adapter Executor:rfq/executor Reactor:rfq/reactor \
-            UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 Multicall3:multicall3
+            UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626
+# Note: api/abi/Multicall3.json is hand-vendored (not a Foundry contract), so Multicall3 is in
+# BINDINGS_V1 but not ABIS. It stays on the v1 generator: it's the transport (chain.Multicall binds
+# its Aggregate3 caller), where v2's pure pack/unpack helpers buy nothing. aggregate3 is marked `view`
+# there so abigen binds it as a Caller.
+BINDINGS_V1 := Multicall3:multicall3
 
 BIN     := bin/vault-solver
 PKG     := github.com/symbioticfi/vault-solver
@@ -95,13 +102,21 @@ refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=..
 
 .PHONY: bindings
 bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; package = leaf dir)
-	@for pair in $(BINDINGS); do \
+	@for pair in $(BINDINGS_V2); do \
+		c="$${pair%%:*}"; rel="$${pair##*:}"; pkg="$${rel##*/}"; \
+		abi="api/abi/$$c.json"; \
+		if [[ ! -f "$$abi" ]]; then echo "missing $$abi (run make refresh-abi)"; exit 1; fi; \
+		mkdir -p "api/bindings/$$rel"; \
+		abigen --v2 --abi "$$abi" --pkg "$$pkg" --type "$$c" --out "api/bindings/$$rel/$$c.go"; \
+		echo "generated api/bindings/$$rel/$$c.go (v2)"; \
+	done
+	@for pair in $(BINDINGS_V1); do \
 		c="$${pair%%:*}"; rel="$${pair##*:}"; pkg="$${rel##*/}"; \
 		abi="api/abi/$$c.json"; \
 		if [[ ! -f "$$abi" ]]; then echo "missing $$abi (run make refresh-abi)"; exit 1; fi; \
 		mkdir -p "api/bindings/$$rel"; \
 		abigen --abi "$$abi" --pkg "$$pkg" --type "$$c" --out "api/bindings/$$rel/$$c.go"; \
-		echo "generated api/bindings/$$rel/$$c.go"; \
+		echo "generated api/bindings/$$rel/$$c.go (v1)"; \
 	done
 
 # Both OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,

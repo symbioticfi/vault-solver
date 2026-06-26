@@ -33,7 +33,7 @@ func TestLiveGenerateKey(t *testing.T) {
 		baseURL = "https://bf.dev.gcp.3f.xyz"
 	}
 
-	ac, err := newAPIClient(baseURL, sgnr, sgnr.Address(), "", logr.Discard())
+	ac, err := newAPIClient(baseURL, 30*time.Second, sgnr, sgnr.Address(), "", logr.Discard())
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
