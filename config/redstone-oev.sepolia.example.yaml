@@ -1,0 +1,52 @@
+# vault-solver — RedStone OEV solver, Sepolia profile.
+#
+# Secrets are referenced by env-var NAME and read at point of use; ${VAR} fields are expanded at load time.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_SEPOLIA}        # expanded from env; do not commit a real URL
+  chainId: 11155111
+
+signer:
+  keyEnv: OEV_SIGNER_PRIVATE_KEY        # EXECUTOR_V6 signer + Executor deposit wallet
+
+observability:
+  addr: ":9090"
+
+solvers:
+  - name: redstone-oev
+    config:
+      ws:
+        url: wss://dev-rwa-sepolia.oev.a.redstone.finance
+        apiKeyEnv: OEV_REDSTONE_API_KEY
+
+      executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"   # RedStone Atom Executor (proxy)
+      callback: "0x7EE46765Bd337931E9f2CF6333BeBf2b78D17fcf"   # SymbioticOevSolver (sells each leg through the LiquidLane adapter; pays the bid)
+      adapter:  "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # the LiquidLane adapter the callback pins (TLOAN vault / TCOL)
+
+      # Public api.morpho.org does not index this custom Sepolia Morpho. The Sepolia harness uses
+      # OEV_TEST_MONITOR=true plus OEV_TEST_MARKETS/OEV_TEST_POSITIONS from scripts/oev/addresses.sepolia.json.
+      morphoApiUrl: ""
+
+      # TLOAN is the Sepolia testbed's $1 loan token, so loanUsd uses Chainlink's Sepolia USDC/USD feed.
+      loanEthFeed:
+        ethUsd: "0x694AA1769357215DE4FAC081bf1f309aDC325306"   # Chainlink Sepolia ETH / USD
+        loanUsd: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"  # Chainlink Sepolia USDC / USD proxy for TLOAN
+        maxAgeMs: 86400000
+
+      bid:
+        bidEth: "0.0005"                 # minimum bid in ETH; final bid is max(this, gross profit share)
+        totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms
+        minBundleProfitBidBps: 1000      # extra bundle margin after gas + bid, as bps of the final bid
+        maxTxGasPriceWei: "20000000000"  # 20 gwei signed tx.gasprice cap and profitability/deposit assumption
+
+      sizing:
+        allowFullLiquidation: true       # seize full collateral when profitable; set false to force fixed 90% partial mode
+        swapHaircutBps: 100              # extra safety margin on the adapter's discounted rate (slippage/staleness)
+
+      breaker:
+        maxFailures: 3                   # halt bidding after this many failed liquidations…
+        windowMs: 3600000                # …within 1h (plus an immediate halt on a `blacklisted` frame)
+
+      intervals:
+        opsPollMs: 30000                 # ops checks (balances, filler status)
+        monitorPollMs: 10000             # monitor snapshot poll (API in prod, testMonitor on Sepolia)

@@ -1,0 +1,25 @@
+{
+  "_comment": "RedStone OEV Sepolia testbed addresses - the manifest scripts/oev/oev-balance.sh reads. Single-adapter deploy.",
+  "chainId": 11155111,
+  "owner": "0x812492C36b003837C30cB0B63960b86eC9B27309",
+  "instance": {
+    "vault": "0xb99F1FeA50f40Bb7C5E568c2De6D79dd0b61EB3A",
+    "adapter": "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b",
+    "account": "0xE86974B0B302C389f746AC088E42732A754A941C",
+    "callback": "0x7EE46765Bd337931E9f2CF6333BeBf2b78D17fcf"
+  },
+  "external": {
+    "redstoneExecutor": "0xFdFB1862a53a974b166d1f0D012f524Ebd2e0EbD",
+    "morpho": "0xd011EE229E7459ba1ddd22631eF7bF528d424A14",
+    "morphoMarket": "0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5",
+    "morphoOracle": "0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D",
+    "collateralFeed": "0x6beE2D4dC04afb93b8117849138aA4fCa300c788",
+    "tloan": "0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d",
+    "tcol": "0x17e892d4E802B01d7DA49Ca3542560f6851AA4D3",
+    "testPositions": [
+      "0x629d764eC8563AFA701709B52c1a215e865632dE",
+      "0x378A49C640fD9EeA888A6a553CAae441E2fdebC6",
+      "0xa42B7e0819DC251445841D1476F30841Fda310E9"
+    ]
+  }
+}
