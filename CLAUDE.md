@@ -27,6 +27,13 @@ Two layers, and code lives in exactly one:
   (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
   live here.
 
+**Shared protocol code** used by ≥2 solvers lives in its own shared package or generated binding — e.g.
+Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/morphographql`, or neutral
+contract bindings like `api/bindings/liquidlane/adapter` / `api/bindings/erc4626` (shared by redstone-oev +
+rfq). Hand-written domain adapters stay inside the solver that owns the workflow unless a second solver
+actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
+helper package — `internal/parse`.
+
 To add a new integration (e.g. `rfq`):
 1. Create `internal/solvers/rfq/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
    `Factory(raw yaml.Node, deps solver.Deps) (Solver, error)`.
@@ -104,7 +111,7 @@ bot's view of an external surface honest (it comes from the source of truth, not
 that silently drifts), keeps the build hermetic (generated code is committed, so a clean checkout
 builds with no network/toolchain surprises), and turns an upstream change into a reviewable diff.
 
-Two instances of the same pattern — **vendor → generate → commit, regenerated only via `make`:**
+Three instances of the same pattern — **vendor → generate → commit, regenerated only via `make`:**
 
 - **Contract bindings (ABI → abigen).** Vendor the ABI JSON under `api/abi/` (from a `forge build`
   out-dir; `make refresh-abi` extracts `.abi` from the build artifacts of `ABIS`/`CORE_MIRROR_ABIS`),
@@ -127,8 +134,14 @@ Two instances of the same pattern — **vendor → generate → commit, regenera
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
   `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
   (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+- **GraphQL clients (schema SDL + operations → genqlient).** Vendor the upstream schema SDL under
+  `api/graphql/<name>/` (`make refresh-morpho-graphql-schema` pulls Morpho's live schema), keep named
+  operation documents under `operations/`, then `make refresh-morpho-graphql-client` runs pinned
+  `genqlient` into `api/<client>/` and emits `operations.json` for review/safelisting. The generated package
+  is the shared binding; hand-written adapters that parse generated response types into domain types live in
+  the owning integration until reuse proves they belong elsewhere.
 
-Rules for both: the vendored artifact (ABI/spec) is the **contract of record** — when upstream changes,
+Rules for every generated surface: the vendored artifact (ABI/spec/schema) is the **contract of record** — when upstream changes,
 re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps
 the generated client/binding behind a thin adapter so generated types (nullable pointers, response
 wrappers) stay contained at the boundary and don't leak into solver logic. Reach for this pattern
