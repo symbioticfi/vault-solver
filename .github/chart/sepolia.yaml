@@ -29,7 +29,7 @@ configMap:
             backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
             listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
             # Sepolia RFQ deployment:
-            executor: ${EXECUTOR} # per-instance: each solver pod injects its own Executor via its vault env
+            executor: ${EXECUTOR} # per-instance: deploy.yml sets EXECUTOR per solver (non-secret env, not vault)
             reactor: "0x9CEA2ff051A285d5Eb9dc41b16B2407Bb7a81377" # used at execution time
             pollIntervalMs: 333 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
