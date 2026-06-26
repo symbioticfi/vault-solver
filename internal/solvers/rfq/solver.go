@@ -79,13 +79,15 @@ func buildServices(
 	whitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:   chainID,
-		executor:  cfg.Executor,
-		whitelist: whitelist,
-		reader:    rdr,
-		store:     st,
-		log:       log,
-		now:       time.Now,
+		chainID:            chainID,
+		executor:           cfg.Executor,
+		whitelist:          whitelist,
+		tokensToQuote:      cfg.TokensToQuote,
+		permissionedTokens: cfg.PermissionedTokens,
+		reader:             rdr,
+		store:              st,
+		log:                log,
+		now:                time.Now,
 	}
 	exec := &executionService{
 		chainID:          chainID,
