@@ -7,6 +7,7 @@ package bridgefacilitator
 import (
 	"context"
 	"math/big"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,13 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
+
+// offerStatusIgnored are 3F offer statuses that are not live coverage when rebuilding the cache: a
+// FAILED consume or a NOT_ACCEPTED bid won't cover the auction, so discovery should re-offer.
+var offerStatusIgnored = map[string]bool{
+	"FAILED":       true,
+	"NOT_ACCEPTED": true,
+}
 
 // Name is the registry key that selects this solver from config.
 const Name = "3f-bridge-facilitator"
@@ -122,6 +130,9 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 			continue
 		}
 		for _, o := range offers {
+			if offerStatusIgnored[strings.ToUpper(strings.TrimSpace(o.Status))] {
+				continue // failed/not-accepted offers aren't live coverage — let discovery re-offer
+			}
 			exp, perr := parseUnixTime(o.Expiration)
 			if perr != nil || !exp.After(now) {
 				continue // unparseable or already expired — we may freely re-offer
