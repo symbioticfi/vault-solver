@@ -10,7 +10,7 @@ import (
 func TestGasUnitsForBundleRoutes(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	bundle := chosenBundle{
-		legs:        []LiquidationLeg{{SwapAmountOut: big.NewInt(100)}},
+		legs:        []LiquidationLeg{{MaxAssets: big.NewInt(100)}},
 		collaterals: []common.Address{coll},
 	}
 
@@ -65,9 +65,9 @@ func TestGasUnitsForBundleConsumesSharedBudgets(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	bundle := chosenBundle{
 		legs: []LiquidationLeg{
-			{SwapAmountOut: big.NewInt(70)},
-			{SwapAmountOut: big.NewInt(70)},
-			{SwapAmountOut: big.NewInt(70)},
+			{MaxAssets: big.NewInt(70)},
+			{MaxAssets: big.NewInt(70)},
+			{MaxAssets: big.NewInt(70)},
 		},
 		collaterals: []common.Address{coll, coll, coll},
 	}
@@ -92,8 +92,8 @@ func TestGasUnitsForBundleConsumesSharedBudgets(t *testing.T) {
 
 func TestGasPredictionFixedFeedCostAndLimit(t *testing.T) {
 	bundle := chosenBundle{legs: []LiquidationLeg{
-		{SwapAmountOut: big.NewInt(1)},
-		{SwapAmountOut: big.NewInt(1)},
+		{MaxAssets: big.NewInt(1)},
+		{MaxAssets: big.NewInt(1)},
 	}}
 	pred := gasPredictionForBundleFeeds(bundle, nil, 3)
 	want := gasBaseUnits + gasExecutorDebitSurcharge + 3*gasPriceUpdatePerFeed + gasFirstUnknownLeg + gasAdditionalUnknownLeg
@@ -112,25 +112,25 @@ func TestLiveRedStoneLimitRejectsThreeAllocateLegs(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	two := chosenBundle{
 		legs: []LiquidationLeg{
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
 		},
 		collaterals: []common.Address{coll, coll},
 	}
 	three := chosenBundle{
 		legs: []LiquidationLeg{
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
 		},
 		collaterals: []common.Address{coll, coll, coll},
 	}
 	four := chosenBundle{
 		legs: []LiquidationLeg{
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
-			{SwapAmountOut: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
+			{MaxAssets: big.NewInt(1)},
 		},
 		collaterals: []common.Address{coll, coll, coll, coll},
 	}
@@ -159,7 +159,7 @@ func TestGasPredictionTracksForkCalibratedSettlements(t *testing.T) {
 			collaterals: make([]common.Address, legs),
 		}
 		for i := range legs {
-			b.legs[i] = LiquidationLeg{SwapAmountOut: big.NewInt(1)}
+			b.legs[i] = LiquidationLeg{MaxAssets: big.NewInt(1)}
 			b.collaterals[i] = coll
 		}
 		return b

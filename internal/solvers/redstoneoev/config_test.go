@@ -41,7 +41,7 @@ func TestExampleConfigParses(t *testing.T) {
 	if !cfg.Sizing.AllowFullLiquidation {
 		t.Fatal("example settings drifted: allowFullLiquidation must stay enabled")
 	}
-	if !cfg.hasRateSource() {
+	if cfg.LoanEthFeed == nil {
 		t.Fatal("example settings drifted: config must carry a loan↔ETH rate source")
 	}
 }
@@ -79,7 +79,7 @@ func TestConfigProfiles(t *testing.T) {
 				if c.BidWei.Sign() <= 0 {
 					t.Fatalf("prod profile must carry a positive flat bid, got %v", c.BidWei)
 				}
-				if !c.hasRateSource() {
+				if c.LoanEthFeed == nil {
 					t.Fatal("prod profile must carry a rate source")
 				}
 			},

@@ -22,7 +22,14 @@ func logCallbackEvents(log logr.Logger, callback common.Address, receipt *types.
 				"borrower", ev.Borrower.Hex(),
 				"index", fields.index, "status", legStatusLabel(fields.status), "reason", legReasonLabel(fields.reason),
 				"selector", fields.selector, "seizedAssets", ev.SeizedAssets, "repaidAssets", ev.RepaidAssets,
-				"profitLoan", ev.ProfitLoan)
+				"profitLoan", ev.ProfitLoan, "gasUsed", ev.GasUsed)
+			continue
+		}
+		if ev, err := callbackB.UnpackBundleResultEvent(lg); err == nil {
+			log.Info("callback bundle result",
+				"auctionKey", common.BytesToHash(ev.AuctionKey[:]).Hex(),
+				"totalProfitLoan", ev.TotalProfitLoan, "minProfitLoan", ev.MinProfitLoan,
+				"gasUsed", ev.GasUsed, "bidAuthorized", ev.BidAuthorized)
 			continue
 		}
 		if ev, err := callbackB.UnpackPayBidResultEvent(lg); err == nil {
@@ -64,6 +71,8 @@ func legStatusLabel(status uint8) string {
 	switch status {
 	case 1:
 		return "success"
+	case 2:
+		return "skipped"
 	case 3:
 		return "reverted"
 	default:
@@ -75,7 +84,13 @@ func legReasonLabel(reason uint8) string {
 	switch reason {
 	case 0:
 		return "none"
-	case 7:
+	case 1:
+		return "swap_output_below_min"
+	case 2:
+		return "insufficient_loan_proceeds"
+	case 3:
+		return "profit_below_min"
+	case 4:
 		return "morpho_revert"
 	default:
 		return gasRouteUnknownLabel

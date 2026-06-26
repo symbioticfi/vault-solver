@@ -9,14 +9,14 @@ import (
 	"github.com/go-errors/errors"
 )
 
-// LiquidationLeg is one solver-selected liquidation cap. The callback receives only the signed fields
-// encoded by callbackLeg; SwapAmountOut is a solver-only estimate for selection and gas prediction.
+// LiquidationLeg is one solver-selected liquidation cap. MaxAssets is the signed loan-output cap for this
+// leg, so the callback never calls LiquidLane's non-view getMaxAssets on-chain.
 type LiquidationLeg struct {
 	MarketId       common.Hash
 	Borrower       common.Address
 	MaxSeizeAssets *big.Int
 	MinProfit      *big.Int
-	SwapAmountOut  *big.Int
+	MaxAssets      *big.Int
 }
 
 type operationAuth struct {
@@ -29,6 +29,7 @@ type callbackLeg struct {
 	MarketId       common.Hash
 	Borrower       common.Address
 	MaxSeizeAssets *big.Int
+	MaxAssets      *big.Int
 	MinProfit      *big.Int
 }
 
@@ -51,7 +52,7 @@ var (
 		{Type: mustType("uint256")},
 		{Type: mustType("bytes32")},
 	}
-	authDomain = crypto.Keccak256Hash([]byte("SYMBIOTIC_OEV_AUTH_V2"))
+	authDomain = crypto.Keccak256Hash([]byte("SYMBIOTIC_OEV_AUTH_V1"))
 )
 
 // EncodeOperationData ABI-encodes the callback payload committed by the RedStone EXECUTOR_V6 signature.
@@ -62,10 +63,8 @@ func EncodeOperationData(auth operationAuth, legs []LiquidationLeg, authSig []by
 	if auth.BidAmount == nil || auth.MinBundleProfit == nil || auth.MinBundleProfit.Sign() <= 0 {
 		return nil, errors.New("operationData: invalid auth")
 	}
-	for i, leg := range legs {
-		if leg.MinProfit == nil || leg.MinProfit.Sign() < 0 {
-			return nil, errors.Errorf("operationData: invalid leg %d minProfit", i)
-		}
+	if err := validateOperationLegs(legs); err != nil {
+		return nil, err
 	}
 	op := operationData{Auth: auth, Legs: encodeLegs(legs), AuthSig: authSig}
 	enc, err := operationDataArgs.Pack(op)
@@ -76,6 +75,9 @@ func EncodeOperationData(auth operationAuth, legs []LiquidationLeg, authSig []by
 }
 
 func CallbackAuthDigest(chainID *big.Int, callback, executor common.Address, auth operationAuth, legs []LiquidationLeg) (common.Hash, error) {
+	if err := validateOperationLegs(legs); err != nil {
+		return common.Hash{}, err
+	}
 	legsHash, err := encodedLegsHash(legs)
 	if err != nil {
 		return common.Hash{}, err
@@ -85,6 +87,18 @@ func CallbackAuthDigest(chainID *big.Int, callback, executor common.Address, aut
 		return common.Hash{}, errors.Errorf("encode callback auth digest: %w", err)
 	}
 	return crypto.Keccak256Hash(enc), nil
+}
+
+func validateOperationLegs(legs []LiquidationLeg) error {
+	for i, leg := range legs {
+		if leg.MinProfit == nil || leg.MinProfit.Sign() < 0 {
+			return errors.Errorf("operationData: invalid leg %d minProfit", i)
+		}
+		if leg.MaxAssets == nil || leg.MaxAssets.Sign() <= 0 {
+			return errors.Errorf("operationData: invalid leg %d maxAssets", i)
+		}
+	}
+	return nil
 }
 
 func encodedLegsHash(legs []LiquidationLeg) (common.Hash, error) {
@@ -102,6 +116,7 @@ func encodeLegs(legs []LiquidationLeg) []callbackLeg {
 			MarketId:       leg.MarketId,
 			Borrower:       leg.Borrower,
 			MaxSeizeAssets: leg.MaxSeizeAssets,
+			MaxAssets:      leg.MaxAssets,
 			MinProfit:      leg.MinProfit,
 		}
 	}
@@ -155,6 +170,7 @@ func callbackLegComponents() []abi.ArgumentMarshaling {
 		{Name: "marketId", Type: "bytes32"},
 		{Name: "borrower", Type: "address"},
 		{Name: "maxSeizeAssets", Type: "uint256"},
+		{Name: "maxAssets", Type: "uint256"},
 		{Name: "minProfit", Type: "uint256"},
 	}
 }

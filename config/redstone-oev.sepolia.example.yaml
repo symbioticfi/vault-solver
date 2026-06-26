@@ -20,7 +20,7 @@ solvers:
         apiKeyEnv: OEV_REDSTONE_API_KEY
 
       executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"   # RedStone Atom Executor (proxy)
-      callback: "0x7EE46765Bd337931E9f2CF6333BeBf2b78D17fcf"   # SymbioticOevSolver (sells each leg through the LiquidLane adapter; pays the bid)
+      callback: "0x065B612a182f360D4428cD00a8094049B3c92168"   # SymbioticOevSolver (sells each leg through the LiquidLane adapter; pays the bid)
       adapter:  "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # the LiquidLane adapter the callback pins (TLOAN vault / TCOL)
 
       # Public api.morpho.org does not index this custom Sepolia Morpho. The Sepolia harness uses

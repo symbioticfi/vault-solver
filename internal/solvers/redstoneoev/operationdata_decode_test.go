@@ -92,11 +92,21 @@ func decodeOperationLegsValue(v reflect.Value) ([]callbackLeg, error) {
 		if !ok {
 			return nil, errors.Errorf("decode operationData leg %d: bad maxSeizeAssets", i)
 		}
+		maxAssets, ok := bigValue(legV.FieldByName("MaxAssets"))
+		if !ok {
+			return nil, errors.Errorf("decode operationData leg %d: bad maxAssets", i)
+		}
 		minProfit, ok := bigValue(legV.FieldByName("MinProfit"))
 		if !ok {
 			return nil, errors.Errorf("decode operationData leg %d: bad minProfit", i)
 		}
-		out[i] = callbackLeg{MarketId: id, Borrower: borrower, MaxSeizeAssets: maxSeize, MinProfit: minProfit}
+		out[i] = callbackLeg{
+			MarketId:       id,
+			Borrower:       borrower,
+			MaxSeizeAssets: maxSeize,
+			MaxAssets:      maxAssets,
+			MinProfit:      minProfit,
+		}
 	}
 	return out, nil
 }

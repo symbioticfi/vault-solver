@@ -26,7 +26,7 @@ var (
 
 // SymbioticOevSolverMetaData contains all meta data concerning the SymbioticOevSolver contract.
 var SymbioticOevSolverMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"executor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"morpho\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"liquidLaneAdapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"authSigner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initialOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"AUTH_SIGNER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"EXECUTOR\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"LIQUID_LANE_ADAPTER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"MORPHO\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"liquidate\",\"inputs\":[{\"name\":\"bidAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"operationData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"onMorphoLiquidate\",\"inputs\":[{\"name\":\"repaidAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"payBid\",\"inputs\":[{\"name\":\"bidAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"usedAuctionKey\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"outputs\":[{\"name\":\"used\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawERC20\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"to\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"withdrawNative\",\"inputs\":[{\"name\":\"to\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"LegResult\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"marketId\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"Id\"},{\"name\":\"borrower\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"code\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"seizedAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"repaidAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"profitLoan\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnerUpdated\",\"inputs\":[{\"name\":\"previous\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"next\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PayBidResult\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"bidAmount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"paid\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"BundleProfitBelowMin\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignature\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignatureLength\",\"inputs\":[{\"name\":\"length\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignatureS\",\"inputs\":[{\"name\":\"s\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}]},{\"type\":\"error\",\"name\":\"InvalidAuth\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotExecutor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotMorpho\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotOwner\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"TransferFailed\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ZeroAddress\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"executor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"morpho\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"liquidLaneAdapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"authSigner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initialOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"AUTH_SIGNER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"EXECUTOR\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"LIQUID_LANE_ADAPTER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"MORPHO\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"liquidate\",\"inputs\":[{\"name\":\"bidAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"operationData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"onMorphoLiquidate\",\"inputs\":[{\"name\":\"repaidAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"payBid\",\"inputs\":[{\"name\":\"bidAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"usedAuctionKey\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"outputs\":[{\"name\":\"used\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"withdrawERC20\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"to\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"withdrawNative\",\"inputs\":[{\"name\":\"to\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"BundleResult\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"totalProfitLoan\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"minProfitLoan\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"gasUsed\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"bidAuthorized\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"LegResult\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"marketId\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"Id\"},{\"name\":\"borrower\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"code\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"seizedAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"repaidAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"profitLoan\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"gasUsed\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnerUpdated\",\"inputs\":[{\"name\":\"previous\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"next\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PayBidResult\",\"inputs\":[{\"name\":\"auctionKey\",\"type\":\"bytes32\",\"indexed\":true,\"internalType\":\"bytes32\"},{\"name\":\"bidAmount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"paid\",\"type\":\"bool\",\"indexed\":false,\"internalType\":\"bool\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignature\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignatureLength\",\"inputs\":[{\"name\":\"length\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"ECDSAInvalidSignatureS\",\"inputs\":[{\"name\":\"s\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}]},{\"type\":\"error\",\"name\":\"InsufficientLoanProceeds\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidAuth\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotExecutor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotMorpho\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotOwner\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ProfitBelowMin\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SwapOutputBelowMin\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TransferFailed\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ZeroAddress\",\"inputs\":[]}]",
 	ID:  "SymbioticOevSolver",
 }
 
@@ -404,6 +404,51 @@ func (symbioticOevSolver *SymbioticOevSolver) TryPackWithdrawNative(to common.Ad
 	return symbioticOevSolver.abi.Pack("withdrawNative", to, amount)
 }
 
+// SymbioticOevSolverBundleResult represents a BundleResult event raised by the SymbioticOevSolver contract.
+type SymbioticOevSolverBundleResult struct {
+	AuctionKey      [32]byte
+	TotalProfitLoan *big.Int
+	MinProfitLoan   *big.Int
+	GasUsed         *big.Int
+	BidAuthorized   bool
+	Raw             *types.Log // Blockchain specific contextual infos
+}
+
+const SymbioticOevSolverBundleResultEventName = "BundleResult"
+
+// ContractEventName returns the user-defined event name.
+func (SymbioticOevSolverBundleResult) ContractEventName() string {
+	return SymbioticOevSolverBundleResultEventName
+}
+
+// UnpackBundleResultEvent is the Go binding that unpacks the event data emitted
+// by contract.
+//
+// Solidity: event BundleResult(bytes32 indexed auctionKey, uint256 totalProfitLoan, uint256 minProfitLoan, uint256 gasUsed, bool bidAuthorized)
+func (symbioticOevSolver *SymbioticOevSolver) UnpackBundleResultEvent(log *types.Log) (*SymbioticOevSolverBundleResult, error) {
+	event := "BundleResult"
+	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
+		return nil, errors.New("event signature mismatch")
+	}
+	out := new(SymbioticOevSolverBundleResult)
+	if len(log.Data) > 0 {
+		if err := symbioticOevSolver.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
+			return nil, err
+		}
+	}
+	var indexed abi.Arguments
+	for _, arg := range symbioticOevSolver.abi.Events[event].Inputs {
+		if arg.Indexed {
+			indexed = append(indexed, arg)
+		}
+	}
+	if err := abi.ParseTopics(out, indexed, log.Topics[1:]); err != nil {
+		return nil, err
+	}
+	out.Raw = log
+	return out, nil
+}
+
 // SymbioticOevSolverLegResult represents a LegResult event raised by the SymbioticOevSolver contract.
 type SymbioticOevSolverLegResult struct {
 	AuctionKey   [32]byte
@@ -413,6 +458,7 @@ type SymbioticOevSolverLegResult struct {
 	SeizedAssets *big.Int
 	RepaidAssets *big.Int
 	ProfitLoan   *big.Int
+	GasUsed      *big.Int
 	Raw          *types.Log // Blockchain specific contextual infos
 }
 
@@ -426,7 +472,7 @@ func (SymbioticOevSolverLegResult) ContractEventName() string {
 // UnpackLegResultEvent is the Go binding that unpacks the event data emitted
 // by contract.
 //
-// Solidity: event LegResult(bytes32 indexed auctionKey, bytes32 indexed marketId, address indexed borrower, uint256 code, uint256 seizedAssets, uint256 repaidAssets, uint256 profitLoan)
+// Solidity: event LegResult(bytes32 indexed auctionKey, bytes32 indexed marketId, address indexed borrower, uint256 code, uint256 seizedAssets, uint256 repaidAssets, uint256 profitLoan, uint256 gasUsed)
 func (symbioticOevSolver *SymbioticOevSolver) UnpackLegResultEvent(log *types.Log) (*SymbioticOevSolverLegResult, error) {
 	event := "LegResult"
 	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
@@ -539,9 +585,6 @@ func (symbioticOevSolver *SymbioticOevSolver) UnpackPayBidResultEvent(log *types
 // UnpackError attempts to decode the provided error data using user-defined
 // error definitions.
 func (symbioticOevSolver *SymbioticOevSolver) UnpackError(raw []byte) (any, error) {
-	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["BundleProfitBelowMin"].ID.Bytes()[:4]) {
-		return symbioticOevSolver.UnpackBundleProfitBelowMinError(raw[4:])
-	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["ECDSAInvalidSignature"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackECDSAInvalidSignatureError(raw[4:])
 	}
@@ -550,6 +593,9 @@ func (symbioticOevSolver *SymbioticOevSolver) UnpackError(raw []byte) (any, erro
 	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["ECDSAInvalidSignatureS"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackECDSAInvalidSignatureSError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["InsufficientLoanProceeds"].ID.Bytes()[:4]) {
+		return symbioticOevSolver.UnpackInsufficientLoanProceedsError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["InvalidAuth"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackInvalidAuthError(raw[4:])
@@ -563,11 +609,17 @@ func (symbioticOevSolver *SymbioticOevSolver) UnpackError(raw []byte) (any, erro
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["NotOwner"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackNotOwnerError(raw[4:])
 	}
+	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["ProfitBelowMin"].ID.Bytes()[:4]) {
+		return symbioticOevSolver.UnpackProfitBelowMinError(raw[4:])
+	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["ReentrancyGuardReentrantCall"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackReentrancyGuardReentrantCallError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["SafeERC20FailedOperation"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackSafeERC20FailedOperationError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["SwapOutputBelowMin"].ID.Bytes()[:4]) {
+		return symbioticOevSolver.UnpackSwapOutputBelowMinError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], symbioticOevSolver.abi.Errors["TransferFailed"].ID.Bytes()[:4]) {
 		return symbioticOevSolver.UnpackTransferFailedError(raw[4:])
@@ -576,29 +628,6 @@ func (symbioticOevSolver *SymbioticOevSolver) UnpackError(raw []byte) (any, erro
 		return symbioticOevSolver.UnpackZeroAddressError(raw[4:])
 	}
 	return nil, errors.New("Unknown error")
-}
-
-// SymbioticOevSolverBundleProfitBelowMin represents a BundleProfitBelowMin error raised by the SymbioticOevSolver contract.
-type SymbioticOevSolverBundleProfitBelowMin struct {
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error BundleProfitBelowMin()
-func SymbioticOevSolverBundleProfitBelowMinErrorID() common.Hash {
-	return common.HexToHash("0x29d167cc2d9f1759ad30a5d9e9f77039a4c538c3748c82210d061d4701b53d28")
-}
-
-// UnpackBundleProfitBelowMinError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error BundleProfitBelowMin()
-func (symbioticOevSolver *SymbioticOevSolver) UnpackBundleProfitBelowMinError(raw []byte) (*SymbioticOevSolverBundleProfitBelowMin, error) {
-	out := new(SymbioticOevSolverBundleProfitBelowMin)
-	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "BundleProfitBelowMin", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // SymbioticOevSolverECDSAInvalidSignature represents a ECDSAInvalidSignature error raised by the SymbioticOevSolver contract.
@@ -667,6 +696,29 @@ func SymbioticOevSolverECDSAInvalidSignatureSErrorID() common.Hash {
 func (symbioticOevSolver *SymbioticOevSolver) UnpackECDSAInvalidSignatureSError(raw []byte) (*SymbioticOevSolverECDSAInvalidSignatureS, error) {
 	out := new(SymbioticOevSolverECDSAInvalidSignatureS)
 	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "ECDSAInvalidSignatureS", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SymbioticOevSolverInsufficientLoanProceeds represents a InsufficientLoanProceeds error raised by the SymbioticOevSolver contract.
+type SymbioticOevSolverInsufficientLoanProceeds struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error InsufficientLoanProceeds()
+func SymbioticOevSolverInsufficientLoanProceedsErrorID() common.Hash {
+	return common.HexToHash("0x8dff298421d9adf12071798b4a2ba2b222fcafe9e2d1885468bb553b5152ddaf")
+}
+
+// UnpackInsufficientLoanProceedsError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error InsufficientLoanProceeds()
+func (symbioticOevSolver *SymbioticOevSolver) UnpackInsufficientLoanProceedsError(raw []byte) (*SymbioticOevSolverInsufficientLoanProceeds, error) {
+	out := new(SymbioticOevSolverInsufficientLoanProceeds)
+	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "InsufficientLoanProceeds", raw); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -764,6 +816,29 @@ func (symbioticOevSolver *SymbioticOevSolver) UnpackNotOwnerError(raw []byte) (*
 	return out, nil
 }
 
+// SymbioticOevSolverProfitBelowMin represents a ProfitBelowMin error raised by the SymbioticOevSolver contract.
+type SymbioticOevSolverProfitBelowMin struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error ProfitBelowMin()
+func SymbioticOevSolverProfitBelowMinErrorID() common.Hash {
+	return common.HexToHash("0xe42f715d4b8066279da9ab3b7d708b4d7702d6769277c477f0f130466b02a066")
+}
+
+// UnpackProfitBelowMinError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error ProfitBelowMin()
+func (symbioticOevSolver *SymbioticOevSolver) UnpackProfitBelowMinError(raw []byte) (*SymbioticOevSolverProfitBelowMin, error) {
+	out := new(SymbioticOevSolverProfitBelowMin)
+	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "ProfitBelowMin", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SymbioticOevSolverReentrancyGuardReentrantCall represents a ReentrancyGuardReentrantCall error raised by the SymbioticOevSolver contract.
 type SymbioticOevSolverReentrancyGuardReentrantCall struct {
 }
@@ -806,6 +881,29 @@ func SymbioticOevSolverSafeERC20FailedOperationErrorID() common.Hash {
 func (symbioticOevSolver *SymbioticOevSolver) UnpackSafeERC20FailedOperationError(raw []byte) (*SymbioticOevSolverSafeERC20FailedOperation, error) {
 	out := new(SymbioticOevSolverSafeERC20FailedOperation)
 	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "SafeERC20FailedOperation", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SymbioticOevSolverSwapOutputBelowMin represents a SwapOutputBelowMin error raised by the SymbioticOevSolver contract.
+type SymbioticOevSolverSwapOutputBelowMin struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error SwapOutputBelowMin()
+func SymbioticOevSolverSwapOutputBelowMinErrorID() common.Hash {
+	return common.HexToHash("0x4f3f768fa41bcfdbeb273b7d91fd78101b766e92d4b008ec24772933ae5c425c")
+}
+
+// UnpackSwapOutputBelowMinError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error SwapOutputBelowMin()
+func (symbioticOevSolver *SymbioticOevSolver) UnpackSwapOutputBelowMinError(raw []byte) (*SymbioticOevSolverSwapOutputBelowMin, error) {
+	out := new(SymbioticOevSolverSwapOutputBelowMin)
+	if err := symbioticOevSolver.abi.UnpackIntoInterface(out, "SwapOutputBelowMin", raw); err != nil {
 		return nil, err
 	}
 	return out, nil

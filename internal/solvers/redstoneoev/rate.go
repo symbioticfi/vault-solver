@@ -30,10 +30,11 @@ func composeLoanPerEth(ethUsd, loanUsd *big.Int, ethFeedDec, loanFeedDec, loanDe
 	return rate
 }
 
-// hasRateSource reports whether a loan↔ETH rate source is configured. Live bidding requires one because
-// gas and bid are native-denominated settlement costs while profit is measured in the loan token.
-func (c *Config) hasRateSource() bool {
-	return c.LoanEthFeed != nil
+func validRate(rate *big.Int) *big.Int {
+	if rate != nil && rate.Sign() > 0 {
+		return rate
+	}
+	return nil
 }
 
 // loanToNative converts loan-token base units to native token base units at the loanPerEth rate, rounding

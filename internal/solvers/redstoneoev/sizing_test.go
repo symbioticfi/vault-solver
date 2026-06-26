@@ -61,7 +61,7 @@ func TestEvaluateLegTargetsFullCollateral(t *testing.T) {
 		t.Fatalf("seized = %s, want 1 TCOL", leg.MaxSeizeAssets)
 	}
 	// swapOut at the adapter rate: 1 TCOL × 1534.5 = 1534.5 TLOAN; profit ≈ 49.6 TLOAN.
-	if out := leg.SwapAmountOut; out.Cmp(big.NewInt(1_533_000_000)) < 0 || out.Cmp(big.NewInt(1_536_000_000)) > 0 {
+	if out := leg.MaxAssets; out.Cmp(big.NewInt(1_533_000_000)) < 0 || out.Cmp(big.NewInt(1_536_000_000)) > 0 {
 		t.Fatalf("swapOut = %s, want ~1534.5e6", out)
 	}
 	if profit.Cmp(big.NewInt(45_000_000)) < 0 || profit.Cmp(big.NewInt(55_000_000)) > 0 {
@@ -163,7 +163,7 @@ func sizeFixture() (SizingParams, func(b byte) Candidate, *big.Int) {
 }
 
 // TestSizeLegClampsToGetMaxAssets proves the single adapter's getMaxAssets liquidity clamp: when the
-// adapter can't absorb the full target seize, the leg is re-sized down so its requested swapAmountOut
+// adapter can't absorb the full target seize, the leg is re-sized down so its requested MaxAssets
 // stays within the adapter's getMaxAssets — never a swap that reverts InsufficientAllocate on-chain.
 func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	_, cand, price := sizeFixture()
@@ -176,7 +176,7 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	if !ok {
 		t.Fatal("uncapped leg should size")
 	}
-	uncapped := full.SwapAmountOut
+	uncapped := full.MaxAssets
 
 	// Cap the adapter to 1.5× of... no: cap below the full swapOut so the clamp binds.
 	budget := new(big.Int).Div(uncapped, big.NewInt(2))
@@ -184,11 +184,11 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	if !ok {
 		t.Fatal("capped leg should still size (smaller)")
 	}
-	if capped.SwapAmountOut.Cmp(budget) > 0 {
-		t.Fatalf("leg over-draws the adapter: swapAmountOut=%s > getMaxAssets=%s", capped.SwapAmountOut, budget)
+	if capped.MaxAssets.Cmp(budget) > 0 {
+		t.Fatalf("leg over-draws the adapter: maxAssets=%s > getMaxAssets=%s", capped.MaxAssets, budget)
 	}
-	if capped.SwapAmountOut.Cmp(uncapped) >= 0 {
-		t.Fatalf("a tight budget must trim below the uncapped swapOut: capped=%s uncapped=%s", capped.SwapAmountOut, uncapped)
+	if capped.MaxAssets.Cmp(uncapped) >= 0 {
+		t.Fatalf("a tight budget must trim below the uncapped swapOut: capped=%s uncapped=%s", capped.MaxAssets, uncapped)
 	}
 	if cappedProfit.Cmp(fullProfit) >= 0 {
 		t.Fatalf("clamped leg should net less profit: capped=%s full=%s", cappedProfit, fullProfit)
@@ -196,7 +196,7 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 }
 
 // TestCandidatesEmitsSingleSwapLeg proves the strategy emits one LiquidationLeg per liquidatable
-// candidate with SwapAmountOut set (one swap per leg, no per-vault Exit split).
+// candidate with MaxAssets set (one swap per leg, no per-vault Exit split).
 func TestCandidatesEmitsSingleSwapLeg(t *testing.T) {
 	sp, cand, price := sizeFixture()
 	c := cand(1)
@@ -205,8 +205,8 @@ func TestCandidatesEmitsSingleSwapLeg(t *testing.T) {
 	if !ok {
 		t.Fatal("position should liquidate")
 	}
-	if leg.SwapAmountOut == nil || leg.SwapAmountOut.Sign() <= 0 {
-		t.Fatalf("leg must carry a positive swapAmountOut, got %v", leg.SwapAmountOut)
+	if leg.MaxAssets == nil || leg.MaxAssets.Sign() <= 0 {
+		t.Fatalf("leg must carry a positive maxAssets, got %v", leg.MaxAssets)
 	}
 	if leg.MaxSeizeAssets.Sign() <= 0 {
 		t.Fatalf("leg should seize collateral, got maxSeizeAssets=%s", leg.MaxSeizeAssets)

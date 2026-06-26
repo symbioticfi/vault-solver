@@ -228,6 +228,43 @@
   },
   {
     "type": "event",
+    "name": "BundleResult",
+    "inputs": [
+      {
+        "name": "auctionKey",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "totalProfitLoan",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "minProfitLoan",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "gasUsed",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "bidAuthorized",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "LegResult",
     "inputs": [
       {
@@ -268,6 +305,12 @@
       },
       {
         "name": "profitLoan",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "gasUsed",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -321,11 +364,6 @@
   },
   {
     "type": "error",
-    "name": "BundleProfitBelowMin",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "ECDSAInvalidSignature",
     "inputs": []
   },
@@ -353,6 +391,11 @@
   },
   {
     "type": "error",
+    "name": "InsufficientLoanProceeds",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InvalidAuth",
     "inputs": []
   },
@@ -373,6 +416,11 @@
   },
   {
     "type": "error",
+    "name": "ProfitBelowMin",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
@@ -386,6 +434,11 @@
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "SwapOutputBelowMin",
+    "inputs": []
   },
   {
     "type": "error",

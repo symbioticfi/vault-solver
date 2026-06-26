@@ -160,6 +160,7 @@ func recoverCallbackAuthSigner(t *testing.T, s *Solver, op operationData) common
 			MarketId:       leg.MarketId,
 			Borrower:       leg.Borrower,
 			MaxSeizeAssets: leg.MaxSeizeAssets,
+			MaxAssets:      leg.MaxAssets,
 			MinProfit:      leg.MinProfit,
 		}
 	}
@@ -334,17 +335,14 @@ func TestComposeLoanPerEth(t *testing.T) {
 	}
 }
 
-func TestRateForUsesCachedOracleAndConversions(t *testing.T) {
-	s, _ := seededSolver(t)
-	st, _ := s.state.load()
-	st.Rate = nil
-	if got := s.rate(st); got != nil {
+func TestValidRateAndConversions(t *testing.T) {
+	if got := validRate(nil); got != nil {
 		t.Fatalf("no cached oracle rate should fail closed, got %v", got)
 	}
 
-	st.Rate = mustBig("2500000000")
-	if got := s.rate(st); got == nil || got.String() != "2500000000" {
-		t.Fatalf("oracle rate present → preferred over config, got %v", got)
+	rate := mustBig("2500000000")
+	if got := validRate(rate); got == nil || got.String() != "2500000000" {
+		t.Fatalf("oracle rate present should be used, got %v", got)
 	}
 
 	if got := loanToNative(mustBig("2500000000"), mustBig("2500000000")); got.Cmp(morpho.Wad) != 0 {
@@ -937,7 +935,7 @@ func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
 	var b common.Address
 	b[19] = borrowerByte
 	return scoredLeg{
-		leg:    LiquidationLeg{Borrower: b, MarketId: common.Hash{}, SwapAmountOut: profit},
+		leg:    LiquidationLeg{Borrower: b, MarketId: common.Hash{}, MaxAssets: profit},
 		profit: profit,
 	}
 }
@@ -947,21 +945,22 @@ func headerGasLimitForUsable(usable uint64) uint64 {
 }
 
 func TestBundleSearchBounds(t *testing.T) {
-	t.Run("candidate window keeps only top gross candidates", func(t *testing.T) {
-		scored := make([]scoredLeg, 0, maxBundleSearchCandidates+100)
-		for i := maxBundleSearchCandidates + 100; i > 0; i-- {
+	t.Run("candidate order keeps all candidates by gross", func(t *testing.T) {
+		const candidates = 600
+		scored := make([]scoredLeg, 0, candidates)
+		for i := candidates; i > 0; i-- {
 			scored = append(scored, scoredLeg{
 				leg:    LiquidationLeg{Borrower: common.BigToAddress(big.NewInt(int64(i)))},
 				profit: big.NewInt(int64(i)),
 			})
 		}
 
-		got := bundleSearchCandidates(scored)
-		if len(got) != maxBundleSearchCandidates {
-			t.Fatalf("candidate window = %d, want %d", len(got), maxBundleSearchCandidates)
+		got := sortedScoredLegs(scored)
+		if len(got) != candidates {
+			t.Fatalf("candidate count = %d, want %d", len(got), candidates)
 		}
-		if got[0].profit.Int64() != int64(maxBundleSearchCandidates+100) || got[len(got)-1].profit.Int64() != 101 {
-			t.Fatalf("candidate window did not keep top gross range: first=%s last=%s", got[0].profit, got[len(got)-1].profit)
+		if got[0].profit.Int64() != candidates || got[len(got)-1].profit.Int64() != 1 {
+			t.Fatalf("candidate order wrong: first=%s last=%s", got[0].profit, got[len(got)-1].profit)
 		}
 	})
 
@@ -1057,14 +1056,14 @@ func TestSelectBundleSingleToken(t *testing.T) {
 }
 
 // TestSelectBundlePerCollateralBudget pins the shared-liquidity cap: legs seizing the same collateral can't
-// jointly over-commit that collateral's getMaxAssets (scoredFor sets SwapAmountOut = profit), so the bundle
+// jointly over-commit that collateral's getMaxAssets (scoredFor sets MaxAssets = profit), so the bundle
 // won't revert with InsufficientAllocate on settlement. A leg on a different collateral is unaffected.
 func TestSelectBundlePerCollateralBudget(t *testing.T) {
 	s := &Solver{cfg: &Config{}, log: logr.Discard()}
 	collA := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	collB := common.HexToAddress("0x00000000000000000000000000000000000000cb")
 	withColl := func(byteID byte, profit int64, c common.Address, maxA int64) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit)) // SwapAmountOut == profit
+		sl := scoredFor(byteID, big.NewInt(profit)) // MaxAssets == profit
 		sl.collateral = c
 		sl.maxAssets = big.NewInt(maxA)
 		return sl
@@ -1161,7 +1160,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 			t.Fatal("fixture should size")
 		}
 		leg.MaxSeizeAssets = big.NewInt(1) // stale/bogus: selection must ignore and recompute from source
-		leg.SwapAmountOut = big.NewInt(1)  // stale/bogus
+		leg.MaxAssets = big.NewInt(1)      // stale/bogus
 		return scoredLeg{
 			leg:        leg,
 			profit:     mustBig("999999999999999999"),
@@ -1183,7 +1182,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d same-market replayed legs, want 2", len(b.legs))
 	}
-	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].SwapAmountOut.Cmp(big.NewInt(1)) == 0 {
+	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].MaxAssets.Cmp(big.NewInt(1)) == 0 {
 		t.Fatalf("selected stale precomputed leg instead of replaying source: %+v", b.legs[0])
 	}
 	if b.grossLoan.Cmp(mustBig("999999999999999999")) >= 0 {
@@ -1227,6 +1226,32 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 	if got := s.bundleNetNative(b, morpho.Wad, gasState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", got)
 	}
+
+	t.Run("searches past gross-only candidate window", func(t *testing.T) {
+		const formerGrossWindow = 512
+		withAddr := func(addr common.Address, profit int64, c common.Address) scoredLeg {
+			sl := scoredLeg{
+				leg:        LiquidationLeg{Borrower: addr, MaxAssets: big.NewInt(profit)},
+				profit:     big.NewInt(profit),
+				collateral: c,
+			}
+			return sl
+		}
+		scored := make([]scoredLeg, 0, formerGrossWindow+2)
+		for i := 0; i <= formerGrossWindow; i++ {
+			scored = append(scored, withAddr(common.BigToAddress(big.NewInt(int64(i+1))), 620_000, collHigh))
+		}
+		wantBorrower := common.BigToAddress(big.NewInt(10_000))
+		scored = append(scored, withAddr(wantBorrower, 600_000, collLow))
+
+		gotBundle, gotSkip := s.selectNetBundle(scored, morpho.Wad, gasState, big.NewInt(1), redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
+		if gotSkip != "" {
+			t.Fatalf("lower-gross passing leg after the old window should be selected, got skip %q", gotSkip)
+		}
+		if len(gotBundle.legs) != 1 || gotBundle.legs[0].Borrower != wantBorrower {
+			t.Fatalf("selected borrowers = %+v, want only lower-gross acquire leg past gross-only window", gotBundle.legs)
+		}
+	})
 }
 
 func TestSelectNetBundleAllowsSameMarketStaticLegs(t *testing.T) {

@@ -101,9 +101,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, errors.Errorf("%s: %w", Name, err)
 	}
-	if !cfg.hasRateSource() {
-		return nil, errors.Errorf("%s: loanEthFeed is required so bundle profit can be gated after gas", Name)
-	}
 	chainID := deps.Chain.ChainID()
 	if !chainID.IsInt64() || chainID.Sign() <= 0 {
 		return nil, errors.Errorf("%s: chain id %s out of supported range", Name, chainID)
@@ -264,7 +261,7 @@ func (s *Solver) latestHeadState(ctx context.Context) (latestHeadState, error) {
 	if berr != nil {
 		return latestHeadState{}, err
 	}
-	s.log.Error(err, "read latest header failed; using configured gas price cap")
+	s.log.Error(err, "read latest header failed; using RedStone gas limit cap")
 	return latestHeadState{Number: head}, nil
 }
 
@@ -279,14 +276,6 @@ func (s *Solver) epochStillCurrent(ctx context.Context, epoch readEpoch, label s
 		return false
 	}
 	return true
-}
-
-// rate resolves the loan↔ETH rate (loan base units per 1 ETH) from the last oracle refresh.
-func (s *Solver) rate(st cachedState) *big.Int {
-	if st.Rate != nil && st.Rate.Sign() > 0 {
-		return st.Rate
-	}
-	return nil
 }
 
 // applyExecutorState runs the bookkeeping derived purely from the Executor state read (nonce + deposit):
@@ -506,8 +495,8 @@ func (s *Solver) buildBid(a AuctionMessage, nowFn func() time.Time) bidDecision 
 	if !ok {
 		return bidDecision{skip: "state_unknown"}
 	}
-	rate := s.rate(st)
-	if rate == nil || rate.Sign() <= 0 {
+	rate := validRate(st.Rate)
+	if rate == nil {
 		s.log.Info("bid skipped: loan/ETH rate unavailable",
 			"auction", a.ID, "scoredLegs", len(scored), "feedCount", len(a.Payload.Prices))
 		return bidDecision{skip: skipGasUnprofitable}

@@ -14,10 +14,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 )
 
-const (
-	netBundleBeamWidth        = 64
-	maxBundleSearchCandidates = 512
-)
+const netBundleBeamWidth = 64
 
 // scoredLeg is a liquidatable, sized leg paired with its expected profit, in the single loan token's base
 // units (one adapter ⇒ one loan token, so there is nothing to group by).
@@ -49,7 +46,7 @@ type pricedBundle struct {
 
 // selectBundle is the gross-profit fallback for dry-run/no-rate paths. Live bidding uses selectNetBundle.
 //
-// Legs sharing collateral also share the adapter's getMaxAssets pool, so selection caps cumulative swapOut
+// Legs sharing collateral also share the adapter's getMaxAssets pool, so selection caps cumulative MaxAssets
 // per collateral to avoid InsufficientAllocate at settlement.
 func (s *Solver) selectBundle(scored []scoredLeg) (chosenBundle, string) {
 	return s.selectBundleWithGas(scored, nil, 0, defaultPriceUpdateFeeds)
@@ -116,7 +113,7 @@ func (s *Solver) searchBundle(scored []scoredLeg, gasState *gasPredictorState, g
 	if maxDepth == 0 {
 		return bundleSearchState{}, false
 	}
-	group := bundleSearchCandidates(scored)
+	group := sortedScoredLegs(scored)
 	start := bundleSearchState{
 		bundle:   chosenBundle{grossLoan: new(big.Int)},
 		consumed: make(map[common.Address]*big.Int),
@@ -159,14 +156,6 @@ func (s *Solver) searchBundle(scored []scoredLeg, gasState *gasPredictorState, g
 		beam = nextBeam
 	}
 	return best, len(best.bundle.legs) > 0
-}
-
-func bundleSearchCandidates(scored []scoredLeg) []scoredLeg {
-	group := sortedScoredLegs(scored)
-	if len(group) <= maxBundleSearchCandidates {
-		return group
-	}
-	return group[:maxBundleSearchCandidates]
 }
 
 func bundleSearchDepth(gasLimit uint64, feedCount int) int {
@@ -251,7 +240,7 @@ func fitsCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) bo
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return true
 	}
-	next := new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.SwapAmountOut)
+	next := new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.MaxAssets)
 	return next.Cmp(sl.maxAssets) <= 0
 }
 
@@ -259,7 +248,7 @@ func commitCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) 
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return
 	}
-	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.SwapAmountOut)
+	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.MaxAssets)
 }
 
 func cloneCollateralBudget(in map[common.Address]*big.Int) map[common.Address]*big.Int {

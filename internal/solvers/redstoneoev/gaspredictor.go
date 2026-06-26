@@ -94,7 +94,7 @@ func gasLegPredictionForBundle(b chosenBundle, st *gasPredictorState) (uint64, [
 		if i < len(b.collaterals) {
 			coll = b.collaterals[i]
 		}
-		route := predictGasRoute(leg.SwapAmountOut, coll, acquire, free, withdrawable)
+		route := predictGasRoute(leg.MaxAssets, coll, acquire, free, withdrawable)
 		routes = append(routes, route)
 		total = saturatingAddUint64(total, gasUnitsForRouteAt(route, i == 0))
 	}

@@ -55,7 +55,7 @@ type SizingParams struct {
 func swapOutFor(collIn *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 	adapterOut := morpho.MulDivDown(new(big.Int).Mul(collIn, q.MaxRate), q.LoanScale, new(big.Int).Mul(morpho.Wad, q.CollScale))
 	out := morpho.MulDivDown(adapterOut, big.NewInt(int64(10_000-haircutBps)), big.NewInt(10_000))
-	// swapAmountOut is a MIN-out. The adapter recomputes its InvalidSwapRate ceiling with a different nested
+	// MaxAssets is a MIN-out. The adapter recomputes its InvalidSwapRate ceiling with a different nested
 	// rounding (floor getAmountOut, THEN apply the curator discount) than our getMaxRate-derived value (the
 	// discount is pre-floored onto the oracle price), so ours can land 1 base unit above the ceiling when the
 	// haircut is ~0 → InvalidSwapRate revert. Shave one unit so the requested min-out never exceeds the
@@ -90,12 +90,12 @@ func collForBudget(budget *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 // configured adapter (quote q) in one swap. It targets either all collateral or the fixed partial seize,
 // CLAMPED by the borrower's full debt (so a small-debt / large-collateral position can't over-seize and
 // revert the Morpho borrowShares underflow) AND by the adapter's getMaxAssets redemption liquidity (so the
-// swap can't ask for more than the vault can allocate and revert InsufficientAllocate). swapAmountOut is
+// swap can't ask for more than the vault can allocate and revert InsufficientAllocate). MaxAssets is
 // the min loan-token out for the whole seize at the adapter's discounted getMaxRate minus the safety
 // haircut.
 //
-// Returns the leg (one swap, SwapAmountOut set) and its gross loan profit (swapOut − repaid). ok=false when
-// the position can't liquidate profitably here — including the contract's own guards: swapAmountOut must
+// Returns the leg (one swap, MaxAssets set) and its gross loan profit (swapOut − repaid). ok=false when
+// the position can't liquidate profitably here — including the contract's own guards: MaxAssets must
 // EXCEED the repayment. Bundle and gas economics are applied later by bundle selection and operationData.
 func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (LiquidationLeg, *big.Int, bool) {
 	m, p := c.Market.State, c.Position
@@ -151,7 +151,7 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 		MarketId:       c.MarketID,
 		Borrower:       c.Borrower,
 		MaxSeizeAssets: target,
-		SwapAmountOut:  swapOut,
+		MaxAssets:      swapOut,
 	}
 	return leg, profit, true
 }
