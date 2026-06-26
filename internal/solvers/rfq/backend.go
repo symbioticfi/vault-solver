@@ -57,8 +57,31 @@ type backendClient struct {
 func newBackendClient(baseURL string) *backendClient {
 	cfg := rfqbackend.NewConfiguration()
 	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
-	cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
+	cfg.HTTPClient = &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: internalDiscountTransport{base: http.DefaultTransport},
+	}
 	return &backendClient{api: rfqbackend.NewAPIClient(cfg)}
+}
+
+const (
+	publicAPIPrefix   = "/api/v1"          // the spec's prefix, baked into the generated client
+	internalAPIPrefix = "/api-internal/v1" // where the backend serves the internal-only discounts API
+)
+
+// internalDiscountTransport routes discount requests to the backend's internal API prefix. The discounts
+// API is internal-only, but the generated client emits the public /api/v1/discount(s) paths from the
+// spec; rather than regenerate the client for a deployment routing detail, we rewrite just those paths to
+// /api-internal/v1/... at the transport layer. Orders and everything else pass through unchanged.
+type internalDiscountTransport struct{ base http.RoundTripper }
+
+func (t internalDiscountTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(req.URL.Path, publicAPIPrefix+"/discount") {
+		req = req.Clone(req.Context()) // RoundTrippers must not mutate the caller's request
+		req.URL.Path = internalAPIPrefix + strings.TrimPrefix(req.URL.Path, publicAPIPrefix)
+		req.URL.RawPath = "" // drop any cached encoding so the URL re-encodes from Path
+	}
+	return t.base.RoundTrip(req)
 }
 
 // closeResp drains and closes the HTTP response body. The generated client already reads the body

@@ -44,17 +44,18 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID    int64
-	executor   common.Address
-	orderLimit int
-	vaults     []recoveryVault
-	whitelist  adapterWhitelist // nil disables adapter filtering
-	backend    orderBackend
-	store      *store
-	reader     recoveryReader
-	txm        txSender
-	log        logr.Logger
-	now        func() time.Time
+	chainID          int64
+	executor         common.Address
+	orderLimit       int
+	vaults           []recoveryVault
+	whitelist        adapterWhitelist // nil disables adapter filtering
+	discountsEnabled bool             // false (external solver) skips the backend discounts API entirely
+	backend          orderBackend
+	store            *store
+	reader           recoveryReader
+	txm              txSender
+	log              logr.Logger
+	now              func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -201,7 +202,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		// order instead of submitting. While the backend still lists the order open, the next poll
 		// re-arms it and re-resolves the discount, so a transient mis-resolution self-heals without
 		// ever sending a tx through the wrong adapter (mirrors the TS filler's lifecycle).
-		if errors.Is(err, errDiscountAdapterMismatch) {
+		if errors.Is(err, errDiscountAdapterMismatch) || errors.Is(err, errDiscountsDisabled) {
 			e.fail(orderID, err.Error())
 			return
 		}
@@ -295,7 +296,10 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 		}
 		inv = append(inv, direct...)
 	}
-	inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
+	// Discount inventories use the internal-only discounts API; external solvers skip it (adapters alone).
+	if e.discountsEnabled {
+		inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
+	}
 	if len(inv) == 0 {
 		return nil, nil
 	}
@@ -329,6 +333,10 @@ func (e *executionService) buildDiscountSwapInputs(
 	for _, leg := range selected.Legs {
 		if leg.DiscountID == nil {
 			continue
+		}
+		// Defensive: external solvers never produce discount legs; fail closed (see errDiscountsDisabled).
+		if !e.discountsEnabled {
+			return nil, errors.Errorf("%w: leg %s", errDiscountsDisabled, leg.DiscountID.Hex())
 		}
 		resolved, err := e.backend.resolveDiscount(ctx, leg.DiscountID.Hex())
 		if err != nil {
@@ -392,6 +400,10 @@ func (e *executionService) discountInventories(
 // strategy leg it was quoted for. The leg's adapter was whitelist-filtered at selection time, so a
 // mismatch means the backend swapped the adapter under us — never fill through it.
 var errDiscountAdapterMismatch = errors.New("resolved discount adapter does not match the strategy leg adapter")
+
+// errDiscountsDisabled marks a discount leg seen while discounts are off (external solver). Terminal —
+// fail the order, no tx. Defensive: a restart (needed to change config) wipes the cache, so it's unreachable.
+var errDiscountsDisabled = errors.New("discount leg present but discounts are disabled")
 
 // toDiscountSwapInput converts a resolved signed discount + its strategy leg into the Executor input.
 func toDiscountSwapInput(
