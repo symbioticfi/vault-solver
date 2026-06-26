@@ -3,6 +3,7 @@ package bridgefacilitator
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,19 +12,18 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
-// TestLiveGenerateKey exercises the real 3F generate-key flow against the live API. It is skipped
-// unless SOLVER_LIVE_AUTH=1 (so it never runs in CI), and needs SOLVER_PRIVATE_KEY in the env. A
-// pass means the facilitator (the signer EOA) is onboarded and a key was issued; a 403 means the
-// signature is accepted but the address isn't registered with 3F yet.
-func TestLiveGenerateKey(t *testing.T) {
+// TestLiveListOffers exercises the signed per-adapter GET /v1/offer flow against the live API. It is
+// skipped unless SOLVER_LIVE_AUTH=1 (so it never runs in CI), and needs SOLVER_PRIVATE_KEY in the
+// env. A pass (200 or 403) means the EIP-712 signature was accepted by the 3F API.
+func TestLiveListOffers(t *testing.T) {
 	if os.Getenv("SOLVER_LIVE_AUTH") != "1" {
-		t.Skip("set SOLVER_LIVE_AUTH=1 and SOLVER_PRIVATE_KEY to run the live 3F auth check")
+		t.Skip("set SOLVER_LIVE_AUTH=1 and SOLVER_PRIVATE_KEY to run the live 3F listOffers auth check")
 	}
 	pk := os.Getenv("SOLVER_PRIVATE_KEY")
 	if pk == "" {
 		t.Fatal("SOLVER_PRIVATE_KEY not set")
 	}
-	sgnr, err := signer.NewFromHexKey(pk)
+	sgnr, err := signer.NewFromHexKey(strings.TrimPrefix(pk, "0x"))
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
@@ -33,24 +33,15 @@ func TestLiveGenerateKey(t *testing.T) {
 		baseURL = "https://bf.dev.gcp.3f.xyz"
 	}
 
-	ac, err := newAPIClient(baseURL, 30*time.Second, sgnr, sgnr.Address(), "", logr.Discard())
-	if err != nil {
-		t.Fatalf("client: %v", err)
-	}
+	ac := newAPIClient(baseURL, sgnr, 30*time.Second, logr.Discard())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	key, err := ac.generate(ctx)
+	// Use the signer's own address as the adapter for the live auth check.
+	offers, err := ac.listOffers(ctx, sgnr.Address())
 	if err != nil {
-		t.Fatalf("generate-key failed for facilitator %s:\n  %v", sgnr.Address().Hex(), err)
+		t.Fatalf("listOffers failed for adapter %s:\n  %v", sgnr.Address().Hex(), err)
 	}
-	t.Logf("AUTH OK — facilitator %s issued key %s", sgnr.Address().Hex(), maskKey(key))
-}
-
-func maskKey(s string) string {
-	if len(s) <= 10 {
-		return "***"
-	}
-	return s[:10] + "…(redacted)"
+	t.Logf("AUTH OK — adapter %s returned %d offers", sgnr.Address().Hex(), len(offers))
 }

@@ -7,17 +7,14 @@ package bridgefacilitator
 import (
 	"context"
 	"math/big"
-	"os"
 	"sync/atomic"
 	"time"
 
-	"github.com/go-errors/errors"
-
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
@@ -31,14 +28,14 @@ func init() {
 
 // Solver is the 3F Bridge Facilitator strategy.
 type Solver struct {
-	cfg       *Config
-	deps      solver.Deps
-	api       *apiClient
-	reader    *reader
-	log       logr.Logger
-	nonceSeq  atomic.Uint64
-	onboarded bool          // set once the 3F API key + offer-address are in place (Run goroutine only)
-	offers    *offerTracker // dedup: auctions we hold a live offer for (Run goroutine only)
+	cfg        *Config
+	deps       solver.Deps
+	api        *apiClient
+	reader     *reader
+	log        logr.Logger
+	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
+	nonceSeq   atomic.Uint64
+	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -47,27 +44,16 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
-	var fallbackKey string
-	if cfg.APIKeyEnv != "" {
-		fallbackKey = os.Getenv(cfg.APIKeyEnv)
-		if fallbackKey == "" {
-			return nil, errors.Errorf("%s: api key env %q is empty", Name, cfg.APIKeyEnv)
-		}
-	}
-	// The facilitator (API-key owner) is the signing EOA; offers carry the per-target adapter as
-	// maker, registered as the facilitator offer-address at startup.
-	api, err := newAPIClient(cfg.APIBaseURL, cfg.HTTPTimeout, deps.Signer, deps.Signer.Address(), fallbackKey, deps.Log.WithName(Name))
-	if err != nil {
-		return nil, err
-	}
+	api := newAPIClient(cfg.APIBaseURL, deps.Signer, cfg.HTTPTimeout, deps.Log.WithName(Name))
 
 	s := &Solver{
-		cfg:    cfg,
-		deps:   deps,
-		api:    api,
-		reader: newReader(deps.Chain),
-		log:    deps.Log.WithName(Name),
-		offers: newOfferTracker(),
+		cfg:        cfg,
+		deps:       deps,
+		api:        api,
+		reader:     newReader(deps.Chain),
+		log:        deps.Log.WithName(Name),
+		signerAddr: deps.Signer.Address(),
+		offers:     newOfferTracker(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
@@ -80,21 +66,23 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
-	// Resolve the target's vault and collateral from the adapter once at startup (see resolveTarget).
-	s.resolveTarget(ctx)
+	// Resolve every adapter's vault/collateral and drop any for which this solver is not the
+	// authorised EIP-1271 signer (see resolveTargets).
+	if err := s.resolveTargets(ctx); err != nil {
+		return err
+	}
 
 	s.log.Info("starting",
-		"adapter", s.cfg.Target.Adapter.Hex(),
-		"vault", s.cfg.Target.Vault.Hex(),
+		"adapters", len(s.cfg.Targets),
 		"apiBaseUrl", s.cfg.APIBaseURL,
 		"discover", s.cfg.Intervals.Discover.String(),
 	)
 
-	// Onboard once at startup. On failure the bot runs redeem-only (offers disabled) until restart;
-	// redemption and reconciliation are on-chain and need no API auth.
-	if err := s.onboard(ctx); err != nil {
-		s.log.Error(err, "3F onboarding failed; running redeem-only (offers disabled until restart)")
-	}
+	// Best-effort at startup: load existing offers so a restart doesn't re-offer where we already hold
+	// a live offer. Per-adapter failures are logged and skipped; a missing entry costs at most one
+	// redundant, bounded-safe offer. There is no redeem-only mode — startup either kept ≥1 matching
+	// adapter (above) and runs offers + redeems, or resolveTargets already shut the solver down.
+	s.rebuildOfferCache(ctx)
 
 	discoverT := time.NewTicker(s.cfg.Intervals.Discover)
 	redeemT := time.NewTicker(s.cfg.Intervals.RedeemPoll)
@@ -121,193 +109,194 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 }
 
-// onboard ensures the 3F API key and offer-address registration are in place. It runs once at
-// startup and sets s.onboarded, which gates discovery/offers. Mid-run key expiry is handled
-// separately by apiClient.withAuth (regenerate + retry on 401/403), so onboard never needs to rerun.
-func (s *Solver) onboard(ctx context.Context) error {
-	if err := s.api.ensureKey(ctx); err != nil {
-		return errors.Errorf("api key: %w", err)
-	}
-	if err := s.ensureOfferAddress(ctx); err != nil {
-		return err
-	}
-	// Rebuild the offer-dedup cache from the API so a restart doesn't re-offer on auctions we
-	// already hold live offers for. Non-fatal: an empty cache just risks one redundant (bounded-safe)
-	// offer per auction.
-	if err := s.rebuildOfferCache(ctx); err != nil {
-		s.log.Error(err, "could not load existing offers; starting with an empty offer cache")
-	}
-	s.onboarded = true
-	return nil
-}
-
-// rebuildOfferCache loads the facilitator's outstanding offers (a single API call covering its
-// broker address and its configured offer-address, i.e. our adapter) and records the expiration of
-// each still-unexpired one, so discovery skips auctions we already cover.
-func (s *Solver) rebuildOfferCache(ctx context.Context) error {
+// rebuildOfferCache records each adapter's still-unexpired offers so discovery skips auctions we
+// already cover. Best-effort: a per-adapter list failure is logged and skipped so one bad adapter
+// can't blank the others' caches.
+func (s *Solver) rebuildOfferCache(ctx context.Context) {
 	now := time.Now()
-	offers, err := s.api.listOffers(ctx)
-	if err != nil {
-		return err
-	}
 	live := 0
-	for _, o := range offers {
-		exp, perr := parseUnixTime(o.Expiration)
-		if perr != nil || !exp.After(now) {
-			continue // unparseable or already expired — we may freely re-offer
+	for _, t := range s.cfg.Targets {
+		offers, err := s.api.listOffers(ctx, t.Adapter)
+		if err != nil {
+			s.log.Error(err, "rebuild offer cache: list offers", "adapter", t.Adapter.Hex())
+			continue
 		}
-		s.offers.record(int64(o.AuctionId), exp)
-		live++
+		for _, o := range offers {
+			exp, perr := parseUnixTime(o.Expiration)
+			if perr != nil || !exp.After(now) {
+				continue // unparseable or already expired — we may freely re-offer
+			}
+			principal, ok := new(big.Int).SetString(o.Amount, 10)
+			if !ok {
+				s.log.V(1).Info("offer cache: unparseable amount; coverage may undercount",
+					"adapter", t.Adapter.Hex(), "amount", o.Amount)
+				principal = new(big.Int)
+			}
+			s.offers.record(t.Adapter, int64(o.AuctionId), exp, principal)
+			live++
+		}
 	}
 	s.log.Info("loaded existing offers into dedup cache", "live", live)
-	return nil
 }
 
-// discoverAndOffer lists auctions and offers per target. It runs only when onboarding succeeded; in
-// redeem-only mode (onboarding failed at startup) it is a no-op — redemption and reconciliation run
-// independently, since they're on-chain only.
+// adapterOffering tracks one adapter's liquidity/exposure across an offer pass; committed and opened
+// accumulate as bids land so later auctions see the reduced capacity (no over-commit, no re-read).
+type adapterOffering struct {
+	target    Target
+	st        exposureState
+	committed *big.Int
+	opened    int
+}
+
+// discoverAndOffer lists open auctions and, for each, offers on behalf of the single best-fit adapter
+// (the one that can fund the most). It reads every active adapter's liquidity/exposure once per pass.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
-	if !s.onboarded {
-		s.log.V(1).Info("not onboarded; skipping discovery/offers (redeem-only mode)")
-		return
-	}
 	auctions, err := s.api.listAuctions(ctx)
 	if err != nil {
 		s.log.Error(err, "discover: list auctions")
 		return
 	}
+	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
-	s.log.V(1).Info("discovered auctions", "count", len(auctions), "auctions", auctions)
-	s.offerForTarget(ctx, s.cfg.Target, auctions)
+	offerings := make([]*adapterOffering, 0, len(s.cfg.Targets))
+	for _, t := range s.cfg.Targets {
+		st, lerr := s.reader.liquidityAndExposure(ctx, t.Vault, t.Adapter)
+		if lerr != nil {
+			s.log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
+			continue
+		}
+		s.log.V(1).Info("adapter liquidity",
+			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "outstanding", st.outstanding.String(),
+			"openLoans", st.openCount, "perRequestMax", st.perRequestMax.String(), "totalMax", st.totalMax.String(),
+			"minYieldBps", st.minYieldBps.String(), "maxConcurrent", st.maxConcurrent)
+		offerings = append(offerings, &adapterOffering{target: t, st: st, committed: new(big.Int)})
+	}
+	if len(offerings) == 0 {
+		return // every adapter's liquidity read failed this pass
+	}
+
+	now := time.Now()
+	s.offers.pruneExpired(now) // keep the dedup map bounded
+	for i := range auctions {
+		s.offerAuction(ctx, auctionView{auctions[i]}, offerings, now)
+	}
 }
 
-// offerForTarget reads the target's vault/adapter liquidity and exposure once, then bids on each
-// matching auction. `committed`/`opened` accumulate this pass's offers so successive bids see the
-// reduced capacity — preserving the no-over-commit guarantee without re-reading per auction.
-func (s *Solver) offerForTarget(ctx context.Context, target Target, auctions []threef.AuctionDto) {
-	// One multicall fetches liquidity, live exposure, the open-loan count, and the adapter's caps.
-	st, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
-	if err != nil {
-		s.log.Error(err, "offer: liquidity/exposure", "adapter", target.Adapter.Hex())
+// offerAuction covers one auction's full requested amount in a single pass: greedily offer through the
+// most-fundable eligible adapter, each offer sized to the uncovered remainder, until covered or no
+// adapter can add more (a later pass retries). Coverage already held counts, so a fully-covered auction
+// is skipped. One adapter per offer; no aggregation within an offer.
+func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*adapterOffering, now time.Time) {
+	auctionID := int64(av.dto.Id)
+	if !av.isOpen() {
+		s.log.V(1).Info("skip auction: status not open/solvable", "auctionId", auctionID, "status", av.dto.Status)
 		return
 	}
-	s.log.V(1).Info("target liquidity",
-		"adapter", target.Adapter.Hex(), "vault", target.Vault.Hex(),
-		"fundable", st.fundable.String(), "outstanding", st.outstanding.String(), "openLoans", st.openCount,
-		"perRequestMax", st.perRequestMax.String(), "totalMax", st.totalMax.String(),
-		"minYieldBps", st.minYieldBps.String(), "maxConcurrent", st.maxConcurrent)
+	request := av.requestAddr()
+	if request == (common.Address{}) {
+		s.log.V(1).Info("skip auction: missing/invalid requestId", "auctionId", auctionID, "requestId", av.dto.RequestId)
+		return
+	}
+	amountRequested := av.amountRequested()
+	if amountRequested == nil || amountRequested.Sign() <= 0 {
+		s.log.V(1).Info("skip auction: missing/invalid amountRequested", "auctionId", auctionID)
+		return
+	}
+	rateBps, rateOk := av.maxRateBps()
+	if !rateOk {
+		s.log.V(1).Info("skip auction: maxRate unresolved", "auctionId", auctionID)
+		return
+	}
 
-	committed := new(big.Int)
-	opened := 0
-	now := time.Now()
-	s.offers.pruneExpired(now) // drop expired offer-tracking entries so the map stays bounded
-	for i := range auctions {
-		av := auctionView{auctions[i]}
-		auctionID := int64(av.dto.Id)
+	// Remaining = requested minus what our live offers (this pass and prior passes) already cover.
+	remaining := new(big.Int).Sub(amountRequested, s.offers.liveCoverage(auctionID, now))
+	if remaining.Sign() <= 0 {
+		s.log.V(1).Info("skip auction: already fully covered by live offers", "auctionId", auctionID)
+		return
+	}
 
-		// Asset gate: the auction's deposit asset must equal this target vault's collateral.
-		if !av.matchesAsset(target.Collateral) {
-			s.log.V(1).Info("skip auction: deposit asset != target collateral", "auctionId", auctionID,
-				"depositAsset", av.depositAsset(), "collateral", target.Collateral.Hex())
-			continue
+	// tried bounds each adapter to one consideration per auction, so the loop terminates.
+	tried := make(map[common.Address]bool, len(offerings))
+	for remaining.Sign() > 0 {
+		candidates := make([]adapterSizing, 0, len(offerings))
+		byAdapter := make(map[common.Address]*adapterOffering, len(offerings))
+		for _, off := range offerings {
+			if tried[off.target.Adapter] || !av.matchesAsset(off.target.Collateral) ||
+				s.offers.hasLive(off.target.Adapter, auctionID, now) {
+				continue
+			}
+			// Floor enforced at selection, not at signing.
+			if off.st.minYieldBps.Sign() > 0 && rateBps < bpsToFloat(off.st.minYieldBps) {
+				s.log.V(1).Info("skip adapter: rate below its on-chain return floor", "auctionId", auctionID,
+					"adapter", off.target.Adapter.Hex(), "maxRateBps", rateBps, "minYieldBps", off.st.minYieldBps.String())
+				continue
+			}
+			principal, ok := sizeOffer(sizeInputs{
+				perRequestMax:   off.st.perRequestMax,
+				fundable:        new(big.Int).Sub(off.st.fundable, off.committed),
+				amountRequested: remaining, // size to the uncovered remainder, not the full ask
+				sleeveMax:       off.st.totalMax,
+				outstanding:     new(big.Int).Add(off.st.outstanding, off.committed),
+				openCount:       off.st.openCount + off.opened,
+				maxConcurrent:   off.st.maxConcurrent,
+			})
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, adapterSizing{target: off.target, principal: principal})
+			byAdapter[off.target.Adapter] = off
 		}
-		// From here on the auction concerns this target, so decisions are logged at info for visibility.
-		if !av.isOpen() {
-			s.log.Info("skip auction: status not open/solvable", "auctionId", auctionID, "status", av.dto.Status)
-			continue
-		}
 
-		request := av.requestAddr()
-		if request == (common.Address{}) {
-			s.log.Info("skip auction: missing/invalid requestId", "auctionId", auctionID, "requestId", av.dto.RequestId)
-			continue
-		}
-
-		// Skip auctions we already hold a live (unexpired) offer for. Expired entries fall through so
-		// we re-offer.
-		if s.offers.hasLive(auctionID, now) {
-			s.log.Info("skip auction: live offer already outstanding", "auctionId", auctionID)
-			continue
-		}
-
-		principal, ok := sizeOffer(sizeInputs{
-			perRequestMax:   st.perRequestMax,
-			fundable:        new(big.Int).Sub(st.fundable, committed),
-			amountRequested: av.amountRequested(),
-			sleeveMax:       st.totalMax,
-			outstanding:     new(big.Int).Add(st.outstanding, committed),
-			openCount:       st.openCount + opened,
-			maxConcurrent:   st.maxConcurrent,
-		})
+		best, ok := selectBestAdapter(candidates)
 		if !ok {
-			s.log.Info("skip auction: not biddable under policy/liquidity", "auctionId", auctionID,
-				"request", request.Hex(), "fundableRemaining", new(big.Int).Sub(st.fundable, committed).String(),
-				"openLoans", st.openCount+opened, "maxConcurrent", st.maxConcurrent)
-			continue
+			s.log.V(1).Info("auction not fully covered this pass; will retry next pass",
+				"auctionId", auctionID, "uncovered", remaining.String())
+			return
 		}
+		off := byAdapter[best.target.Adapter]
+		tried[best.target.Adapter] = true
 
-		// The adapter configured for this target is the offer maker (validated via EIP-1271).
-		dto, bid, buildErr := s.buildSignedOffer(av, request, target.Adapter, principal, st.minYieldBps)
+		dto, buildErr := s.buildSignedOffer(av, request, best.target.Adapter, best.principal, rateBps)
 		if buildErr != nil {
-			s.log.Error(buildErr, "offer: build", "request", request.Hex())
-			continue
-		}
-		if !bid {
-			s.log.Info("skip auction: rate below on-chain return floor", "auctionId", auctionID,
-				"request", request.Hex(), "maxRateBps", av.maxRate(), "minYieldBps", st.minYieldBps.String())
+			s.log.Error(buildErr, "offer: build", "auctionId", auctionID, "adapter", best.target.Adapter.Hex())
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
-			s.log.Error(subErr, "offer: submit", "request", request.Hex())
+			s.log.Error(subErr, "offer: submit", "auctionId", auctionID, "adapter", best.target.Adapter.Hex())
 			continue
 		}
 
-		committed.Add(committed, principal)
-		opened++
-		// Record so we don't re-offer until this offer expires.
+		off.committed.Add(off.committed, best.principal)
+		off.opened++
 		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
-			s.offers.record(auctionID, exp)
+			s.offers.record(best.target.Adapter, auctionID, exp, best.principal)
 		}
-		s.log.Info("offer submitted",
-			"request", request.Hex(), "principal", principal.String(), "expectedReturn", dto.ExpectedReturn)
+		remaining.Sub(remaining, best.principal)
+		s.log.Info("offer submitted", "auctionId", auctionID, "adapter", best.target.Adapter.Hex(),
+			"request", request.Hex(), "principal", best.principal.String(),
+			"expectedReturn", dto.ExpectedReturn, "uncovered", remaining.String())
 	}
+	s.log.V(1).Info("auction fully covered this pass", "auctionId", auctionID)
 }
 
-// ensureOfferAddress makes the 3F-registered facilitator offer-address match our maker (the target
-// adapter). The offer-address is a facilitator-level singleton — the reason this solver serves a
-// single vault+adapter pair. Read/write failures are returned so the caller can degrade to
-// redeem-only.
-func (s *Solver) ensureOfferAddress(ctx context.Context) error {
-	desired := s.cfg.Target.Adapter
-	current, err := s.api.offerAddress(ctx)
-	if err != nil {
-		return errors.Errorf("read offer-address: %w", err)
-	}
-	if current == desired {
-		return nil
-	}
-	if err := s.api.setOfferAddress(ctx, desired); err != nil {
-		return errors.Errorf("set offer-address to %s: %w", desired.Hex(), err)
-	}
-	s.log.Info("registered facilitator offer-address", "offerAddress", desired.Hex(), "previous", current.Hex())
-	return nil
-}
-
-// redeemAll runs the redeemer for the configured target.
+// redeemAll runs the redeemer for every matched adapter.
 func (s *Solver) redeemAll(ctx context.Context) {
-	s.redeemReady(ctx, s.cfg.Target)
+	for _, t := range s.cfg.Targets {
+		s.redeemReady(ctx, t)
+	}
 }
 
-// reconcile reports the live open-position set — a stateless health/observability tick.
+// reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
-	target := s.cfg.Target
-	st, err := s.reader.liquidityAndExposure(ctx, target.Vault, target.Adapter)
-	if err != nil {
-		s.log.Error(err, "reconcile", "adapter", target.Adapter.Hex())
-		return
+	for _, t := range s.cfg.Targets {
+		st, err := s.reader.liquidityAndExposure(ctx, t.Vault, t.Adapter)
+		if err != nil {
+			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
+			continue
+		}
+		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
+			"openLoans", st.openCount, "outstandingPrincipal", st.outstanding.String())
 	}
-	s.log.Info("reconcile", "adapter", target.Adapter.Hex(),
-		"openLoans", st.openCount, "outstandingPrincipal", st.outstanding.String())
 }
 
 // nextNonce returns a strictly-increasing offer nonce.
@@ -315,23 +304,43 @@ func (s *Solver) nextNonce() uint64 {
 	return s.nonceSeq.Add(1)
 }
 
-// resolveTarget reads the adapter's vault and the vault's collateral asset once at startup. Both are
-// fixed for the adapter's lifetime, so config only carries the adapter address. On a read failure the
-// fields stay zero (no auction matches; offers disabled) but redemption still runs off the adapter.
-func (s *Solver) resolveTarget(ctx context.Context) {
-	t := &s.cfg.Target
-	vault, err := s.reader.adapterVault(ctx, t.Adapter)
-	if err != nil {
-		s.log.Error(err, "resolve adapter vault; will match no auctions until restart", "adapter", t.Adapter.Hex())
-		return
+// resolveTargets resolves every adapter's vault, collateral, and EIP-1271 signer at startup (two
+// batched Multicalls via reader.resolveAdapters) and keeps only the adapters that resolved and have
+// this solver as their on-chain offerSigner — the rest are dropped with a warning. If none remain,
+// it returns a startup error.
+func (s *Solver) resolveTargets(ctx context.Context) error {
+	adapters := make([]common.Address, len(s.cfg.Targets))
+	for i := range s.cfg.Targets {
+		adapters[i] = s.cfg.Targets[i].Adapter
 	}
-	t.Vault = vault
-	collateral, err := s.reader.vaultAsset(ctx, vault)
+	resolved, err := s.reader.resolveAdapters(ctx, adapters)
 	if err != nil {
-		s.log.Error(err, "resolve collateral; will match no auctions until restart", "vault", vault.Hex())
-		return
+		return err // whole-batch transport/RPC failure, not a per-adapter revert
 	}
-	t.Collateral = collateral
-	s.log.Info("resolved target",
-		"adapter", t.Adapter.Hex(), "vault", vault.Hex(), "collateral", collateral.Hex())
+
+	kept := make([]Target, 0, len(s.cfg.Targets))
+	for i, t := range s.cfg.Targets {
+		r := resolved[i]
+		if r.err != nil {
+			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", t.Adapter.Hex())
+			continue
+		}
+		if r.signer != s.signerAddr {
+			s.log.Info("skipping adapter: solver is not its EIP-1271 signer",
+				"adapter", t.Adapter.Hex(),
+				"want", s.signerAddr.Hex(),
+				"got", r.signer.Hex())
+			continue
+		}
+		t.Vault, t.Collateral = r.vault, r.collateral
+		s.log.Info("resolved target",
+			"adapter", t.Adapter.Hex(), "vault", r.vault.Hex(), "collateral", r.collateral.Hex())
+		kept = append(kept, t)
+	}
+
+	s.cfg.Targets = kept
+	if len(s.cfg.Targets) == 0 {
+		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
+	}
+	return nil
 }

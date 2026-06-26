@@ -23,8 +23,12 @@ solvers:
   - name: 3f-bridge-facilitator
     config:
       apiBaseUrl: https://bf.dev.gcp.3f.xyz
-      adapter: "0x0000000000000000000000000000000000000000"    # TODO: deployed BridgeFacilitatorAdapter (vault + collateral derived from it at startup)
-      # Exposure/return caps live on the adapter (setExposureLimits), read on-chain — not config.
+      # Adapters this solver maintains offers for. Each must be registered with 3F as a facilitator by
+      # its vault creator, with this solver's signer set as the adapter's EIP-1271 signer. Vault +
+      # collateral are resolved from each adapter at startup; exposure/return caps live on the adapter
+      # (read on-chain, not config). No API key — offers authenticate via the adapter's EIP-1271 check.
+      adapters:
+        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed BridgeFacilitatorAdapter
       intervals:
         discover: 1h
         redeemPoll: 5m
