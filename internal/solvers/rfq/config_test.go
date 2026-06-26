@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func parse(t *testing.T, body string) (*Config, error) {
+func parseCfg(t *testing.T, body string) (*Config, error) {
 	t.Helper()
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
@@ -24,7 +24,7 @@ executor: "0x0000000000000000000000000000000000000010"
 `
 
 func TestParseConfig_Defaults(t *testing.T) {
-	cfg, err := parse(t, minimalConfig)
+	cfg, err := parseCfg(t, minimalConfig)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 }
 
 func TestParseConfig_UnknownKeyRejected(t *testing.T) {
-	if _, err := parse(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
+	if _, err := parseCfg(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
 		t.Fatal("expected a typo'd key to be rejected")
 	}
 }
@@ -63,7 +63,7 @@ adapters:
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
+			cfg, err := parseCfg(t, minimalConfig+tc.yaml+"\n")
 			if err != nil {
 				t.Fatalf("parseConfig: %v", err)
 			}
@@ -75,7 +75,7 @@ adapters:
 }
 
 func TestParseConfig_Overrides(t *testing.T) {
-	cfg, err := parse(t, minimalConfig+`
+	cfg, err := parseCfg(t, minimalConfig+`
 listenAddr: ":9000"
 pollIntervalMs: 1500
 orderLimit: 5
@@ -94,7 +94,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 }
 
 func TestParseConfig_Adapters(t *testing.T) {
-	cfg, err := parse(t, minimalConfig+`
+	cfg, err := parseCfg(t, minimalConfig+`
 adapters:
   - "0x0000000000000000000000000000000000000042"
 `)
@@ -128,7 +128,7 @@ adapters:
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parse(t, minimalConfig+body); err == nil {
+			if _, err := parseCfg(t, minimalConfig+body); err == nil {
 				t.Fatalf("expected an error for %q", name)
 			}
 		})
@@ -156,7 +156,7 @@ adapterWhitelistEnabled: true
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parse(t, body); err == nil {
+			if _, err := parseCfg(t, body); err == nil {
 				t.Fatalf("expected an error for %q", name)
 			}
 		})

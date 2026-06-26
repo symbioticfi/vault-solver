@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 // rateScale is the adapter's fixed-point rate scale (1e18).
-var rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+var rateScale = chain.Exp10(18)
 
 // solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
 // (the filler does not re-read maxAssets/maxRate/decimals on-chain in the quote path). "adapter" is
@@ -238,9 +240,11 @@ func dedupeByAdapter(legs []eligibleLeg) []eligibleLeg {
 
 /* ───────── fixed-point rate math ───────── */
 
-func pow10(n int) *big.Int { return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil) }
+func pow10(n int) *big.Int { return chain.Exp10(n) }
 
-// amountOutForRate = amountIn * rate * 10^assetDec / (RATE_SCALE * 10^tokenInDec).
+// amountOutForRate = amountIn * rate * 10^assetDec / (RATE_SCALE * 10^tokenInDec). Replicates the
+// LiquidLane adapter's getAmountOut; the OEV solver has the same formula inline (redstoneoev/sizing.go
+// adapterOut) — keep both in sync (deliberately not unified into one 5-arg helper, see that site).
 func amountOutForRate(amountIn, rate *big.Int, tokenInDec, assetDec int) *big.Int {
 	num := new(big.Int).Mul(amountIn, rate)
 	num.Mul(num, pow10(assetDec))

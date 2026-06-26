@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
@@ -72,7 +73,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.BackendSharedSecretEnv == "" {
 		return nil, errors.New("backendSharedSecretEnv is required")
 	}
-	executor, err := parseAddress(raw.Executor, "executor")
+	executor, err := parse.Address(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +81,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	cfg := &Config{
 		BackendURL:              raw.BackendURL,
 		BackendSharedSecretEnv:  raw.BackendSharedSecretEnv,
-		ListenAddr:              orStr(raw.ListenAddr, defaultListenAddr),
+		ListenAddr:              parse.OrDefault(raw.ListenAddr, defaultListenAddr),
 		Executor:                executor,
 		PollInterval:            defaultPollInterval,
 		OrderLimit:              defaultOrderLimit,
@@ -94,14 +95,14 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	// Reactor is optional (used by execution). Parse when present so a bad address fails fast.
 	if raw.Reactor != "" {
-		if cfg.Reactor, err = parseAddress(raw.Reactor, "reactor"); err != nil {
+		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
 			return nil, err
 		}
 	}
 	for i, a := range raw.Adapters {
 		// The zero address is rejected so a placeholder fails at startup rather than weakening the
 		// whitelist. Vault + Asset are resolved on-chain at startup.
-		adapterAddr, verr := parseNonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
+		adapterAddr, verr := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
 		if verr != nil {
 			return nil, verr
 		}
@@ -113,29 +114,4 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, errors.New("adapterWhitelistEnabled requires at least one adapters entry")
 	}
 	return cfg, nil
-}
-
-func parseAddress(s, field string) (common.Address, error) {
-	if !common.IsHexAddress(s) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
-	}
-	return common.HexToAddress(s), nil
-}
-
-func parseNonZeroAddress(s, field string) (common.Address, error) {
-	addr, err := parseAddress(s, field)
-	if err != nil {
-		return common.Address{}, err
-	}
-	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
-	}
-	return addr, nil
-}
-
-func orStr(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
 }

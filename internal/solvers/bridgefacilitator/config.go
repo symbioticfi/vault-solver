@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
@@ -94,20 +95,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
-	discover, err := parseDuration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
+	discover, err := parse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
 	if err != nil {
 		return nil, err
 	}
-	redeemPoll, err := parseDuration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
+	redeemPoll, err := parse.Duration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
 	if err != nil {
 		return nil, err
 	}
-	reconcile, err := parseDuration(raw.Intervals.Reconcile, defaultReconcile, "intervals.reconcile")
+	reconcile, err := parse.Duration(raw.Intervals.Reconcile, defaultReconcile, "intervals.reconcile")
 	if err != nil {
 		return nil, err
 	}
 
-	httpTimeout, err := parseDuration(raw.HTTPTimeout, defaultHTTPTimeout, "httpTimeout")
+	httpTimeout, err := parse.Duration(raw.HTTPTimeout, defaultHTTPTimeout, "httpTimeout")
 	if err != nil {
 		return nil, err
 	}
@@ -125,44 +126,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 func parseTarget(raw rawConfig) (Target, error) {
 	// The zero address is rejected so an unreplaced placeholder fails at startup rather than being
 	// registered as the 3F offer-address.
-	adapter, err := parseNonZeroAddress(raw.Adapter, "adapter")
+	adapter, err := parse.NonZeroAddress(raw.Adapter, "adapter")
 	if err != nil {
 		return Target{}, err
 	}
 	return Target{Adapter: adapter}, nil
-}
-
-func parseAddress(s, field string) (common.Address, error) {
-	if !common.IsHexAddress(s) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
-	}
-	return common.HexToAddress(s), nil
-}
-
-func parseNonZeroAddress(s, field string) (common.Address, error) {
-	addr, err := parseAddress(s, field)
-	if err != nil {
-		return common.Address{}, err
-	}
-	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
-	}
-	return addr, nil
-}
-
-// parseDuration returns fallback when s is empty, but a present-but-invalid or non-positive value is
-// an error rather than a silent fall back to the default — a typo'd interval should fail, not run at
-// some surprising cadence.
-func parseDuration(s string, fallback time.Duration, field string) (time.Duration, error) {
-	if s == "" {
-		return fallback, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, errors.Errorf("%s: invalid duration %q: %w", field, s, err)
-	}
-	if d <= 0 {
-		return 0, errors.Errorf("%s: duration must be positive, got %q", field, s)
-	}
-	return d, nil
 }

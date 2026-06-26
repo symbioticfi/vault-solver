@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 // orderStatus is the local order lifecycle. queued → submitting → submitted → {filled|expired|failed}.
@@ -129,7 +131,7 @@ func (s *store) upsertQueued(in queuedOrder) {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}
-	rec.QuoteID = orStr(in.QuoteID, rec.QuoteID)
+	rec.QuoteID = parse.OrDefault(in.QuoteID, rec.QuoteID)
 	rec.UpdatedAt = now
 }
 

@@ -3,14 +3,13 @@ package rfq
 import (
 	"context"
 	"math/big"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
-	"github.com/symbioticfi/vault-solver/api/bindings/rfq/adapter"
+	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
@@ -18,8 +17,8 @@ import (
 // ABI change fails at compile time (see CLAUDE.md "Code generation").
 var (
 	llAdapter = adapter.NewLiquidLaneAdapter()
-	// erc4626b serves both the vault's asset() and the asset token's decimals(): IERC4626 is an
-	// ERC-20, and a method's selector/return shape is fixed by the ABI regardless of target.
+	// erc4626b serves the vault's asset(): a method's selector/return shape is fixed by the ABI
+	// regardless of target. (Token decimals go through the shared chain.Decimals helper.)
 	erc4626b = erc4626.NewIERC4626()
 )
 
@@ -28,18 +27,16 @@ var (
 // (see resolveVaults), not re-read here.
 const readsPerAdapter = 3
 
-// reader performs the on-chain reads, batching via Multicall3. Token decimals are cached; the HTTP
-// server serves quotes concurrently, so the cache is mutex-guarded.
+// reader performs the on-chain reads, batching via Multicall3. Token decimals are resolved + cached by
+// the shared chain.Decimals helper (its own mutex), so concurrent quote requests stay safe.
 type reader struct {
 	chain *chain.Client
 	log   logr.Logger
-
-	mu       sync.Mutex
-	decimals map[common.Address]int
+	dec   *chain.Decimals
 }
 
 func newReader(c *chain.Client, log logr.Logger) *reader {
-	return &reader{chain: c, log: log, decimals: make(map[common.Address]int)}
+	return &reader{chain: c, log: log, dec: chain.NewDecimals(c)}
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
@@ -52,30 +49,10 @@ type recoveryVault struct {
 	Asset   common.Address
 }
 
-// tokenDecimals returns the ERC-20 decimals for token, caching the result.
+// tokenDecimals returns the ERC-20 decimals for token (cached). Delegates to the shared chain.Decimals
+// so the quote + recovery paths reuse one cache instead of a per-reader copy.
 func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, error) {
-	r.mu.Lock()
-	if d, ok := r.decimals[token]; ok {
-		r.mu.Unlock()
-		return d, nil
-	}
-	r.mu.Unlock()
-
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: token, Data: erc4626b.PackDecimals()}})
-	if err != nil {
-		return 0, err
-	}
-	if len(res) != 1 || !res[0].Success {
-		return 0, errors.Errorf("erc20.decimals() reverted for %s", token)
-	}
-	d, err := erc4626b.UnpackDecimals(res[0].ReturnData)
-	if err != nil {
-		return 0, errors.Errorf("unpack decimals: %w", err)
-	}
-	r.mu.Lock()
-	r.decimals[token] = int(d)
-	r.mu.Unlock()
-	return int(d), nil
+	return r.dec.Get(ctx, token)
 }
 
 // amountsOut prices each distinct asset by calling its representative adapter's getAmountOut(tokenIn,
