@@ -21,6 +21,8 @@ type rawConfig struct {
 	PollIntervalMs         int      `yaml:"pollIntervalMs"`
 	OrderLimit             int      `yaml:"orderLimit"`
 	SolverMode             string   `yaml:"solverMode"`
+	TokensToQuote          string   `yaml:"tokensToQuote"`
+	PermissionedTokens     []string `yaml:"permissionedTokens"`
 	Adapters               []string `yaml:"adapters"`
 }
 
@@ -46,6 +48,13 @@ type Config struct {
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting/filling.
 	//   - internal: uses public discounts; adapters are optional extra recovery inventory (deduped vs discounts).
 	SolverMode string
+	// TokensToQuote scopes which input tokens this filler quotes by class: "all" (default) quotes any,
+	// "permissioned" quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens NOT in
+	// PermissionedTokens. Typically set per instance via env (e.g. tokensToQuote: ${TOKENS_TO_QUOTE}).
+	TokensToQuote string
+	// PermissionedTokens is the local set of input-token addresses treated as permissioned; the
+	// TokensToQuote scope is evaluated against it. Empty means no input token is permissioned.
+	PermissionedTokens map[common.Address]bool
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
 	// scoped to, and the candidate universe used to rebuild a strategy on-chain when the quote-time
 	// strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
@@ -58,6 +67,14 @@ type Config struct {
 const (
 	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
 	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
+)
+
+// Input-token quote scopes (see Config.TokensToQuote): "all" quotes any input token, "permissioned"
+// quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens not in it.
+const (
+	tokensToQuoteAll            = "all"
+	tokensToQuotePermissioned   = "permissioned"
+	tokensToQuotePermissionless = "permissionless"
 )
 
 // Defaults applied when a field is unset.
@@ -88,6 +105,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if mode != solverModeExternal && mode != solverModeInternal {
 		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
 	}
+	scope := orStr(raw.TokensToQuote, tokensToQuoteAll)
+	if scope != tokensToQuoteAll && scope != tokensToQuotePermissioned && scope != tokensToQuotePermissionless {
+		return nil, errors.Errorf("tokensToQuote: must be %q, %q or %q, got %q",
+			tokensToQuoteAll, tokensToQuotePermissioned, tokensToQuotePermissionless, scope)
+	}
 
 	cfg := &Config{
 		BackendURL:             raw.BackendURL,
@@ -97,6 +119,17 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
+		TokensToQuote:          scope,
+	}
+	for i, t := range raw.PermissionedTokens {
+		addr, terr := parseNonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
+		if terr != nil {
+			return nil, terr
+		}
+		if cfg.PermissionedTokens == nil {
+			cfg.PermissionedTokens = make(map[common.Address]bool, len(raw.PermissionedTokens))
+		}
+		cfg.PermissionedTokens[addr] = true
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond

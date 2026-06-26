@@ -38,6 +38,11 @@ configMap:
             # solverMode: external # "external" (default) | "internal". external skips the internal-only
             #                      # discounts API and scopes to `adapters`; internal uses public discounts on all.
             solverMode: internal
+            # Token routing: quote scope ("all"|"permissioned"|"permissionless") is set per-instance via
+            # env (deploy.yml). permissionedTokens is the local set the scope is evaluated against.
+            tokensToQuote: ${TOKENS_TO_QUOTE}
+            permissionedTokens:
+              - "0x2Ee6f1A395Bce7a7c5bF1D07bAaF9F8A0828A8d3" # mGLOBAL
             # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
             # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
             # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.

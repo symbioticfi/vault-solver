@@ -29,6 +29,7 @@ jobs:
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
           --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
+          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissionless
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"
 
@@ -58,5 +59,6 @@ jobs:
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
           --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && matrix.executorHoodi || matrix.executorSepolia }}
+          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissioned
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-${{ matrix.name }}"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}\,secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}-keys"
