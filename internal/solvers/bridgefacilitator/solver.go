@@ -182,10 +182,11 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 }
 
-// offerAuction covers one auction's full requested amount in a single pass: greedily offer through the
-// most-fundable eligible adapter, each offer sized to the uncovered remainder, until covered or no
-// adapter can add more (a later pass retries). Coverage already held counts, so a fully-covered auction
-// is skipped. One adapter per offer; no aggregation within an offer.
+// offerAuction covers one auction's full requested amount in a single pass: it sizes every eligible
+// adapter to its capacity, then selectOffers ranks them (largest first) and assigns each the principal
+// to offer until the still-uncovered amount is filled. Coverage already held counts, so a fully-covered
+// auction is skipped. One adapter per offer; no aggregation within an offer. Any amount left uncovered
+// (not enough capacity, or a build/submit failure) is retried on a later pass.
 func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*adapterOffering, now time.Time) {
 	auctionID := int64(av.dto.Id)
 	if !av.isOpen() {
@@ -215,68 +216,52 @@ func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*
 		return
 	}
 
-	// tried bounds each adapter to one consideration per auction, so the loop terminates.
-	tried := make(map[common.Address]bool, len(offerings))
-	for remaining.Sign() > 0 {
-		candidates := make([]adapterSizing, 0, len(offerings))
-		byAdapter := make(map[common.Address]*adapterOffering, len(offerings))
-		for _, off := range offerings {
-			if tried[off.target.Adapter] || !av.matchesAsset(off.target.Collateral) ||
-				s.offers.hasLive(off.target.Adapter, auctionID, now) {
-				continue
-			}
-			// Floor enforced at selection, not at signing.
-			if off.st.minYieldBps.Sign() > 0 && rateBps < bpsToFloat(off.st.minYieldBps) {
-				s.log.V(1).Info("skip adapter: rate below its on-chain return floor", "auctionId", auctionID,
-					"adapter", off.target.Adapter.Hex(), "maxRateBps", rateBps, "minYieldBps", off.st.minYieldBps.String())
-				continue
-			}
-			principal, ok := sizeOffer(sizeInputs{
-				perRequestMax:   off.st.perRequestMax,
-				fundable:        new(big.Int).Sub(off.st.fundable, off.committed),
-				amountRequested: remaining, // size to the uncovered remainder, not the full ask
-				sleeveMax:       off.st.totalMax,
-				outstanding:     new(big.Int).Add(off.st.outstanding, off.committed),
-				openCount:       off.st.openCount + off.opened,
-				maxConcurrent:   off.st.maxConcurrent,
-			})
-			if !ok {
-				continue
-			}
-			candidates = append(candidates, adapterSizing{target: off.target, principal: principal})
-			byAdapter[off.target.Adapter] = off
+	// Size every eligible adapter to its capacity (collateral match, no live offer of ours, rate clears
+	// its return floor). selectOffers ranks these and clamps each to the uncovered remainder.
+	candidates := make([]adapterSizing, 0, len(offerings))
+	for _, off := range offerings {
+		if !av.matchesAsset(off.target.Collateral) || s.offers.hasLive(off.target.Adapter, auctionID, now) {
+			continue
 		}
-
-		best, ok := selectBestAdapter(candidates)
+		if off.st.minYieldBps.Sign() > 0 && rateBps < bpsToFloat(off.st.minYieldBps) {
+			s.log.V(1).Info("skip adapter: rate below its on-chain return floor", "auctionId", auctionID,
+				"adapter", off.target.Adapter.Hex(), "maxRateBps", rateBps, "minYieldBps", off.st.minYieldBps.String())
+			continue
+		}
+		capacity, ok := sizeOffer(sizeInputs{
+			perRequestMax: off.st.perRequestMax,
+			fundable:      new(big.Int).Sub(off.st.fundable, off.committed),
+			sleeveMax:     off.st.totalMax,
+			outstanding:   new(big.Int).Add(off.st.outstanding, off.committed),
+			openCount:     off.st.openCount + off.opened,
+			maxConcurrent: off.st.maxConcurrent,
+		})
 		if !ok {
-			s.log.V(1).Info("auction not fully covered this pass; will retry next pass",
-				"auctionId", auctionID, "uncovered", remaining.String())
-			return
+			continue
 		}
-		off := byAdapter[best.target.Adapter]
-		tried[best.target.Adapter] = true
+		candidates = append(candidates, adapterSizing{off: off, capacity: capacity})
+	}
 
-		dto, buildErr := s.buildSignedOffer(av, request, best.target.Adapter, best.principal, rateBps)
+	for _, sel := range selectOffers(candidates, remaining) {
+		adapter := sel.off.target.Adapter
+		dto, buildErr := s.buildSignedOffer(av, request, adapter, sel.principal, rateBps)
 		if buildErr != nil {
-			s.log.Error(buildErr, "offer: build", "auctionId", auctionID, "adapter", best.target.Adapter.Hex())
+			s.log.Error(buildErr, "offer: build", "auctionId", auctionID, "adapter", adapter.Hex())
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
-			s.log.Error(subErr, "offer: submit", "auctionId", auctionID, "adapter", best.target.Adapter.Hex())
+			s.log.Error(subErr, "offer: submit", "auctionId", auctionID, "adapter", adapter.Hex())
 			continue
 		}
 
-		off.committed.Add(off.committed, best.principal)
-		off.opened++
+		sel.off.committed.Add(sel.off.committed, sel.principal)
+		sel.off.opened++
 		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
-			s.offers.record(best.target.Adapter, auctionID, exp, best.principal)
+			s.offers.record(adapter, auctionID, exp, sel.principal)
 		}
-		remaining.Sub(remaining, best.principal)
-		s.log.Info("offer submitted", "auctionId", auctionID, "adapter", best.target.Adapter.Hex(),
-			"request", request.Hex(), "principal", best.principal.String(),
-			"expectedReturn", dto.ExpectedReturn, "uncovered", remaining.String())
+		s.log.Info("offer submitted", "auctionId", auctionID, "adapter", adapter.Hex(),
+			"request", request.Hex(), "principal", sel.principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
-	s.log.V(1).Info("auction fully covered this pass", "auctionId", auctionID)
 }
 
 // redeemAll runs the redeemer for every matched adapter.

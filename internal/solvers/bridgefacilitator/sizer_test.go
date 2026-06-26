@@ -10,13 +10,12 @@ func bi(n int64) *big.Int { return big.NewInt(n) }
 func TestSizeOffer(t *testing.T) {
 	base := func() sizeInputs {
 		return sizeInputs{
-			perRequestMax:   bi(250_000),
-			fundable:        bi(500_000),
-			amountRequested: bi(1_000_000),
-			sleeveMax:       bi(1_000_000),
-			outstanding:     bi(0),
-			openCount:       0,
-			maxConcurrent:   10,
+			perRequestMax: bi(250_000),
+			fundable:      bi(500_000),
+			sleeveMax:     bi(1_000_000),
+			outstanding:   bi(0),
+			openCount:     0,
+			maxConcurrent: 10,
 		}
 	}
 
@@ -43,12 +42,6 @@ func TestSizeOffer(t *testing.T) {
 			mutate: func(in *sizeInputs) { in.outstanding = bi(900_000) }, // 100k room
 			wantOK: true,
 			want:   bi(100_000),
-		},
-		{
-			name:   "amountRequested binds",
-			mutate: func(in *sizeInputs) { in.amountRequested = bi(50_000) },
-			wantOK: true,
-			want:   bi(50_000),
 		},
 		{
 			name:   "concurrency cap reached",

@@ -179,15 +179,18 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    the auction's `maxRate` clears the adapter's on-chain return floor (`minRequestYieldBps`). The floor is
    a selection filter, not a late signing-time check — a floor-failing adapter never competes.
 2. **Capacity** — read each candidate's exposure/liquidity in one Multicall (`fundable`,
-   `outstandingPrincipal`, open-loan count, the four on-chain caps), then `sizeOffer()` it against the
-   uncovered remainder (per-request → fundable → sleeve → concurrency → remainder).
-3. **Cover the remainder** — `remaining = amountRequested − liveCoverage(auction)` (coverage already
-   held from this and prior passes, summed across adapters). If `remaining ≤ 0` the auction is already
-   fully covered → skip it (no duplicate offers). Otherwise greedily pick the **most-fundable** eligible
-   adapter, size its offer to `remaining`, submit, subtract, and repeat until covered or no adapter can
-   add more (a later pass retries the rest). Each adapter offers at most once per auction. **1 adapter
-   per offer, no aggregation within an offer** — a single offer is never split across adapters, but an
-   auction's ask may be covered by several single-adapter offers.
+   `outstandingPrincipal`, open-loan count, the four on-chain caps), then `sizeOffer()` it to its
+   **capacity** — the max principal it can fund (per-request → fundable → sleeve → concurrency),
+   independent of the ask.
+3. **Select offers** — `remaining = amountRequested − liveCoverage(auction)` (coverage already held from
+   this and prior passes, summed across adapters). If `remaining ≤ 0` the auction is already fully
+   covered → skip it (no duplicate offers). Otherwise `selectOffers` ranks the candidates by capacity
+   (largest first) and, in one shot, assigns each the principal it will offer — `min(capacity,
+   still-uncovered)` — until `remaining` is filled or candidates run out. Each adapter offers at most
+   once. **1 adapter per offer, no aggregation within an offer** — a single offer is never split across
+   adapters, but an auction's ask may be covered by several single-adapter offers; any uncovered
+   remainder (insufficient capacity, or a build/submit failure) is retried next pass. A future
+   min-amount exposure param would be enforced here.
 4. **Sign + submit** — each offer is built with `maker = chosen adapter`, the EIP-712 digest signed with
    the solver signer, and `createOffer`d as a **signed payload** (3F authorizes via the adapter's
    EIP-1271). Dedup is keyed by **(adapter, auction)** and offers carry their **principal**, so coverage
