@@ -28,6 +28,7 @@ jobs:
           -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"
 
@@ -38,10 +39,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name:
-          - vault-solver-first
-          - vault-solver-second
-          - vault-solver-third
+        include:
+          - name: vault-solver-first
+            executorHoodi: "0x910af97D2402681a6B57D0794B9246Eae17c0B24"
+            executorSepolia: "0xc2251516e23A2b8E01249f8e9084297EDd8559b7"
+          - name: vault-solver-second
+            executorHoodi: "0x37bF9f850b7C3334D3Fc252D79215C088D8be30d"
+            executorSepolia: "0xC879456C5Ce99d3a6B81797f40b0BF28143E1640"
+          - name: vault-solver-third
+            executorHoodi: "0x1B321F3B62AF7B3dF25E01800094802e3621C9dc"
+            executorSepolia: "0x92E04ea2a18c8E87EAf6803691772b15eBb939ED"
     with:
       NAME: ${{ matrix.name }}
       NAMESPACE: '${{ inputs.namespace }}'
@@ -50,5 +57,6 @@ jobs:
           -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && matrix.executorHoodi || matrix.executorSepolia }}
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-${{ matrix.name }}"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}\,secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}-keys"
