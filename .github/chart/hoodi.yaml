@@ -31,8 +31,8 @@ configMap:
             backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
             listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
             # Hoodi RFQ deployment:
-            executor: "0x382ec37d78f4F58F08478759A22Bab348eB18Eb6"
-            reactor: "0x8d63ef7Cf597Ff7F682E7Bc0692a186aCAA455c0" # used at execution time
+            executor: "0x8F32D7195fD1B99ba64BC9780f580db2A7055990"
+            reactor: "0xC1b4A404288F049785Be4aB424589E743456338D" # used at execution time
             pollIntervalMs: 333 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
             # solverMode: external # "external" (default) | "internal". external skips the internal-only
@@ -42,4 +42,5 @@ configMap:
             # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
             # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
             adapters:
-              - "0x9158695D91E131d6c33033dE4ACD4c7Acb02c29c" # LiquidLane adapter
+              - "0x8DCC2515dE40c62d09125db5551de02603C70190" # USDC LiquidLane adapter
+              - "0x797390393A8a5b65e93A0E4E4A5fCDe06B94Bd3F" # aUSD LiquidLane adapter

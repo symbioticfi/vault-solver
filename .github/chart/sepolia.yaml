@@ -29,8 +29,8 @@ configMap:
             backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
             listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
             # Sepolia RFQ deployment:
-            executor: "0x46a95b97f5FFE5Abd7aB199b75307a7D06A06394"
-            reactor: "0x57F4cA7219F82652205CB59fb02ad9A30EeDb9B6" # used at execution time
+            executor: "0xCB2C6B190090074e7493e04874aA36E2aA258554"
+            reactor: "0x81ab189f6EBC8214565724078F1366a67a0E7DC9" # used at execution time
             pollIntervalMs: 333 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
             # solverMode: external # "external" (default) | "internal". external skips the internal-only
@@ -40,4 +40,5 @@ configMap:
             # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
             # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
             adapters:
-              - "0xe44DeE43EFCC9466031Eb51F363699A6bB15d13B" # LiquidLane adapter
+              - "0x6d3456D8DcDD4F3e8a506275E22eBB9653a7bD79" # USDC LiquidLane adapter
+              - "0xC06382F350618dBFf760369F3d42294aDa8F1277" # aUSD LiquidLane adapter

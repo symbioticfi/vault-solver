@@ -13,10 +13,11 @@ import (
 
 // fillSignature is the canonical signature of the mixed fill overload; pinning its selector guards
 // against accidentally encoding a different fill overload. It mirrors the selector string in the TS
-// filler's encodeExecutorFill (executor.ts): swapInputs carry (adapter, (recipient,tokenIn,amountIn,
-// amountOut)); discountSwapInputs carry (adapter, ((tokenToRedeem,discount,signer,protocol,nonce,
-// deadline),sig,protocolDeadline),protocolSig,recipient,amountIn).
-const fillSignature = "fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address)," +
+// filler's encodeExecutorFill (executor.ts): the order carries protocol-authorized outputs,
+// swapInputs carry (adapter, (recipient,tokenIn,amountIn, amountOut)); discountSwapInputs carry
+// (adapter, ((tokenToRedeem,discount,signer,protocol,nonce,deadline),sig,protocolDeadline),
+// protocolSig,recipient,amountIn).
+const fillSignature = "fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address,(address,uint256,address)[])," +
 	"bytes,(address,(address,address,uint256,uint256))[]," +
 	"(address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[],bytes)"
 
@@ -35,6 +36,9 @@ func sampleOrder() executor.IReactorOrder {
 		SwapperSignature: []byte{0x01, 0x02},
 		Swapper:          common.HexToAddress("0x0000000000000000000000000000000000000099"),
 		Filler:           common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		Outputs: []executor.IReactorOutput{{
+			Token: tOut, Amount: big.NewInt(900000), Recipient: common.HexToAddress("0x0000000000000000000000000000000000000099"),
+		}},
 	}
 }
 
@@ -69,7 +73,9 @@ func TestDecodeOrder_RoundTrip(t *testing.T) {
 		got.Request.AmountIn.Cmp(order.Request.AmountIn) != 0 ||
 		got.Filler != order.Filler ||
 		len(got.Request.Outputs) != 1 ||
-		got.Request.Outputs[0].Amount.Cmp(big.NewInt(900000)) != 0 {
+		got.Request.Outputs[0].Amount.Cmp(big.NewInt(900000)) != 0 ||
+		len(got.Outputs) != 1 ||
+		got.Outputs[0].Amount.Cmp(big.NewInt(900000)) != 0 {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 }
