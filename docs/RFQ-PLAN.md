@@ -139,11 +139,14 @@ The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainI
 The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `adapters`
 list serves two purposes:
 
-- **Adapter whitelist** (auto-enabled in `external` mode when `adapters` is non-empty — see `solverMode`
-  above): only the configured `adapters` addresses are quoted and filled through. Non-whitelisted adapters
-  in a `/quote` request are dropped (none left ⇒ 204), and backend discounts with a non-whitelisted adapter
-  are ignored during recovery. In `internal` mode there is no whitelist (every advertised adapter is
-  accepted).
+- **Adapter whitelist** — scoping is per-path. The **quote** path scopes to the configured `adapters`
+  whenever `adapters` is non-empty, in **both** `external` and `internal` mode (`quoteScopesToAdapters`):
+  non-configured adapters in a `/quote` request are dropped (none left ⇒ 204), so an `internal`-mode
+  filler advertises quotes only for its own adapter universe (e.g. a per-solver adapter). The **execution**
+  path scopes to the configured `adapters` only in `external` mode (`restrictsToAdapters`): there backend
+  discounts with a non-configured adapter are ignored during recovery. `internal` mode never restricts
+  filling — discount-driven recovery may legitimately route through any advertised adapter — so with no
+  `adapters` configured an `internal` filler quotes and fills through every advertised adapter.
 - **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
   multicall scans (recovery's direct inventories are whitelisted by construction).
 
@@ -251,10 +254,11 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
 - **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
   (the Go config analogue of the TS deployment manifest's `vaults`). It was originally gated by an
   explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag
-  has since been folded into **`solverMode`** (§3) — `external` mode auto-enables the whitelist whenever
-  `adapters` is non-empty, `internal` mode never whitelists. Same three
-  enforcement points: `/quote` adapter filtering (none left ⇒ 204), recovery discount filtering, and
-  the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
+  has since been folded into **`solverMode`** (§3), and scoping is now per-path. The **quote** whitelist
+  is enabled whenever `adapters` is non-empty in either mode (`quoteScopesToAdapters`); the **execution**
+  whitelist (recovery discount filtering) is `external`-only (`restrictsToAdapters`). Enforcement points:
+  `/quote` adapter filtering (none left ⇒ 204) — quote-scoped; recovery discount filtering — execution-scoped;
+  and the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
   order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
   and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).
   Deliberate divergences: the Go default profile is **`external`**, which **requires `adapters`** (an empty

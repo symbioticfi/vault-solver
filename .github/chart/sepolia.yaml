@@ -41,9 +41,8 @@ configMap:
             tokensToQuote: ${TOKENS_TO_QUOTE}
             permissionedTokens:
               - "0xb547DCEcfC86FCC7B2964A4d9A2d5e8CFc407593" # mGLOBAL
-            # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
-            # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
-            # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
-            adapters:
-              - "0x8F38656B85fb440018c109A5118aFfDfD923721c" # USDC LiquidLane adapter
-              - "0xe4eb1E756F2d78F77B9ebE304515fA61B2451A33" # aUSD LiquidLane adapter
+            # LiquidLane adapter addresses: per-instance via env (deploy.yml sets RFQ_ADAPTER).
+            # The daemon (permissionless) supplies its 2 historical adapters as a comma-separated
+            # quoted list; first/second/third each supply their single mGLOBAL adapter. Flow-style
+            # list so one OR many comma-separated entries expand correctly. Empty disables recovery.
+            adapters: [${RFQ_ADAPTER}]
