@@ -74,25 +74,31 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
 ) (*quoteService, *executionService) {
-	// Shared by quoting (drop out-of-scope request adapters) and execution (drop out-of-scope recovery
-	// discounts). restrictsToAdapters() implies non-empty Adapters, so a wired whitelist is never empty.
-	whitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
+	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
+	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
+	// universe; execution uses restrictsToAdapters() (external-only) so internal-mode discount recovery can
+	// still fill through any advertised adapter. Both predicates imply non-empty Adapters when true, so a
+	// wired whitelist is never empty.
+	quoteWhitelist := buildAdapterWhitelist(cfg.quoteScopesToAdapters(), cfg.Adapters)
+	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:   chainID,
-		executor:  cfg.Executor,
-		whitelist: whitelist,
-		reader:    rdr,
-		store:     st,
-		log:       log,
-		now:       time.Now,
+		chainID:            chainID,
+		executor:           cfg.Executor,
+		whitelist:          quoteWhitelist,
+		tokensToQuote:      cfg.TokensToQuote,
+		permissionedTokens: cfg.PermissionedTokens,
+		reader:             rdr,
+		store:              st,
+		log:                log,
+		now:                time.Now,
 	}
 	exec := &executionService{
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		orderLimit:       cfg.OrderLimit,
 		vaults:           cfg.Adapters,
-		whitelist:        whitelist,
+		whitelist:        execWhitelist,
 		discountsEnabled: cfg.usesDiscounts(),
 		backend:          newBackendClient(cfg.BackendURL),
 		store:            st,

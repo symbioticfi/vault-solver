@@ -21,6 +21,8 @@ type rawConfig struct {
 	PollIntervalMs         int      `yaml:"pollIntervalMs"`
 	OrderLimit             int      `yaml:"orderLimit"`
 	SolverMode             string   `yaml:"solverMode"`
+	TokensToQuote          string   `yaml:"tokensToQuote"`
+	PermissionedTokens     []string `yaml:"permissionedTokens"`
 	Adapters               []string `yaml:"adapters"`
 }
 
@@ -42,10 +44,18 @@ type Config struct {
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
-	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters):
-	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting/filling.
-	//   - internal: uses public discounts; adapters are optional extra recovery inventory (deduped vs discounts).
+	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
+	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
+	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
+	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
 	SolverMode string
+	// TokensToQuote scopes which input tokens this filler quotes by class: "all" (default) quotes any,
+	// "permissioned" quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens NOT in
+	// PermissionedTokens. Typically set per instance via env (e.g. tokensToQuote: ${TOKENS_TO_QUOTE}).
+	TokensToQuote string
+	// PermissionedTokens is the local set of input-token addresses treated as permissioned; the
+	// TokensToQuote scope is evaluated against it. Empty means no input token is permissioned.
+	PermissionedTokens map[common.Address]bool
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
 	// scoped to, and the candidate universe used to rebuild a strategy on-chain when the quote-time
 	// strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
@@ -58,6 +68,14 @@ type Config struct {
 const (
 	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
 	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
+)
+
+// Input-token quote scopes (see Config.TokensToQuote): "all" quotes any input token, "permissioned"
+// quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens not in it.
+const (
+	tokensToQuoteAll            = "all"
+	tokensToQuotePermissioned   = "permissioned"
+	tokensToQuotePermissionless = "permissionless"
 )
 
 // Defaults applied when a field is unset.
@@ -88,6 +106,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if mode != solverModeExternal && mode != solverModeInternal {
 		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
 	}
+	scope := orStr(raw.TokensToQuote, tokensToQuoteAll)
+	if scope != tokensToQuoteAll && scope != tokensToQuotePermissioned && scope != tokensToQuotePermissionless {
+		return nil, errors.Errorf("tokensToQuote: must be %q, %q or %q, got %q",
+			tokensToQuoteAll, tokensToQuotePermissioned, tokensToQuotePermissionless, scope)
+	}
 
 	cfg := &Config{
 		BackendURL:             raw.BackendURL,
@@ -97,6 +120,17 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
+		TokensToQuote:          scope,
+	}
+	for i, t := range raw.PermissionedTokens {
+		addr, terr := parseNonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
+		if terr != nil {
+			return nil, terr
+		}
+		if cfg.PermissionedTokens == nil {
+			cfg.PermissionedTokens = make(map[common.Address]bool, len(raw.PermissionedTokens))
+		}
+		cfg.PermissionedTokens[addr] = true
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
@@ -129,10 +163,22 @@ func parseConfig(node yaml.Node) (*Config, error) {
 // usesDiscounts reports whether this solver may call the internal-only discounts API (internal mode only).
 func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
 
-// restrictsToAdapters reports whether quoting/filling is scoped to the configured Adapters: external mode
-// with ≥1 adapter. parseConfig requires external to have adapters; the len check guards hand-built Configs.
+// restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
+// scoped to the configured Adapters: external mode with ≥1 adapter. parseConfig requires external to have
+// adapters; the len check guards hand-built Configs. Internal mode never restricts filling — discount
+// recovery may legitimately route through any advertised adapter — so this stays external-only.
 func (c *Config) restrictsToAdapters() bool {
 	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
+}
+
+// quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It is a
+// superset of restrictsToAdapters: external always scopes quoting (adapters are required), and internal
+// scopes quoting too whenever ≥1 adapter is configured. This lets an internal-mode filler advertise quotes
+// only for its own adapter universe (e.g. a per-solver adapter) without touching discount/execution
+// semantics, which remain governed by restrictsToAdapters. Equivalent to len(Adapters) > 0 across the two
+// valid modes, but written in terms of intent so the quote-vs-execution split is explicit.
+func (c *Config) quoteScopesToAdapters() bool {
+	return c.restrictsToAdapters() || (c.SolverMode == solverModeInternal && len(c.Adapters) > 0)
 }
 
 func parseAddress(s, field string) (common.Address, error) {

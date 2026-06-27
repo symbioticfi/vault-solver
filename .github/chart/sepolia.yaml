@@ -29,16 +29,20 @@ configMap:
             backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
             listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
             # Sepolia RFQ deployment:
-            executor: ${EXECUTOR} # per-instance: each solver pod injects its own Executor via its vault env
+            executor: ${EXECUTOR} # per-instance: deploy.yml sets EXECUTOR per solver (non-secret env, not vault)
             reactor: "0x9CEA2ff051A285d5Eb9dc41b16B2407Bb7a81377" # used at execution time
             pollIntervalMs: 333 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
             # solverMode: external # "external" (default) | "internal". external skips the internal-only
             #                      # discounts API and scopes to `adapters`; internal uses public discounts on all.
             solverMode: internal
-            # LiquidLane adapter addresses: the candidate universe for on-chain strategy recovery (e.g.
-            # after a restart) and, when the whitelist is enabled, the source of allowed adapters; the
-            # quote path's inventory snapshot still comes from the backend request. Empty disables recovery.
-            adapters:
-              - "0x8F38656B85fb440018c109A5118aFfDfD923721c" # USDC LiquidLane adapter
-              - "0xe4eb1E756F2d78F77B9ebE304515fA61B2451A33" # aUSD LiquidLane adapter
+            # Token routing: quote scope ("all"|"permissioned"|"permissionless") is set per-instance via
+            # env (deploy.yml). permissionedTokens is the local set the scope is evaluated against.
+            tokensToQuote: ${TOKENS_TO_QUOTE}
+            permissionedTokens:
+              - "0xb547DCEcfC86FCC7B2964A4d9A2d5e8CFc407593" # mGLOBAL
+            # LiquidLane adapter addresses: per-instance via env (deploy.yml sets RFQ_ADAPTER).
+            # The daemon (permissionless) supplies its 2 historical adapters as a comma-separated
+            # quoted list; first/second/third each supply their single mGLOBAL adapter. Flow-style
+            # list so one OR many comma-separated entries expand correctly. Empty disables recovery.
+            adapters: [${RFQ_ADAPTER}]
