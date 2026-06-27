@@ -44,9 +44,10 @@ type Config struct {
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
-	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters):
-	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting/filling.
-	//   - internal: uses public discounts; adapters are optional extra recovery inventory (deduped vs discounts).
+	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
+	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
+	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
+	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
 	SolverMode string
 	// TokensToQuote scopes which input tokens this filler quotes by class: "all" (default) quotes any,
 	// "permissioned" quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens NOT in
@@ -162,10 +163,22 @@ func parseConfig(node yaml.Node) (*Config, error) {
 // usesDiscounts reports whether this solver may call the internal-only discounts API (internal mode only).
 func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
 
-// restrictsToAdapters reports whether quoting/filling is scoped to the configured Adapters: external mode
-// with ≥1 adapter. parseConfig requires external to have adapters; the len check guards hand-built Configs.
+// restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
+// scoped to the configured Adapters: external mode with ≥1 adapter. parseConfig requires external to have
+// adapters; the len check guards hand-built Configs. Internal mode never restricts filling — discount
+// recovery may legitimately route through any advertised adapter — so this stays external-only.
 func (c *Config) restrictsToAdapters() bool {
 	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
+}
+
+// quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It is a
+// superset of restrictsToAdapters: external always scopes quoting (adapters are required), and internal
+// scopes quoting too whenever ≥1 adapter is configured. This lets an internal-mode filler advertise quotes
+// only for its own adapter universe (e.g. a per-solver adapter) without touching discount/execution
+// semantics, which remain governed by restrictsToAdapters. Equivalent to len(Adapters) > 0 across the two
+// valid modes, but written in terms of intent so the quote-vs-execution split is explicit.
+func (c *Config) quoteScopesToAdapters() bool {
+	return c.restrictsToAdapters() || (c.SolverMode == solverModeInternal && len(c.Adapters) > 0)
 }
 
 func parseAddress(s, field string) (common.Address, error) {
