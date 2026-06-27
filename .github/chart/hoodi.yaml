@@ -33,7 +33,7 @@ configMap:
             # Hoodi RFQ deployment:
             executor: ${EXECUTOR} # per-instance: deploy.yml sets EXECUTOR per solver (non-secret env, not vault)
             reactor: "0x36BAa2637be47e3E2cB07C46E02226b6b45a9faA" # used at execution time
-            pollIntervalMs: 333 # backend order poll cadence
+            pollIntervalMs: 166 # backend order poll cadence
             orderLimit: 20 # max open orders fetched per poll
             # solverMode: external # "external" (default) | "internal". external skips the internal-only
             #                      # discounts API and scopes to `adapters`; internal uses public discounts on all.
