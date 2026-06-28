@@ -91,6 +91,58 @@ func TestParseConfig_SolverMode(t *testing.T) {
 	}
 }
 
+// TestParseConfig_QuoteScopesToAdapters pins the quote-vs-execution scoping split: the QUOTE path scopes
+// to configured adapters in BOTH external and internal mode (quoteScopesToAdapters), while execution
+// scoping (restrictsToAdapters) stays external-only. The internal+adapters row is the new behavior — an
+// internal-mode filler advertises quotes only for its own adapter universe without restricting filling.
+func TestParseConfig_QuoteScopesToAdapters(t *testing.T) {
+	a := "\n" + oneAdapter
+	type want struct {
+		quoteScope   bool // quoteScopesToAdapters()
+		execRestrict bool // restrictsToAdapters()
+	}
+	cases := map[string]struct {
+		yaml string
+		want want
+	}{
+		"external + adapters → quote scoped, exec restricted": {
+			yaml: "solverMode: external" + a,
+			want: want{quoteScope: true, execRestrict: true},
+		},
+		"internal + adapters → quote scoped, exec unrestricted": {
+			yaml: "solverMode: internal" + a,
+			want: want{quoteScope: true, execRestrict: false},
+		},
+		"internal, no adapters → neither scoped": {
+			yaml: "solverMode: internal",
+			want: want{quoteScope: false, execRestrict: false},
+		},
+		"default (unset) + adapters → quote scoped, exec restricted": {
+			yaml: a,
+			want: want{quoteScope: true, execRestrict: true},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
+			if err != nil {
+				t.Fatalf("parseConfig: %v", err)
+			}
+			if cfg.quoteScopesToAdapters() != tc.want.quoteScope {
+				t.Fatalf("quoteScopesToAdapters() = %v, want %v", cfg.quoteScopesToAdapters(), tc.want.quoteScope)
+			}
+			if cfg.restrictsToAdapters() != tc.want.execRestrict {
+				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.want.execRestrict)
+			}
+			// Quote scoping must always be a superset of execution scoping (filling never scopes when
+			// quoting doesn't).
+			if tc.want.execRestrict && !tc.want.quoteScope {
+				t.Fatal("invariant broken: execution restricted but quote not scoped")
+			}
+		})
+	}
+}
+
 func TestParseConfig_UnknownKeyRejected(t *testing.T) {
 	if _, err := parse(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
 		t.Fatal("expected a typo'd key to be rejected")
