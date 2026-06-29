@@ -161,7 +161,7 @@ func (s *Solver) searchBundle(scored []scoredLeg, gasState *gasPredictorState, g
 func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 	usable := usableBundleGasLimit(gasLimit)
 	fixed := saturatingAddUint64(fixedGasUnits(feedCount), gasFirstAcquireLeg)
-	if usable <= fixed {
+	if usable < fixed {
 		return 0
 	}
 	return 1 + int((usable-fixed)/gasAdditionalAcquireLeg)
