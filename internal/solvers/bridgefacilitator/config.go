@@ -1,6 +1,7 @@
 package bridgefacilitator
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -11,13 +12,11 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
-// rawConfig mirrors the YAML shape; strings are parsed into typed values in parse(). 3F registers
-// exactly one offer-address per facilitator, so the bot serves a single vault+adapter pair.
+// rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
 	APIBaseURL      string       `yaml:"apiBaseUrl"`
-	APIKeyEnv       string       `yaml:"apiKeyEnv"`
 	RedeemBatchSize int          `yaml:"redeemBatchSize"`
-	Adapter         string       `yaml:"adapter"`
+	Adapters        []string     `yaml:"adapters"`
 	HTTPTimeout     string       `yaml:"httpTimeout"`
 	Intervals       rawIntervals `yaml:"intervals"`
 }
@@ -31,22 +30,19 @@ type rawIntervals struct {
 // Config is the validated, typed solver configuration.
 type Config struct {
 	APIBaseURL string
-	// APIKeyEnv is the env var holding a pre-generated 3F API key (sent as the x-api-key header).
-	APIKeyEnv string
 	// RedeemBatchSize caps how many Requests are redeemed in a single redeem() call (gas bound).
 	RedeemBatchSize int
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
 	// (including redemption scans). Applied as the 3F http.Client timeout.
 	HTTPTimeout time.Duration
-	// Target is the single vault+adapter pair this facilitator serves. 3F allows exactly one
-	// offer-address per facilitator, so this solver is single-pair by construction.
-	Target    Target
+	// Targets is the list of vault+adapter pairs this facilitator serves.
+	Targets   []Target
 	Intervals Intervals
 }
 
-// Target is the adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
-// Collateral (vault.asset()) are resolved on-chain at startup (see Solver.resolveTarget) and fixed for
-// the adapter's lifetime. Exposure/return caps also live on-chain (setExposureLimits), read each poll.
+// Target is one adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
+// Collateral (vault.asset()) are resolved on-chain at startup (resolveTargets); exposure/return caps
+// also live on-chain (setExposureLimits), read each poll.
 type Target struct {
 	Adapter common.Address
 	// Auctions are matched to this target by their deposit asset equalling Collateral.
@@ -89,7 +85,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		redeemBatch = defaultRedeemBatchSize
 	}
 
-	target, err := parseTarget(raw)
+	targets, err := parseTargets(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -114,22 +110,26 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
-		APIKeyEnv:       raw.APIKeyEnv,
 		RedeemBatchSize: redeemBatch,
 		HTTPTimeout:     httpTimeout,
-		Target:          target,
+		Targets:         targets,
 		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 	}, nil
 }
 
-func parseTarget(raw rawConfig) (Target, error) {
-	// The zero address is rejected so an unreplaced placeholder fails at startup rather than being
-	// registered as the 3F offer-address.
-	adapter, err := parseNonZeroAddress(raw.Adapter, "adapter")
-	if err != nil {
-		return Target{}, err
+func parseTargets(raw rawConfig) ([]Target, error) {
+	if len(raw.Adapters) == 0 {
+		return nil, errors.New("at least one adapters entry is required")
 	}
-	return Target{Adapter: adapter}, nil
+	targets := make([]Target, 0, len(raw.Adapters))
+	for i, a := range raw.Adapters {
+		adapter, err := parseNonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, Target{Adapter: adapter})
+	}
+	return targets, nil
 }
 
 func parseAddress(s, field string) (common.Address, error) {

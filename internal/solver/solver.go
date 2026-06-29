@@ -110,7 +110,10 @@ func Run(ctx context.Context, s Solver, log logr.Logger) error {
 	log.Info("solver running")
 	err := s.Run(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		return errors.Errorf("solver %q: %w", s.Name(), err)
+		wrapped := errors.Errorf("solver %q: %w", s.Name(), err)
+		// Attribute the failure to this solver in the structured logs; the returned error still drives exit.
+		log.Error(wrapped, "solver stopped with error")
+		return wrapped
 	}
 	log.Info("solver stopped")
 	return nil

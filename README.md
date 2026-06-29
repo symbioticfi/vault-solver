@@ -45,25 +45,30 @@ running them together is safe. Each entry's `config` block is typed and validate
 
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
-Acts as a Bridge Facilitator in 3F's bridge-loan auctions, on top of a Symbiotic
-`BridgeFacilitatorAdapter`:
+Acts as a Bridge Facilitator in 3F's bridge-loan auctions, on top of one or more Symbiotic
+`BridgeFacilitatorAdapter`s:
 
-- **Discover** open auctions via the 3F API (matched to a target vault by deposit asset == collateral).
-- **Price & size** an offer at the auction's `maxRate`, capped by fundable vault liquidity and curator
-  exposure (per-request / total-sleeve / max-concurrent).
-- **Sign & submit** the offer (EIP-712), with the adapter as the on-chain maker (verified via EIP-1271
-  against an owner-set offer-signer key).
-- **Fund** a won loan just-in-time inside the adapter's consume callback (self-allocation from vault
-  liquidity), then **redeem** repaid loans permissionlessly — realizing principal + yield back to the
-  vault.
+- **Discover** open auctions via the 3F API.
+- **Per-auction coverage** — among the configured adapters whose collateral matches the auction, size
+  each against its on-chain liquidity + exposure caps (per-request / total-sleeve / max-concurrent) and,
+  in a single pass, offer through as many (most-fundable first) as needed to cover the auction's full
+  requested amount. One adapter per offer, no aggregation within an offer; coverage already held counts,
+  so a fully-covered auction is never re-offered and any uncovered remainder is retried next pass.
+- **Sign & submit** the offer (EIP-712) as a **signed payload** — no API key. The adapter is the on-chain
+  `maker`, and 3F authorizes offer create + list via the adapter's **EIP-1271 `isValidSignature`** (which
+  trusts this solver's signer); listing sends a signed `Authorization` header.
+- **Fund** a won loan just-in-time inside the adapter's consume callback, then **redeem** repaid loans
+  permissionlessly — realizing principal + yield back to the vault. Redeem + reconcile run for every
+  matched adapter.
 
-Onboarding generates a 3F facilitator API key (EIP-712) and registers the adapter as the facilitator
-offer-address. Because 3F allows exactly **one offer-address per facilitator**, this solver serves a
-**single `vault` + `adapter` pair**. The on-chain `BridgeFacilitatorAdapter` lives in the sibling
-`rfq` repo, consumed via `api/bindings/3f/`. Config block: `apiBaseUrl`, `apiKeyEnv`, `minReturnBps`,
-`vault`, `adapter`, `exposure`, `intervals` — see
-[`config/config.example.yaml`](config/config.example.yaml). Design, decisions, and the live TODO
-list: [`docs/3F-PLAN.md`](docs/3F-PLAN.md).
+This solver holds **no API key and registers no offer-address**: each adapter is deployed and registered
+with 3F **as a facilitator by its vault creator**, who sets this solver's signer as the adapter's EIP-1271
+signer. At startup the solver resolves each adapter's vault/collateral and verifies on-chain that it is the
+adapter's signer — dropping any it isn't, and shutting down if none match. The on-chain
+`BridgeFacilitatorAdapter` lives in the sibling `rfq` repo, consumed via `api/bindings/3f/`. Config block:
+`apiBaseUrl`, `adapters` (a whitelist; a dynamic "list public adapters" API replaces it later),
+`intervals` — see [`config/3f.sepolia.example.yaml`](config/3f.sepolia.example.yaml). Design, decisions,
+and the live TODO list: [`docs/3F-PLAN.md`](docs/3F-PLAN.md).
 
 ### RFQ Filler — `rfq-filler`
 

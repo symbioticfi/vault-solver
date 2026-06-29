@@ -52,14 +52,15 @@ func (a auctionView) requestAddr() common.Address {
 	return common.HexToAddress(a.dto.RequestId)
 }
 
-// maxRate returns the auction's current max rate (basis points) as a float64, or 0 if the API
-// didn't resolve it (for logging only).
-func (a auctionView) maxRate() float64 {
+// maxRateBps returns the auction's current max rate (basis points) and whether the API resolved it.
+// It prices every offer and gates the per-adapter return floor, so an unresolved rate means we can't
+// bid on the auction at all.
+func (a auctionView) maxRateBps() (float64, bool) {
 	r, ok := a.dto.GetMaxRateOk()
 	if !ok || r == nil {
-		return 0
+		return 0, false
 	}
-	return float64(*r)
+	return float64(*r), true
 }
 
 // amountRequested returns the requested principal, or nil if the API didn't resolve it.
