@@ -512,7 +512,7 @@ func TestBuildBidReservesInFlightFunding(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), nil, "", gasPrediction{})
+	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), nil, "", common.Hash{}, gasPrediction{})
 
 	if d2 := s.buildBid(a, auctionClock()); d2.skip != skipCallbackBalance {
 		t.Fatalf("second in-flight bid should skip callback_balance (native already committed), got %q", d2.skip)
@@ -561,7 +561,7 @@ func TestBuildBidReservesInFlightGasFunding(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should fit exactly one gas reservation, got skip %q", d1.skip)
 	}
-	s.reserve(d1.bidNative, d1.gasNative, d1.nonce, time.Unix(1781243340, 0), nil, "", d1.gas)
+	s.reserve(d1.bidNative, d1.gasNative, d1.nonce, time.Unix(1781243340, 0), nil, "", common.Hash{}, d1.gas)
 
 	if d2 := s.buildBid(a, auctionClock()); d2.skip != skipDepositLow {
 		t.Fatalf("second bid should skip deposit_low because gas is already reserved, got %q", d2.skip)
@@ -594,7 +594,7 @@ func TestBuildBidSkipsInFlightPosition(t *testing.T) {
 	if d1.skip != "" || len(d1.positions) == 0 {
 		t.Fatalf("first bid should succeed with reserved positions, got skip %q positions %d", d1.skip, len(d1.positions))
 	}
-	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), d1.positions, "", gasPrediction{})
+	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), d1.positions, "", common.Hash{}, gasPrediction{})
 
 	if d2 := s.buildBid(a, auctionClock()); d2.skip != "in_flight" {
 		t.Fatalf("a second auction for the same in-flight position(s) must skip in_flight, got %q", d2.skip)
@@ -614,9 +614,9 @@ func TestBuildBidSkipsInFlightPosition(t *testing.T) {
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, nil, "", gasPrediction{})
-	s.reserve(big.NewInt(200), big.NewInt(20), 10, now, nil, "", gasPrediction{})
-	s.reserve(big.NewInt(300), big.NewInt(30), 12, now.Add(-time.Hour), nil, "", gasPrediction{})
+	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, nil, "", common.Hash{}, gasPrediction{})
+	s.reserve(big.NewInt(200), big.NewInt(20), 10, now, nil, "", common.Hash{}, gasPrediction{})
+	s.reserve(big.NewInt(300), big.NewInt(30), 12, now.Add(-time.Hour), nil, "", common.Hash{}, gasPrediction{})
 
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
@@ -625,7 +625,7 @@ func TestPruneReservations(t *testing.T) {
 		t.Fatalf("all reservations should be freed, got bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
 	}
 
-	s.reserve(big.NewInt(500), big.NewInt(50), 11, now, nil, "", gasPrediction{})
+	s.reserve(big.NewInt(500), big.NewInt(50), 11, now, nil, "", common.Hash{}, gasPrediction{})
 	s.pruneReservations(10, now)
 	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "500" || inFlight.gasNative.String() != "50" {
 		t.Fatalf("a recent pending bid should be kept, got bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
@@ -642,7 +642,7 @@ func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-won", gasPrediction{})
+	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-won", common.Hash{}, gasPrediction{})
 
 	s.pruneReservations(7, now.Add(2*time.Minute))
 	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "100" || len(inFlight.positions) != 1 {
@@ -653,7 +653,8 @@ func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 func TestReservationByAuctionCarriesGasPrediction(t *testing.T) {
 	s, _ := seededSolver(t)
 	pred := gasPrediction{Units: 350_000, Routes: []gasRoute{gasRouteAcquire}}
-	s.reserve(big.NewInt(100), big.NewInt(50), 8, time.Unix(1781243340, 0), nil, "auction-1", pred)
+	auctionKey := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	s.reserve(big.NewInt(100), big.NewInt(50), 8, time.Unix(1781243340, 0), nil, "auction-1", auctionKey, pred)
 
 	got, ok := s.reservationByAuction("auction-1")
 	if !ok {
@@ -662,13 +663,16 @@ func TestReservationByAuctionCarriesGasPrediction(t *testing.T) {
 	if got.gasUnits != pred.Units || got.gasRoutes != "acquire" {
 		t.Fatalf("attribution = gas %d routes %q", got.gasUnits, got.gasRoutes)
 	}
+	if got.auctionKey != auctionKey {
+		t.Fatalf("auctionKey = %s, want %s", got.auctionKey, auctionKey)
+	}
 }
 
 func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-lost", gasPrediction{})
+	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-lost", common.Hash{}, gasPrediction{})
 
 	s.handleMessage(context.Background(), []byte(`{
 		"op":"auction-result",
@@ -679,7 +683,7 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 		t.Fatalf("lost auction must release reservation, bid=%s gas=%s inflight=%v", inFlight.bidNative, inFlight.gasNative, inFlight.positions)
 	}
 
-	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-won", gasPrediction{})
+	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-won", common.Hash{}, gasPrediction{})
 	s.handleMessage(context.Background(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-won",
@@ -694,7 +698,7 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-ours", gasPrediction{})
+	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-ours", common.Hash{}, gasPrediction{})
 
 	s.handleMessage(context.Background(), []byte(`{
 		"op":"liquidation-result",
@@ -705,7 +709,7 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 		t.Fatalf("our liquidation result must release reservation, bid=%s gas=%s inflight=%v", inFlight.bidNative, inFlight.gasNative, inFlight.positions)
 	}
 
-	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-other", gasPrediction{})
+	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-other", common.Hash{}, gasPrediction{})
 	s.handleMessage(context.Background(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-other",
@@ -723,7 +727,7 @@ func TestApplyExecutorStateRunsWithoutBalance(t *testing.T) {
 	now := time.Unix(1781243340, 0)
 
 	// A sent bid (nonce 8) pinning headroom, plus a stale local nonce high-water mark (5).
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}, "", gasPrediction{})
+	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}, "", common.Hash{}, gasPrediction{})
 	s.nonces.reconcile(5)
 	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() == 0 || inFlight.gasNative.Sign() == 0 {
 		t.Fatal("precondition: the reservation should be present")

@@ -9,15 +9,19 @@ import (
 	"github.com/go-logr/logr"
 )
 
-func logCallbackEvents(log logr.Logger, callback common.Address, receipt *types.Receipt) {
+func logCallbackEvents(log logr.Logger, callback common.Address, expectedAuctionKey common.Hash, receipt *types.Receipt) {
 	for _, lg := range receipt.Logs {
 		if lg.Address != callback || len(lg.Topics) == 0 {
 			continue
 		}
 		if ev, err := callbackB.UnpackLegResultEvent(lg); err == nil {
+			auctionKey := common.BytesToHash(ev.AuctionKey[:])
+			if !callbackEventMatchesAuction(log, expectedAuctionKey, auctionKey, "LegResult") {
+				continue
+			}
 			fields := legResultCode(ev.Code)
 			log.Info("callback leg result",
-				"auctionKey", common.BytesToHash(ev.AuctionKey[:]).Hex(),
+				"auctionKey", auctionKey.Hex(),
 				"market", common.BytesToHash(ev.MarketId[:]).Hex(),
 				"borrower", ev.Borrower.Hex(),
 				"index", fields.index, "status", legStatusLabel(fields.status), "reason", legReasonLabel(fields.reason),
@@ -26,18 +30,34 @@ func logCallbackEvents(log logr.Logger, callback common.Address, receipt *types.
 			continue
 		}
 		if ev, err := callbackB.UnpackBundleResultEvent(lg); err == nil {
+			auctionKey := common.BytesToHash(ev.AuctionKey[:])
+			if !callbackEventMatchesAuction(log, expectedAuctionKey, auctionKey, "BundleResult") {
+				continue
+			}
 			log.Info("callback bundle result",
-				"auctionKey", common.BytesToHash(ev.AuctionKey[:]).Hex(),
+				"auctionKey", auctionKey.Hex(),
 				"totalProfitLoan", ev.TotalProfitLoan, "minProfitLoan", ev.MinProfitLoan,
 				"gasUsed", ev.GasUsed, "bidAuthorized", ev.BidAuthorized)
 			continue
 		}
 		if ev, err := callbackB.UnpackPayBidResultEvent(lg); err == nil {
+			auctionKey := common.BytesToHash(ev.AuctionKey[:])
+			if !callbackEventMatchesAuction(log, expectedAuctionKey, auctionKey, "PayBidResult") {
+				continue
+			}
 			log.Info("callback paybid result",
-				"auctionKey", common.BytesToHash(ev.AuctionKey[:]).Hex(),
+				"auctionKey", auctionKey.Hex(),
 				"bidAmount", ev.BidAmount, "paid", ev.Paid)
 		}
 	}
+}
+
+func callbackEventMatchesAuction(log logr.Logger, expected, got common.Hash, event string) bool {
+	if expected == (common.Hash{}) || got == expected {
+		return true
+	}
+	log.Info("callback event auction key mismatch", "event", event, "expectedAuctionKey", expected.Hex(), "gotAuctionKey", got.Hex())
+	return false
 }
 
 type legResultFields struct {

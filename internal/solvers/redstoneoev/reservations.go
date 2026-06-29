@@ -19,14 +19,15 @@ type positionKey struct {
 // reservedBid is one sent-but-not-yet-resolved bid's commitment against cached headroom: payBid native,
 // predicted Executor-deposit gas debit, signed nonce, send time, and the positions it liquidates.
 type reservedBid struct {
-	bidNative *big.Int
-	gasNative *big.Int
-	nonce     uint64
-	at        time.Time
-	positions []positionKey
-	auctionID string
-	gasUnits  uint64
-	gasRoutes string
+	bidNative  *big.Int
+	gasNative  *big.Int
+	nonce      uint64
+	at         time.Time
+	positions  []positionKey
+	auctionID  string
+	auctionKey common.Hash
+	gasUnits   uint64
+	gasRoutes  string
 }
 
 // reservationTTL is only a fallback for missed auction/liquidation result frames. Normal release is
@@ -62,18 +63,19 @@ func (s *Solver) inFlightSnapshot() inFlightState {
 
 // reserve records the headroom a just-sent bid commits: bid native, predicted gas debit from
 // the Executor deposit, and the positions it liquidates.
-func (s *Solver) reserve(bidNative, gasNative *big.Int, nonce uint64, now time.Time, positions []positionKey, auctionID string, gas gasPrediction) {
+func (s *Solver) reserve(bidNative, gasNative *big.Int, nonce uint64, now time.Time, positions []positionKey, auctionID string, auctionKey common.Hash, gas gasPrediction) {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = append(s.res, reservedBid{
-		bidNative: orZero(bidNative),
-		gasNative: orZero(gasNative),
-		nonce:     nonce,
-		at:        now,
-		positions: positions,
-		auctionID: auctionID,
-		gasUnits:  gas.Units,
-		gasRoutes: gasRoutesString(gas.Routes),
+		bidNative:  orZero(bidNative),
+		gasNative:  orZero(gasNative),
+		nonce:      nonce,
+		at:         now,
+		positions:  positions,
+		auctionID:  auctionID,
+		auctionKey: auctionKey,
+		gasUnits:   gas.Units,
+		gasRoutes:  gasRoutesString(gas.Routes),
 	})
 }
 

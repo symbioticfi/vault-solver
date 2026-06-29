@@ -432,7 +432,7 @@ func (s *Solver) handleAuction(raw []byte) {
 		s.log.Info("bid NOT sent (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
 		return
 	}
-	s.reserve(d.bidNative, d.gasNative, d.nonce, time.Now(), d.positions, a.ID, d.gas)
+	s.reserve(d.bidNative, d.gasNative, d.nonce, time.Now(), d.positions, a.ID, auctionKeyHash(a), d.gas)
 	s.metrics.bid()
 	s.log.Info("bid sent", "auction", a.ID, "legs", d.legs, "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid, "grossProfit", d.gross, "predictedGas", d.gas.Units,
@@ -454,7 +454,7 @@ func (s *Solver) attributeSettlementGas(ctx context.Context, txHash string, pred
 	s.metrics.settlementGas(pred.gasUnits, receipt.GasUsed)
 	s.log.Info("settlement gas", "auction", pred.auctionID, "txHash", txHash,
 		"predictedGas", pred.gasUnits, "actualGas", receipt.GasUsed, "predictedRoute", pred.gasRoutes)
-	logCallbackEvents(s.log, s.cfg.Callback, receipt)
+	logCallbackEvents(s.log, s.cfg.Callback, pred.auctionKey, receipt)
 }
 
 // buildBid evaluates an auction end-to-end: pick candidates from the configured source, size
