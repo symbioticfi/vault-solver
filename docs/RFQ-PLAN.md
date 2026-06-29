@@ -109,20 +109,44 @@ solver:
     reactor:              "0x…"
     pollIntervalMs: 3000
     orderLimit: 20
-    # adapterWhitelistEnabled: true                     # default false (accept every adapter)
+    solverMode: external                                # "external" (default) | "internal" — see below
     adapters:                                           # LiquidLane adapter addresses (whitelist + recovery)
       - "0x…liquidLaneAdapter"                          # vault + collateral resolved on-chain at startup
 ```
+
+**`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
+available only to **internal Symbiotic** solvers, so one mode flag drives both the discount-API gate and the
+adapter whitelist (it replaces the earlier separate `adapterWhitelistEnabled` / `discountsEnabled` flags — a
+config still carrying either is rejected at startup so operators migrate):
+
+- **`external`** (default — the open-source filler external parties run): **never touches the discounts
+  API** — skips `GET /discounts` in recovery, never calls `POST /discounts` at fill (a surfacing discount
+  leg is failed closed). It uses **only its own adapters**, which scope quoting/filling and are
+  **required** (no discounts fallback → an empty list is rejected at startup). The quote path is not
+  discount-filtered — the backend is trusted to send each solver the right adapters.
+- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`) and accepts **every adapter the backend
+  advertises** (no quote-time scoping). Its `adapters` are **optional extra permissioned inventory** used in
+  recovery alongside the discounts — **deduped** (`discountInventories` drops a discount whose adapter is
+  already in the configured/permissioned set).
+
+Both behaviours are **derived from `solverMode` on demand** — no redundant config fields. `Config` exposes
+`usesDiscounts()` (`mode == internal`) and `restrictsToAdapters()` (`mode == external && len(adapters) > 0`),
+which `buildServices` uses to wire the discount gate (into the execution service: recovery + fill) and the
+adapter scoping (into both services). Covered by `discounts_disabled_test.go`, `config_test.go`
+(`TestParseConfig_SolverMode`), and `solver_test.go` (`TestBuildServices_WhitelistWiring`).
 
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
 The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `adapters`
 list serves two purposes:
 
-- **Adapter whitelist** (`adapterWhitelistEnabled`, off by default — every adapter the backend
-  advertises is accepted): when enabled, only the configured `adapters` addresses are quoted and filled
-  through. Non-whitelisted adapters in a `/quote` request are dropped (none left ⇒ 204), and backend
-  discounts with a non-whitelisted adapter are ignored during recovery. Enabling it with an empty
-  `adapters` list is a misconfiguration and is rejected at startup.
+- **Adapter whitelist** — scoping is per-path. The **quote** path scopes to the configured `adapters`
+  whenever `adapters` is non-empty, in **both** `external` and `internal` mode (`quoteScopesToAdapters`):
+  non-configured adapters in a `/quote` request are dropped (none left ⇒ 204), so an `internal`-mode
+  filler advertises quotes only for its own adapter universe (e.g. a per-solver adapter). The **execution**
+  path scopes to the configured `adapters` only in `external` mode (`restrictsToAdapters`): there backend
+  discounts with a non-configured adapter are ignored during recovery. `internal` mode never restricts
+  filling — discount-driven recovery may legitimately route through any advertised adapter — so with no
+  `adapters` configured an `internal` filler quotes and fills through every advertised adapter.
 - **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
   multicall scans (recovery's direct inventories are whitelisted by construction).
 
@@ -152,7 +176,8 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    discount inventories in recovery. Direct + discount fills now match the TS filler. Unit-tested
    (discount-leg selection, discount fill resolves + encodes).
 4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
-   configured `vaults[].adapter` set (`adapterWhitelistEnabled`, off by default — see §3),
+   configured `vaults[].adapter` set (originally `adapterWhitelistEnabled`; now auto-enabled by
+   `solverMode: external` when `adapters` is non-empty — see §3),
    recovery discounts filtered by the same set, and a fill-time guard that fails the order when a
    backend-resolved discount's adapter differs from the quoted strategy leg's adapter (no tx is
    sent; a still-open order is re-armed and re-evaluated next poll, matching the TS lifecycle).
@@ -208,6 +233,11 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
 - **Backend base-URL prefix** — the generated client embeds the spec's `/api/v1` prefix, so the Go
   `backendUrl` is the backend **host root**; the TS filler's base URL already includes the path. Set
   each deployment's `backendUrl` accordingly (mismatch ⇒ 404 on every backend call).
+- **Internal discounts path** — the discounts API is internal-only and served under `/api-internal/v1`
+  (orders stay on `/api/v1`). Rather than regenerate the client for a routing detail,
+  `internalDiscountTransport` (`backend.go`) rewrites the generated `/api/v1/discount(s)` requests to
+  `/api-internal/v1/...` at the transport layer; orders pass through unchanged. Covered by the
+  `backend_test.go` httptest assertions.
 - The `{adapter, tokenToRedeem}` discount-resolve selector exists in TS types but is unused by
   execution (both sides resolve by `discountId`); Go omits it. Cosmetic.
 
@@ -222,16 +252,19 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
   `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
 - **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
-  (the Go config analogue of the TS deployment manifest's `vaults`), gated by
-  `adapterWhitelistEnabled` (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env). Same three
-  enforcement points: `/quote` adapter filtering (none left ⇒ 204), recovery discount filtering, and
-  the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
+  (the Go config analogue of the TS deployment manifest's `vaults`). It was originally gated by an
+  explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag
+  has since been folded into **`solverMode`** (§3), and scoping is now per-path. The **quote** whitelist
+  is enabled whenever `adapters` is non-empty in either mode (`quoteScopesToAdapters`); the **execution**
+  whitelist (recovery discount filtering) is `external`-only (`restrictsToAdapters`). Enforcement points:
+  `/quote` adapter filtering (none left ⇒ 204) — quote-scoped; recovery discount filtering — execution-scoped;
+  and the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
   order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
   and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).
-  Deliberate divergences: the Go default is **off** (the TS default is on — enable it explicitly to
-  enforce the whitelist); an enabled whitelist with an empty `vaults` list is rejected at startup
-  (TS runs and quotes nothing); and Go rejects zero-address `vaults` entries at startup (the TS
-  manifest schema does not), so a placeholder config cannot put `address(0)` on the whitelist.
+  Deliberate divergences: the Go default profile is **`external`**, which **requires `adapters`** (an empty
+  list is rejected at startup — no discounts fallback) and scopes quoting/filling to them; and Go rejects
+  zero-address `adapters` entries at startup (the TS manifest schema does not), so a placeholder config
+  cannot put `address(0)` on the whitelist.
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.

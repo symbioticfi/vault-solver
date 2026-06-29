@@ -74,34 +74,39 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
 ) (*quoteService, *executionService) {
-	// The whitelist is shared by quoting (drop non-whitelisted request adapters) and execution
-	// (drop non-whitelisted recovery discounts); recovery's direct inventories come from cfg.Adapters
-	// and are therefore whitelisted by construction. parseConfig rejects an enabled whitelist with no
-	// adapters, so an enabled whitelist is never empty here.
-	whitelist := buildAdapterWhitelist(cfg.AdapterWhitelistEnabled, cfg.Adapters)
+	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
+	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
+	// universe; execution uses restrictsToAdapters() (external-only) so internal-mode discount recovery can
+	// still fill through any advertised adapter. Both predicates imply non-empty Adapters when true, so a
+	// wired whitelist is never empty.
+	quoteWhitelist := buildAdapterWhitelist(cfg.quoteScopesToAdapters(), cfg.Adapters)
+	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:   chainID,
-		executor:  cfg.Executor,
-		whitelist: whitelist,
-		reader:    rdr,
-		store:     st,
-		log:       log,
-		now:       time.Now,
+		chainID:            chainID,
+		executor:           cfg.Executor,
+		whitelist:          quoteWhitelist,
+		tokensToQuote:      cfg.TokensToQuote,
+		permissionedTokens: cfg.PermissionedTokens,
+		reader:             rdr,
+		store:              st,
+		log:                log,
+		now:                time.Now,
 	}
 	exec := &executionService{
-		chainID:    chainID,
-		executor:   cfg.Executor,
-		orderLimit: cfg.OrderLimit,
-		vaults:     cfg.Adapters,
-		whitelist:  whitelist,
-		backend:    newBackendClient(cfg.BackendURL),
-		store:      st,
-		reader:     rdr,
-		txm:        txm,
-		log:        log,
-		now:        time.Now,
-		inflight:   make(map[string]bool),
+		chainID:          chainID,
+		executor:         cfg.Executor,
+		orderLimit:       cfg.OrderLimit,
+		vaults:           cfg.Adapters,
+		whitelist:        execWhitelist,
+		discountsEnabled: cfg.usesDiscounts(),
+		backend:          newBackendClient(cfg.BackendURL),
+		store:            st,
+		reader:           rdr,
+		txm:              txm,
+		log:              log,
+		now:              time.Now,
+		inflight:         make(map[string]bool),
 	}
 	return quotes, exec
 }
@@ -115,8 +120,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
+		"solverMode", s.cfg.SolverMode,
 		"adapters", len(s.cfg.Adapters),
-		"adapterWhitelistEnabled", s.cfg.AdapterWhitelistEnabled,
 		"backendUrl", s.cfg.BackendURL,
 	)
 

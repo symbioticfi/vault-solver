@@ -74,9 +74,10 @@ both a request/response **quote server** and an order-filling **poller**:
   it prices the requested swap directly off the adapter's on-chain `getAmountOut` (the oracle rate,
   quoted as-is), selects the best adapter legs across the inventory in the request,
   persists the chosen strategy by `quoteId`, and returns an `amountOut` (or `204` when it cannot
-  quote — wrong chain, no whitelisted adapter, no matching asset, or no viable strategy). With
-  `adapterWhitelistEnabled` (off by default), quoting and filling are restricted to the adapters of
-  the configured `vaults` (enabling it without `vaults` entries fails at startup). The
+  quote — wrong chain, no in-scope adapter, no matching asset, or no viable strategy). In the default
+  `external` `solverMode`, quoting and filling are scoped to the configured `adapters` — **at least one
+  is required** (an external solver has no discounts fallback). `internal` mode accepts every advertised
+  adapter and uses public discounts; its `adapters` are optional extra inventory. The
   HTTP surface is **code-first OpenAPI 3.1**: request validation and the spec served at
   `/openapi.json` + `/docs` are generated from the same typed structs; `/health` is public.
 - **Fill** — polls `GET /orders?filler=<executor>&orderStatus=open` every `pollIntervalMs`, then
@@ -87,7 +88,7 @@ both a request/response **quote server** and an order-filling **poller**:
 - **Strategy recovery** — when the quote-time strategy isn't cached (e.g. after a restart), it rebuilds
   one from current on-chain state across the configured `vaults`, restricted to those the executor is
   authorized to fill through (adapter `marketMaker`, adapter `owner`, or delegated `isFiller`),
-  plus any currently-offered discounts through whitelisted adapters.
+  plus — in `internal` mode only — any currently-offered backend discounts.
 - **Leg types** — **direct** legs (the public adapter rate) and **discount** legs (a signature-gated
   private rate resolved fresh from the backend's `/discounts` flow at fill time).
 
@@ -98,7 +99,7 @@ bounded over long runs. The caller EOA must hold `CALLER_ROLE` on the `Executor`
 `core-mirror` submodule, all consumed via `api/bindings/rfq/`; the backend contract is pinned by a
 vendored OpenAPI spec (`openapi/rfq-backend.openapi.json`). Config block: `backendUrl`,
 `backendSharedSecretEnv`, `listenAddr`, `executor`, `reactor`, `pollIntervalMs`, `orderLimit`,
-`adapterWhitelistEnabled`, `vaults` — see
+`solverMode`, `adapters` — see
 [`config/rfq.hoodi.example.yaml`](config/rfq.hoodi.example.yaml).
 Design, decisions, and the live TODO list: [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md).
 

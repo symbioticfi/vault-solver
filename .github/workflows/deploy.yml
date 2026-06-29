@@ -28,6 +28,9 @@ jobs:
           -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
+          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissionless
+          --set deployment.containers.vault-solver.env.RFQ_ADAPTER.value='${{ inputs.network == 'hoodi' && '"0x788Ab0D58bC7E5537109064F95875013c886ACC8"\, "0x9292Ad3e9C3747cFA31885657B5A458002205281"' || '"0x8F38656B85fb440018c109A5118aFfDfD923721c"\, "0xe4eb1E756F2d78F77B9ebE304515fA61B2451A33"' }}'
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"
 
@@ -38,10 +41,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name:
-          - vault-solver-first
-          - vault-solver-second
-          - vault-solver-third
+        include:
+          - name: vault-solver-first
+            executorHoodi: "0x910af97D2402681a6B57D0794B9246Eae17c0B24"
+            executorSepolia: "0xc2251516e23A2b8E01249f8e9084297EDd8559b7"
+            rfqAdapterHoodi: "0xFAb7c0202e99E98b9D9a9124FCad458413a7657C"   # dedicated mGLOBAL LiquidLane vault 1
+            rfqAdapterSepolia: "0x5eaA348ecBe55113Eee161ae289960aFCDd3E52D" # dedicated mGLOBAL LiquidLane vault 1
+          - name: vault-solver-second
+            executorHoodi: "0x37bF9f850b7C3334D3Fc252D79215C088D8be30d"
+            executorSepolia: "0xC879456C5Ce99d3a6B81797f40b0BF28143E1640"
+            rfqAdapterHoodi: "0x055D6B6f3454d733B99d5D71841bd6493E5ca664"   # dedicated mGLOBAL LiquidLane vault 2
+            rfqAdapterSepolia: "0x7fCE4C36D52f8d7A67B00e86EbF69808203eEBB7" # dedicated mGLOBAL LiquidLane vault 2
+          - name: vault-solver-third
+            executorHoodi: "0x1B321F3B62AF7B3dF25E01800094802e3621C9dc"
+            executorSepolia: "0x92E04ea2a18c8E87EAf6803691772b15eBb939ED"
+            rfqAdapterHoodi: "0x9B745481799355c33F8196d857420BEe7E222e0f"   # dedicated mGLOBAL LiquidLane vault 3
+            rfqAdapterSepolia: "0x3f7ee97C17D69477F822980E6f4DA5bbB0323043" # dedicated mGLOBAL LiquidLane vault 3
     with:
       NAME: ${{ matrix.name }}
       NAMESPACE: '${{ inputs.namespace }}'
@@ -50,5 +65,8 @@ jobs:
           -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
+          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && matrix.executorHoodi || matrix.executorSepolia }}
+          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissioned
+          --set deployment.containers.vault-solver.env.RFQ_ADAPTER.value='"${{ inputs.network == 'hoodi' && matrix.rfqAdapterHoodi || matrix.rfqAdapterSepolia }}"'
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-${{ matrix.name }}"
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}\,secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}-keys"

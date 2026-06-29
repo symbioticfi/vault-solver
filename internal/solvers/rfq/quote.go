@@ -25,10 +25,14 @@ type quoteService struct {
 	chainID   int64
 	executor  common.Address
 	whitelist adapterWhitelist // nil disables adapter filtering
-	reader    priceReader
-	store     *store
-	log       logr.Logger
-	now       func() time.Time
+	// tokensToQuote scopes which input tokens are quotable: "all" (default), "permissioned", or
+	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
+	tokensToQuote      string
+	permissionedTokens map[common.Address]bool
+	reader             priceReader
+	store              *store
+	log                logr.Logger
+	now                func() time.Time
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
@@ -41,6 +45,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}
 	if parsed == nil {
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
+		return nil, nil
+	}
+	if !qs.quotesTokenIn(parsed.req.TokenIn) {
+		qs.log.V(1).Info("declining quote: input token out of scope",
+			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokensToQuote)
 		return nil, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
@@ -101,3 +110,17 @@ func matchingInventories(inv []solverInventory, tokenOut common.Address) []solve
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
 func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
+
+// quotesTokenIn reports whether this filler's TokensToQuote scope admits the request's input token:
+// "permissioned" admits only tokens in permissionedTokens, "permissionless" admits only those not in
+// it, and "all" (or any unset value, for hand-built services) admits every token.
+func (qs *quoteService) quotesTokenIn(tokenIn common.Address) bool {
+	switch qs.tokensToQuote {
+	case tokensToQuotePermissioned:
+		return qs.permissionedTokens[tokenIn]
+	case tokensToQuotePermissionless:
+		return !qs.permissionedTokens[tokenIn]
+	default:
+		return true
+	}
+}

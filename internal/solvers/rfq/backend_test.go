@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// The generated rfqbackend client carries the spec's `/api/v1` path prefix, so the backend client
-// rooted at the httptest server URL hits `/api/v1/orders` and `/api/v1/discounts`.
+// The generated rfqbackend client carries the spec's `/api/v1` prefix, so the backend client rooted at
+// the httptest server URL hits `/api/v1/orders`; the discount transport rewrite (internalDiscountTransport)
+// sends discount calls to `/api-internal/v1/discounts` instead (orders unchanged).
 
 func TestBackendClient_ListOpenOrders(t *testing.T) {
 	var gotPath, gotStatus, gotFiller, gotLimit string
@@ -84,7 +85,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveDiscount: %v", err)
 	}
-	if gotPath != "/api/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
+	if gotPath != "/api-internal/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
 	}
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" ||
@@ -157,7 +158,7 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listDiscounts: %v", err)
 	}
-	if gotPath != "/api/v1/discounts" {
+	if gotPath != "/api-internal/v1/discounts" {
 		t.Fatalf("path = %q", gotPath)
 	}
 	if len(resp.Discounts) != 1 || resp.Discounts[0].CollateralDecimals != 6 ||

@@ -147,6 +147,28 @@
             "name": "filler",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
           }
         ]
       },
@@ -361,6 +383,28 @@
             "name": "filler",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
           }
         ]
       },
@@ -494,6 +538,28 @@
             "name": "filler",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
           }
         ]
       },
@@ -671,6 +737,28 @@
             "name": "filler",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
           }
         ]
       }
