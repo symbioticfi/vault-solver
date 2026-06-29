@@ -8,12 +8,12 @@
         "internalType": "address"
       },
       {
-        "name": "vaultFactory",
+        "name": "adapterFactory",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "adapterFactory",
+        "name": "vaultFactory",
         "type": "address",
         "internalType": "address"
       }
@@ -42,6 +42,19 @@
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "activeLoans",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -148,6 +161,25 @@
   },
   {
     "type": "function",
+    "name": "isRequest",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "isValidSignature",
     "inputs": [
       {
@@ -203,7 +235,7 @@
   },
   {
     "type": "function",
-    "name": "minRequestYieldBps",
+    "name": "minRequestYield",
     "inputs": [],
     "outputs": [
       {
@@ -292,7 +324,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "yield",
+        "name": "yieldAmount",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -352,13 +384,13 @@
     "outputs": [
       {
         "name": "principal",
-        "type": "uint128",
-        "internalType": "uint128"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
         "name": "ytExpected",
-        "type": "uint128",
-        "internalType": "uint128"
+        "type": "uint256",
+        "internalType": "uint256"
       },
       {
         "name": "openedAt",
@@ -429,12 +461,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "totalMaxCollateral_",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "minRequestYieldBps_",
+        "name": "minRequestYield_",
         "type": "uint256",
         "internalType": "uint256"
       },
@@ -462,20 +489,25 @@
   },
   {
     "type": "function",
-    "name": "totalAssets",
-    "inputs": [],
-    "outputs": [
+    "name": "staticDelegateCall",
+    "inputs": [
       {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
       }
     ],
-    "stateMutability": "view"
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
-    "name": "totalMaxCollateral",
+    "name": "totalAssets",
     "inputs": [],
     "outputs": [
       {
@@ -599,7 +631,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "yield",
+        "name": "yieldAmount",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -618,13 +650,7 @@
         "internalType": "uint256"
       },
       {
-        "name": "totalMaxCollateral",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "minRequestYieldBps",
+        "name": "minRequestYield",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -701,11 +727,6 @@
   },
   {
     "type": "error",
-    "name": "NotInitialized",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NotInitializing",
     "inputs": []
   },
@@ -748,22 +769,6 @@
   },
   {
     "type": "error",
-    "name": "SafeCastOverflowedUintDowncast",
-    "inputs": [
-      {
-        "name": "bits",
-        "type": "uint8",
-        "internalType": "uint8"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "SafeERC20FailedOperation",
     "inputs": [
       {
@@ -775,12 +780,7 @@
   },
   {
     "type": "error",
-    "name": "SleeveCapExceeded",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "TooManyConcurrentLoans",
+    "name": "TooManyLoans",
     "inputs": []
   },
   {

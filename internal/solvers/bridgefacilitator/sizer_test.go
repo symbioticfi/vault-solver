@@ -12,8 +12,6 @@ func TestSizeOffer(t *testing.T) {
 		return sizeInputs{
 			perRequestMax: bi(250_000),
 			fundable:      bi(500_000),
-			sleeveMax:     bi(1_000_000),
-			outstanding:   bi(0),
 			openCount:     0,
 			maxConcurrent: 10,
 		}
@@ -38,19 +36,8 @@ func TestSizeOffer(t *testing.T) {
 			want:   bi(100_000),
 		},
 		{
-			name:   "sleeve headroom binds",
-			mutate: func(in *sizeInputs) { in.outstanding = bi(900_000) }, // 100k room
-			wantOK: true,
-			want:   bi(100_000),
-		},
-		{
 			name:   "concurrency cap reached",
 			mutate: func(in *sizeInputs) { in.openCount = 10 },
-			wantOK: false,
-		},
-		{
-			name:   "sleeve full",
-			mutate: func(in *sizeInputs) { in.outstanding = bi(1_000_000) },
 			wantOK: false,
 		},
 		{
@@ -58,12 +45,6 @@ func TestSizeOffer(t *testing.T) {
 			mutate: func(in *sizeInputs) { in.perRequestMax = bi(0) },
 			wantOK: true,
 			want:   bi(500_000),
-		},
-		{
-			name:   "sleeveMax disabled (0): sleeve ignored even when outstanding is high",
-			mutate: func(in *sizeInputs) { in.sleeveMax = bi(0); in.outstanding = bi(900_000) },
-			wantOK: true,
-			want:   bi(250_000), // perRequestMax binds; no sleeve cap
 		},
 		{
 			name:   "maxConcurrent disabled (0): no concurrency limit",

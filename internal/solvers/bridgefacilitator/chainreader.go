@@ -26,7 +26,7 @@ import (
 // UniversalDelegator(vault.delegator()).limitOf(adapter). vaultV2 is therefore only used for the
 // vault.delegator() and vault.withdrawable() lookups.
 var (
-	bfAdapter = adapter.NewBridgeFacilitatorAdapter()
+	bfAdapter = adapter.NewThreeFAdapter()
 	vaultV2   = vaultv2.NewIVaultV2()
 	vc        = vaultcontroller.NewIVaultController()
 	erc4626b  = erc4626.NewIERC4626()
@@ -160,15 +160,14 @@ func (r *reader) vaultDelegator(ctx context.Context, vault common.Address) (comm
 }
 
 // exposureState bundles the per-target liquidity and the adapter's exposure caps the offer sizer needs.
-// The four caps are the adapter's authoritative on-chain risk limits (setExposureLimits, each 0 =
-// disabled); the bot reads them to pre-screen offers before the contract enforces them at consume time.
+// Caps are the adapter's on-chain risk limits (setExposureLimits, each 0 = disabled); the bot pre-screens
+// offers before the contract enforces them at consume time.
 type exposureState struct {
-	fundable      *big.Int // max(min(limitOf - totalAssets, vault.withdrawable), 0)
-	outstanding   *big.Int // outstandingPrincipal (live sleeve exposure), clamped >= 0
+	fundable      *big.Int // max(min(limitOf - totalAssets, vault.withdrawable), 0); the sleeve ceiling
+	outstanding   *big.Int // outstandingPrincipal (live exposure, telemetry), clamped >= 0
 	openCount     int      // len(activeRequests)
 	perRequestMax *big.Int // perRequestMaxCollateral (0 = no limit)
-	totalMax      *big.Int // totalMaxCollateral (0 = no limit)
-	minYieldBps   *big.Int // minRequestYieldBps (0 = no floor)
+	minYieldBps   *big.Int // minRequestYield in bps (0 = no floor)
 	maxConcurrent int      // maxConcurrentLoans (0 = no limit; an unrepresentable value is treated as none)
 }
 
@@ -194,8 +193,7 @@ func (r *reader) liquidityAndExposure(
 		{Target: adapterAddr, Data: bfAdapter.PackActiveRequests()},
 		{Target: vault, Data: vaultV2.PackWithdrawable()},
 		{Target: adapterAddr, Data: bfAdapter.PackPerRequestMaxCollateral()},
-		{Target: adapterAddr, Data: bfAdapter.PackTotalMaxCollateral()},
-		{Target: adapterAddr, Data: bfAdapter.PackMinRequestYieldBps()},
+		{Target: adapterAddr, Data: bfAdapter.PackMinRequestYield()},
 		{Target: adapterAddr, Data: bfAdapter.PackMaxConcurrentLoans()},
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -235,15 +233,11 @@ func (r *reader) liquidityAndExposure(
 	if err != nil {
 		return exposureState{}, err
 	}
-	totalMax, err := bfAdapter.UnpackTotalMaxCollateral(res[6].ReturnData)
+	minRequestYield, err := bfAdapter.UnpackMinRequestYield(res[6].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
-	minYieldBps, err := bfAdapter.UnpackMinRequestYieldBps(res[7].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-	maxConcurrent, err := bfAdapter.UnpackMaxConcurrentLoans(res[8].ReturnData)
+	maxConcurrent, err := bfAdapter.UnpackMaxConcurrentLoans(res[7].ReturnData)
 	if err != nil {
 		return exposureState{}, err
 	}
@@ -254,10 +248,15 @@ func (r *reader) liquidityAndExposure(
 		outstanding:   outstanding,
 		openCount:     len(reqs),
 		perRequestMax: perRequestMax,
-		totalMax:      totalMax,
-		minYieldBps:   minYieldBps,
+		minYieldBps:   ppmToBps(minRequestYield),
 		maxConcurrent: loanCount(maxConcurrent),
 	}, nil
+}
+
+// ppmToBps converts minRequestYield (ppm, YIELD_PRECISION=1e6) to bps, rounding up so the bot never bids
+// below the on-chain floor.
+func ppmToBps(ppm *big.Int) *big.Int {
+	return new(big.Int).Div(new(big.Int).Add(ppm, big.NewInt(99)), big.NewInt(100)) // ceil(ppm/100); 1 bps = 100 ppm
 }
 
 // loanCount converts the on-chain maxConcurrentLoans uint256 to the sizer's int. 0 (disabled) and any

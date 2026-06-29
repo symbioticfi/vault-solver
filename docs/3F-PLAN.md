@@ -166,8 +166,9 @@ solver:
 
 `apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each
 adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
-**exposure caps are read on-chain** (`perRequestMaxCollateral`, `totalMaxCollateral`, `maxConcurrentLoans`,
-`minRequestYieldBps`) — config carries only the adapter addresses.
+**exposure caps are read on-chain** (`perRequestMaxCollateral`, `maxConcurrentLoans`, `minRequestYield` —
+ppm, converted to bps by the reader) — config carries only the adapter addresses. The sleeve cap is the
+delegator's per-adapter `limitOf` (folded into `fundable`), so the adapter has no separate one.
 
 ### Per-auction adapter coverage (the new multi-adapter core)
 
@@ -176,11 +177,11 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 
 1. **Candidates** — the configured adapters that are **eligible to bid**: collateral (`vault.asset()`)
    matches the auction's `depositAsset`, no live offer of ours already covers them on this auction, and
-   the auction's `maxRate` clears the adapter's on-chain return floor (`minRequestYieldBps`). The floor is
+   the auction's `maxRate` clears the adapter's on-chain return floor (`minRequestYield`). The floor is
    a selection filter, not a late signing-time check — a floor-failing adapter never competes.
 2. **Capacity** — read each candidate's exposure/liquidity in one Multicall (`fundable`,
-   `outstandingPrincipal`, open-loan count, the four on-chain caps), then `sizeOffer()` it to its
-   **capacity** — the max principal it can fund (per-request → fundable → sleeve → concurrency),
+   `outstandingPrincipal`, open-loan count, the on-chain caps), then `sizeOffer()` it to its
+   **capacity** — the max principal it can fund (per-request → fundable → concurrency),
    independent of the ask.
 3. **Select offers** — `remaining = amountRequested − liveCoverage(auction)` (coverage already held from
    this and prior passes, summed across adapters). If `remaining ≤ 0` the auction is already fully
@@ -211,14 +212,14 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 | `make lint` / `test` / `build` / `docker` | golangci-lint; `go test -race -cover ./...`; build; image |
 
 Generated code is committed (hermetic build); refresh targets regenerate from upstream
-on demand. ABIs required: `BridgeFacilitatorAdapter`, `IRequest`/`IVaultController`,
+on demand. ABIs required: `ThreeFAdapter` (from core-mirror), `IRequest`/`IVaultController`,
 `IWhitelist`, `IVaultV2`.
 
 ---
 
 ## 8. Build phases
 
-Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `rfq` repo (`src/3f/`), 25 tests, ABI vendored here. This is what the bot binds against.
+Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contracts/adapters/ThreeFAdapter.sol`, ABI vendored here from the core-mirror Foundry build. This is what the bot binds against (it replaced rfq's `BridgeFacilitatorAdapter`).
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
@@ -262,11 +263,11 @@ Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `r
 Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
-- **(done) Exposure / risk params are on-chain.** The caps (`perRequestMaxCollateral`, `totalMaxCollateral`, `maxConcurrentLoans`, `minRequestYieldBps`) now live on the `BridgeFacilitatorAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Trust-minimized + curator-governed, as planned.
+- **(done) Exposure / risk params are on-chain.** The caps (`perRequestMaxCollateral`, `maxConcurrentLoans`, `minRequestYield` in ppm) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. The total-sleeve cap is the delegator's per-adapter `limitOf` (folded into `fundable`), not a separate adapter cap. Trust-minimized + curator-governed, as planned.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
-- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minRequestYieldBps`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
+- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minRequestYield`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **Dynamic adapter discovery.** The adapter set is a config whitelist; the dynamic "list public 3F adapters" API (§9) replaces it later, filtered to adapters our signer is the EIP-1271 signer for.
-- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and the adapter's on-chain `minRequestYieldBps` is the only floor today.
+- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and the adapter's on-chain `minRequestYield` is the only floor today.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 

@@ -8,20 +8,16 @@ import (
 // caps mirror the adapter's authoritative on-chain exposure limits (each 0 = disabled).
 type sizeInputs struct {
 	perRequestMax *big.Int // adapter perRequestMaxCollateral (0 = no limit)
-	fundable      *big.Int // delegator-cap + vault-liquidity headroom (chain read)
-	sleeveMax     *big.Int // adapter totalMaxCollateral (0 = no limit)
-	outstanding   *big.Int // live sleeve exposure (sum of open principals)
+	fundable      *big.Int // delegator-cap + vault-liquidity headroom, incl. the sleeve ceiling (chain read)
 
 	openCount     int
 	maxConcurrent int // adapter maxConcurrentLoans (0 = no limit)
 }
 
-// sizeOffer returns the maximum principal an adapter can fund for one Request — its capacity — and
-// whether it can bid at all. `fundable` is always a hard cap (committing more would make the
-// just-in-time allocation inside the consume callback revert); the per-Request, sleeve, and
-// concurrency caps apply only when set (0 = disabled). The capacity is independent of the auction's
-// ask — selectOffers clamps it to the still-uncovered amount. Request authorization is enforced
-// on-chain by the 3F whitelist at consume time, so the bot applies only these risk caps.
+// sizeOffer returns the max principal an adapter can fund for one Request (its capacity) and whether it
+// can bid. fundable is a hard cap (it folds in the delegator's per-adapter limitOf / sleeve ceiling);
+// per-Request and concurrency caps apply only when set (0 = disabled). Capacity is independent of the
+// ask — selectOffers clamps it to the uncovered amount.
 func sizeOffer(in sizeInputs) (*big.Int, bool) {
 	if in.maxConcurrent > 0 && in.openCount >= in.maxConcurrent {
 		return nil, false
@@ -30,13 +26,6 @@ func sizeOffer(in sizeInputs) (*big.Int, bool) {
 	amount := new(big.Int).Set(in.fundable)
 	if in.perRequestMax != nil && in.perRequestMax.Sign() > 0 {
 		amount = minBig(amount, in.perRequestMax)
-	}
-	if in.sleeveMax != nil && in.sleeveMax.Sign() > 0 {
-		sleeveRoom := new(big.Int).Sub(in.sleeveMax, in.outstanding)
-		if sleeveRoom.Sign() <= 0 {
-			return nil, false
-		}
-		amount = minBig(amount, sleeveRoom)
 	}
 	if amount.Sign() <= 0 {
 		return nil, false

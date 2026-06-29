@@ -178,7 +178,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		}
 		s.log.V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "outstanding", st.outstanding.String(),
-			"openLoans", st.openCount, "perRequestMax", st.perRequestMax.String(), "totalMax", st.totalMax.String(),
+			"openLoans", st.openCount, "perRequestMax", st.perRequestMax.String(),
 			"minYieldBps", st.minYieldBps.String(), "maxConcurrent", st.maxConcurrent)
 		offerings = append(offerings, &adapterOffering{target: t, st: st, committed: new(big.Int)})
 	}
@@ -242,8 +242,6 @@ func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*
 		capacity, ok := sizeOffer(sizeInputs{
 			perRequestMax: off.st.perRequestMax,
 			fundable:      new(big.Int).Sub(off.st.fundable, off.committed),
-			sleeveMax:     off.st.totalMax,
-			outstanding:   new(big.Int).Add(off.st.outstanding, off.committed),
 			openCount:     off.st.openCount + off.opened,
 			maxConcurrent: off.st.maxConcurrent,
 		})
