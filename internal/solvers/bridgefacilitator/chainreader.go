@@ -49,31 +49,83 @@ func newReader(c *chain.Client) *reader {
 	return &reader{chain: c, delegatorCache: make(map[common.Address]common.Address)}
 }
 
-// adapterVault returns the vault the adapter funds (bound once at adapter initialize), so config
-// carries only the adapter address and the bot derives the vault at startup.
-func (r *reader) adapterVault(ctx context.Context, adapterAddr common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackVault()}})
-	if err != nil {
-		return common.Address{}, err
-	}
-	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, errors.New("adapter.vault() reverted")
-	}
-	return bfAdapter.UnpackVault(res[0].ReturnData)
+// resolvedAdapter is one adapter's startup resolution: its vault, that vault's collateral (the
+// ERC-4626 asset, used to match auctions), and its EIP-1271 offer-signer. err is set (other fields
+// zero) if any read reverted, so the caller can drop just that adapter.
+type resolvedAdapter struct {
+	vault      common.Address
+	collateral common.Address
+	signer     common.Address
+	err        error
 }
 
-// vaultAsset returns the vault's collateral token, used to match auctions (by deposit asset) to this
-// funding vault. In the core-mirror VaultV2 the deposit/collateral token is the ERC-4626 asset, so
-// this reads IERC4626(vault).asset() (the old vault.collateral() no longer exists).
-func (r *reader) vaultAsset(ctx context.Context, vault common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: vault, Data: erc4626b.PackAsset()}})
+// decodeAddr returns the address a Multicall sub-call returned, or an error tagged with `what` if it
+// reverted or failed to decode.
+func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error), what string) (common.Address, error) {
+	if !res.Success {
+		return common.Address{}, errors.Errorf("%s reverted", what)
+	}
+	addr, err := unpack(res.ReturnData)
 	if err != nil {
-		return common.Address{}, err
+		return common.Address{}, errors.Errorf("decode %s: %w", what, err)
 	}
-	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, errors.New("vault.asset() reverted")
+	return addr, nil
+}
+
+// resolveAdapters resolves every adapter's vault, collateral, and offer-signer in two Multicalls
+// regardless of adapter count: round 1 batches each adapter's vault()+offerSigner(); round 2 batches
+// asset() on the vaults round 1 returned. Per-call AllowFailure isolates a bad adapter to its own err;
+// a returned error is a whole-batch RPC failure.
+func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address) ([]resolvedAdapter, error) {
+	out := make([]resolvedAdapter, len(adapters))
+
+	calls := make([]chain.Call, 0, 2*len(adapters))
+	for _, a := range adapters {
+		calls = append(calls,
+			chain.Call{Target: a, Data: bfAdapter.PackVault(), AllowFailure: true},
+			chain.Call{Target: a, Data: bfAdapter.PackOfferSigner(), AllowFailure: true},
+		)
 	}
-	return erc4626b.UnpackAsset(res[0].ReturnData)
+	res, err := r.chain.Multicall(ctx, calls)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decode round 1; queue an asset() call for each adapter whose vault and signer both resolved.
+	assetCalls := make([]chain.Call, 0, len(adapters))
+	assetIdx := make([]int, 0, len(adapters)) // assetIdx[k] = out index of assetCalls[k]
+	for i := range adapters {
+		vault, derr := decodeAddr(res[2*i], bfAdapter.UnpackVault, "adapter.vault()")
+		if derr != nil {
+			out[i].err = derr
+			continue
+		}
+		signer, derr := decodeAddr(res[2*i+1], bfAdapter.UnpackOfferSigner, "adapter.offerSigner()")
+		if derr != nil {
+			out[i].err = derr
+			continue
+		}
+		out[i].vault, out[i].signer = vault, signer
+		assetCalls = append(assetCalls, chain.Call{Target: vault, Data: erc4626b.PackAsset(), AllowFailure: true})
+		assetIdx = append(assetIdx, i)
+	}
+	if len(assetCalls) == 0 {
+		return out, nil
+	}
+
+	ares, err := r.chain.Multicall(ctx, assetCalls)
+	if err != nil {
+		return nil, err
+	}
+	for k, idx := range assetIdx {
+		collateral, derr := decodeAddr(ares[k], erc4626b.UnpackAsset, "vault.asset()")
+		if derr != nil {
+			out[idx].err = derr
+			continue
+		}
+		out[idx].collateral = collateral
+	}
+	return out, nil
 }
 
 // vaultDelegator resolves the vault's delegator address (the contract that holds the per-adapter
