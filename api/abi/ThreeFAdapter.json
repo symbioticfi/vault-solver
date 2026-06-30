@@ -3,7 +3,7 @@
     "type": "constructor",
     "inputs": [
       {
-        "name": "requestWhitelist",
+        "name": "vaultFactory",
         "type": "address",
         "internalType": "address"
       },
@@ -13,7 +13,7 @@
         "internalType": "address"
       },
       {
-        "name": "vaultFactory",
+        "name": "requestWhitelist",
         "type": "address",
         "internalType": "address"
       }
@@ -42,32 +42,6 @@
         "name": "",
         "type": "address",
         "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "activeLoans",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "activeRequests",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address[]",
-        "internalType": "address[]"
       }
     ],
     "stateMutability": "view"
@@ -116,11 +90,24 @@
     ],
     "outputs": [
       {
-        "name": "deallocated",
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "finalizeRequest",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -135,6 +122,19 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getMaxAssets",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "assets",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -158,25 +158,6 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "isRequest",
-    "inputs": [
-      {
-        "name": "request",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -204,7 +185,7 @@
   },
   {
     "type": "function",
-    "name": "maxConcurrentLoans",
+    "name": "maxAssetsPerRequest",
     "inputs": [],
     "outputs": [
       {
@@ -235,7 +216,20 @@
   },
   {
     "type": "function",
-    "name": "minRequestYield",
+    "name": "minAssetsPerRequest",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "minYieldPerRequest",
     "inputs": [],
     "outputs": [
       {
@@ -277,7 +271,7 @@
     "name": "onRequestConsumed",
     "inputs": [
       {
-        "name": "",
+        "name": "offer",
         "type": "tuple",
         "internalType": "struct Offer",
         "components": [
@@ -319,31 +313,18 @@
         "internalType": "bytes"
       },
       {
-        "name": "principal",
+        "name": "principalAssets",
         "type": "uint256",
         "internalType": "uint256"
       },
       {
-        "name": "yieldAmount",
+        "name": "yieldAssets",
         "type": "uint256",
         "internalType": "uint256"
       }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "outstandingPrincipal",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -357,79 +338,6 @@
       }
     ],
     "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "perRequestMaxCollateral",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "positions",
-    "inputs": [
-      {
-        "name": "request",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "principal",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "ytExpected",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "openedAt",
-        "type": "uint48",
-        "internalType": "uint48"
-      },
-      {
-        "name": "redeemed",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "realizedPrincipal",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "redeem",
-    "inputs": [
-      {
-        "name": "requests",
-        "type": "address[]",
-        "internalType": "address[]"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -453,20 +361,58 @@
   },
   {
     "type": "function",
-    "name": "setExposureLimits",
+    "name": "requestIndex",
     "inputs": [
       {
-        "name": "perRequestMaxCollateral_",
+        "name": "request",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "requests",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setLimitsPerRequest",
+    "inputs": [
+      {
+        "name": "newMinYieldPerRequest",
         "type": "uint256",
         "internalType": "uint256"
       },
       {
-        "name": "minRequestYield_",
+        "name": "newMinAssetsPerRequest",
         "type": "uint256",
         "internalType": "uint256"
       },
       {
-        "name": "maxConcurrentLoans_",
+        "name": "newMaxAssetsPerRequest",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -479,7 +425,7 @@
     "name": "setOfferSigner",
     "inputs": [
       {
-        "name": "signer",
+        "name": "newOfferSigner",
         "type": "address",
         "internalType": "address"
       }
@@ -511,7 +457,7 @@
     "inputs": [],
     "outputs": [
       {
-        "name": "",
+        "name": "assets",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -559,6 +505,19 @@
   },
   {
     "type": "event",
+    "name": "FinalizeRequest",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Initialized",
     "inputs": [
       {
@@ -566,6 +525,69 @@
         "type": "uint64",
         "indexed": false,
         "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OnRequestConsumed",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "offer",
+        "type": "tuple",
+        "indexed": false,
+        "internalType": "struct Offer",
+        "components": [
+          {
+            "name": "maker",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "expectedReturn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "expiration",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "useCallback",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      },
+      {
+        "name": "principalAssets",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "yieldAssets",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -591,72 +613,22 @@
   },
   {
     "type": "event",
-    "name": "PositionOpened",
+    "name": "SetLimitsPerRequest",
     "inputs": [
       {
-        "name": "request",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "principal",
+        "name": "minYieldPerRequest",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
       },
       {
-        "name": "ytExpected",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "PositionRedeemed",
-    "inputs": [
-      {
-        "name": "request",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "principal",
+        "name": "minAssetsPerRequest",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
       },
       {
-        "name": "yieldAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "SetExposureLimits",
-    "inputs": [
-      {
-        "name": "perRequestMaxCollateral",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "minRequestYield",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "maxConcurrentLoans",
+        "name": "maxAssetsPerRequest",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -669,7 +641,7 @@
     "name": "SetOfferSigner",
     "inputs": [
       {
-        "name": "signer",
+        "name": "offerSigner",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -697,12 +669,12 @@
   },
   {
     "type": "error",
-    "name": "AssetMismatch",
+    "name": "AlreadyRequest",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "InsufficientLiquidity",
+    "name": "InsufficientAllocate",
     "inputs": []
   },
   {
@@ -717,17 +689,17 @@
   },
   {
     "type": "error",
-    "name": "NotAttested",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NotFactory",
     "inputs": []
   },
   {
     "type": "error",
     "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotRequest",
     "inputs": []
   },
   {
@@ -759,11 +731,6 @@
   },
   {
     "type": "error",
-    "name": "PerRequestCapExceeded",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
@@ -780,12 +747,27 @@
   },
   {
     "type": "error",
-    "name": "TooManyLoans",
+    "name": "TooLargeRequest",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "YieldTooLow",
+    "name": "TooLowYield",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TooManyRequests",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TooSmallRequest",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "WrongAsset",
     "inputs": []
   }
 ]

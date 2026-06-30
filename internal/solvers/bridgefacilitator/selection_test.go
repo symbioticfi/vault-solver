@@ -56,6 +56,17 @@ func TestSelectOffers(t *testing.T) {
 		}
 	})
 
+	t.Run("skip adapter when clamped remainder is below its minAssets floor", func(t *testing.T) {
+		// ranked: 2(80), 1(50). 2→80 of 90 (rem 10); 1's clamped principal 10 < its minAssets 20, so 1 is
+		// skipped and the 10 stays uncovered for a later pass.
+		c1 := cand(1, 50)
+		c1.off.st.minAssets = big.NewInt(20)
+		offers := selectOffers([]adapterSizing{c1, cand(2, 80)}, big.NewInt(90))
+		if len(offers) != 1 || adapterOf(offers[0]) != 2 || offers[0].principal.Int64() != 80 {
+			t.Fatalf("want a single offer adapter 2 / 80, got %d offers (%+v)", len(offers), offers)
+		}
+	})
+
 	t.Run("no candidates", func(t *testing.T) {
 		if offers := selectOffers(nil, big.NewInt(100)); len(offers) != 0 {
 			t.Fatalf("expected no offers, got %d", len(offers))

@@ -36,7 +36,7 @@ type Offer struct {
 
 // ThreeFAdapterMetaData contains all meta data concerning the ThreeFAdapter contract.
 var ThreeFAdapterMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapterFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeLoans\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"activeRequests\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"deallocated\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isRequest\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"maxConcurrentLoans\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"minRequestYield\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yieldAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"outstandingPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"perRequestMaxCollateral\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"positions\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"principal\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"openedAt\",\"type\":\"uint48\",\"internalType\":\"uint48\"},{\"name\":\"redeemed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"realizedPrincipal\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"redeem\",\"inputs\":[{\"name\":\"requests\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestDeallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setExposureLimits\",\"inputs\":[{\"name\":\"perRequestMaxCollateral_\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"minRequestYield_\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"maxConcurrentLoans_\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"staticDelegateCall\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"vault\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionOpened\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"ytExpected\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"PositionRedeemed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"principal\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yieldAmount\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetExposureLimits\",\"inputs\":[{\"name\":\"perRequestMaxCollateral\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"minRequestYield\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"maxConcurrentLoans\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"signer\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetVault\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AssetMismatch\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientLiquidity\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotAttested\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"PerRequestCapExceeded\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"TooManyLoans\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"YieldTooLow\",\"inputs\":[]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"vaultFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"adapterFactory\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"requestWhitelist\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"FACTORY\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"REQUEST_WHITELIST\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocatable\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"allocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"deallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"finalizeRequest\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"freeAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getMaxAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"initialVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"maxAssetsPerRequest\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"migrate\",\"inputs\":[{\"name\":\"newVersion\",\"type\":\"uint64\",\"internalType\":\"uint64\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"minAssetsPerRequest\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"minYieldPerRequest\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"offerSigner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"onRequestConsumed\",\"inputs\":[{\"name\":\"offer\",\"type\":\"tuple\",\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"principalAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"yieldAssets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestDeallocate\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"requestIndex\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"index\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"requests\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"setLimitsPerRequest\",\"inputs\":[{\"name\":\"newMinYieldPerRequest\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"newMinAssetsPerRequest\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"newMaxAssetsPerRequest\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setOfferSigner\",\"inputs\":[{\"name\":\"newOfferSigner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"staticDelegateCall\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"totalAssets\",\"inputs\":[],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"vault\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"version\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"uint64\",\"internalType\":\"uint64\"}],\"stateMutability\":\"view\"},{\"type\":\"event\",\"name\":\"FinalizeRequest\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OnRequestConsumed\",\"inputs\":[{\"name\":\"request\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"offer\",\"type\":\"tuple\",\"indexed\":false,\"internalType\":\"structOffer\",\"components\":[{\"name\":\"maker\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expectedReturn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expiration\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"useCallback\",\"type\":\"bool\",\"internalType\":\"bool\"}]},{\"name\":\"principalAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"yieldAssets\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetLimitsPerRequest\",\"inputs\":[{\"name\":\"minYieldPerRequest\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"minAssetsPerRequest\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"},{\"name\":\"maxAssetsPerRequest\",\"type\":\"uint256\",\"indexed\":false,\"internalType\":\"uint256\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetOfferSigner\",\"inputs\":[{\"name\":\"offerSigner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetVault\",\"inputs\":[{\"name\":\"vault\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AlreadyInitialized\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"AlreadyRequest\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientAllocate\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InvalidVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotFactory\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotRequest\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotVault\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"ReentrancyGuardReentrantCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"TooLargeRequest\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooLowYield\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooManyRequests\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"TooSmallRequest\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"WrongAsset\",\"inputs\":[]}]",
 	ID:  "ThreeFAdapter",
 }
 
@@ -63,9 +63,9 @@ func (c *ThreeFAdapter) Instance(backend bind.ContractBackend, addr common.Addre
 // PackConstructor is the Go binding used to pack the parameters required for
 // contract deployment.
 //
-// Solidity: constructor(address requestWhitelist, address adapterFactory, address vaultFactory) returns()
-func (threeFAdapter *ThreeFAdapter) PackConstructor(requestWhitelist common.Address, adapterFactory common.Address, vaultFactory common.Address) []byte {
-	enc, err := threeFAdapter.abi.Pack("", requestWhitelist, adapterFactory, vaultFactory)
+// Solidity: constructor(address vaultFactory, address adapterFactory, address requestWhitelist) returns()
+func (threeFAdapter *ThreeFAdapter) PackConstructor(vaultFactory common.Address, adapterFactory common.Address, requestWhitelist common.Address) []byte {
+	enc, err := threeFAdapter.abi.Pack("", vaultFactory, adapterFactory, requestWhitelist)
 	if err != nil {
 		panic(err)
 	}
@@ -139,76 +139,6 @@ func (threeFAdapter *ThreeFAdapter) UnpackREQUESTWHITELIST(data []byte) (common.
 		return *new(common.Address), err
 	}
 	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
-	return out0, nil
-}
-
-// PackActiveLoans is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x416b40c7.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function activeLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackActiveLoans() []byte {
-	enc, err := threeFAdapter.abi.Pack("activeLoans")
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackActiveLoans is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x416b40c7.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function activeLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackActiveLoans() ([]byte, error) {
-	return threeFAdapter.abi.Pack("activeLoans")
-}
-
-// UnpackActiveLoans is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x416b40c7.
-//
-// Solidity: function activeLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackActiveLoans(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("activeLoans", data)
-	if err != nil {
-		return new(big.Int), err
-	}
-	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
-	return out0, nil
-}
-
-// PackActiveRequests is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x83cc915c.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function activeRequests() view returns(address[])
-func (threeFAdapter *ThreeFAdapter) PackActiveRequests() []byte {
-	enc, err := threeFAdapter.abi.Pack("activeRequests")
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackActiveRequests is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x83cc915c.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function activeRequests() view returns(address[])
-func (threeFAdapter *ThreeFAdapter) TryPackActiveRequests() ([]byte, error) {
-	return threeFAdapter.abi.Pack("activeRequests")
-}
-
-// UnpackActiveRequests is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x83cc915c.
-//
-// Solidity: function activeRequests() view returns(address[])
-func (threeFAdapter *ThreeFAdapter) UnpackActiveRequests(data []byte) ([]common.Address, error) {
-	out, err := threeFAdapter.abi.Unpack("activeRequests", data)
-	if err != nil {
-		return *new([]common.Address), err
-	}
-	out0 := *abi.ConvertType(out[0], new([]common.Address)).(*[]common.Address)
 	return out0, nil
 }
 
@@ -286,7 +216,7 @@ func (threeFAdapter *ThreeFAdapter) UnpackAllocate(data []byte) (*big.Int, error
 // the contract method with ID 0x6f6c441f.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
+// Solidity: function deallocate(uint256 amount) returns(uint256)
 func (threeFAdapter *ThreeFAdapter) PackDeallocate(amount *big.Int) []byte {
 	enc, err := threeFAdapter.abi.Pack("deallocate", amount)
 	if err != nil {
@@ -299,7 +229,7 @@ func (threeFAdapter *ThreeFAdapter) PackDeallocate(amount *big.Int) []byte {
 // the contract method with ID 0x6f6c441f.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
+// Solidity: function deallocate(uint256 amount) returns(uint256)
 func (threeFAdapter *ThreeFAdapter) TryPackDeallocate(amount *big.Int) ([]byte, error) {
 	return threeFAdapter.abi.Pack("deallocate", amount)
 }
@@ -307,7 +237,7 @@ func (threeFAdapter *ThreeFAdapter) TryPackDeallocate(amount *big.Int) ([]byte, 
 // UnpackDeallocate is the Go binding that unpacks the parameters returned
 // from invoking the contract method with ID 0x6f6c441f.
 //
-// Solidity: function deallocate(uint256 amount) returns(uint256 deallocated)
+// Solidity: function deallocate(uint256 amount) returns(uint256)
 func (threeFAdapter *ThreeFAdapter) UnpackDeallocate(data []byte) (*big.Int, error) {
 	out, err := threeFAdapter.abi.Unpack("deallocate", data)
 	if err != nil {
@@ -315,6 +245,28 @@ func (threeFAdapter *ThreeFAdapter) UnpackDeallocate(data []byte) (*big.Int, err
 	}
 	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
 	return out0, nil
+}
+
+// PackFinalizeRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x1d280eb9.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function finalizeRequest(address request) returns()
+func (threeFAdapter *ThreeFAdapter) PackFinalizeRequest(request common.Address) []byte {
+	enc, err := threeFAdapter.abi.Pack("finalizeRequest", request)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackFinalizeRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x1d280eb9.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function finalizeRequest(address request) returns()
+func (threeFAdapter *ThreeFAdapter) TryPackFinalizeRequest(request common.Address) ([]byte, error) {
+	return threeFAdapter.abi.Pack("finalizeRequest", request)
 }
 
 // PackFreeAssets is the Go binding used to pack the parameters required for calling
@@ -352,6 +304,41 @@ func (threeFAdapter *ThreeFAdapter) UnpackFreeAssets(data []byte) (*big.Int, err
 	return out0, nil
 }
 
+// PackGetMaxAssets is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x1755da83.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function getMaxAssets() returns(uint256 assets)
+func (threeFAdapter *ThreeFAdapter) PackGetMaxAssets() []byte {
+	enc, err := threeFAdapter.abi.Pack("getMaxAssets")
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackGetMaxAssets is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x1755da83.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function getMaxAssets() returns(uint256 assets)
+func (threeFAdapter *ThreeFAdapter) TryPackGetMaxAssets() ([]byte, error) {
+	return threeFAdapter.abi.Pack("getMaxAssets")
+}
+
+// UnpackGetMaxAssets is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x1755da83.
+//
+// Solidity: function getMaxAssets() returns(uint256 assets)
+func (threeFAdapter *ThreeFAdapter) UnpackGetMaxAssets(data []byte) (*big.Int, error) {
+	out, err := threeFAdapter.abi.Unpack("getMaxAssets", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	return out0, nil
+}
+
 // PackInitialize is the Go binding used to pack the parameters required for calling
 // the contract method with ID 0x57ec83cc.  This method will panic if any
 // invalid/nil inputs are passed.
@@ -372,41 +359,6 @@ func (threeFAdapter *ThreeFAdapter) PackInitialize(initialVersion uint64, owner 
 // Solidity: function initialize(uint64 initialVersion, address owner_, bytes data) returns()
 func (threeFAdapter *ThreeFAdapter) TryPackInitialize(initialVersion uint64, owner common.Address, data []byte) ([]byte, error) {
 	return threeFAdapter.abi.Pack("initialize", initialVersion, owner, data)
-}
-
-// PackIsRequest is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xe9adfc20.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function isRequest(address request) view returns(bool)
-func (threeFAdapter *ThreeFAdapter) PackIsRequest(request common.Address) []byte {
-	enc, err := threeFAdapter.abi.Pack("isRequest", request)
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackIsRequest is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xe9adfc20.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function isRequest(address request) view returns(bool)
-func (threeFAdapter *ThreeFAdapter) TryPackIsRequest(request common.Address) ([]byte, error) {
-	return threeFAdapter.abi.Pack("isRequest", request)
-}
-
-// UnpackIsRequest is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0xe9adfc20.
-//
-// Solidity: function isRequest(address request) view returns(bool)
-func (threeFAdapter *ThreeFAdapter) UnpackIsRequest(data []byte) (bool, error) {
-	out, err := threeFAdapter.abi.Unpack("isRequest", data)
-	if err != nil {
-		return *new(bool), err
-	}
-	out0 := *abi.ConvertType(out[0], new(bool)).(*bool)
-	return out0, nil
 }
 
 // PackIsValidSignature is the Go binding used to pack the parameters required for calling
@@ -444,34 +396,34 @@ func (threeFAdapter *ThreeFAdapter) UnpackIsValidSignature(data []byte) ([4]byte
 	return out0, nil
 }
 
-// PackMaxConcurrentLoans is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x0fa715c7.  This method will panic if any
+// PackMaxAssetsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xe84fb141.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function maxConcurrentLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackMaxConcurrentLoans() []byte {
-	enc, err := threeFAdapter.abi.Pack("maxConcurrentLoans")
+// Solidity: function maxAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) PackMaxAssetsPerRequest() []byte {
+	enc, err := threeFAdapter.abi.Pack("maxAssetsPerRequest")
 	if err != nil {
 		panic(err)
 	}
 	return enc
 }
 
-// TryPackMaxConcurrentLoans is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x0fa715c7.  This method will return an error
+// TryPackMaxAssetsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xe84fb141.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function maxConcurrentLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackMaxConcurrentLoans() ([]byte, error) {
-	return threeFAdapter.abi.Pack("maxConcurrentLoans")
+// Solidity: function maxAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) TryPackMaxAssetsPerRequest() ([]byte, error) {
+	return threeFAdapter.abi.Pack("maxAssetsPerRequest")
 }
 
-// UnpackMaxConcurrentLoans is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x0fa715c7.
+// UnpackMaxAssetsPerRequest is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xe84fb141.
 //
-// Solidity: function maxConcurrentLoans() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackMaxConcurrentLoans(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("maxConcurrentLoans", data)
+// Solidity: function maxAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) UnpackMaxAssetsPerRequest(data []byte) (*big.Int, error) {
+	out, err := threeFAdapter.abi.Unpack("maxAssetsPerRequest", data)
 	if err != nil {
 		return new(big.Int), err
 	}
@@ -501,34 +453,69 @@ func (threeFAdapter *ThreeFAdapter) TryPackMigrate(newVersion uint64, data []byt
 	return threeFAdapter.abi.Pack("migrate", newVersion, data)
 }
 
-// PackMinRequestYield is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xbc0d16fd.  This method will panic if any
+// PackMinAssetsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x5b0a8440.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function minRequestYield() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackMinRequestYield() []byte {
-	enc, err := threeFAdapter.abi.Pack("minRequestYield")
+// Solidity: function minAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) PackMinAssetsPerRequest() []byte {
+	enc, err := threeFAdapter.abi.Pack("minAssetsPerRequest")
 	if err != nil {
 		panic(err)
 	}
 	return enc
 }
 
-// TryPackMinRequestYield is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xbc0d16fd.  This method will return an error
+// TryPackMinAssetsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x5b0a8440.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function minRequestYield() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackMinRequestYield() ([]byte, error) {
-	return threeFAdapter.abi.Pack("minRequestYield")
+// Solidity: function minAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) TryPackMinAssetsPerRequest() ([]byte, error) {
+	return threeFAdapter.abi.Pack("minAssetsPerRequest")
 }
 
-// UnpackMinRequestYield is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0xbc0d16fd.
+// UnpackMinAssetsPerRequest is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x5b0a8440.
 //
-// Solidity: function minRequestYield() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackMinRequestYield(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("minRequestYield", data)
+// Solidity: function minAssetsPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) UnpackMinAssetsPerRequest(data []byte) (*big.Int, error) {
+	out, err := threeFAdapter.abi.Unpack("minAssetsPerRequest", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	return out0, nil
+}
+
+// PackMinYieldPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xa9c6b425.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function minYieldPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) PackMinYieldPerRequest() []byte {
+	enc, err := threeFAdapter.abi.Pack("minYieldPerRequest")
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackMinYieldPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xa9c6b425.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function minYieldPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) TryPackMinYieldPerRequest() ([]byte, error) {
+	return threeFAdapter.abi.Pack("minYieldPerRequest")
+}
+
+// UnpackMinYieldPerRequest is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xa9c6b425.
+//
+// Solidity: function minYieldPerRequest() view returns(uint256)
+func (threeFAdapter *ThreeFAdapter) UnpackMinYieldPerRequest(data []byte) (*big.Int, error) {
+	out, err := threeFAdapter.abi.Unpack("minYieldPerRequest", data)
 	if err != nil {
 		return new(big.Int), err
 	}
@@ -597,9 +584,9 @@ func (threeFAdapter *ThreeFAdapter) UnpackOfferSigner(data []byte) (common.Addre
 // the contract method with ID 0xf2fe1357.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function onRequestConsumed((address,uint256,uint256,uint256,uint256,bool) , bytes , uint256 principal, uint256 yieldAmount) returns()
-func (threeFAdapter *ThreeFAdapter) PackOnRequestConsumed(arg0 Offer, arg1 []byte, principal *big.Int, yieldAmount *big.Int) []byte {
-	enc, err := threeFAdapter.abi.Pack("onRequestConsumed", arg0, arg1, principal, yieldAmount)
+// Solidity: function onRequestConsumed((address,uint256,uint256,uint256,uint256,bool) offer, bytes , uint256 principalAssets, uint256 yieldAssets) returns()
+func (threeFAdapter *ThreeFAdapter) PackOnRequestConsumed(offer Offer, arg1 []byte, principalAssets *big.Int, yieldAssets *big.Int) []byte {
+	enc, err := threeFAdapter.abi.Pack("onRequestConsumed", offer, arg1, principalAssets, yieldAssets)
 	if err != nil {
 		panic(err)
 	}
@@ -610,44 +597,9 @@ func (threeFAdapter *ThreeFAdapter) PackOnRequestConsumed(arg0 Offer, arg1 []byt
 // the contract method with ID 0xf2fe1357.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function onRequestConsumed((address,uint256,uint256,uint256,uint256,bool) , bytes , uint256 principal, uint256 yieldAmount) returns()
-func (threeFAdapter *ThreeFAdapter) TryPackOnRequestConsumed(arg0 Offer, arg1 []byte, principal *big.Int, yieldAmount *big.Int) ([]byte, error) {
-	return threeFAdapter.abi.Pack("onRequestConsumed", arg0, arg1, principal, yieldAmount)
-}
-
-// PackOutstandingPrincipal is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x29b1829e.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function outstandingPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackOutstandingPrincipal() []byte {
-	enc, err := threeFAdapter.abi.Pack("outstandingPrincipal")
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackOutstandingPrincipal is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x29b1829e.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function outstandingPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackOutstandingPrincipal() ([]byte, error) {
-	return threeFAdapter.abi.Pack("outstandingPrincipal")
-}
-
-// UnpackOutstandingPrincipal is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x29b1829e.
-//
-// Solidity: function outstandingPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackOutstandingPrincipal(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("outstandingPrincipal", data)
-	if err != nil {
-		return new(big.Int), err
-	}
-	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
-	return out0, nil
+// Solidity: function onRequestConsumed((address,uint256,uint256,uint256,uint256,bool) offer, bytes , uint256 principalAssets, uint256 yieldAssets) returns()
+func (threeFAdapter *ThreeFAdapter) TryPackOnRequestConsumed(offer Offer, arg1 []byte, principalAssets *big.Int, yieldAssets *big.Int) ([]byte, error) {
+	return threeFAdapter.abi.Pack("onRequestConsumed", offer, arg1, principalAssets, yieldAssets)
 }
 
 // PackOwner is the Go binding used to pack the parameters required for calling
@@ -683,146 +635,6 @@ func (threeFAdapter *ThreeFAdapter) UnpackOwner(data []byte) (common.Address, er
 	}
 	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 	return out0, nil
-}
-
-// PackPerRequestMaxCollateral is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xca1f1576.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function perRequestMaxCollateral() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackPerRequestMaxCollateral() []byte {
-	enc, err := threeFAdapter.abi.Pack("perRequestMaxCollateral")
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackPerRequestMaxCollateral is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xca1f1576.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function perRequestMaxCollateral() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackPerRequestMaxCollateral() ([]byte, error) {
-	return threeFAdapter.abi.Pack("perRequestMaxCollateral")
-}
-
-// UnpackPerRequestMaxCollateral is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0xca1f1576.
-//
-// Solidity: function perRequestMaxCollateral() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackPerRequestMaxCollateral(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("perRequestMaxCollateral", data)
-	if err != nil {
-		return new(big.Int), err
-	}
-	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
-	return out0, nil
-}
-
-// PackPositions is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x55f57510.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function positions(address request) view returns(uint256 principal, uint256 ytExpected, uint48 openedAt, bool redeemed)
-func (threeFAdapter *ThreeFAdapter) PackPositions(request common.Address) []byte {
-	enc, err := threeFAdapter.abi.Pack("positions", request)
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackPositions is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x55f57510.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function positions(address request) view returns(uint256 principal, uint256 ytExpected, uint48 openedAt, bool redeemed)
-func (threeFAdapter *ThreeFAdapter) TryPackPositions(request common.Address) ([]byte, error) {
-	return threeFAdapter.abi.Pack("positions", request)
-}
-
-// PositionsOutput serves as a container for the return parameters of contract
-// method Positions.
-type PositionsOutput struct {
-	Principal  *big.Int
-	YtExpected *big.Int
-	OpenedAt   *big.Int
-	Redeemed   bool
-}
-
-// UnpackPositions is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x55f57510.
-//
-// Solidity: function positions(address request) view returns(uint256 principal, uint256 ytExpected, uint48 openedAt, bool redeemed)
-func (threeFAdapter *ThreeFAdapter) UnpackPositions(data []byte) (PositionsOutput, error) {
-	out, err := threeFAdapter.abi.Unpack("positions", data)
-	outstruct := new(PositionsOutput)
-	if err != nil {
-		return *outstruct, err
-	}
-	outstruct.Principal = abi.ConvertType(out[0], new(big.Int)).(*big.Int)
-	outstruct.YtExpected = abi.ConvertType(out[1], new(big.Int)).(*big.Int)
-	outstruct.OpenedAt = abi.ConvertType(out[2], new(big.Int)).(*big.Int)
-	outstruct.Redeemed = *abi.ConvertType(out[3], new(bool)).(*bool)
-	return *outstruct, nil
-}
-
-// PackRealizedPrincipal is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x5b348b1f.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function realizedPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) PackRealizedPrincipal() []byte {
-	enc, err := threeFAdapter.abi.Pack("realizedPrincipal")
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackRealizedPrincipal is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x5b348b1f.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function realizedPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) TryPackRealizedPrincipal() ([]byte, error) {
-	return threeFAdapter.abi.Pack("realizedPrincipal")
-}
-
-// UnpackRealizedPrincipal is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0x5b348b1f.
-//
-// Solidity: function realizedPrincipal() view returns(uint256)
-func (threeFAdapter *ThreeFAdapter) UnpackRealizedPrincipal(data []byte) (*big.Int, error) {
-	out, err := threeFAdapter.abi.Unpack("realizedPrincipal", data)
-	if err != nil {
-		return new(big.Int), err
-	}
-	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
-	return out0, nil
-}
-
-// PackRedeem is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x8730b205.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function redeem(address[] requests) returns()
-func (threeFAdapter *ThreeFAdapter) PackRedeem(requests []common.Address) []byte {
-	enc, err := threeFAdapter.abi.Pack("redeem", requests)
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackRedeem is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x8730b205.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function redeem(address[] requests) returns()
-func (threeFAdapter *ThreeFAdapter) TryPackRedeem(requests []common.Address) ([]byte, error) {
-	return threeFAdapter.abi.Pack("redeem", requests)
 }
 
 // PackRenounceOwnership is the Go binding used to pack the parameters required for calling
@@ -869,35 +681,105 @@ func (threeFAdapter *ThreeFAdapter) TryPackRequestDeallocate(amount *big.Int) ([
 	return threeFAdapter.abi.Pack("requestDeallocate", amount)
 }
 
-// PackSetExposureLimits is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x30f0c89f.  This method will panic if any
+// PackRequestIndex is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x8163ade3.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function setExposureLimits(uint256 perRequestMaxCollateral_, uint256 minRequestYield_, uint256 maxConcurrentLoans_) returns()
-func (threeFAdapter *ThreeFAdapter) PackSetExposureLimits(perRequestMaxCollateral *big.Int, minRequestYield *big.Int, maxConcurrentLoans *big.Int) []byte {
-	enc, err := threeFAdapter.abi.Pack("setExposureLimits", perRequestMaxCollateral, minRequestYield, maxConcurrentLoans)
+// Solidity: function requestIndex(address request) view returns(uint256 index)
+func (threeFAdapter *ThreeFAdapter) PackRequestIndex(request common.Address) []byte {
+	enc, err := threeFAdapter.abi.Pack("requestIndex", request)
 	if err != nil {
 		panic(err)
 	}
 	return enc
 }
 
-// TryPackSetExposureLimits is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x30f0c89f.  This method will return an error
+// TryPackRequestIndex is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x8163ade3.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function setExposureLimits(uint256 perRequestMaxCollateral_, uint256 minRequestYield_, uint256 maxConcurrentLoans_) returns()
-func (threeFAdapter *ThreeFAdapter) TryPackSetExposureLimits(perRequestMaxCollateral *big.Int, minRequestYield *big.Int, maxConcurrentLoans *big.Int) ([]byte, error) {
-	return threeFAdapter.abi.Pack("setExposureLimits", perRequestMaxCollateral, minRequestYield, maxConcurrentLoans)
+// Solidity: function requestIndex(address request) view returns(uint256 index)
+func (threeFAdapter *ThreeFAdapter) TryPackRequestIndex(request common.Address) ([]byte, error) {
+	return threeFAdapter.abi.Pack("requestIndex", request)
+}
+
+// UnpackRequestIndex is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x8163ade3.
+//
+// Solidity: function requestIndex(address request) view returns(uint256 index)
+func (threeFAdapter *ThreeFAdapter) UnpackRequestIndex(data []byte) (*big.Int, error) {
+	out, err := threeFAdapter.abi.Unpack("requestIndex", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	return out0, nil
+}
+
+// PackRequests is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x81d12c58.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function requests(uint256 ) view returns(address)
+func (threeFAdapter *ThreeFAdapter) PackRequests(arg0 *big.Int) []byte {
+	enc, err := threeFAdapter.abi.Pack("requests", arg0)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackRequests is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x81d12c58.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function requests(uint256 ) view returns(address)
+func (threeFAdapter *ThreeFAdapter) TryPackRequests(arg0 *big.Int) ([]byte, error) {
+	return threeFAdapter.abi.Pack("requests", arg0)
+}
+
+// UnpackRequests is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x81d12c58.
+//
+// Solidity: function requests(uint256 ) view returns(address)
+func (threeFAdapter *ThreeFAdapter) UnpackRequests(data []byte) (common.Address, error) {
+	out, err := threeFAdapter.abi.Unpack("requests", data)
+	if err != nil {
+		return *new(common.Address), err
+	}
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	return out0, nil
+}
+
+// PackSetLimitsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x719b949f.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function setLimitsPerRequest(uint256 newMinYieldPerRequest, uint256 newMinAssetsPerRequest, uint256 newMaxAssetsPerRequest) returns()
+func (threeFAdapter *ThreeFAdapter) PackSetLimitsPerRequest(newMinYieldPerRequest *big.Int, newMinAssetsPerRequest *big.Int, newMaxAssetsPerRequest *big.Int) []byte {
+	enc, err := threeFAdapter.abi.Pack("setLimitsPerRequest", newMinYieldPerRequest, newMinAssetsPerRequest, newMaxAssetsPerRequest)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackSetLimitsPerRequest is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x719b949f.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function setLimitsPerRequest(uint256 newMinYieldPerRequest, uint256 newMinAssetsPerRequest, uint256 newMaxAssetsPerRequest) returns()
+func (threeFAdapter *ThreeFAdapter) TryPackSetLimitsPerRequest(newMinYieldPerRequest *big.Int, newMinAssetsPerRequest *big.Int, newMaxAssetsPerRequest *big.Int) ([]byte, error) {
+	return threeFAdapter.abi.Pack("setLimitsPerRequest", newMinYieldPerRequest, newMinAssetsPerRequest, newMaxAssetsPerRequest)
 }
 
 // PackSetOfferSigner is the Go binding used to pack the parameters required for calling
 // the contract method with ID 0x868adcae.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function setOfferSigner(address signer) returns()
-func (threeFAdapter *ThreeFAdapter) PackSetOfferSigner(signer common.Address) []byte {
-	enc, err := threeFAdapter.abi.Pack("setOfferSigner", signer)
+// Solidity: function setOfferSigner(address newOfferSigner) returns()
+func (threeFAdapter *ThreeFAdapter) PackSetOfferSigner(newOfferSigner common.Address) []byte {
+	enc, err := threeFAdapter.abi.Pack("setOfferSigner", newOfferSigner)
 	if err != nil {
 		panic(err)
 	}
@@ -908,9 +790,9 @@ func (threeFAdapter *ThreeFAdapter) PackSetOfferSigner(signer common.Address) []
 // the contract method with ID 0x868adcae.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function setOfferSigner(address signer) returns()
-func (threeFAdapter *ThreeFAdapter) TryPackSetOfferSigner(signer common.Address) ([]byte, error) {
-	return threeFAdapter.abi.Pack("setOfferSigner", signer)
+// Solidity: function setOfferSigner(address newOfferSigner) returns()
+func (threeFAdapter *ThreeFAdapter) TryPackSetOfferSigner(newOfferSigner common.Address) ([]byte, error) {
+	return threeFAdapter.abi.Pack("setOfferSigner", newOfferSigner)
 }
 
 // PackStaticDelegateCall is the Go binding used to pack the parameters required for calling
@@ -939,7 +821,7 @@ func (threeFAdapter *ThreeFAdapter) TryPackStaticDelegateCall(target common.Addr
 // the contract method with ID 0x01e1d114.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function totalAssets() view returns(uint256)
+// Solidity: function totalAssets() view returns(uint256 assets)
 func (threeFAdapter *ThreeFAdapter) PackTotalAssets() []byte {
 	enc, err := threeFAdapter.abi.Pack("totalAssets")
 	if err != nil {
@@ -952,7 +834,7 @@ func (threeFAdapter *ThreeFAdapter) PackTotalAssets() []byte {
 // the contract method with ID 0x01e1d114.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function totalAssets() view returns(uint256)
+// Solidity: function totalAssets() view returns(uint256 assets)
 func (threeFAdapter *ThreeFAdapter) TryPackTotalAssets() ([]byte, error) {
 	return threeFAdapter.abi.Pack("totalAssets")
 }
@@ -960,7 +842,7 @@ func (threeFAdapter *ThreeFAdapter) TryPackTotalAssets() ([]byte, error) {
 // UnpackTotalAssets is the Go binding that unpacks the parameters returned
 // from invoking the contract method with ID 0x01e1d114.
 //
-// Solidity: function totalAssets() view returns(uint256)
+// Solidity: function totalAssets() view returns(uint256 assets)
 func (threeFAdapter *ThreeFAdapter) UnpackTotalAssets(data []byte) (*big.Int, error) {
 	out, err := threeFAdapter.abi.Unpack("totalAssets", data)
 	if err != nil {
@@ -1062,6 +944,47 @@ func (threeFAdapter *ThreeFAdapter) UnpackVersion(data []byte) (uint64, error) {
 	return out0, nil
 }
 
+// ThreeFAdapterFinalizeRequest represents a FinalizeRequest event raised by the ThreeFAdapter contract.
+type ThreeFAdapterFinalizeRequest struct {
+	Request common.Address
+	Raw     *types.Log // Blockchain specific contextual infos
+}
+
+const ThreeFAdapterFinalizeRequestEventName = "FinalizeRequest"
+
+// ContractEventName returns the user-defined event name.
+func (ThreeFAdapterFinalizeRequest) ContractEventName() string {
+	return ThreeFAdapterFinalizeRequestEventName
+}
+
+// UnpackFinalizeRequestEvent is the Go binding that unpacks the event data emitted
+// by contract.
+//
+// Solidity: event FinalizeRequest(address indexed request)
+func (threeFAdapter *ThreeFAdapter) UnpackFinalizeRequestEvent(log *types.Log) (*ThreeFAdapterFinalizeRequest, error) {
+	event := "FinalizeRequest"
+	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
+		return nil, errors.New("event signature mismatch")
+	}
+	out := new(ThreeFAdapterFinalizeRequest)
+	if len(log.Data) > 0 {
+		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
+			return nil, err
+		}
+	}
+	var indexed abi.Arguments
+	for _, arg := range threeFAdapter.abi.Events[event].Inputs {
+		if arg.Indexed {
+			indexed = append(indexed, arg)
+		}
+	}
+	if err := abi.ParseTopics(out, indexed, log.Topics[1:]); err != nil {
+		return nil, err
+	}
+	out.Raw = log
+	return out, nil
+}
+
 // ThreeFAdapterInitialized represents a Initialized event raised by the ThreeFAdapter contract.
 type ThreeFAdapterInitialized struct {
 	Version uint64
@@ -1085,6 +1008,50 @@ func (threeFAdapter *ThreeFAdapter) UnpackInitializedEvent(log *types.Log) (*Thr
 		return nil, errors.New("event signature mismatch")
 	}
 	out := new(ThreeFAdapterInitialized)
+	if len(log.Data) > 0 {
+		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
+			return nil, err
+		}
+	}
+	var indexed abi.Arguments
+	for _, arg := range threeFAdapter.abi.Events[event].Inputs {
+		if arg.Indexed {
+			indexed = append(indexed, arg)
+		}
+	}
+	if err := abi.ParseTopics(out, indexed, log.Topics[1:]); err != nil {
+		return nil, err
+	}
+	out.Raw = log
+	return out, nil
+}
+
+// ThreeFAdapterOnRequestConsumed represents a OnRequestConsumed event raised by the ThreeFAdapter contract.
+type ThreeFAdapterOnRequestConsumed struct {
+	Request         common.Address
+	Offer           Offer
+	PrincipalAssets *big.Int
+	YieldAssets     *big.Int
+	Raw             *types.Log // Blockchain specific contextual infos
+}
+
+const ThreeFAdapterOnRequestConsumedEventName = "OnRequestConsumed"
+
+// ContractEventName returns the user-defined event name.
+func (ThreeFAdapterOnRequestConsumed) ContractEventName() string {
+	return ThreeFAdapterOnRequestConsumedEventName
+}
+
+// UnpackOnRequestConsumedEvent is the Go binding that unpacks the event data emitted
+// by contract.
+//
+// Solidity: event OnRequestConsumed(address indexed request, (address,uint256,uint256,uint256,uint256,bool) offer, uint256 principalAssets, uint256 yieldAssets)
+func (threeFAdapter *ThreeFAdapter) UnpackOnRequestConsumedEvent(log *types.Log) (*ThreeFAdapterOnRequestConsumed, error) {
+	event := "OnRequestConsumed"
+	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
+		return nil, errors.New("event signature mismatch")
+	}
+	out := new(ThreeFAdapterOnRequestConsumed)
 	if len(log.Data) > 0 {
 		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
 			return nil, err
@@ -1145,117 +1112,31 @@ func (threeFAdapter *ThreeFAdapter) UnpackOwnershipTransferredEvent(log *types.L
 	return out, nil
 }
 
-// ThreeFAdapterPositionOpened represents a PositionOpened event raised by the ThreeFAdapter contract.
-type ThreeFAdapterPositionOpened struct {
-	Request    common.Address
-	Principal  *big.Int
-	YtExpected *big.Int
-	Raw        *types.Log // Blockchain specific contextual infos
+// ThreeFAdapterSetLimitsPerRequest represents a SetLimitsPerRequest event raised by the ThreeFAdapter contract.
+type ThreeFAdapterSetLimitsPerRequest struct {
+	MinYieldPerRequest  *big.Int
+	MinAssetsPerRequest *big.Int
+	MaxAssetsPerRequest *big.Int
+	Raw                 *types.Log // Blockchain specific contextual infos
 }
 
-const ThreeFAdapterPositionOpenedEventName = "PositionOpened"
+const ThreeFAdapterSetLimitsPerRequestEventName = "SetLimitsPerRequest"
 
 // ContractEventName returns the user-defined event name.
-func (ThreeFAdapterPositionOpened) ContractEventName() string {
-	return ThreeFAdapterPositionOpenedEventName
+func (ThreeFAdapterSetLimitsPerRequest) ContractEventName() string {
+	return ThreeFAdapterSetLimitsPerRequestEventName
 }
 
-// UnpackPositionOpenedEvent is the Go binding that unpacks the event data emitted
+// UnpackSetLimitsPerRequestEvent is the Go binding that unpacks the event data emitted
 // by contract.
 //
-// Solidity: event PositionOpened(address indexed request, uint256 principal, uint256 ytExpected)
-func (threeFAdapter *ThreeFAdapter) UnpackPositionOpenedEvent(log *types.Log) (*ThreeFAdapterPositionOpened, error) {
-	event := "PositionOpened"
+// Solidity: event SetLimitsPerRequest(uint256 minYieldPerRequest, uint256 minAssetsPerRequest, uint256 maxAssetsPerRequest)
+func (threeFAdapter *ThreeFAdapter) UnpackSetLimitsPerRequestEvent(log *types.Log) (*ThreeFAdapterSetLimitsPerRequest, error) {
+	event := "SetLimitsPerRequest"
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
 		return nil, errors.New("event signature mismatch")
 	}
-	out := new(ThreeFAdapterPositionOpened)
-	if len(log.Data) > 0 {
-		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
-			return nil, err
-		}
-	}
-	var indexed abi.Arguments
-	for _, arg := range threeFAdapter.abi.Events[event].Inputs {
-		if arg.Indexed {
-			indexed = append(indexed, arg)
-		}
-	}
-	if err := abi.ParseTopics(out, indexed, log.Topics[1:]); err != nil {
-		return nil, err
-	}
-	out.Raw = log
-	return out, nil
-}
-
-// ThreeFAdapterPositionRedeemed represents a PositionRedeemed event raised by the ThreeFAdapter contract.
-type ThreeFAdapterPositionRedeemed struct {
-	Request     common.Address
-	Principal   *big.Int
-	YieldAmount *big.Int
-	Raw         *types.Log // Blockchain specific contextual infos
-}
-
-const ThreeFAdapterPositionRedeemedEventName = "PositionRedeemed"
-
-// ContractEventName returns the user-defined event name.
-func (ThreeFAdapterPositionRedeemed) ContractEventName() string {
-	return ThreeFAdapterPositionRedeemedEventName
-}
-
-// UnpackPositionRedeemedEvent is the Go binding that unpacks the event data emitted
-// by contract.
-//
-// Solidity: event PositionRedeemed(address indexed request, uint256 principal, uint256 yieldAmount)
-func (threeFAdapter *ThreeFAdapter) UnpackPositionRedeemedEvent(log *types.Log) (*ThreeFAdapterPositionRedeemed, error) {
-	event := "PositionRedeemed"
-	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
-	}
-	out := new(ThreeFAdapterPositionRedeemed)
-	if len(log.Data) > 0 {
-		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
-			return nil, err
-		}
-	}
-	var indexed abi.Arguments
-	for _, arg := range threeFAdapter.abi.Events[event].Inputs {
-		if arg.Indexed {
-			indexed = append(indexed, arg)
-		}
-	}
-	if err := abi.ParseTopics(out, indexed, log.Topics[1:]); err != nil {
-		return nil, err
-	}
-	out.Raw = log
-	return out, nil
-}
-
-// ThreeFAdapterSetExposureLimits represents a SetExposureLimits event raised by the ThreeFAdapter contract.
-type ThreeFAdapterSetExposureLimits struct {
-	PerRequestMaxCollateral *big.Int
-	MinRequestYield         *big.Int
-	MaxConcurrentLoans      *big.Int
-	Raw                     *types.Log // Blockchain specific contextual infos
-}
-
-const ThreeFAdapterSetExposureLimitsEventName = "SetExposureLimits"
-
-// ContractEventName returns the user-defined event name.
-func (ThreeFAdapterSetExposureLimits) ContractEventName() string {
-	return ThreeFAdapterSetExposureLimitsEventName
-}
-
-// UnpackSetExposureLimitsEvent is the Go binding that unpacks the event data emitted
-// by contract.
-//
-// Solidity: event SetExposureLimits(uint256 perRequestMaxCollateral, uint256 minRequestYield, uint256 maxConcurrentLoans)
-func (threeFAdapter *ThreeFAdapter) UnpackSetExposureLimitsEvent(log *types.Log) (*ThreeFAdapterSetExposureLimits, error) {
-	event := "SetExposureLimits"
-	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
-	}
-	out := new(ThreeFAdapterSetExposureLimits)
+	out := new(ThreeFAdapterSetLimitsPerRequest)
 	if len(log.Data) > 0 {
 		if err := threeFAdapter.abi.UnpackIntoInterface(out, event, log.Data); err != nil {
 			return nil, err
@@ -1276,8 +1157,8 @@ func (threeFAdapter *ThreeFAdapter) UnpackSetExposureLimitsEvent(log *types.Log)
 
 // ThreeFAdapterSetOfferSigner represents a SetOfferSigner event raised by the ThreeFAdapter contract.
 type ThreeFAdapterSetOfferSigner struct {
-	Signer common.Address
-	Raw    *types.Log // Blockchain specific contextual infos
+	OfferSigner common.Address
+	Raw         *types.Log // Blockchain specific contextual infos
 }
 
 const ThreeFAdapterSetOfferSignerEventName = "SetOfferSigner"
@@ -1290,7 +1171,7 @@ func (ThreeFAdapterSetOfferSigner) ContractEventName() string {
 // UnpackSetOfferSignerEvent is the Go binding that unpacks the event data emitted
 // by contract.
 //
-// Solidity: event SetOfferSigner(address indexed signer)
+// Solidity: event SetOfferSigner(address indexed offerSigner)
 func (threeFAdapter *ThreeFAdapter) UnpackSetOfferSignerEvent(log *types.Log) (*ThreeFAdapterSetOfferSigner, error) {
 	event := "SetOfferSigner"
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
@@ -1362,11 +1243,11 @@ func (threeFAdapter *ThreeFAdapter) UnpackError(raw []byte) (any, error) {
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["AlreadyInitialized"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackAlreadyInitializedError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["AssetMismatch"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackAssetMismatchError(raw[4:])
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["AlreadyRequest"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackAlreadyRequestError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["InsufficientLiquidity"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackInsufficientLiquidityError(raw[4:])
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["InsufficientAllocate"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackInsufficientAllocateError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["InvalidInitialization"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackInvalidInitializationError(raw[4:])
@@ -1374,14 +1255,14 @@ func (threeFAdapter *ThreeFAdapter) UnpackError(raw []byte) (any, error) {
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["InvalidVault"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackInvalidVaultError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["NotAttested"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackNotAttestedError(raw[4:])
-	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["NotFactory"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackNotFactoryError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["NotInitializing"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackNotInitializingError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["NotRequest"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackNotRequestError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["NotVault"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackNotVaultError(raw[4:])
@@ -1392,20 +1273,26 @@ func (threeFAdapter *ThreeFAdapter) UnpackError(raw []byte) (any, error) {
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["OwnableUnauthorizedAccount"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackOwnableUnauthorizedAccountError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["PerRequestCapExceeded"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackPerRequestCapExceededError(raw[4:])
-	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["ReentrancyGuardReentrantCall"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackReentrancyGuardReentrantCallError(raw[4:])
 	}
 	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["SafeERC20FailedOperation"].ID.Bytes()[:4]) {
 		return threeFAdapter.UnpackSafeERC20FailedOperationError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["TooManyLoans"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackTooManyLoansError(raw[4:])
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["TooLargeRequest"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackTooLargeRequestError(raw[4:])
 	}
-	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["YieldTooLow"].ID.Bytes()[:4]) {
-		return threeFAdapter.UnpackYieldTooLowError(raw[4:])
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["TooLowYield"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackTooLowYieldError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["TooManyRequests"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackTooManyRequestsError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["TooSmallRequest"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackTooSmallRequestError(raw[4:])
+	}
+	if bytes.Equal(raw[:4], threeFAdapter.abi.Errors["WrongAsset"].ID.Bytes()[:4]) {
+		return threeFAdapter.UnpackWrongAssetError(raw[4:])
 	}
 	return nil, errors.New("Unknown error")
 }
@@ -1433,47 +1320,47 @@ func (threeFAdapter *ThreeFAdapter) UnpackAlreadyInitializedError(raw []byte) (*
 	return out, nil
 }
 
-// ThreeFAdapterAssetMismatch represents a AssetMismatch error raised by the ThreeFAdapter contract.
-type ThreeFAdapterAssetMismatch struct {
+// ThreeFAdapterAlreadyRequest represents a AlreadyRequest error raised by the ThreeFAdapter contract.
+type ThreeFAdapterAlreadyRequest struct {
 }
 
 // ErrorID returns the hash of canonical representation of the error's signature.
 //
-// Solidity: error AssetMismatch()
-func ThreeFAdapterAssetMismatchErrorID() common.Hash {
-	return common.HexToHash("0x83c1010ad7aa04f27fb612a82818ae1f4e183ffb2c2ce08a49b7b56cdd6dd4fb")
+// Solidity: error AlreadyRequest()
+func ThreeFAdapterAlreadyRequestErrorID() common.Hash {
+	return common.HexToHash("0x8d93e31a683f438f3632655955c279b3597d3f204f2f379582403ed351370f82")
 }
 
-// UnpackAssetMismatchError is the Go binding used to decode the provided
+// UnpackAlreadyRequestError is the Go binding used to decode the provided
 // error data into the corresponding Go error struct.
 //
-// Solidity: error AssetMismatch()
-func (threeFAdapter *ThreeFAdapter) UnpackAssetMismatchError(raw []byte) (*ThreeFAdapterAssetMismatch, error) {
-	out := new(ThreeFAdapterAssetMismatch)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "AssetMismatch", raw); err != nil {
+// Solidity: error AlreadyRequest()
+func (threeFAdapter *ThreeFAdapter) UnpackAlreadyRequestError(raw []byte) (*ThreeFAdapterAlreadyRequest, error) {
+	out := new(ThreeFAdapterAlreadyRequest)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "AlreadyRequest", raw); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// ThreeFAdapterInsufficientLiquidity represents a InsufficientLiquidity error raised by the ThreeFAdapter contract.
-type ThreeFAdapterInsufficientLiquidity struct {
+// ThreeFAdapterInsufficientAllocate represents a InsufficientAllocate error raised by the ThreeFAdapter contract.
+type ThreeFAdapterInsufficientAllocate struct {
 }
 
 // ErrorID returns the hash of canonical representation of the error's signature.
 //
-// Solidity: error InsufficientLiquidity()
-func ThreeFAdapterInsufficientLiquidityErrorID() common.Hash {
-	return common.HexToHash("0xbb55fd27c46b5ba9f88ff2cb2222216afeb0f193423b26615497b3020ab61f8e")
+// Solidity: error InsufficientAllocate()
+func ThreeFAdapterInsufficientAllocateErrorID() common.Hash {
+	return common.HexToHash("0xb128897f3cb0ff1be99d96c4772ed6c60ee2a8e88745c65f2a907980f83cad61")
 }
 
-// UnpackInsufficientLiquidityError is the Go binding used to decode the provided
+// UnpackInsufficientAllocateError is the Go binding used to decode the provided
 // error data into the corresponding Go error struct.
 //
-// Solidity: error InsufficientLiquidity()
-func (threeFAdapter *ThreeFAdapter) UnpackInsufficientLiquidityError(raw []byte) (*ThreeFAdapterInsufficientLiquidity, error) {
-	out := new(ThreeFAdapterInsufficientLiquidity)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "InsufficientLiquidity", raw); err != nil {
+// Solidity: error InsufficientAllocate()
+func (threeFAdapter *ThreeFAdapter) UnpackInsufficientAllocateError(raw []byte) (*ThreeFAdapterInsufficientAllocate, error) {
+	out := new(ThreeFAdapterInsufficientAllocate)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "InsufficientAllocate", raw); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -1525,29 +1412,6 @@ func (threeFAdapter *ThreeFAdapter) UnpackInvalidVaultError(raw []byte) (*ThreeF
 	return out, nil
 }
 
-// ThreeFAdapterNotAttested represents a NotAttested error raised by the ThreeFAdapter contract.
-type ThreeFAdapterNotAttested struct {
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error NotAttested()
-func ThreeFAdapterNotAttestedErrorID() common.Hash {
-	return common.HexToHash("0x99efb89078879e78f0f307145c3360fe4f6680762a21d87392e067610a80f73d")
-}
-
-// UnpackNotAttestedError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error NotAttested()
-func (threeFAdapter *ThreeFAdapter) UnpackNotAttestedError(raw []byte) (*ThreeFAdapterNotAttested, error) {
-	out := new(ThreeFAdapterNotAttested)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "NotAttested", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // ThreeFAdapterNotFactory represents a NotFactory error raised by the ThreeFAdapter contract.
 type ThreeFAdapterNotFactory struct {
 }
@@ -1589,6 +1453,29 @@ func ThreeFAdapterNotInitializingErrorID() common.Hash {
 func (threeFAdapter *ThreeFAdapter) UnpackNotInitializingError(raw []byte) (*ThreeFAdapterNotInitializing, error) {
 	out := new(ThreeFAdapterNotInitializing)
 	if err := threeFAdapter.abi.UnpackIntoInterface(out, "NotInitializing", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ThreeFAdapterNotRequest represents a NotRequest error raised by the ThreeFAdapter contract.
+type ThreeFAdapterNotRequest struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error NotRequest()
+func ThreeFAdapterNotRequestErrorID() common.Hash {
+	return common.HexToHash("0x2b1697af70eb58a1fa466030f88f2dd8bedf01f69018be1b04b7747be7c762c7")
+}
+
+// UnpackNotRequestError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error NotRequest()
+func (threeFAdapter *ThreeFAdapter) UnpackNotRequestError(raw []byte) (*ThreeFAdapterNotRequest, error) {
+	out := new(ThreeFAdapterNotRequest)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "NotRequest", raw); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -1665,29 +1552,6 @@ func (threeFAdapter *ThreeFAdapter) UnpackOwnableUnauthorizedAccountError(raw []
 	return out, nil
 }
 
-// ThreeFAdapterPerRequestCapExceeded represents a PerRequestCapExceeded error raised by the ThreeFAdapter contract.
-type ThreeFAdapterPerRequestCapExceeded struct {
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error PerRequestCapExceeded()
-func ThreeFAdapterPerRequestCapExceededErrorID() common.Hash {
-	return common.HexToHash("0x71f1d368b03a6a05e70fa19b11e67ee48021141a925ec34bb569da61b20c54ba")
-}
-
-// UnpackPerRequestCapExceededError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error PerRequestCapExceeded()
-func (threeFAdapter *ThreeFAdapter) UnpackPerRequestCapExceededError(raw []byte) (*ThreeFAdapterPerRequestCapExceeded, error) {
-	out := new(ThreeFAdapterPerRequestCapExceeded)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "PerRequestCapExceeded", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // ThreeFAdapterReentrancyGuardReentrantCall represents a ReentrancyGuardReentrantCall error raised by the ThreeFAdapter contract.
 type ThreeFAdapterReentrancyGuardReentrantCall struct {
 }
@@ -1735,47 +1599,116 @@ func (threeFAdapter *ThreeFAdapter) UnpackSafeERC20FailedOperationError(raw []by
 	return out, nil
 }
 
-// ThreeFAdapterTooManyLoans represents a TooManyLoans error raised by the ThreeFAdapter contract.
-type ThreeFAdapterTooManyLoans struct {
+// ThreeFAdapterTooLargeRequest represents a TooLargeRequest error raised by the ThreeFAdapter contract.
+type ThreeFAdapterTooLargeRequest struct {
 }
 
 // ErrorID returns the hash of canonical representation of the error's signature.
 //
-// Solidity: error TooManyLoans()
-func ThreeFAdapterTooManyLoansErrorID() common.Hash {
-	return common.HexToHash("0x79f076cbcc68c75c88e41b56e5c9c606891ae32cb5903197b2e48a3a10ade578")
+// Solidity: error TooLargeRequest()
+func ThreeFAdapterTooLargeRequestErrorID() common.Hash {
+	return common.HexToHash("0xd67cf587430cfcee33da8a888aff2db6f5f4b9a07d9bbd7bd784b7f9c8c59ab2")
 }
 
-// UnpackTooManyLoansError is the Go binding used to decode the provided
+// UnpackTooLargeRequestError is the Go binding used to decode the provided
 // error data into the corresponding Go error struct.
 //
-// Solidity: error TooManyLoans()
-func (threeFAdapter *ThreeFAdapter) UnpackTooManyLoansError(raw []byte) (*ThreeFAdapterTooManyLoans, error) {
-	out := new(ThreeFAdapterTooManyLoans)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "TooManyLoans", raw); err != nil {
+// Solidity: error TooLargeRequest()
+func (threeFAdapter *ThreeFAdapter) UnpackTooLargeRequestError(raw []byte) (*ThreeFAdapterTooLargeRequest, error) {
+	out := new(ThreeFAdapterTooLargeRequest)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "TooLargeRequest", raw); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// ThreeFAdapterYieldTooLow represents a YieldTooLow error raised by the ThreeFAdapter contract.
-type ThreeFAdapterYieldTooLow struct {
+// ThreeFAdapterTooLowYield represents a TooLowYield error raised by the ThreeFAdapter contract.
+type ThreeFAdapterTooLowYield struct {
 }
 
 // ErrorID returns the hash of canonical representation of the error's signature.
 //
-// Solidity: error YieldTooLow()
-func ThreeFAdapterYieldTooLowErrorID() common.Hash {
-	return common.HexToHash("0x6f0b92522c675a3e71e7d7b1715735261c69f22c160af876cf34df7e201b542f")
+// Solidity: error TooLowYield()
+func ThreeFAdapterTooLowYieldErrorID() common.Hash {
+	return common.HexToHash("0xec84af7bf6cfbe9482148973e3ddd1942a9f2808b5f046694f7cfe46aa2ce953")
 }
 
-// UnpackYieldTooLowError is the Go binding used to decode the provided
+// UnpackTooLowYieldError is the Go binding used to decode the provided
 // error data into the corresponding Go error struct.
 //
-// Solidity: error YieldTooLow()
-func (threeFAdapter *ThreeFAdapter) UnpackYieldTooLowError(raw []byte) (*ThreeFAdapterYieldTooLow, error) {
-	out := new(ThreeFAdapterYieldTooLow)
-	if err := threeFAdapter.abi.UnpackIntoInterface(out, "YieldTooLow", raw); err != nil {
+// Solidity: error TooLowYield()
+func (threeFAdapter *ThreeFAdapter) UnpackTooLowYieldError(raw []byte) (*ThreeFAdapterTooLowYield, error) {
+	out := new(ThreeFAdapterTooLowYield)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "TooLowYield", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ThreeFAdapterTooManyRequests represents a TooManyRequests error raised by the ThreeFAdapter contract.
+type ThreeFAdapterTooManyRequests struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error TooManyRequests()
+func ThreeFAdapterTooManyRequestsErrorID() common.Hash {
+	return common.HexToHash("0x056d63471330a57f6c0d5cc835e9e9c3948af33484f6a6e592a2e3b11a42f713")
+}
+
+// UnpackTooManyRequestsError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error TooManyRequests()
+func (threeFAdapter *ThreeFAdapter) UnpackTooManyRequestsError(raw []byte) (*ThreeFAdapterTooManyRequests, error) {
+	out := new(ThreeFAdapterTooManyRequests)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "TooManyRequests", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ThreeFAdapterTooSmallRequest represents a TooSmallRequest error raised by the ThreeFAdapter contract.
+type ThreeFAdapterTooSmallRequest struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error TooSmallRequest()
+func ThreeFAdapterTooSmallRequestErrorID() common.Hash {
+	return common.HexToHash("0x81b8a5cdb66b9b21248015d7ceda95a251199c135eabf6392fb671dcfa81ea3f")
+}
+
+// UnpackTooSmallRequestError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error TooSmallRequest()
+func (threeFAdapter *ThreeFAdapter) UnpackTooSmallRequestError(raw []byte) (*ThreeFAdapterTooSmallRequest, error) {
+	out := new(ThreeFAdapterTooSmallRequest)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "TooSmallRequest", raw); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ThreeFAdapterWrongAsset represents a WrongAsset error raised by the ThreeFAdapter contract.
+type ThreeFAdapterWrongAsset struct {
+}
+
+// ErrorID returns the hash of canonical representation of the error's signature.
+//
+// Solidity: error WrongAsset()
+func ThreeFAdapterWrongAssetErrorID() common.Hash {
+	return common.HexToHash("0xf170c67fbef37d60daa2c8494fe22631cd135dc228bcc58a8c645c15992ea504")
+}
+
+// UnpackWrongAssetError is the Go binding used to decode the provided
+// error data into the corresponding Go error struct.
+//
+// Solidity: error WrongAsset()
+func (threeFAdapter *ThreeFAdapter) UnpackWrongAssetError(raw []byte) (*ThreeFAdapterWrongAsset, error) {
+	out := new(ThreeFAdapterWrongAsset)
+	if err := threeFAdapter.abi.UnpackIntoInterface(out, "WrongAsset", raw); err != nil {
 		return nil, err
 	}
 	return out, nil

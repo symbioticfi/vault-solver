@@ -17,99 +17,63 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-// TestDeriveLiquidity covers the pure reduction of the core-mirror on-chain reads
-// (delegator.limitOf, adapter.totalAssets, adapter.outstandingPrincipal, vault.withdrawable) to the
-// sizer's inputs:
-//
-//	fundable    = max(min(limit - held, withdrawable), 0)
-//	outstanding = max(outstandingPrincipal, 0)
-func TestDeriveLiquidity(t *testing.T) {
+// TestCollectRequests covers the enumeration-prefix logic: the adapter's requests[] is dense (kept so
+// by finalizeRequest's swap-pop), and indices past the end revert, so collectRequests must take the
+// leading run of decodable successes and stop at the first gap.
+func TestCollectRequests(t *testing.T) {
 	t.Parallel()
 
-	bn := big.NewInt
-	huge := bn(1_000_000) // vault liquidity not the binding constraint
+	a0 := common.HexToAddress("0x00000000000000000000000000000000000000A0")
+	a1 := common.HexToAddress("0x00000000000000000000000000000000000000A1")
+	a2 := common.HexToAddress("0x00000000000000000000000000000000000000A2")
+	ok := func(addr common.Address) chain.CallResult {
+		return chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, addr)}
+	}
+	fail := chain.CallResult{Success: false}
+	bad := chain.CallResult{Success: true, ReturnData: []byte{0x01}} // undecodable as an address
 
 	tests := []struct {
-		name                                            string
-		limit, held, outstandingPrincipal, withdrawable *big.Int
-		wantFundable, wantOutstanding                   *big.Int
+		name string
+		res  []chain.CallResult
+		want []common.Address
 	}{
-		{
-			name:                 "room available (cap binds)",
-			limit:                bn(1000),
-			held:                 bn(400),
-			outstandingPrincipal: bn(350),
-			withdrawable:         huge,
-			wantFundable:         bn(600),
-			wantOutstanding:      bn(350),
-		},
-		{
-			name:                 "vault liquidity binds below cap headroom",
-			limit:                bn(1000),
-			held:                 bn(400),
-			outstandingPrincipal: bn(350),
-			withdrawable:         bn(250),
-			wantFundable:         bn(250),
-			wantOutstanding:      bn(350),
-		},
-		{
-			name:                 "dry vault clamps fundable to zero despite cap room",
-			limit:                bn(1000),
-			held:                 bn(400),
-			outstandingPrincipal: bn(350),
-			withdrawable:         bn(0),
-			wantFundable:         bn(0),
-			wantOutstanding:      bn(350),
-		},
-		{
-			name:                 "cap fully consumed",
-			limit:                bn(1000),
-			held:                 bn(1000),
-			outstandingPrincipal: bn(900),
-			withdrawable:         huge,
-			wantFundable:         bn(0),
-			wantOutstanding:      bn(900),
-		},
-		{
-			name:                 "held over cap clamps fundable to zero",
-			limit:                bn(500),
-			held:                 bn(800),
-			outstandingPrincipal: bn(700),
-			withdrawable:         huge,
-			wantFundable:         bn(0),
-			wantOutstanding:      bn(700),
-		},
-		{
-			name:                 "negative outstanding clamps to zero",
-			limit:                bn(1000),
-			held:                 bn(100),
-			outstandingPrincipal: bn(-5),
-			withdrawable:         huge,
-			wantFundable:         bn(900),
-			wantOutstanding:      bn(0),
-		},
-		{
-			name:                 "all zero",
-			limit:                bn(0),
-			held:                 bn(0),
-			outstandingPrincipal: bn(0),
-			withdrawable:         bn(0),
-			wantFundable:         bn(0),
-			wantOutstanding:      bn(0),
-		},
+		{"empty", nil, nil},
+		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, []common.Address{a0, a1, a2}},
+		{"prefix then end-of-array gap", []chain.CallResult{ok(a0), ok(a1), fail, ok(a2)}, []common.Address{a0, a1}},
+		{"first slot reverts", []chain.CallResult{fail, ok(a0)}, nil},
+		{"undecodable slot ends the set", []chain.CallResult{ok(a0), bad, ok(a1)}, []common.Address{a0}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gotFundable, gotOutstanding := deriveLiquidity(tc.limit, tc.held, tc.outstandingPrincipal, tc.withdrawable)
-			if gotFundable.Cmp(tc.wantFundable) != 0 {
-				t.Errorf("fundable = %s, want %s", gotFundable, tc.wantFundable)
+			got := collectRequests(tc.res)
+			if len(got) != len(tc.want) {
+				t.Fatalf("collectRequests = %v (len %d), want %v (len %d)", got, len(got), tc.want, len(tc.want))
 			}
-			if gotOutstanding.Cmp(tc.wantOutstanding) != 0 {
-				t.Errorf("outstanding = %s, want %s", gotOutstanding, tc.wantOutstanding)
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d] = %s, want %s", i, got[i].Hex(), tc.want[i].Hex())
+				}
 			}
 		})
+	}
+}
+
+// TestPpmToBps covers the ceil(ppm/100) conversion of minYieldPerRequest (ppm) to the bps the pre-screen
+// compares against the auction maxRate — rounded up so the bot never bids below the on-chain floor.
+func TestPpmToBps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ppm, want int64
+	}{
+		{0, 0}, {1, 1}, {99, 1}, {100, 1}, {150, 2}, {10_000, 100}, {1_000_000, 10_000},
+	}
+	for _, tc := range tests {
+		if got := ppmToBps(big.NewInt(tc.ppm)).Int64(); got != tc.want {
+			t.Errorf("ppmToBps(%d) = %d, want %d", tc.ppm, got, tc.want)
+		}
 	}
 }
 
@@ -252,24 +216,5 @@ func TestResolveAdapters(t *testing.T) {
 				i, got[i].vault.Hex(), got[i].signer.Hex(), got[i].collateral.Hex(),
 				w.vault.Hex(), w.signer.Hex(), w.collateral.Hex())
 		}
-	}
-}
-
-// TestDeriveLiquidityDoesNotMutateInputs guards against the clamp accidentally aliasing/mutating the
-// caller's *big.Int values (deriveLiquidity must allocate its own results).
-func TestDeriveLiquidityDoesNotMutateInputs(t *testing.T) {
-	t.Parallel()
-
-	limit := big.NewInt(500)
-	held := big.NewInt(800) // held > limit, so fundable clamps to 0
-	outstandingPrincipal := big.NewInt(-1)
-	withdrawable := big.NewInt(1000)
-
-	_, _ = deriveLiquidity(limit, held, outstandingPrincipal, withdrawable)
-
-	if limit.Cmp(big.NewInt(500)) != 0 || held.Cmp(big.NewInt(800)) != 0 ||
-		outstandingPrincipal.Cmp(big.NewInt(-1)) != 0 || withdrawable.Cmp(big.NewInt(1000)) != 0 {
-		t.Fatalf("deriveLiquidity mutated its inputs: limit=%s held=%s outstanding=%s withdrawable=%s",
-			limit, held, outstandingPrincipal, withdrawable)
 	}
 }
