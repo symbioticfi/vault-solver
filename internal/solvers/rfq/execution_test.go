@@ -234,6 +234,26 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}
 }
 
+func TestToDiscountSwapInput_FixedWidthNonce(t *testing.T) {
+	nonceHex := "0x027f00f66fb80c279f3b232e003b9c42442949b05c5ccb340b840382b25ba07d"
+	got, err := toDiscountSwapInput(&resolveDiscountResponse{
+		Discount: discountTerms{
+			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
+			Signer:   "0x00000000000000000000000000000000000000a1",
+			Protocol: "0x00000000000000000000000000000000000000a2",
+			Nonce:    nonceHex, Deadline: 4_102_444_800,
+		},
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
+	}, strategyLeg{Adapter: vlt, AmountIn: big.NewInt(1)}, common.HexToAddress("0x0000000000000000000000000000000000000099"))
+	if err != nil {
+		t.Fatalf("toDiscountSwapInput: %v", err)
+	}
+	want, _ := new(big.Int).SetString(nonceHex[2:], 16)
+	if got.DiscountSwap.Discount.Nonce.Cmp(want) != 0 {
+		t.Fatalf("nonce = %s, want %s", got.DiscountSwap.Discount.Nonce, want)
+	}
+}
+
 func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	st, be := fillFixtures(t)
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a

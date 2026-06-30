@@ -423,7 +423,7 @@ func toDiscountSwapInput(
 	if !ok {
 		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid amount %q", d.Discount)
 	}
-	nonce, err := hexutil.DecodeBig(d.Nonce)
+	nonce, err := parseDiscountNonce(d.Nonce)
 	if err != nil {
 		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid nonce %q: %w", d.Nonce, err)
 	}
@@ -453,6 +453,20 @@ func toDiscountSwapInput(
 		Recipient:         recipient,
 		AmountIn:          new(big.Int).Set(leg.AmountIn),
 	}, nil
+}
+
+func parseDiscountNonce(s string) (*big.Int, error) {
+	if len(s) < 3 || s[:2] != "0x" {
+		return nil, errors.New("missing 0x prefix")
+	}
+	if len(s) > 66 {
+		return nil, errors.New("exceeds uint256 width")
+	}
+	nonce, ok := new(big.Int).SetString(s[2:], 16)
+	if !ok {
+		return nil, errors.New("invalid hex")
+	}
+	return nonce, nil
 }
 
 func (e *executionService) fail(orderID, msg string) {
