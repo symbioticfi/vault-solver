@@ -5,41 +5,35 @@ import (
 )
 
 // sizeInputs are the bounds that constrain how much principal the bot may offer for one Request. The
-// caps mirror the adapter's authoritative on-chain exposure limits (each 0 = disabled).
+// caps mirror the adapter's authoritative on-chain per-request limits (each 0 = disabled).
 type sizeInputs struct {
-	perRequestMax *big.Int // adapter perRequestMaxCollateral (0 = no limit)
-	fundable      *big.Int // delegator-cap + vault-liquidity headroom (chain read)
-	sleeveMax     *big.Int // adapter totalMaxCollateral (0 = no limit)
-	outstanding   *big.Int // live sleeve exposure (sum of open principals)
+	fundable  *big.Int // getMaxAssets() headroom, less this pass's commitments (chain read)
+	maxAssets *big.Int // adapter maxAssetsPerRequest (0 = no per-request ceiling)
+	minAssets *big.Int // adapter minAssetsPerRequest (0 = no per-request floor)
 
 	openCount     int
-	maxConcurrent int // adapter maxConcurrentLoans (0 = no limit)
+	maxConcurrent int // MAX_REQUESTS (compile-time const, not 0=disabled)
 }
 
-// sizeOffer returns the maximum principal an adapter can fund for one Request — its capacity — and
-// whether it can bid at all. `fundable` is always a hard cap (committing more would make the
-// just-in-time allocation inside the consume callback revert); the per-Request, sleeve, and
-// concurrency caps apply only when set (0 = disabled). The capacity is independent of the auction's
-// ask — selectOffers clamps it to the still-uncovered amount. Request authorization is enforced
-// on-chain by the 3F whitelist at consume time, so the bot applies only these risk caps.
+// sizeOffer returns the max principal an adapter can fund for one Request (its capacity) and whether it
+// can bid. fundable is a hard cap (getMaxAssets already folds in the delegator cap + vault liquidity);
+// the per-request ceiling applies only when set (0 = disabled). Capacity below the per-request floor
+// can't fund a valid request, so the adapter can't bid. Capacity is independent of the ask —
+// selectOffers clamps it to the uncovered amount (and re-checks the floor after clamping).
 func sizeOffer(in sizeInputs) (*big.Int, bool) {
 	if in.maxConcurrent > 0 && in.openCount >= in.maxConcurrent {
 		return nil, false
 	}
 
 	amount := new(big.Int).Set(in.fundable)
-	if in.perRequestMax != nil && in.perRequestMax.Sign() > 0 {
-		amount = minBig(amount, in.perRequestMax)
-	}
-	if in.sleeveMax != nil && in.sleeveMax.Sign() > 0 {
-		sleeveRoom := new(big.Int).Sub(in.sleeveMax, in.outstanding)
-		if sleeveRoom.Sign() <= 0 {
-			return nil, false
-		}
-		amount = minBig(amount, sleeveRoom)
+	if in.maxAssets != nil && in.maxAssets.Sign() > 0 {
+		amount = minBig(amount, in.maxAssets)
 	}
 	if amount.Sign() <= 0 {
 		return nil, false
+	}
+	if in.minAssets != nil && amount.Cmp(in.minAssets) < 0 {
+		return nil, false // capacity below the on-chain minimum request size
 	}
 	return amount, true
 }

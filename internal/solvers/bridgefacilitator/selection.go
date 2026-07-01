@@ -21,8 +21,9 @@ type adapterOffer struct {
 // selectOffers chooses, in one shot, the offers that cover `remaining` of an auction. It ranks the
 // candidates by capacity (largest first) and assigns each the principal it will offer —
 // min(capacity, still-uncovered) — until the amount is covered or candidates run out. The returned
-// principals sum to min(remaining, Σcapacity); one offer per adapter. A future min-amount exposure
-// param would be enforced here.
+// principals sum to at most min(remaining, Σcapacity); one offer per adapter. An adapter is skipped when
+// the clamped principal falls below its on-chain minAssetsPerRequest floor (the consume would revert),
+// leaving that remainder for a later pass.
 func selectOffers(candidates []adapterSizing, remaining *big.Int) []adapterOffer {
 	ranked := append([]adapterSizing(nil), candidates...)
 	sort.SliceStable(ranked, func(i, j int) bool {
@@ -38,6 +39,9 @@ func selectOffers(candidates []adapterSizing, remaining *big.Int) []adapterOffer
 		principal := new(big.Int).Set(c.capacity)
 		if principal.Cmp(left) > 0 {
 			principal.Set(left)
+		}
+		if floor := c.off.st.minAssets; floor != nil && floor.Sign() > 0 && principal.Cmp(floor) < 0 {
+			continue // uncovered remainder is below this adapter's on-chain minimum request size
 		}
 		offers = append(offers, adapterOffer{off: c.off, principal: principal})
 		left.Sub(left, principal)

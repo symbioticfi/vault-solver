@@ -37,8 +37,8 @@ repo root) §4 for the functional blueprint of the 3F solver.
 | API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
 | 3F auth | **Signed payloads — no API key, no offer-address.** Offer create + list authenticate via the EIP-712 offer signature, which 3F verifies through the adapter's **EIP-1271 `isValidSignature`** (the adapter trusts this solver's signer). Auction listing is public. Replaces the old self-generated `x-api-key` + per-facilitator offer-address registration. |
 | Adapter scope | One solver serves a **set of adapters** (config whitelist now; a dynamic "list public 3F adapters" API later). Per auction it covers the **full requested amount** with one or more single-adapter offers (most-fundable first), stopping once covered — **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
-| Persistence | **Stateless + periodic on-chain resync.** No DB. Open positions come from `adapter.activeRequests()` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
-| Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `redeem` (via the shared `txmanager`). |
+| Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
+| Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
 | Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
 
 ---
@@ -49,13 +49,14 @@ Everything the bot needs is reachable from view functions + the 3F API:
 
 | Need | Source | Type |
 |---|---|---|
-| Open position set | `adapter.activeRequests()` | on-chain view |
-| Per-position detail (principal, ytExpected, openedAt) | `adapter.positions(request)` | on-chain view |
-| Realized / recallable principal | `realizedPrincipal()`, `deallocatable()`, `skimmable()` | on-chain view |
-| Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across `activeRequests()` | on-chain view |
-| Offer won / consumed | next `activeRequests()` resync | on-chain view |
+| Open request count | `adapter.requestsLength()` (single read) | on-chain view |
+| Open request set | `adapter.requests(i)` enumerated `0..requestsLength()-1` | on-chain view |
+| Per-request valuation | folded into `adapter.totalAssets()` (values each request's PT/YT live) | on-chain view |
+| Funding headroom | `adapter.getMaxAssets()` (min(limitOf − totalAssets, withdrawable), 0 if sweep pending) | on-chain view |
+| Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across the enumerated `requests(i)` | on-chain view |
+| Offer won / consumed | next `requests(i)` resync | on-chain view |
 | Auction discovery + offer status | `GET /v1/auction`, `GET /v1/offer` | 3F API (off-chain) |
-| Realized loss/gain per loan | `PositionRedeemed` log parsed from the bot's **own** `redeem` receipt | self-emitted |
+| Realized loss/gain per loan | `FinalizeRequest` log parsed from the bot's **own** `multicall(finalizeRequest…)` receipt | self-emitted |
 
 Trade-off accepted: view-only loses *latency* (learn of consume/repay on the next
 poll tick) and *historical analytics*. Neither matters for 3F — funding pull time is
@@ -105,7 +106,7 @@ of `TxRequest{To, Data, Value, GasLimit?, Label}`; for each it tracks the nonce
 locally (seeded from the pending nonce, monotonic), sets EIP-1559 fees, signs via the
 `Signer`, sends, waits for the receipt, and handles `nonce too low` / stuck-tx bump +
 resync. Solvers **never** send directly — they build calldata (packed via the abigen
-ABI, e.g. `adapter.Pack("redeem", requests)`) and hand it to the txmanager, receiving
+ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
 a `TxResult{Hash, Receipt, Err}`. Serializing through one worker eliminates
 parallel-nonce races across solvers.
 
@@ -166,8 +167,11 @@ solver:
 
 `apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each
 adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
-**exposure caps are read on-chain** (`perRequestMaxCollateral`, `totalMaxCollateral`, `maxConcurrentLoans`,
-`minRequestYieldBps`) — config carries only the adapter addresses.
+**per-request caps are read on-chain** (`minYieldPerRequest` — ppm, converted to bps by the reader;
+`minAssetsPerRequest`; `maxAssetsPerRequest` — set via `setLimitsPerRequest`) — config carries only the
+adapter addresses. Funding headroom is the adapter's own `getMaxAssets()` (it folds in the delegator's
+per-adapter `limitOf`, the vault's `withdrawable`, and any pending sweep), so the bot reads no separate
+sleeve cap. Concurrency is the contract's `MAX_REQUESTS` constant (50), mirrored as a bot const.
 
 ### Per-auction adapter coverage (the new multi-adapter core)
 
@@ -176,12 +180,13 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 
 1. **Candidates** — the configured adapters that are **eligible to bid**: collateral (`vault.asset()`)
    matches the auction's `depositAsset`, no live offer of ours already covers them on this auction, and
-   the auction's `maxRate` clears the adapter's on-chain return floor (`minRequestYieldBps`). The floor is
+   the auction's `maxRate` clears the adapter's on-chain return floor (`minYieldPerRequest`). The floor is
    a selection filter, not a late signing-time check — a floor-failing adapter never competes.
-2. **Capacity** — read each candidate's exposure/liquidity in one Multicall (`fundable`,
-   `outstandingPrincipal`, open-loan count, the four on-chain caps), then `sizeOffer()` it to its
-   **capacity** — the max principal it can fund (per-request → fundable → sleeve → concurrency),
-   independent of the ask.
+2. **Capacity** — read each candidate's headroom/caps in one Multicall (`getMaxAssets`, the per-request
+   caps, and `requestsLength()` for the open-request count), then `sizeOffer()` it to its
+   **capacity** — the max principal it can fund (`maxAssetsPerRequest` → `getMaxAssets` → `MAX_REQUESTS`
+   concurrency; below `minAssetsPerRequest` it can't bid), independent of the ask. `selectOffers` re-checks
+   the per-request floor after clamping to the uncovered remainder.
 3. **Select offers** — `remaining = amountRequested − liveCoverage(auction)` (coverage already held from
    this and prior passes, summed across adapters). If `remaining ≤ 0` the auction is already fully
    covered → skip it (no duplicate offers). Otherwise `selectOffers` ranks the candidates by capacity
@@ -211,19 +216,19 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 | `make lint` / `test` / `build` / `docker` | golangci-lint; `go test -race -cover ./...`; build; image |
 
 Generated code is committed (hermetic build); refresh targets regenerate from upstream
-on demand. ABIs required: `BridgeFacilitatorAdapter`, `IRequest`/`IVaultController`,
+on demand. ABIs required: `ThreeFAdapter` (from core-mirror), `IRequest`/`IVaultController`,
 `IWhitelist`, `IVaultV2`.
 
 ---
 
 ## 8. Build phases
 
-Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `rfq` repo (`src/3f/`), 25 tests, ABI vendored here. This is what the bot binds against.
+Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contracts/adapters/ThreeFAdapter.sol`, ABI vendored here from the core-mirror Foundry build. This is what the bot binds against (it replaced rfq's `BridgeFacilitatorAdapter`).
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (fundable-liquidity + curator exposure caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` → pack `redeem` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
+3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
    implemented across the `bridgefacilitator` package:
@@ -262,11 +267,11 @@ Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `r
 Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
-- **(done) Exposure / risk params are on-chain.** The caps (`perRequestMaxCollateral`, `totalMaxCollateral`, `maxConcurrentLoans`, `minRequestYieldBps`) now live on the `BridgeFacilitatorAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Trust-minimized + curator-governed, as planned.
+- **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
-- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minRequestYieldBps`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
+- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **Dynamic adapter discovery.** The adapter set is a config whitelist; the dynamic "list public 3F adapters" API (§9) replaces it later, filtered to adapters our signer is the EIP-1271 signer for.
-- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and the adapter's on-chain `minRequestYieldBps` is the only floor today.
+- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and the adapter's on-chain `minYieldPerRequest` is the only floor today.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
