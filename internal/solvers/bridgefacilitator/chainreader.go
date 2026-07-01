@@ -122,17 +122,14 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address)
 	return out, nil
 }
 
-// exposureState bundles the per-target funding headroom and the adapter's per-request caps the offer
-// sizer needs. Caps are the adapter's on-chain risk limits (setLimitsPerRequest); the bot pre-screens
-// offers before the contract enforces them at consume time. Note the asymmetry: the contract's lower
-// bounds are vacuous at 0 (no floor), but maxAssetsPerRequest is an always-active ceiling — 0 rejects
-// every request (see sizeOffer).
+// exposureState is the per-target funding headroom and per-request caps (setLimitsPerRequest) the sizer
+// pre-screens against before the contract enforces them at consume time.
 type exposureState struct {
 	fundable    *big.Int // getMaxAssets(): min(limitOf - totalAssets, vault.withdrawable), 0 if a sweep is pending
-	openCount   int      // number of active requests (requests[] length, enumerated)
+	openCount   int      // active request count (requests[] length)
 	maxAssets   *big.Int // maxAssetsPerRequest — always-active ceiling (0 = reject-all)
-	minAssets   *big.Int // minAssetsPerRequest (0 = no per-request floor)
-	minYieldBps *big.Int // minYieldPerRequest (ppm) converted to bps (0 = no yield floor)
+	minAssets   *big.Int // minAssetsPerRequest (0 = no floor)
+	minYieldBps *big.Int // minYieldPerRequest (ppm) → bps (0 = no floor)
 }
 
 // liquidityAndExposure reads the adapter's JIT-funding headroom (getMaxAssets), its per-request caps, and

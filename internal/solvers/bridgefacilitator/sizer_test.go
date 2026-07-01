@@ -42,7 +42,7 @@ func TestSizeOffer(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name:   "maxAssets 0 is reject-all (contract caps principal at maxAssetsPerRequest): cannot bid",
+			name:   "maxAssets 0 rejects all: cannot bid",
 			mutate: func(in *sizeInputs) { in.maxAssets = bi(0) },
 			wantOK: false,
 		},
