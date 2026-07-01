@@ -49,7 +49,8 @@ Everything the bot needs is reachable from view functions + the 3F API:
 
 | Need | Source | Type |
 |---|---|---|
-| Open request set | `adapter.requests(i)` enumerated `0..MAX_REQUESTS-1` (dense array, no length getter) | on-chain view |
+| Open request count | `adapter.requestsLength()` (single read) | on-chain view |
+| Open request set | `adapter.requests(i)` enumerated `0..requestsLength()-1` | on-chain view |
 | Per-request valuation | folded into `adapter.totalAssets()` (values each request's PT/YT live) | on-chain view |
 | Funding headroom | `adapter.getMaxAssets()` (min(limitOf − totalAssets, withdrawable), 0 if sweep pending) | on-chain view |
 | Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across the enumerated `requests(i)` | on-chain view |
@@ -182,7 +183,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    the auction's `maxRate` clears the adapter's on-chain return floor (`minYieldPerRequest`). The floor is
    a selection filter, not a late signing-time check — a floor-failing adapter never competes.
 2. **Capacity** — read each candidate's headroom/caps in one Multicall (`getMaxAssets`, the per-request
-   caps, and `requests(i)` enumerated for the open-request count), then `sizeOffer()` it to its
+   caps, and `requestsLength()` for the open-request count), then `sizeOffer()` it to its
    **capacity** — the max principal it can fund (`maxAssetsPerRequest` → `getMaxAssets` → `MAX_REQUESTS`
    concurrency; below `minAssetsPerRequest` it can't bid), independent of the ask. `selectOffers` re-checks
    the per-request floor after clamping to the uncovered remainder.
@@ -227,7 +228,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over enumerated `requests(i)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
+3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
    implemented across the `bridgefacilitator` package:

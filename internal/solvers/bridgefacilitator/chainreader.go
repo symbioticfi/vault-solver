@@ -28,8 +28,9 @@ var (
 )
 
 // maxRequests mirrors MAX_REQUESTS in IThreeFAdapter — the adapter rejects a new request once it tracks
-// this many. requests[] exposes only an element getter (no length/list), so the active set is enumerated
-// requests(0..maxRequests-1); it also bounds the bot's pre-screen concurrency check.
+// this many. It is the bot's concurrency pre-screen cap and the clamp bound for the on-chain
+// requestsLength() count. (50 is a compile-time constant, immutable per deployment, so it is mirrored
+// here rather than read.)
 const maxRequests = 50
 
 // reader performs the adapter- and Request-side on-chain reads the solver relies on, batching via
@@ -135,16 +136,16 @@ type exposureState struct {
 // liquidityAndExposure reads the adapter's JIT-funding headroom (getMaxAssets), its per-request caps, and
 // its active-request count in a single multicall. getMaxAssets() is authoritative for funding: it already
 // bounds the headroom by both the delegator's per-adapter cap AND the vault's withdrawable liquidity, so
-// the bot can't sign an offer the JIT pull at consume time can't satisfy. The active set is enumerated via
-// requests(0..maxRequests-1) (AllowFailure; the dense array's first gap ends the set) so openCount feeds
-// the concurrency pre-screen.
+// the bot can't sign an offer the JIT pull at consume time can't satisfy. openCount is the adapter's own
+// requestsLength() (a single read) feeding the concurrency pre-screen.
 func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Address) (exposureState, error) {
-	calls := append([]chain.Call{
+	calls := []chain.Call{
 		{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()},
 		{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},
-	}, requestSlotCalls(adapterAddr)...)
+		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()},
+	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return exposureState{}, err
@@ -152,10 +153,8 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 	if len(res) != len(calls) {
 		return exposureState{}, errors.Errorf("multicall returned %d results, want %d", len(res), len(calls))
 	}
-	// The four limit reads must succeed; the requests(i) slots are AllowFailure (past-end reverts mark the end).
-	const limitReads = 4
-	for i := range limitReads {
-		if !res[i].Success {
+	for i, rr := range res {
+		if !rr.Success {
 			return exposureState{}, errors.Errorf("liquidity multicall: sub-call %d reverted", i)
 		}
 	}
@@ -176,14 +175,29 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 	if err != nil {
 		return exposureState{}, err
 	}
+	openCount, err := bfAdapter.UnpackRequestsLength(res[4].ReturnData)
+	if err != nil {
+		return exposureState{}, err
+	}
 
 	return exposureState{
 		fundable:    fundable,
-		openCount:   len(collectRequests(res[limitReads:])),
+		openCount:   clampCount(openCount),
 		maxAssets:   maxAssets,
 		minAssets:   minAssets,
 		minYieldBps: ppmToBps(minYield),
 	}, nil
+}
+
+// clampCount converts the on-chain requestsLength (uint256, bounded by MAX_REQUESTS) to an int. A value
+// that doesn't fit is clamped to maxRequests so the concurrency pre-screen fails closed.
+func clampCount(n *big.Int) int {
+	if n.IsInt64() {
+		if v := n.Int64(); v >= 0 && v <= int64(maxRequests) {
+			return int(v)
+		}
+	}
+	return maxRequests
 }
 
 // ppmToBps converts minYieldPerRequest (ppm, YIELD_PRECISION=1e6) to bps, rounding up so the bot never
@@ -192,10 +206,11 @@ func ppmToBps(ppm *big.Int) *big.Int {
 	return new(big.Int).Div(new(big.Int).Add(ppm, big.NewInt(99)), big.NewInt(100)) // ceil(ppm/100); 1 bps = 100 ppm
 }
 
-// requestSlotCalls builds the requests(i) reads for i in [0, maxRequests). AllowFailure: indices past the
-// dense array revert (out-of-bounds), which marks the end of the active set.
-func requestSlotCalls(adapterAddr common.Address) []chain.Call {
-	calls := make([]chain.Call, maxRequests)
+// requestSlotCalls builds the requests(i) reads for i in [0, n) — n from requestsLength(). AllowFailure:
+// a concurrent finalize can shrink the array between the length read and these, so a tail index may
+// revert; collectRequests stops at that gap.
+func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
+	calls := make([]chain.Call, n)
 	for i := range calls {
 		calls[i] = chain.Call{Target: adapterAddr, AllowFailure: true, Data: bfAdapter.PackRequests(big.NewInt(int64(i)))}
 	}
@@ -219,10 +234,27 @@ func collectRequests(res []chain.CallResult) []common.Address {
 	return out
 }
 
-// readyToRedeem returns the adapter's active Requests that are currently redeemable. It enumerates the
-// active set (requests(0..maxRequests-1)) then batches every canWithdraw() into a single multicall.
+// readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads
+// requestsLength(), enumerates exactly that many requests(i), then batches every canWithdraw() into a
+// single multicall.
 func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, error) {
-	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr))
+	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
+	if err != nil {
+		return nil, err
+	}
+	if len(lres) != 1 || !lres[0].Success {
+		return nil, errors.New("adapter.requestsLength() reverted")
+	}
+	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
+	if err != nil {
+		return nil, errors.Errorf("adapter.requestsLength(): %w", err)
+	}
+	count := clampCount(n)
+	if count == 0 {
+		return nil, nil
+	}
+
+	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
 	if err != nil {
 		return nil, err
 	}
