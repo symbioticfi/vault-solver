@@ -10,12 +10,11 @@ func bi(n int64) *big.Int { return big.NewInt(n) }
 func TestSizeOffer(t *testing.T) {
 	base := func() sizeInputs {
 		return sizeInputs{
-			perRequestMax: bi(250_000),
 			fundable:      bi(500_000),
-			sleeveMax:     bi(1_000_000),
-			outstanding:   bi(0),
+			maxAssets:     bi(250_000),
+			minAssets:     bi(0),
 			openCount:     0,
-			maxConcurrent: 10,
+			maxConcurrent: maxRequests,
 		}
 	}
 
@@ -26,7 +25,7 @@ func TestSizeOffer(t *testing.T) {
 		want   *big.Int
 	}{
 		{
-			name:   "perRequestMax binds",
+			name:   "maxAssets binds",
 			mutate: func(in *sizeInputs) {},
 			wantOK: true,
 			want:   bi(250_000),
@@ -38,38 +37,26 @@ func TestSizeOffer(t *testing.T) {
 			want:   bi(100_000),
 		},
 		{
-			name:   "sleeve headroom binds",
-			mutate: func(in *sizeInputs) { in.outstanding = bi(900_000) }, // 100k room
-			wantOK: true,
-			want:   bi(100_000),
-		},
-		{
 			name:   "concurrency cap reached",
-			mutate: func(in *sizeInputs) { in.openCount = 10 },
+			mutate: func(in *sizeInputs) { in.openCount = maxRequests },
 			wantOK: false,
 		},
 		{
-			name:   "sleeve full",
-			mutate: func(in *sizeInputs) { in.outstanding = bi(1_000_000) },
-			wantOK: false,
-		},
-		{
-			name:   "perRequestMax disabled (0): fundable binds",
-			mutate: func(in *sizeInputs) { in.perRequestMax = bi(0) },
+			name:   "maxAssets disabled (0): fundable binds",
+			mutate: func(in *sizeInputs) { in.maxAssets = bi(0) },
 			wantOK: true,
 			want:   bi(500_000),
 		},
 		{
-			name:   "sleeveMax disabled (0): sleeve ignored even when outstanding is high",
-			mutate: func(in *sizeInputs) { in.sleeveMax = bi(0); in.outstanding = bi(900_000) },
-			wantOK: true,
-			want:   bi(250_000), // perRequestMax binds; no sleeve cap
+			name:   "capacity below minAssets floor: cannot bid",
+			mutate: func(in *sizeInputs) { in.fundable = bi(1_000); in.minAssets = bi(5_000) },
+			wantOK: false,
 		},
 		{
-			name:   "maxConcurrent disabled (0): no concurrency limit",
-			mutate: func(in *sizeInputs) { in.maxConcurrent = 0; in.openCount = 100 },
+			name:   "capacity at minAssets floor: can bid",
+			mutate: func(in *sizeInputs) { in.fundable = bi(5_000); in.minAssets = bi(5_000) },
 			wantOK: true,
-			want:   bi(250_000),
+			want:   bi(5_000),
 		},
 	}
 

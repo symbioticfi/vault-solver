@@ -27,10 +27,10 @@ OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
-# CORE_MIRROR_ABIS (LiquidLane adapter, universal delegator, vault/ERC4626 interfaces) come from the
-# core-mirror build, since nothing in rfq/src imports them so they aren't in rfq/out.
-ABIS := BridgeFacilitatorAdapter IRequest IVaultController IWhitelist Executor Reactor
-CORE_MIRROR_ABIS := LiquidLaneAdapter IVaultV2 IERC4626
+# CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, universal delegator, vault/ERC4626
+# interfaces) come from the core-mirror build, since they aren't in rfq/out.
+ABIS := IRequest IVaultController IWhitelist Executor Reactor
+CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IVaultV2 IERC4626
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 
@@ -42,7 +42,7 @@ CORE_MIRROR_ABIS := LiquidLaneAdapter IVaultV2 IERC4626
 # The on-chain read paths build their Multicall3 sub-calls and decode the return blobs through those
 # helpers (see the chainreaders), so an ABI change that renames a method or alters a signature breaks
 # the build at the call site instead of panicking at runtime — no stringly-typed abi.Pack("method").
-BINDINGS_V2 := BridgeFacilitatorAdapter:3f/adapter IRequest:3f/request \
+BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             LiquidLaneAdapter:rfq/adapter Executor:rfq/executor Reactor:rfq/reactor \
             UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626

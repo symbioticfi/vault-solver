@@ -171,15 +171,15 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 
 	offerings := make([]*adapterOffering, 0, len(s.cfg.Targets))
 	for _, t := range s.cfg.Targets {
-		st, lerr := s.reader.liquidityAndExposure(ctx, t.Vault, t.Adapter)
+		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if lerr != nil {
 			s.log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
 		s.log.V(1).Info("adapter liquidity",
-			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "outstanding", st.outstanding.String(),
-			"openLoans", st.openCount, "perRequestMax", st.perRequestMax.String(), "totalMax", st.totalMax.String(),
-			"minYieldBps", st.minYieldBps.String(), "maxConcurrent", st.maxConcurrent)
+			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
+			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
+			"minYieldBps", st.minYieldBps.String())
 		offerings = append(offerings, &adapterOffering{target: t, st: st, committed: new(big.Int)})
 	}
 	if len(offerings) == 0 {
@@ -240,12 +240,11 @@ func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*
 			continue
 		}
 		capacity, ok := sizeOffer(sizeInputs{
-			perRequestMax: off.st.perRequestMax,
 			fundable:      new(big.Int).Sub(off.st.fundable, off.committed),
-			sleeveMax:     off.st.totalMax,
-			outstanding:   new(big.Int).Add(off.st.outstanding, off.committed),
+			maxAssets:     off.st.maxAssets,
+			minAssets:     off.st.minAssets,
 			openCount:     off.st.openCount + off.opened,
-			maxConcurrent: off.st.maxConcurrent,
+			maxConcurrent: maxRequests,
 		})
 		if !ok {
 			continue
@@ -285,13 +284,13 @@ func (s *Solver) redeemAll(ctx context.Context) {
 // reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
 	for _, t := range s.cfg.Targets {
-		st, err := s.reader.liquidityAndExposure(ctx, t.Vault, t.Adapter)
+		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if err != nil {
 			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
 			continue
 		}
 		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
-			"openLoans", st.openCount, "outstandingPrincipal", st.outstanding.String())
+			"openRequests", st.openCount, "fundable", st.fundable.String())
 	}
 }
 
