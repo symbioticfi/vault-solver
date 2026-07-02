@@ -42,8 +42,13 @@ func TestSizeOffer(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name:   "maxAssets disabled (0): fundable binds",
+			name:   "maxAssets 0 rejects all: cannot bid",
 			mutate: func(in *sizeInputs) { in.maxAssets = bi(0) },
+			wantOK: false,
+		},
+		{
+			name:   "maxAssets above fundable: fundable binds",
+			mutate: func(in *sizeInputs) { in.maxAssets = bi(1_000_000) },
 			wantOK: true,
 			want:   bi(500_000),
 		},
