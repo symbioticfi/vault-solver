@@ -94,6 +94,35 @@ func TestEncodeOperationDataRejectsMissingAuth(t *testing.T) {
 	}
 }
 
+func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
+	auth := operationAuth{BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1)}
+	valid := LiquidationLeg{
+		Borrower:       common.Address{19: 1},
+		MaxSeizeAssets: big.NewInt(1),
+		MinProfit:      big.NewInt(1),
+		MaxAssets:      big.NewInt(1),
+	}
+	for name, mutate := range map[string]func(*LiquidationLeg){
+		"nil maxSeizeAssets":  func(l *LiquidationLeg) { l.MaxSeizeAssets = nil },
+		"zero maxSeizeAssets": func(l *LiquidationLeg) { l.MaxSeizeAssets = big.NewInt(0) },
+		"nil minProfit":       func(l *LiquidationLeg) { l.MinProfit = nil },
+		"negative minProfit":  func(l *LiquidationLeg) { l.MinProfit = big.NewInt(-1) },
+		"nil maxAssets":       func(l *LiquidationLeg) { l.MaxAssets = nil },
+		"zero maxAssets":      func(l *LiquidationLeg) { l.MaxAssets = big.NewInt(0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			leg := valid
+			mutate(&leg)
+			if _, err := EncodeOperationData(auth, []LiquidationLeg{leg}, nil); err == nil {
+				t.Fatal("expected invalid leg error")
+			}
+		})
+	}
+	if _, err := EncodeOperationData(auth, []LiquidationLeg{valid}, nil); err != nil {
+		t.Fatalf("valid leg must encode: %v", err)
+	}
+}
+
 func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {

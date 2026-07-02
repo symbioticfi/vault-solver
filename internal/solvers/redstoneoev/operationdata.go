@@ -91,6 +91,11 @@ func CallbackAuthDigest(chainID *big.Int, callback, executor common.Address, aut
 
 func validateOperationLegs(legs []LiquidationLeg) error {
 	for i, leg := range legs {
+		if leg.MaxSeizeAssets == nil || leg.MaxSeizeAssets.Sign() <= 0 {
+			// A zero-seize leg is a guaranteed on-chain skip (Morpho seizes nothing); sizeLeg never
+			// produces one, so reject it here rather than sign a dead leg into the bundle.
+			return errors.Errorf("operationData: invalid leg %d maxSeizeAssets", i)
+		}
 		if leg.MinProfit == nil || leg.MinProfit.Sign() < 0 {
 			return errors.Errorf("operationData: invalid leg %d minProfit", i)
 		}

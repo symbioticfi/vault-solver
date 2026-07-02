@@ -399,19 +399,23 @@ auction auth (`auctionKey`, `bidAmount`, `minBundleProfit`, and capped legs), ma
 then processes legs fail-soft. It enables exactly that `payBid` only after realized bundle profit clears
 `minBundleProfit`.
 
-Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, and loan-denominated `minProfit`.
-`SymbioticOevSolver` is a no-preview callback: it reads immutable Morpho market params, calls
-`Morpho.liquidate` directly with the signed `maxSeizeAssets`, and lets `onMorphoLiquidate` validate economics
-from actual `repaidAssets`. Morpho is invoked with `try/catch`, so a stale/healthy/reverting leg emits
-`LegResult` and the bundle can continue. During `onMorphoLiquidate`, the callback sells the seizure through
-the immutable `LiquidLaneAdapter`, approves Morpho repayment, and requires the realized gain to cover repayment
-plus the current leg gas floor. A reverted leg contributes its signed `minProfit` as skipped-cost penalty to
-the final bundle profit gate.
+Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, a signed loan-output cap `maxAssets`, and a
+loan-denominated `minProfit`. `SymbioticOevSolver` is a no-preview callback: it reads immutable Morpho
+market params, calls `Morpho.liquidate` directly with the signed `maxSeizeAssets`, and lets
+`onMorphoLiquidate` validate economics from actual `repaidAssets`. Morpho is invoked with `try/catch`, so a
+stale/healthy/reverting leg emits `LegResult` and the bundle can continue. During `onMorphoLiquidate`, the
+callback sells the seizure through the immutable `LiquidLaneAdapter` at `min(current adapter rate-out,
+maxAssets)`, approves Morpho repayment, and requires the realized gain to cover repayment plus the leg's
+signed `minProfit`. A skipped or reverted leg contributes **zero** to the bundle profit — the bundle gate
+(`BundleResult.bidAuthorized`) compares only the successful legs' realized profit against the signed
+`minBundleProfit`.
 
 The payBid native pool is owner-funded (`receive`) and owner-withdrawable (`withdrawNative`/`withdrawERC20`).
-`payBid` is not an economic choice: after a valid `liquidate` call it pays the authorized bid amount, because
-that is the solver's auction commitment. Calling `payBid` without a matching authorized liquidation emits
-`PayBidResult(..., false)` and pays nothing.
+`payBid` is gated on the bundle outcome: it pays the authorized bid amount only when `liquidate` cleared the
+`minBundleProfit` gate; otherwise (gate failed, or no matching authorized liquidation) it emits
+`PayBidResult(..., false)` and pays nothing — which the Executor records as `BidUnderpaid`, an event
+RedStone counts toward deposit slashing / blacklisting. A skipped leg in a multi-leg bundle can therefore
+convert a profitable settlement into a `BidUnderpaid` strike (see §10).
 
 Settlement events emitted on-chain (`LegResult` and `PayBidResult`; the Executor's
 `LiquidationFailed(solver indexed, nonce)`) document settlement and post-mortem reasons. The bot does not
@@ -648,3 +652,14 @@ conservative fallback because no cached route state means the solver cannot pric
 - **Keep calibrating predictor constants from real settlements.** The solver logs predicted route/gas and
   records actual/predicted gas ratio from `liquidation-result.txHash` receipts; tune constants above worst
   observed successful settlements.
+- **BidUnderpaid exposure on multi-leg bundles.** Legs settle fail-soft with zero contribution, while the
+  signed `minBundleProfit` (gas + bid + margin) assumes the whole bundle lands — one skipped leg can fail
+  the bundle gate, so `payBid` pays nothing and the Executor emits `BidUnderpaid`, which RedStone counts
+  toward slashing/blacklisting. Mitigations to evaluate: derive `minBundleProfit` so the gate passes when
+  the strongest leg lands; feed `BundleResult.bidAuthorized == false` (from receipt decode) into the
+  breaker; prefer single-leg bundles near the profit floor.
+- **`maxAssets` currently signs the haircut expected output**, so `min(rateOut, maxAssets)` on-chain
+  forfeits the `swapHaircutBps` margin of every seizure to the vault. Planned direction: the callback
+  takes the live adapter rate-out unconditionally and lets the per-leg profit floor gate economics
+  (contract change, drops `maxAssets` from the leg); solver-side, keep the per-collateral budget clamp
+  as the `InsufficientAllocate` defense with an over-reserve buffer for rate rises.
