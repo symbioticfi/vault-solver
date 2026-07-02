@@ -48,6 +48,7 @@ const skipStaleState = "stale_state"
 const (
 	skipDepositLow      = "deposit_low"
 	skipCallbackBalance = "callback_balance"
+	skipEmptyAuctionID  = "empty_auction_id"
 )
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
@@ -395,10 +396,15 @@ func (s *Solver) handleAuction(raw []byte) {
 		return
 	}
 	s.metrics.auction()
+	key := a.dedupKey()
+	if key == "" {
+		s.metrics.skip(skipEmptyAuctionID)
+		s.log.Info("auction with empty id received; dropping", "timestamp", a.Timestamp, "timeoutMs", a.TimeoutMs)
+		return
+	}
 	// Drop a duplicate delivery of the same auction (a reconnect re-subscribe can replay frames): bidding
-	// twice would burn a second nonce and reserve a second headroom for one auction. An empty-id frame still
-	// dedups — on a content hash (dedupKey) — so a replayed id-less frame can't slip past and double-bid.
-	if s.seen.seen(a.dedupKey()) {
+	// twice would burn a second nonce and reserve a second headroom for one auction.
+	if s.seen.seen(key) {
 		s.metrics.skip("duplicate")
 		s.log.V(1).Info("duplicate auction; already processed", "auction", a.ID)
 		return

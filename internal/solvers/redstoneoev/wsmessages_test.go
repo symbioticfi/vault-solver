@@ -63,31 +63,6 @@ func TestDetectFeedAuctionFrame(t *testing.T) {
 	}
 }
 
-// TestDedupKeyTimestamp pins that an id-less frame folds the auctioneer emit timestamp into its dedup key.
-// Distinct same-price re-auctions get distinct keys, while reconnect replay of one frame still dedups.
-func TestDedupKeyTimestamp(t *testing.T) {
-	mk := func(ts int64, timeout int) AuctionMessage {
-		return AuctionMessage{
-			Timestamp: ts, TimeoutMs: timeout,
-			Payload: AuctionPayload{Prices: map[string]string{"0xoracleA": "1800000000000000000000000000"}},
-		}
-	}
-	a := mk(1781243340988, 500)
-	replay := mk(1781243340988, 500) // identical frame redelivered on reconnect
-	later := mk(1781243341488, 500)  // same price, emitted 500ms later → a distinct auction
-
-	if a.dedupKey() != replay.dedupKey() {
-		t.Fatal("identical id-less frames (same timestamp) must dedup to the same key")
-	}
-	if a.dedupKey() == later.dedupKey() {
-		t.Fatal("two same-price id-less frames at different timestamps must NOT collide")
-	}
-	// A different timeout (same price + timestamp) is also a distinct frame.
-	if a.dedupKey() == mk(1781243340988, 400).dedupKey() {
-		t.Fatal("differing timeoutMs must yield a distinct dedup key")
-	}
-}
-
 func TestMarshalSolve(t *testing.T) {
 	msg := SolveMessage{Op: "solve", ID: "abc", Data: SolveData{
 		Bid: "0.0005", Nonce: "3", OperationCallback: "0x7Aa3", OperationData: "0x1234",

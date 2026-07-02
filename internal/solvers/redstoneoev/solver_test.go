@@ -929,10 +929,9 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	}
 }
 
-// TestHandleAuctionEmptyIdDedup is the regression for review F8: an empty-id frame must still be deduped on
-// a content hash, so a replayed id-less frame can't be processed twice (a second nonce + a double bid). The
-// first delivery sends a solve; an identical replay is dropped.
-func TestHandleAuctionEmptyIdDedup(t *testing.T) {
+// TestHandleAuctionEmptyIdDropped pins the auction identity invariant: RedStone auctions must carry an id.
+// Without it we cannot safely correlate solve/result frames, so the frame is ignored before bid building.
+func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	s, _ := seededSolver(t)
 	useOnchainTestMonitor(t, s) // size against the cached $1550
 
@@ -940,43 +939,24 @@ func TestHandleAuctionEmptyIdDedup(t *testing.T) {
 	a.ID = ""                            // the frame carries no id
 	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
 	setSnapshotBlockTime(t, s, a.Timestamp)
-	raw := marshal(a)
 
-	s.handleAuction(raw)
-	if drainSend(s) == nil {
-		t.Fatal("first empty-id auction should produce a solve")
-	}
-	s.handleAuction(raw) // identical replay
 	if f := drainSend(s); f != nil {
-		t.Fatalf("a replayed empty-id frame must be deduped (no second solve), got %s", f)
+		t.Fatalf("precondition: send channel should be empty, got %s", f)
+	}
+	s.handleAuction(marshal(a))
+	if f := drainSend(s); f != nil {
+		t.Fatalf("empty-id auction must be ignored, got solve %s", f)
 	}
 }
 
-// TestDedupKey pins the F8 key derivation: a present id is authoritative; an empty id derives a stable
-// content hash that matches across identical frames and differs when prices differ.
+// TestDedupKey pins that only RedStone's auction id is a valid dedup key.
 func TestDedupKey(t *testing.T) {
 	withID := AuctionMessage{ID: "abc"}
 	if got := withID.dedupKey(); got != "id:abc" {
 		t.Fatalf("present id must be the key, got %q", got)
 	}
-	base := AuctionMessage{Payload: AuctionPayload{
-		Prices: map[string]string{"0xoracleA": "100", "0xoracleB": "200"},
-	}}
-	// Same content (prices map order is irrelevant — sorted) → same key.
-	same := AuctionMessage{Payload: AuctionPayload{
-		Prices: map[string]string{"0xoracleB": "200", "0xoracleA": "100"},
-	}}
-	if base.dedupKey() != same.dedupKey() {
-		t.Fatal("identical empty-id frames must hash to the same key (order-independent)")
-	}
-	// A different price → a different key (not falsely deduped).
-	diff := base
-	diff.Payload.Prices = map[string]string{"0xoracleA": "101", "0xoracleB": "200"}
-	if base.dedupKey() == diff.dedupKey() {
-		t.Fatal("frames with different prices must not share a dedup key")
-	}
-	if got := base.dedupKey(); len(got) < 5 || got[:5] != "hash:" {
-		t.Fatalf("empty-id key must be a content hash, got %q", got)
+	if got := (AuctionMessage{}).dedupKey(); got != "" {
+		t.Fatalf("empty id must not produce a synthetic key, got %q", got)
 	}
 }
 

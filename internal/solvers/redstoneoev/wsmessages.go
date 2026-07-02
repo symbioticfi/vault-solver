@@ -1,12 +1,7 @@
 package redstoneoev
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/go-errors/errors"
 )
@@ -51,29 +46,13 @@ type AuctionPayload struct {
 	Prices map[string]string `json:"prices"`
 }
 
-// dedupKey returns the key used to suppress a replayed delivery of this auction. The auctioneer's `id` is
-// authoritative when present; when it's empty (some frames carry none) we'd otherwise NEVER record the
-// frame as seen, so a replay would be processed twice → a second nonce + a double bid. So derive a synthetic
-// key from the frame content — a hash over the auctioneer emit timestamp/timeout plus the sorted prices.
-// Folding in the emit timestamp is essential: two genuinely-distinct id-less auctions at the SAME price
-// (e.g. the same oracle re-auctioned) emit at different times, so without it the second would collide with
-// the first and be wrongly dropped as a duplicate. A reconnect REPLAY of one frame carries the same
-// timestamp, so it still dedups. Prefixed by source so a content hash can never collide with a real id.
+// dedupKey returns the key used to suppress a replayed delivery of this auction. RedStone's auction id is
+// the only valid identity; empty-id frames are dropped before bidding.
 func (a AuctionMessage) dedupKey() string {
-	if a.ID != "" {
-		return "id:" + a.ID
+	if a.ID == "" {
+		return ""
 	}
-	prices := make([]string, 0, len(a.Payload.Prices))
-	for k, v := range a.Payload.Prices {
-		prices = append(prices, k+"="+v)
-	}
-	sort.Strings(prices)
-	h := sha256.New()
-	// Emit timestamp + timeout first: distinguishes two same-price auctions emitted at different times,
-	// while a replay of the same frame (same timestamp/timeout) still hashes identically.
-	fmt.Fprintf(h, "%d|%d\x00", a.Timestamp, a.TimeoutMs)
-	h.Write([]byte(strings.Join(prices, ",")))
-	return "hash:" + hex.EncodeToString(h.Sum(nil))
+	return "id:" + a.ID
 }
 
 type AuctionResult struct {
