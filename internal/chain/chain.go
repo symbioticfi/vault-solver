@@ -11,13 +11,16 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 )
+
+// multicallB is the stateless v2 aggregate3 pack/unpack binding (no backend).
+var multicallB = multicall3.NewMulticall3()
 
 // Client is an ethclient.Client plus the chain id and the Multicall3 address, cached at dial time.
 type Client struct {
@@ -92,19 +95,20 @@ type CallResult struct {
 	ReturnData []byte
 }
 
-// Multicall batches reads through Multicall3.aggregate3, collapsing N eth_calls into one round-trip.
+// Multicall batches reads through Multicall3.aggregate3 at the latest block.
 func (c *Client) Multicall(ctx context.Context, calls []Call) ([]CallResult, error) {
-	caller, err := multicall3.NewMulticall3Caller(c.multicall, c.Client)
-	if err != nil {
-		return nil, errors.Errorf("chain: bind multicall3 %s: %w", c.multicall, err)
-	}
 	in := make([]multicall3.Multicall3Call3, len(calls))
 	for i, call := range calls {
 		in[i] = multicall3.Multicall3Call3{Target: call.Target, AllowFailure: call.AllowFailure, CallData: call.Data}
 	}
-	out, err := caller.Aggregate3(&bind.CallOpts{Context: ctx}, in)
+	data := multicallB.PackAggregate3(in)
+	ret, err := c.CallContract(ctx, ethereum.CallMsg{To: &c.multicall, Data: data}, nil)
 	if err != nil {
 		return nil, errors.Errorf("chain: multicall aggregate3: %w", err)
+	}
+	out, err := multicallB.UnpackAggregate3(ret)
+	if err != nil {
+		return nil, errors.Errorf("chain: multicall unpack aggregate3: %w", err)
 	}
 	res := make([]CallResult, len(out))
 	for i, o := range out {

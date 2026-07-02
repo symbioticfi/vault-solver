@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
@@ -98,15 +99,15 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.BackendSharedSecretEnv == "" {
 		return nil, errors.New("backendSharedSecretEnv is required")
 	}
-	executor, err := parseAddress(raw.Executor, "executor")
+	executor, err := parse.Address(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}
-	mode := orStr(raw.SolverMode, defaultSolverMode)
+	mode := parse.OrDefault(raw.SolverMode, defaultSolverMode)
 	if mode != solverModeExternal && mode != solverModeInternal {
 		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
 	}
-	scope := orStr(raw.TokensToQuote, tokensToQuoteAll)
+	scope := parse.OrDefault(raw.TokensToQuote, tokensToQuoteAll)
 	if scope != tokensToQuoteAll && scope != tokensToQuotePermissioned && scope != tokensToQuotePermissionless {
 		return nil, errors.Errorf("tokensToQuote: must be %q, %q or %q, got %q",
 			tokensToQuoteAll, tokensToQuotePermissioned, tokensToQuotePermissionless, scope)
@@ -115,7 +116,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	cfg := &Config{
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
-		ListenAddr:             orStr(raw.ListenAddr, defaultListenAddr),
+		ListenAddr:             parse.OrDefault(raw.ListenAddr, defaultListenAddr),
 		Executor:               executor,
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
@@ -123,7 +124,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		TokensToQuote:          scope,
 	}
 	for i, t := range raw.PermissionedTokens {
-		addr, terr := parseNonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
+		addr, terr := parse.NonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
 		if terr != nil {
 			return nil, terr
 		}
@@ -138,22 +139,18 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
 	}
-	// Reactor is optional (used by execution). Parse when present so a bad address fails fast.
 	if raw.Reactor != "" {
-		if cfg.Reactor, err = parseAddress(raw.Reactor, "reactor"); err != nil {
+		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
 			return nil, err
 		}
 	}
 	for i, a := range raw.Adapters {
-		// The zero address is rejected so a placeholder fails at startup rather than weakening the
-		// whitelist. Vault + Asset are resolved on-chain at startup.
-		adapterAddr, verr := parseNonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
-		if verr != nil {
-			return nil, verr
+		adapter, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
+		if err != nil {
+			return nil, err
 		}
-		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapterAddr})
+		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
-	// External has no discounts fallback, so with no adapters it could quote/recover nothing — fail fast.
 	if mode == solverModeExternal && len(cfg.Adapters) == 0 {
 		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
@@ -164,44 +161,14 @@ func parseConfig(node yaml.Node) (*Config, error) {
 func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
 
 // restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
-// scoped to the configured Adapters: external mode with ≥1 adapter. parseConfig requires external to have
-// adapters; the len check guards hand-built Configs. Internal mode never restricts filling — discount
-// recovery may legitimately route through any advertised adapter — so this stays external-only.
+// scoped to the configured Adapters: external mode with at least one adapter. parseConfig requires external
+// to have adapters; the len check guards hand-built Configs.
 func (c *Config) restrictsToAdapters() bool {
 	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
 }
 
-// quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It is a
-// superset of restrictsToAdapters: external always scopes quoting (adapters are required), and internal
-// scopes quoting too whenever ≥1 adapter is configured. This lets an internal-mode filler advertise quotes
-// only for its own adapter universe (e.g. a per-solver adapter) without touching discount/execution
-// semantics, which remain governed by restrictsToAdapters. Equivalent to len(Adapters) > 0 across the two
-// valid modes, but written in terms of intent so the quote-vs-execution split is explicit.
+// quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It scopes in
+// both modes whenever Adapters is non-empty, while execution scoping stays external-only.
 func (c *Config) quoteScopesToAdapters() bool {
-	return c.restrictsToAdapters() || (c.SolverMode == solverModeInternal && len(c.Adapters) > 0)
-}
-
-func parseAddress(s, field string) (common.Address, error) {
-	if !common.IsHexAddress(s) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, s)
-	}
-	return common.HexToAddress(s), nil
-}
-
-func parseNonZeroAddress(s, field string) (common.Address, error) {
-	addr, err := parseAddress(s, field)
-	if err != nil {
-		return common.Address{}, err
-	}
-	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address (placeholder not replaced?)", field)
-	}
-	return addr, nil
-}
-
-func orStr(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
+	return len(c.Adapters) > 0
 }

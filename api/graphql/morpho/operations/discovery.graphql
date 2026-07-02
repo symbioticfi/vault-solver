@@ -1,0 +1,52 @@
+query MorphoDiscoverMarkets($loan: [String!]!, $coll: [String!]!, $chains: [Int!]!, $first: Int!) {
+  markets(
+    first: $first
+    where: { loanAssetAddress_in: $loan, collateralAssetAddress_in: $coll, chainId_in: $chains }
+  ) {
+    items {
+      marketId
+      oracleAddress
+      irmAddress
+      lltv
+      loanAsset {
+        address
+      }
+      collateralAsset {
+        address
+      }
+      state {
+        blockNumber
+        borrowAssets
+        borrowShares
+        supplyAssets
+        supplyShares
+        timestamp
+        price
+      }
+    }
+  }
+}
+
+query MorphoPositionsByMarket($ids: [String!]!, $first: Int!, $skip: Int!, $maxHf: Float) {
+  marketPositions(
+    first: $first
+    skip: $skip
+    orderBy: HealthFactor
+    orderDirection: Asc
+    where: { marketUniqueKey_in: $ids, healthFactor_lte: $maxHf }
+  ) {
+    items {
+      user {
+        address
+      }
+      market {
+        marketId
+      }
+      state {
+        borrowShares
+        collateral
+      }
+      healthFactor
+    }
+  }
+}

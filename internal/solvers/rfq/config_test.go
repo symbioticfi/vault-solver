@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func parse(t *testing.T, body string) (*Config, error) {
+func parseCfg(t *testing.T, body string) (*Config, error) {
 	t.Helper()
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
@@ -23,11 +23,11 @@ backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET
 executor: "0x0000000000000000000000000000000000000010"
 `
 
-// oneAdapter is appended to make an external-mode config valid — external requires at least one adapter.
+// oneAdapter is appended to make an external-mode config valid; external requires at least one adapter.
 const oneAdapter = "adapters:\n  - \"0x0000000000000000000000000000000000000042\"\n"
 
 func TestParseConfig_Defaults(t *testing.T) {
-	cfg, err := parse(t, minimalConfig+oneAdapter)
+	cfg, err := parseCfg(t, minimalConfig+oneAdapter)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
@@ -41,35 +41,38 @@ func TestParseConfig_Defaults(t *testing.T) {
 		t.Fatalf("orderLimit = %d, want %d", cfg.OrderLimit, defaultOrderLimit)
 	}
 	if cfg.SolverMode != solverModeExternal {
-		t.Fatalf("solverMode = %q, want %q (default)", cfg.SolverMode, solverModeExternal)
+		t.Fatalf("solverMode = %q, want %q", cfg.SolverMode, solverModeExternal)
 	}
 	if !cfg.restrictsToAdapters() {
-		t.Fatal("external mode with a configured adapter should restrict to adapters")
+		t.Fatal("external mode with a configured adapter should restrict execution to adapters")
 	}
 	if cfg.usesDiscounts() {
-		t.Fatal("usesDiscounts should default to false (external mode: discounts API is internal-only)")
+		t.Fatal("external mode should not use discounts")
 	}
 }
 
 func TestParseConfig_SolverMode(t *testing.T) {
 	a := "\n" + oneAdapter
 	cases := map[string]struct {
-		yaml                              string
-		wantMode                          string
-		wantWhitelist, wantDiscounts, err bool
+		yaml          string
+		wantMode      string
+		wantRestrict  bool
+		wantDiscounts bool
+		wantErr       bool
 	}{
-		"external + adapters → restrict, no discounts":    {yaml: "solverMode: external" + a, wantMode: "external", wantWhitelist: true, wantDiscounts: false},
-		"external, no adapters → error":                   {yaml: "solverMode: external", err: true},
-		"internal + adapters → discounts on, no restrict": {yaml: "solverMode: internal" + a, wantMode: "internal", wantWhitelist: false, wantDiscounts: true},
-		"internal, no adapters → discounts on (optional)": {yaml: "solverMode: internal", wantMode: "internal", wantWhitelist: false, wantDiscounts: true},
-		"default (unset) + adapters → external":           {yaml: a, wantMode: "external", wantWhitelist: true, wantDiscounts: false},
-		"default (unset), no adapters → error":            {yaml: "", err: true},
-		"invalid mode → error":                            {yaml: "solverMode: hybrid", err: true},
+		"external + adapters":         {yaml: "solverMode: external" + a, wantMode: solverModeExternal, wantRestrict: true},
+		"external, no adapters":       {yaml: "solverMode: external", wantErr: true},
+		"internal + adapters":         {yaml: "solverMode: internal" + a, wantMode: solverModeInternal, wantDiscounts: true},
+		"internal, no adapters":       {yaml: "solverMode: internal", wantMode: solverModeInternal, wantDiscounts: true},
+		"default + adapters":          {yaml: a, wantMode: solverModeExternal, wantRestrict: true},
+		"default, no adapters":        {wantErr: true},
+		"invalid mode":                {yaml: "solverMode: hybrid", wantErr: true},
+		"old whitelist flag rejected": {yaml: "adapterWhitelistEnabled: true" + a, wantErr: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
-			if tc.err {
+			cfg, err := parseCfg(t, minimalConfig+tc.yaml+"\n")
+			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected the config to be rejected")
 				}
@@ -81,8 +84,8 @@ func TestParseConfig_SolverMode(t *testing.T) {
 			if cfg.SolverMode != tc.wantMode {
 				t.Fatalf("solverMode = %q, want %q", cfg.SolverMode, tc.wantMode)
 			}
-			if cfg.restrictsToAdapters() != tc.wantWhitelist {
-				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantWhitelist)
+			if cfg.restrictsToAdapters() != tc.wantRestrict {
+				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantRestrict)
 			}
 			if cfg.usesDiscounts() != tc.wantDiscounts {
 				t.Fatalf("usesDiscounts() = %v, want %v", cfg.usesDiscounts(), tc.wantDiscounts)
@@ -91,66 +94,42 @@ func TestParseConfig_SolverMode(t *testing.T) {
 	}
 }
 
-// TestParseConfig_QuoteScopesToAdapters pins the quote-vs-execution scoping split: the QUOTE path scopes
-// to configured adapters in BOTH external and internal mode (quoteScopesToAdapters), while execution
-// scoping (restrictsToAdapters) stays external-only. The internal+adapters row is the new behavior — an
-// internal-mode filler advertises quotes only for its own adapter universe without restricting filling.
 func TestParseConfig_QuoteScopesToAdapters(t *testing.T) {
 	a := "\n" + oneAdapter
-	type want struct {
-		quoteScope   bool // quoteScopesToAdapters()
-		execRestrict bool // restrictsToAdapters()
-	}
 	cases := map[string]struct {
-		yaml string
-		want want
+		yaml         string
+		wantQuote    bool
+		wantRestrict bool
 	}{
-		"external + adapters → quote scoped, exec restricted": {
-			yaml: "solverMode: external" + a,
-			want: want{quoteScope: true, execRestrict: true},
-		},
-		"internal + adapters → quote scoped, exec unrestricted": {
-			yaml: "solverMode: internal" + a,
-			want: want{quoteScope: true, execRestrict: false},
-		},
-		"internal, no adapters → neither scoped": {
-			yaml: "solverMode: internal",
-			want: want{quoteScope: false, execRestrict: false},
-		},
-		"default (unset) + adapters → quote scoped, exec restricted": {
-			yaml: a,
-			want: want{quoteScope: true, execRestrict: true},
-		},
+		"external + adapters":   {yaml: "solverMode: external" + a, wantQuote: true, wantRestrict: true},
+		"internal + adapters":   {yaml: "solverMode: internal" + a, wantQuote: true},
+		"internal, no adapters": {yaml: "solverMode: internal"},
+		"default + adapters":    {yaml: a, wantQuote: true, wantRestrict: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			cfg, err := parse(t, minimalConfig+tc.yaml+"\n")
+			cfg, err := parseCfg(t, minimalConfig+tc.yaml+"\n")
 			if err != nil {
 				t.Fatalf("parseConfig: %v", err)
 			}
-			if cfg.quoteScopesToAdapters() != tc.want.quoteScope {
-				t.Fatalf("quoteScopesToAdapters() = %v, want %v", cfg.quoteScopesToAdapters(), tc.want.quoteScope)
+			if cfg.quoteScopesToAdapters() != tc.wantQuote {
+				t.Fatalf("quoteScopesToAdapters() = %v, want %v", cfg.quoteScopesToAdapters(), tc.wantQuote)
 			}
-			if cfg.restrictsToAdapters() != tc.want.execRestrict {
-				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.want.execRestrict)
-			}
-			// Quote scoping must always be a superset of execution scoping (filling never scopes when
-			// quoting doesn't).
-			if tc.want.execRestrict && !tc.want.quoteScope {
-				t.Fatal("invariant broken: execution restricted but quote not scoped")
+			if cfg.restrictsToAdapters() != tc.wantRestrict {
+				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantRestrict)
 			}
 		})
 	}
 }
 
 func TestParseConfig_UnknownKeyRejected(t *testing.T) {
-	if _, err := parse(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
+	if _, err := parseCfg(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
 		t.Fatal("expected a typo'd key to be rejected")
 	}
 }
 
 func TestParseConfig_Overrides(t *testing.T) {
-	cfg, err := parse(t, minimalConfig+`
+	cfg, err := parseCfg(t, minimalConfig+`
 listenAddr: ":9000"
 pollIntervalMs: 1500
 orderLimit: 5
@@ -169,10 +148,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 }
 
 func TestParseConfig_Adapters(t *testing.T) {
-	cfg, err := parse(t, minimalConfig+`
-adapters:
-  - "0x0000000000000000000000000000000000000042"
-`)
+	cfg, err := parseCfg(t, minimalConfig+oneAdapter)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
 	}
@@ -180,7 +156,6 @@ adapters:
 		t.Fatalf("adapters = %d, want 1", len(cfg.Adapters))
 	}
 	v := cfg.Adapters[0]
-	// Only Adapter comes from config; Vault/Asset are resolved on-chain at startup (zero here).
 	if v.Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") {
 		t.Fatalf("adapter entry not parsed: %+v", v)
 	}
@@ -195,7 +170,6 @@ func TestParseConfig_BadAdapter(t *testing.T) {
 adapters:
   - "not-an-address"
 `,
-		// A zero adapter feeds the whitelist; a placeholder must fail at startup.
 		"zero adapter address": `
 adapters:
   - "0x0000000000000000000000000000000000000000"
@@ -203,7 +177,7 @@ adapters:
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parse(t, minimalConfig+body); err == nil {
+			if _, err := parseCfg(t, minimalConfig+body); err == nil {
 				t.Fatalf("expected an error for %q", name)
 			}
 		})
@@ -225,16 +199,12 @@ backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
 `,
-		// External mode (the default) has no discounts fallback, so an empty adapter list is rejected.
-		"external mode (default) requires adapters":  minimalConfig,
-		"external mode (explicit) requires adapters": minimalConfig + "solverMode: external\n",
-		// Old flags folded into solverMode — a config still carrying them must fail (unknown key).
-		"removed adapterWhitelistEnabled key rejected": minimalConfig + "adapterWhitelistEnabled: true\n",
-		"removed discountsEnabled key rejected":        minimalConfig + "discountsEnabled: true\n",
+		"external mode requires adapters":       minimalConfig + "solverMode: external\n",
+		"removed discountsEnabled key rejected": minimalConfig + "discountsEnabled: true\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := parse(t, body); err == nil {
+			if _, err := parseCfg(t, body); err == nil {
 				t.Fatalf("expected an error for %q", name)
 			}
 		})

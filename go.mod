@@ -5,12 +5,14 @@ go 1.26
 toolchain go1.26.4
 
 require (
+	github.com/Khan/genqlient v0.8.1
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/ethereum/go-ethereum v1.17.3
 	github.com/getsentry/sentry-go v0.46.2
 	github.com/go-errors/errors v1.5.1
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/zapr v1.3.0
+	github.com/gorilla/websocket v1.5.0
 	github.com/prometheus/client_golang v1.15.0
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.27.0
@@ -36,7 +38,6 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
@@ -48,6 +49,7 @@ require (
 	github.com/supranational/blst v0.3.16 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.19 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
