@@ -106,6 +106,7 @@ func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
 		"nil maxSeizeAssets":  func(l *LiquidationLeg) { l.MaxSeizeAssets = nil },
 		"zero maxSeizeAssets": func(l *LiquidationLeg) { l.MaxSeizeAssets = big.NewInt(0) },
 		"nil minProfit":       func(l *LiquidationLeg) { l.MinProfit = nil },
+		"zero minProfit":      func(l *LiquidationLeg) { l.MinProfit = big.NewInt(0) },
 		"negative minProfit":  func(l *LiquidationLeg) { l.MinProfit = big.NewInt(-1) },
 		"nil maxAssets":       func(l *LiquidationLeg) { l.MaxAssets = nil },
 		"zero maxAssets":      func(l *LiquidationLeg) { l.MaxAssets = big.NewInt(0) },
