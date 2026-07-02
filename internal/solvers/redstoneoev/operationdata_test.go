@@ -21,7 +21,6 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 		Borrower:       common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE"),
 		MaxSeizeAssets: mustBig("500000000000000000"),
 		MinProfit:      mustBig("625000"),
-		MaxAssets:      big.NewInt(760000000),
 	}}
 	authSig := bytes.Repeat([]byte{0x42}, 65)
 
@@ -35,12 +34,11 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 		"0000000000000000000000000000000000000000000000000001c6bf52634000" +
 		"00000000000000000000000000000000000000000000000000000000002191c0" +
 		"00000000000000000000000000000000000000000000000000000000000000a0" +
-		"0000000000000000000000000000000000000000000000000000000000000160" +
+		"0000000000000000000000000000000000000000000000000000000000000140" +
 		"0000000000000000000000000000000000000000000000000000000000000001" +
 		"6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5" +
 		"000000000000000000000000629d764ec8563afa701709b52c1a215e865632de" +
 		"00000000000000000000000000000000000000000000000006f05b59d3b20000" +
-		"000000000000000000000000000000000000000000000000000000002d4cae00" +
 		"0000000000000000000000000000000000000000000000000000000000098968" +
 		"0000000000000000000000000000000000000000000000000000000000000041" +
 		"4242424242424242424242424242424242424242424242424242424242424242" +
@@ -64,7 +62,6 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 	if leg := back.Legs[0]; leg.MarketId != legs[0].MarketId ||
 		leg.Borrower != legs[0].Borrower ||
 		leg.MaxSeizeAssets.Cmp(legs[0].MaxSeizeAssets) != 0 ||
-		leg.MaxAssets.Cmp(legs[0].MaxAssets) != 0 ||
 		leg.MinProfit.Cmp(legs[0].MinProfit) != 0 {
 		t.Fatalf("leg round-trip mismatch: %+v", leg)
 	}
@@ -100,7 +97,6 @@ func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
 		Borrower:       common.Address{19: 1},
 		MaxSeizeAssets: big.NewInt(1),
 		MinProfit:      big.NewInt(1),
-		MaxAssets:      big.NewInt(1),
 	}
 	for name, mutate := range map[string]func(*LiquidationLeg){
 		"nil maxSeizeAssets":  func(l *LiquidationLeg) { l.MaxSeizeAssets = nil },
@@ -108,8 +104,6 @@ func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
 		"nil minProfit":       func(l *LiquidationLeg) { l.MinProfit = nil },
 		"zero minProfit":      func(l *LiquidationLeg) { l.MinProfit = big.NewInt(0) },
 		"negative minProfit":  func(l *LiquidationLeg) { l.MinProfit = big.NewInt(-1) },
-		"nil maxAssets":       func(l *LiquidationLeg) { l.MaxAssets = nil },
-		"zero maxAssets":      func(l *LiquidationLeg) { l.MaxAssets = big.NewInt(0) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			leg := valid
@@ -139,7 +133,6 @@ func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 		Borrower:       common.Address{19: 2},
 		MaxSeizeAssets: big.NewInt(3),
 		MinProfit:      big.NewInt(4),
-		MaxAssets:      big.NewInt(999),
 	}}
 	digest, err := CallbackAuthDigest(big.NewInt(11155111), common.Address{19: 3}, common.Address{19: 4}, auth, legs)
 	if err != nil {

@@ -47,30 +47,28 @@ type SizingParams struct {
 	SwapHaircutBps       int  // EXTRA safety margin on the adapter's already-discounted output (slippage/staleness)
 }
 
-// swapOutFor is the loan-token we receive for selling `collIn` of seized collateral through quote q, at the
-// adapter's discounted rate minus the extra safety haircut — mirrors the adapter's getAmountOut(getMaxRate):
+// expectedLoanOutFor estimates the loan-token output for selling `collIn` of seized collateral through
+// quote q at the adapter's discounted rate minus the extra safety haircut:
 // collIn × maxRate × 10^loanDec / (1e18 × 10^collDec), then × (1 − haircut). The RFQ solver replicates this
 // same adapter formula in rfq/strategy.go amountOutForRate — keep both in sync (not unified: a shared helper
 // would take several same-type big.Int args, a swap-footgun for fund pricing).
-func swapOutFor(collIn *big.Int, q AdapterQuote, haircutBps int) *big.Int {
+func expectedLoanOutFor(collIn *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 	adapterOut := morpho.MulDivDown(new(big.Int).Mul(collIn, q.MaxRate), q.LoanScale, new(big.Int).Mul(morpho.Wad, q.CollScale))
 	out := morpho.MulDivDown(adapterOut, big.NewInt(int64(10_000-haircutBps)), big.NewInt(10_000))
-	// MaxAssets is a MIN-out. The adapter recomputes its InvalidSwapRate ceiling with a different nested
-	// rounding (floor getAmountOut, THEN apply the curator discount) than our getMaxRate-derived value (the
-	// discount is pre-floored onto the oracle price), so ours can land 1 base unit above the ceiling when the
-	// haircut is ~0 → InvalidSwapRate revert. Shave one unit so the requested min-out never exceeds the
-	// on-chain ceiling (review K5); negligible vs leg profit, and only binds at a near-zero haircut.
+	// The adapter recomputes its rate ceiling with a different nested rounding (floor getAmountOut, THEN
+	// apply the curator discount) than our getMaxRate-derived value. Shave one unit so our estimate stays
+	// below the on-chain ceiling; negligible vs leg profit, and only binds at a near-zero haircut.
 	if out.Sign() > 0 {
 		out.Sub(out, big.NewInt(1))
 	}
 	return out
 }
 
-// collForBudget is the inverse of swapOutFor: the most collateral whose swapOutFor(...) stays within
-// `budget` (loan-token / getMaxAssets units), so an exit sized to it never asks the vault for more than its
-// remaining redemption liquidity (which would revert InsufficientAllocate). The single flooring division
-// guarantees swapOutFor(result) ≤ budget. Returns 0 when the quote can't price an exit. SwapHaircutBps is
-// config-validated to [0, 10000), so 10000−haircut > 0.
+// collForBudget is the inverse of expectedLoanOutFor: the most collateral whose expected loan output stays
+// within `budget` (loan-token / getMaxAssets units), so the selected leg does not rely on more redemption
+// liquidity than the cached adapter state says exists. The callback still reads the live cap at settlement.
+// Returns 0 when the quote can't price an exit. SwapHaircutBps is config-validated to [0, 10000), so
+// 10000−haircut > 0.
 func collForBudget(budget *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 	h := int64(10_000 - haircutBps)
 	if h <= 0 || q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
@@ -90,13 +88,11 @@ func collForBudget(budget *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 // configured adapter (quote q) in one swap. It targets either all collateral or the fixed partial seize,
 // CLAMPED by the borrower's full debt (so a small-debt / large-collateral position can't over-seize and
 // revert the Morpho borrowShares underflow) AND by the adapter's getMaxAssets redemption liquidity (so the
-// swap can't ask for more than the vault can allocate and revert InsufficientAllocate). MaxAssets is
-// the min loan-token out for the whole seize at the adapter's discounted getMaxRate minus the safety
-// haircut.
+// swap can't ask for more than the vault can allocate and revert InsufficientAllocate).
 //
-// Returns the leg (one swap, MaxAssets set) and its gross loan profit (swapOut − repaid). ok=false when
-// the position can't liquidate profitably here — including the contract's own guards: MaxAssets must
-// EXCEED the repayment. Bundle and gas economics are applied later by bundle selection and operationData.
+// Returns the callback leg and its gross loan profit (expectedLoanOut - repaid). ok=false when the position
+// cannot liquidate profitably here. Bundle and gas economics are applied later by bundle selection and
+// operationData.
 func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (LiquidationLeg, *big.Int, bool) {
 	m, p := c.Market.State, c.Position
 	if price == nil || price.Sign() <= 0 {
@@ -127,9 +123,8 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 	if maxSeize := morpho.MaxSeizeForFullDebt(p.BorrowShares, price, lif, accrued, m.TotalBorrowShares); target.Cmp(maxSeize) > 0 {
 		target = maxSeize
 	}
-	// Clamp the seize by the adapter's getMaxAssets redemption liquidity: collForBudget is the most
-	// collateral whose swapOut stays within MaxAssets, so the requested min-out never exceeds what the vault
-	// can allocate (InsufficientAllocate). nil/0 ⇒ uncapped (unknown liquidity).
+	// Clamp the seize by cached adapter redemption liquidity. This is a bidding-time safety check; the
+	// callback reads the current getMaxAssets again before swapping. nil/0 ⇒ uncapped (unknown liquidity).
 	if q.MaxAssets != nil && q.MaxAssets.Sign() > 0 {
 		if fit := collForBudget(q.MaxAssets, q, sp.SwapHaircutBps); fit.Cmp(target) < 0 {
 			target = fit
@@ -138,20 +133,19 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 	if target.Sign() <= 0 {
 		return LiquidationLeg{}, nil, false
 	}
-	swapOut := swapOutFor(target, q, sp.SwapHaircutBps)
-	if swapOut.Sign() <= 0 {
+	expectedLoanOut := expectedLoanOutFor(target, q, sp.SwapHaircutBps)
+	if expectedLoanOut.Sign() <= 0 {
 		return LiquidationLeg{}, nil, false
 	}
 	repaid := morpho.RepaidAssetsForSeizeAt(target, price, lif, accrued, m.TotalBorrowShares)
-	if swapOut.Cmp(repaid) <= 0 {
+	if expectedLoanOut.Cmp(repaid) <= 0 {
 		return LiquidationLeg{}, nil, false // proceeds can't cover repayment after discount + haircut
 	}
-	profit := new(big.Int).Sub(swapOut, repaid) // > 0 here
+	profit := new(big.Int).Sub(expectedLoanOut, repaid) // > 0 here
 	leg := LiquidationLeg{
 		MarketId:       c.MarketID,
 		Borrower:       c.Borrower,
 		MaxSeizeAssets: target,
-		MaxAssets:      swapOut,
 	}
 	return leg, profit, true
 }

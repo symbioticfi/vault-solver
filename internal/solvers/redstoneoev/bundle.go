@@ -19,21 +19,23 @@ const netBundleBeamWidth = 64
 // scoredLeg is a liquidatable, sized leg paired with its expected profit, in the single loan token's base
 // units (one adapter ⇒ one loan token, so there is nothing to group by).
 type scoredLeg struct {
-	leg        LiquidationLeg
-	profit     *big.Int       // loan-token base units
-	collateral common.Address // seized collateral; legs sharing it share the adapter's getMaxAssets pool
-	maxAssets  *big.Int       // that collateral's getMaxAssets budget (loan units; nil ⇒ uncapped liquidity)
-	source     evalItem
-	replay     bool
+	leg             LiquidationLeg
+	expectedLoanOut *big.Int       // solver-local loan-token output estimate; not sent to the callback
+	profit          *big.Int       // loan-token base units
+	collateral      common.Address // seized collateral; legs sharing it share the adapter's getMaxAssets pool
+	maxAssets       *big.Int       // cached adapter getMaxAssets budget (loan units; nil ⇒ uncapped)
+	source          evalItem
+	replay          bool
 }
 
 // chosenBundle is the set of legs selected for one solve. Single-token by design: the on-chain callback
 // runs every leg against its one immutable LiquidLaneAdapter and a single loan token.
 type chosenBundle struct {
-	legs        []LiquidationLeg
-	collaterals []common.Address // seized collateral per leg, parallel to legs; used by the gas predictor
-	borrowers   []string         // lowercased borrower addresses, parallel to legs (the solve's borrowers field)
-	grossLoan   *big.Int         // Σ leg profit in the loan token's units
+	legs             []LiquidationLeg
+	expectedLoanOuts []*big.Int       // solver-local output estimates, parallel to legs
+	collaterals      []common.Address // seized collateral per leg, parallel to legs; used by the gas predictor
+	borrowers        []string         // lowercased borrower addresses, parallel to legs (the solve's borrowers field)
+	grossLoan        *big.Int         // Σ leg profit in the loan token's units
 }
 
 type pricedBundle struct {
@@ -46,8 +48,8 @@ type pricedBundle struct {
 
 // selectBundle is the gross-profit fallback for dry-run/no-rate paths. Live bidding uses selectNetBundle.
 //
-// Legs sharing collateral also share the adapter's getMaxAssets pool, so selection caps cumulative MaxAssets
-// per collateral to avoid InsufficientAllocate at settlement.
+// Legs sharing collateral also share the adapter's getMaxAssets pool, so selection caps cumulative expected
+// loan output per collateral against the cached adapter liquidity.
 func (s *Solver) selectBundle(scored []scoredLeg) (chosenBundle, string) {
 	return s.selectBundleWithGas(scored, nil, 0, defaultPriceUpdateFeeds)
 }
@@ -218,6 +220,7 @@ func (s *Solver) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMar
 	nextMarket.positions[cand.Borrower] = replay.Position
 	nextLeg := sl
 	nextLeg.leg = leg
+	nextLeg.expectedLoanOut = expectedLoanOutFor(leg.MaxSeizeAssets, sl.source.quote, s.cfg.Sizing.SwapHaircutBps)
 	nextLeg.profit = profit
 	nextLeg.collateral = cand.Market.Params.CollateralToken
 	nextLeg.maxAssets = sl.source.quote.MaxAssets
@@ -240,7 +243,7 @@ func fitsCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) bo
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return true
 	}
-	next := new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.MaxAssets)
+	next := new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
 	return next.Cmp(sl.maxAssets) <= 0
 }
 
@@ -248,7 +251,7 @@ func commitCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) 
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return
 	}
-	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), sl.leg.MaxAssets)
+	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
 }
 
 func cloneCollateralBudget(in map[common.Address]*big.Int) map[common.Address]*big.Int {
@@ -305,6 +308,7 @@ func clonePositionState(in morpho.PositionState) morpho.PositionState {
 
 func appendScoredLeg(b *chosenBundle, sl scoredLeg) {
 	b.legs = append(b.legs, sl.leg)
+	b.expectedLoanOuts = append(b.expectedLoanOuts, cloneBig(sl.expectedLoanOut))
 	b.collaterals = append(b.collaterals, sl.collateral)
 	b.borrowers = append(b.borrowers, strings.ToLower(sl.leg.Borrower.Hex()))
 	b.grossLoan.Add(b.grossLoan, sl.profit)
@@ -312,12 +316,21 @@ func appendScoredLeg(b *chosenBundle, sl scoredLeg) {
 
 func cloneBundleWithLeg(b chosenBundle, sl scoredLeg) chosenBundle {
 	out := chosenBundle{
-		legs:        slices.Clone(b.legs),
-		collaterals: slices.Clone(b.collaterals),
-		borrowers:   slices.Clone(b.borrowers),
-		grossLoan:   new(big.Int).Set(b.grossLoan),
+		legs:             slices.Clone(b.legs),
+		expectedLoanOuts: cloneBigSlice(b.expectedLoanOuts),
+		collaterals:      slices.Clone(b.collaterals),
+		borrowers:        slices.Clone(b.borrowers),
+		grossLoan:        new(big.Int).Set(b.grossLoan),
 	}
 	appendScoredLeg(&out, sl)
+	return out
+}
+
+func cloneBigSlice(in []*big.Int) []*big.Int {
+	out := make([]*big.Int, len(in))
+	for i, v := range in {
+		out[i] = cloneBig(v)
+	}
 	return out
 }
 

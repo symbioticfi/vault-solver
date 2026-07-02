@@ -9,14 +9,13 @@ import (
 	"github.com/go-errors/errors"
 )
 
-// LiquidationLeg is one solver-selected liquidation cap. MaxAssets is the signed loan-output cap for this
-// leg, so the callback never calls LiquidLane's non-view getMaxAssets on-chain.
+// LiquidationLeg is one solver-selected callback leg. The callback reads the current LiquidLane getMaxAssets
+// cap on-chain when it prices the swap.
 type LiquidationLeg struct {
 	MarketId       common.Hash
 	Borrower       common.Address
 	MaxSeizeAssets *big.Int
 	MinProfit      *big.Int
-	MaxAssets      *big.Int
 }
 
 type operationAuth struct {
@@ -29,7 +28,6 @@ type callbackLeg struct {
 	MarketId       common.Hash
 	Borrower       common.Address
 	MaxSeizeAssets *big.Int
-	MaxAssets      *big.Int
 	MinProfit      *big.Int
 }
 
@@ -97,9 +95,6 @@ func validateOperationLegs(legs []LiquidationLeg) error {
 		if leg.MinProfit == nil || leg.MinProfit.Sign() <= 0 {
 			return errors.Errorf("operationData: invalid leg %d minProfit", i)
 		}
-		if leg.MaxAssets == nil || leg.MaxAssets.Sign() <= 0 {
-			return errors.Errorf("operationData: invalid leg %d maxAssets", i)
-		}
 	}
 	return nil
 }
@@ -119,7 +114,6 @@ func encodeLegs(legs []LiquidationLeg) []callbackLeg {
 			MarketId:       leg.MarketId,
 			Borrower:       leg.Borrower,
 			MaxSeizeAssets: leg.MaxSeizeAssets,
-			MaxAssets:      leg.MaxAssets,
 			MinProfit:      leg.MinProfit,
 		}
 	}
@@ -173,7 +167,6 @@ func callbackLegComponents() []abi.ArgumentMarshaling {
 		{Name: "marketId", Type: "bytes32"},
 		{Name: "borrower", Type: "address"},
 		{Name: "maxSeizeAssets", Type: "uint256"},
-		{Name: "maxAssets", Type: "uint256"},
 		{Name: "minProfit", Type: "uint256"},
 	}
 }

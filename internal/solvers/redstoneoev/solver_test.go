@@ -171,7 +171,6 @@ func recoverCallbackAuthSigner(t *testing.T, s *Solver, op operationData) common
 			MarketId:       leg.MarketId,
 			Borrower:       leg.Borrower,
 			MaxSeizeAssets: leg.MaxSeizeAssets,
-			MaxAssets:      leg.MaxAssets,
 			MinProfit:      leg.MinProfit,
 		}
 	}
@@ -968,8 +967,9 @@ func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
 	var b common.Address
 	b[19] = borrowerByte
 	return scoredLeg{
-		leg:    LiquidationLeg{Borrower: b, MarketId: common.Hash{}, MaxAssets: profit},
-		profit: profit,
+		leg:             LiquidationLeg{Borrower: b, MarketId: common.Hash{}},
+		expectedLoanOut: profit,
+		profit:          profit,
 	}
 }
 
@@ -1089,14 +1089,14 @@ func TestSelectBundleSingleToken(t *testing.T) {
 }
 
 // TestSelectBundlePerCollateralBudget pins the shared-liquidity cap: legs seizing the same collateral can't
-// jointly over-commit that collateral's getMaxAssets (scoredFor sets MaxAssets = profit), so the bundle
+// jointly over-commit that collateral's cached getMaxAssets (scoredFor sets expectedLoanOut = profit), so the bundle
 // won't revert with InsufficientAllocate on settlement. A leg on a different collateral is unaffected.
 func TestSelectBundlePerCollateralBudget(t *testing.T) {
 	s := &Solver{cfg: &Config{}, log: logr.Discard()}
 	collA := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	collB := common.HexToAddress("0x00000000000000000000000000000000000000cb")
 	withColl := func(byteID byte, profit int64, c common.Address, maxA int64) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit)) // MaxAssets == profit
+		sl := scoredFor(byteID, big.NewInt(profit)) // expectedLoanOut == profit
 		sl.collateral = c
 		sl.maxAssets = big.NewInt(maxA)
 		return sl
@@ -1193,13 +1193,13 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 			t.Fatal("fixture should size")
 		}
 		leg.MaxSeizeAssets = big.NewInt(1) // stale/bogus: selection must ignore and recompute from source
-		leg.MaxAssets = big.NewInt(1)      // stale/bogus
 		return scoredLeg{
-			leg:        leg,
-			profit:     mustBig("999999999999999999"),
-			collateral: coll,
-			source:     evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
-			replay:     true,
+			leg:             leg,
+			expectedLoanOut: big.NewInt(1),
+			profit:          mustBig("999999999999999999"),
+			collateral:      coll,
+			source:          evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
+			replay:          true,
 		}
 	}
 
@@ -1215,7 +1215,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d same-market replayed legs, want 2", len(b.legs))
 	}
-	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].MaxAssets.Cmp(big.NewInt(1)) == 0 {
+	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.expectedLoanOuts[0].Cmp(big.NewInt(1)) == 0 {
 		t.Fatalf("selected stale precomputed leg instead of replaying source: %+v", b.legs[0])
 	}
 	if b.grossLoan.Cmp(mustBig("999999999999999999")) >= 0 {
@@ -1264,9 +1264,10 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		const formerGrossWindow = 512
 		withAddr := func(addr common.Address, profit int64, c common.Address) scoredLeg {
 			sl := scoredLeg{
-				leg:        LiquidationLeg{Borrower: addr, MaxAssets: big.NewInt(profit)},
-				profit:     big.NewInt(profit),
-				collateral: c,
+				leg:             LiquidationLeg{Borrower: addr},
+				expectedLoanOut: big.NewInt(profit),
+				profit:          big.NewInt(profit),
+				collateral:      c,
 			}
 			return sl
 		}
