@@ -68,6 +68,7 @@ type rawIntervals struct {
 	// non-positive interval is a misconfiguration and is rejected, never silently defaulted.
 	OpsPollMs     *int `yaml:"opsPollMs"`
 	MonitorPollMs *int `yaml:"monitorPollMs"`
+	MaxStateAgeMs *int `yaml:"maxStateAgeMs"`
 }
 
 // Config is the validated, typed redstone-oev configuration.
@@ -100,6 +101,9 @@ type Config struct {
 
 	OpsPoll     time.Duration
 	MonitorPoll time.Duration
+	// MaxStateAge is the maximum age of any background cache (monitor snapshot, ops state) before
+	// bidding fails closed on stale_state. Must exceed every background poll interval.
+	MaxStateAge time.Duration
 }
 
 const (
@@ -111,6 +115,7 @@ const (
 	defaultBreakerWindow        = time.Hour
 	defaultOpsPoll              = 30 * time.Second
 	defaultMonitorPoll          = 10 * time.Second // cadence of the monitor snapshot poll
+	defaultMaxStateAge          = 90 * time.Second // 3× the slowest default poll; bidding halts past this
 	defaultDiscoveryMaxHF       = 1.30             // API at-risk band ceiling (spec §3.2: within 30% of liquidation)
 	defaultMaxTrackedPositions  = 10_000           // API `first` window + in-memory at-risk cap
 )
@@ -127,11 +132,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.WS.APIKeyEnv == "" {
 		return nil, errors.New("ws.apiKeyEnv is required")
 	}
-	executor, err := parse.Address(raw.Executor, "executor")
+	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}
-	callback, err := parse.Address(raw.Callback, "callback")
+	callback, err := parse.NonZeroAddress(raw.Callback, "callback")
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +152,18 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	monitorPoll, err := parse.MsDuration(raw.Intervals.MonitorPollMs, defaultMonitorPoll, "intervals.monitorPollMs")
 	if err != nil {
 		return nil, err
+	}
+	maxStateAge, err := parse.MsDuration(raw.Intervals.MaxStateAgeMs, defaultMaxStateAge, "intervals.maxStateAgeMs")
+	if err != nil {
+		return nil, err
+	}
+	// Every background loop must refresh strictly faster than the staleness cutoff, or steady-state
+	// bidding would flap between fresh and stale on ordinary poll cadence.
+	if opsPoll >= maxStateAge {
+		return nil, errors.Errorf("intervals.opsPollMs (%s) must be < intervals.maxStateAgeMs (%s)", opsPoll, maxStateAge)
+	}
+	if monitorPoll >= maxStateAge {
+		return nil, errors.Errorf("intervals.monitorPollMs (%s) must be < intervals.maxStateAgeMs (%s)", monitorPoll, maxStateAge)
 	}
 
 	// SwapHaircutBps can't use OrDefault: an explicit 0 (no extra haircut) must be distinguishable from
@@ -173,8 +190,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		BreakerWindow:      breakerWindow,
 		OpsPoll:            opsPoll,
 		MonitorPoll:        monitorPoll,
+		MaxStateAge:        maxStateAge,
 	}
-	if cfg.Adapter, err = parse.Address(raw.Adapter, "adapter"); err != nil {
+	if cfg.Adapter, err = parse.NonZeroAddress(raw.Adapter, "adapter"); err != nil {
 		return nil, err // required: sizing needs the adapter's redemption rate; the callback pins it as LiquidLaneAdapter
 	}
 	if cfg.BidWei, err = parse.EthToWei(parse.OrDefault(raw.Bid.BidEth, "0"), "bid.bidEth"); err != nil {

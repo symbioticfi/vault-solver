@@ -143,7 +143,7 @@ func (m *testMonitor) refresh(ctx context.Context) {
 	}
 	m.snap.Store(&snapshot{
 		markets: markets, prices: prices, quotes: compactQuotes(quotes), positions: positions,
-		block: header.Number.Uint64(), blockTime: header.Time,
+		block: header.Number.Uint64(), blockTime: header.Time, updatedAt: time.Now(),
 	})
 }
 

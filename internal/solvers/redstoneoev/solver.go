@@ -41,6 +41,10 @@ const skipGasUnprofitable = "gas_unprofitable"
 // skipStaleEpoch is the bounded skip reason for missing or stale monitor snapshot epochs.
 const skipStaleEpoch = "stale_epoch"
 
+// skipStaleState is the bounded skip reason for a background cache older than intervals.maxStateAgeMs —
+// a loop that stopped storing (stuck upstream, wedged RPC) must not keep bidding on its last state forever.
+const skipStaleState = "stale_state"
+
 const (
 	skipDepositLow      = "deposit_low"
 	skipCallbackBalance = "callback_balance"
@@ -238,7 +242,7 @@ func (s *Solver) refreshState(ctx context.Context) {
 		}
 		s.state.store(cachedState{
 			Exec: st, CallbackNative: bal, Rate: rate, Gas: gasState,
-			GasLimit: head.GasLimit,
+			GasLimit: head.GasLimit, UpdatedAt: time.Now(),
 		})
 	}
 	s.applyExecutorState(st, bal, epoch.At)
@@ -462,10 +466,51 @@ func (s *Solver) attributeSettlementGas(ctx context.Context, txHash string, pred
 // against cached state, and sign the EXECUTOR_V6 bid. It performs no I/O (reads only the in-memory
 // snapshot/state caches and the local signer), so it is deterministic and unit-testable; nowFn is
 // injected for breaker/accrual timing. A non-empty skip reason means no bid was built.
+// staleStateGate fails closed when any background cache is older than cfg.MaxStateAge: the monitor
+// snapshot (Morpho markets/positions + adapter/vault quotes) or the ops-loop state (Executor accounting,
+// callback balance, loan/ETH rate, gas predictor). Each cache stamps updatedAt only on a successful
+// store, so a loop that keeps failing (and keeps its prior data) trips this gate instead of bidding on
+// arbitrarily old state.
+func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
+	kv := make([]any, 0, 6)
+	if snap := s.mon.snapshot(); snap == nil || now.Sub(snap.updatedAt) > s.cfg.MaxStateAge {
+		var at time.Time
+		if snap != nil {
+			at = snap.updatedAt
+		}
+		kv = append(kv, "monitorAge", cacheAge(at, now))
+	}
+	if st, ok := s.state.load(); !ok || now.Sub(st.UpdatedAt) > s.cfg.MaxStateAge {
+		var at time.Time
+		if ok {
+			at = st.UpdatedAt
+		}
+		kv = append(kv, "opsAge", cacheAge(at, now))
+	}
+	if len(kv) == 0 {
+		return ""
+	}
+	s.log.Error(errors.New("background state stale"), "bid skipped: cache exceeds intervals.maxStateAgeMs",
+		append(kv, "maxStateAge", s.cfg.MaxStateAge, "auction", auctionID)...)
+	return skipStaleState
+}
+
+// cacheAge renders a cache timestamp's age for the stale-state log; a zero timestamp means the cache
+// never had a successful store.
+func cacheAge(at, now time.Time) string {
+	if at.IsZero() {
+		return "never"
+	}
+	return now.Sub(at).String()
+}
+
 func (s *Solver) buildBid(a AuctionMessage, nowFn func() time.Time) bidDecision {
 	now := nowFn()
 	if tripped, _ := s.breaker.tripped(now); tripped {
 		return bidDecision{skip: "breaker"}
+	}
+	if skip := s.staleStateGate(a.ID, now); skip != "" {
+		return bidDecision{skip: skip}
 	}
 	// Snapshot in-flight bids ONCE: the committed (market,borrower) set filters the scored legs below, and
 	// the reserved native debits the callback funding gate further down — all under a single resMu acquisition.
@@ -701,6 +746,7 @@ type cachedState struct {
 	Rate           *big.Int
 	Gas            *gasPredictorState
 	GasLimit       uint64
+	UpdatedAt      time.Time // wall clock of the last successful ops-loop store
 }
 
 type stateCache struct {

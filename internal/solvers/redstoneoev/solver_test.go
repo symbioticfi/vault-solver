@@ -64,6 +64,7 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		},
 		block:     100,
 		blockTime: 1781243340,
+		updatedAt: auctionClock()(),
 	})
 
 	cfg := &Config{
@@ -72,6 +73,7 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		Adapter:       seedAdapter,
 		BidWei:        mustBig("500000000000000"), // 0.0005 ETH flat bid
 		MaxTxGasPrice: big.NewInt(1_000_000_000),
+		MaxStateAge:   defaultMaxStateAge,
 		Sizing:        SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
 	}
 
@@ -98,6 +100,7 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 			Withdrawable: mustBig("100000000000"),
 			Acquire:      map[common.Address]*big.Int{},
 		},
+		UpdatedAt: auctionClock()(),
 	})
 	return s, sgnr
 }
@@ -131,11 +134,19 @@ func useOnchainTestMonitor(t *testing.T, s *Solver) {
 	s.mon = mon
 }
 
+// setSnapshotBlockTime re-stamps the cached snapshot (and the ops state) for tests that drive
+// handleMessage with wall-clock time: blockTime tracks the frame and both updatedAt stamps move to now
+// so the stale-state gate sees freshly-refreshed caches.
 func setSnapshotBlockTime(t *testing.T, s *Solver, tsMs int64) {
 	t.Helper()
 	snap := *snapshotOf(t, s)
 	snap.blockTime = uint64(tsMs / 1000)
+	snap.updatedAt = time.Now()
 	storeSnapshot(t, s, &snap)
+	if st, ok := s.state.load(); ok {
+		st.UpdatedAt = time.Now()
+		s.state.store(st)
+	}
 }
 
 // auctionClock returns a clock within ±600s of the captured auction's timestamp, so clampTsAt keeps
@@ -180,6 +191,44 @@ func recoverCallbackAuthSigner(t *testing.T, s *Solver, op operationData) common
 		t.Fatalf("recover callback auth: %v", err)
 	}
 	return crypto.PubkeyToAddress(*pub)
+}
+
+// TestBuildBidStaleStateGate pins the background-cache staleness gate: a monitor snapshot or ops state
+// older than cfg.MaxStateAge fails closed with stale_state before any sizing runs.
+func TestBuildBidStaleStateGate(t *testing.T) {
+	base := auctionClock()()
+	pastMax := func() time.Time { return base.Add(defaultMaxStateAge + time.Second) }
+
+	t.Run("both caches stale", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
+			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		}
+	})
+	t.Run("monitor stale, ops fresh", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		st, _ := s.state.load()
+		st.UpdatedAt = pastMax()
+		s.state.store(st)
+		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
+			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		}
+	})
+	t.Run("ops stale, monitor fresh", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		snap := *snapshotOf(t, s)
+		snap.updatedAt = pastMax()
+		storeSnapshot(t, s, &snap)
+		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
+			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		}
+	})
+	t.Run("fresh caches pass the gate", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		if d := s.buildBid(decodeAuction(t), auctionClock()); d.skip == skipStaleState {
+			t.Fatalf("fresh caches must not trip stale_state")
+		}
+	})
 }
 
 func TestBuildBidHappyPath(t *testing.T) {

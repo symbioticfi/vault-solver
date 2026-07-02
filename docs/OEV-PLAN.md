@@ -230,6 +230,18 @@ window behind the auction timestamp. This allows ordinary one-block monitor/API 
 stuck API cache bid indefinitely. The ops loop is separate: it refreshes Executor state, callback native
 balance, loan↔ETH feeds, gas price, and gas-predictor getters on `opsPollMs`.
 
+**Stale-state gate (rule for all background caches).** Every background-refreshed cache the hot path
+reads stamps a wall-clock `updatedAt` **only on a successful store** — today the monitor snapshot
+(Morpho markets/positions + adapter/vault quotes) and the ops-loop `cachedState` (Executor accounting,
+callback balance, loan↔ETH rate, gas predictor). Before any bid, `staleStateGate` fails closed with
+`stale_state` (an error log naming each stale component and its age) when any stamp is older than
+`intervals.maxStateAgeMs` — a loop that keeps failing while serving its prior data stops bidding instead
+of running on arbitrarily old state. Startup config validation enforces that every background poll
+interval (`opsPollMs`, `monitorPollMs`) is strictly less than `maxStateAgeMs`. **Any future
+background-refreshed state consumed by the bid path MUST follow the same pattern: stamp `updatedAt` on
+successful store, join `staleStateGate`, and include its refresh interval in the startup
+`< maxStateAgeMs` validation.**
+
 ### 3.4 Market scope
 
 The tracked Morpho markets are **discovered from the adapter**, not configured. The (loan, collateral)
@@ -368,7 +380,7 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
   isFiller(marketMaker, callback)`) — so the bot never bids a leg whose swap would revert `InvalidCaller`.
   The single immutable `LiquidLaneAdapter` is pinned at construction, so this curator `setFiller` gate is the
   only adapter-routing preflight.
-- **Other pre-bid gates**: snapshot block epoch (`stale_epoch`), duplicate-auction
+- **Other pre-bid gates**: background-cache age (`stale_state`, vs `intervals.maxStateAgeMs` — §3.3), snapshot block epoch (`stale_epoch`), duplicate-auction
   de-dup + `timeoutMs` drop, after-cost profitability (`gas_unprofitable`), deposit gas headroom
   (`deposit_low`) + callback-native funding. The bid is bounded **off-chain** by `bid.bidEth` plus optional `bid.totalBundleProfitBps` — there is no on-chain bid cap. A deposit below MIN_DEPOSIT raises
   an `oev_deposit_below_floor` gauge + error log; insufficient predicted-gas headroom logs a structured
@@ -578,7 +590,8 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `bid.maxTxGasPriceWei` | signed gas-price cap and the gas price used for bundle/deposit gates |
 | `sizing.allowFullLiquidation` / `swapHaircutBps` | full-collateral policy and swap cushion |
 | `breaker.maxFailures` / `windowMs` | failed-liquidation rolling-window halt plus immediate blacklist halt |
-| `intervals.{ops,monitor}PollMs` | ops refresh cadence and monitor snapshot cadence |
+| `intervals.{ops,monitor}PollMs` | ops refresh cadence and monitor snapshot cadence (each must be < `maxStateAgeMs`) |
+| `intervals.maxStateAgeMs` | max age of any background cache before bidding fails closed on `stale_state` (§3.3) |
 
 Hard cutovers already applied:
 

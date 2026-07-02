@@ -50,3 +50,5 @@ solvers:
       intervals:
         opsPollMs: 30000                 # ops checks (balances, filler status)
         monitorPollMs: 10000             # monitor snapshot poll (API in prod, testMonitor on Sepolia)
+        maxStateAgeMs: 90000             # max age of any background cache before bidding fails closed
+                                         # (stale_state); must exceed every poll interval above

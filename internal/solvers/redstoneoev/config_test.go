@@ -195,6 +195,9 @@ bid: {bidEth: "0.0001"}
 	if cfg.MonitorPoll != defaultMonitorPoll || cfg.MaxTxGasPrice.Int64() != defaultMaxTxGasPrice {
 		t.Fatalf("interval/gas defaults wrong")
 	}
+	if cfg.MaxStateAge != defaultMaxStateAge {
+		t.Fatalf("maxStateAge default wrong: %v, want %v", cfg.MaxStateAge, defaultMaxStateAge)
+	}
 	if cfg.MaxTrackedPositions != defaultMaxTrackedPositions {
 		t.Fatalf("maxTrackedPositions default wrong: %d, want %d", cfg.MaxTrackedPositions, defaultMaxTrackedPositions)
 	}
@@ -273,6 +276,12 @@ func TestParseConfigErrors(t *testing.T) {
 		"removed snapshot age":           wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nmaxSnapshotAgeMs: 60000",
 		"zero interval":                  wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nintervals: {opsPollMs: 0}",
 		"non-positive breaker":           wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nbreaker: {maxFailures: 3, windowMs: 0}",
+		"opsPoll >= maxStateAge":         wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nintervals: {opsPollMs: 60000, maxStateAgeMs: 60000}",
+		"monitorPoll >= maxStateAge":     wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nintervals: {monitorPollMs: 90001, maxStateAgeMs: 90000}",
+		"zero maxStateAge":               wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nintervals: {maxStateAgeMs: 0}",
+		"zero executor addr":             wsline + "executor: \"0x0000000000000000000000000000000000000000\"\ncallback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\nadapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\n" + api + feedLine + "bid: {bidEth: \"0.1\"}",
+		"zero callback addr":             wsline + "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\ncallback: \"0x0000000000000000000000000000000000000000\"\nadapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\n" + api + feedLine + "bid: {bidEth: \"0.1\"}",
+		"zero adapter addr":              wsline + "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\ncallback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\nadapter: \"0x0000000000000000000000000000000000000000\"\n" + api + feedLine + "bid: {bidEth: \"0.1\"}",
 	}
 	for name, y := range cases {
 		t.Run(name, func(t *testing.T) {

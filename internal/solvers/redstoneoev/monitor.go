@@ -23,6 +23,7 @@ type snapshot struct {
 
 	block     uint64
 	blockTime uint64
+	updatedAt time.Time // wall clock of the last successful refresh store; zero until one succeeds
 }
 
 type monitorSource interface {
@@ -166,7 +167,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 
 	m.snap.Store(&snapshot{
 		markets: apiSnap.markets, prices: apiSnap.prices, quotes: quotes, positions: positions,
-		block: apiSnap.block, blockTime: apiSnap.blockTime,
+		block: apiSnap.block, blockTime: apiSnap.blockTime, updatedAt: time.Now(),
 	})
 }
 
