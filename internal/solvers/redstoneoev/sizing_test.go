@@ -30,12 +30,11 @@ func TestTargetSeizeModes(t *testing.T) {
 	}
 }
 
-// evalLeg sizes a position against the single configured adapter's quote — the only repay→swap→profit
-// core (sizeLeg). The adapter argument is ignored (the leg no longer carries an adapter; the contract
-// pins the LiquidLane adapter); it is kept so the assertions below read unchanged.
-func evalLeg(c Candidate, price *big.Int, _ common.Address, q AdapterQuote, nowTs uint64, sp SizingParams) (LiquidationLeg, *big.Int, bool) {
+// evalLeg sizes a position against the single configured adapter's quote.
+func evalLeg(c Candidate, price *big.Int, q AdapterQuote, nowTs uint64, sp SizingParams) (LiquidationLeg, *big.Int, bool) {
 	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, nowTs)
-	return sizeLeg(c, price, q, accrued, sp)
+	sized, ok := sizeLeg(c, price, q, accrued, sp)
+	return sized.leg, sized.profit, ok
 }
 
 // TestEvaluateLegTargetsFullCollateral proves the default sizing path captures full-collateral opportunities,
@@ -53,16 +52,17 @@ func TestEvaluateLegTargetsFullCollateral(t *testing.T) {
 	q := newQuote("1534500000000000000000", nil)
 	sp := SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0}
 
-	leg, profit, ok := evalLeg(cand, price, seedAdapter, q, m.LastUpdate, sp)
+	leg, profit, ok := evalLeg(cand, price, q, m.LastUpdate, sp)
 	if !ok {
 		t.Fatal("expected a profitable leg at $1550")
 	}
 	if leg.MaxSeizeAssets.String() != "1000000000000000000" { // 1 TCOL
 		t.Fatalf("seized = %s, want 1 TCOL", leg.MaxSeizeAssets)
 	}
-	// swapOut at the adapter rate: 1 TCOL × 1534.5 = 1534.5 TLOAN; profit ≈ 49.6 TLOAN.
-	if out := leg.MaxAssets; out.Cmp(big.NewInt(1_533_000_000)) < 0 || out.Cmp(big.NewInt(1_536_000_000)) > 0 {
-		t.Fatalf("swapOut = %s, want ~1534.5e6", out)
+	// expectedLoanOut at the adapter rate: 1 TCOL × 1534.5 = 1534.5 TLOAN; profit ≈ 49.6 TLOAN.
+	expectedLoanOut := expectedLoanOutFor(leg.MaxSeizeAssets, q, sp.SwapHaircutBps)
+	if expectedLoanOut.Cmp(big.NewInt(1_533_000_000)) < 0 || expectedLoanOut.Cmp(big.NewInt(1_536_000_000)) > 0 {
+		t.Fatalf("expectedLoanOut = %s, want ~1534.5e6", expectedLoanOut)
 	}
 	if profit.Cmp(big.NewInt(45_000_000)) < 0 || profit.Cmp(big.NewInt(55_000_000)) > 0 {
 		t.Fatalf("profit = %s, want ~50e6", profit)
@@ -89,22 +89,22 @@ func TestSizeLegAllowsFullBadDebtSeize(t *testing.T) {
 		t.Fatalf("fixture must be bad-debt-like: maxSeizeForFullDebt=%s <= collateral=%s", maxSeize, collateral)
 	}
 	q := newQuote("1200000000000000000000", nil) // exit at 1200 loan per collateral, above the full-collateral repayment.
-	full, fullProfit, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0})
+	full, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0})
 	if !ok {
 		t.Fatal("full bad-debt seize should be profitable")
 	}
-	if full.MaxSeizeAssets.Cmp(collateral) != 0 {
-		t.Fatalf("full bad-debt seize = %s, want all collateral %s", full.MaxSeizeAssets, collateral)
+	if full.leg.MaxSeizeAssets.Cmp(collateral) != 0 {
+		t.Fatalf("full bad-debt seize = %s, want all collateral %s", full.leg.MaxSeizeAssets, collateral)
 	}
-	partial, partialProfit, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0})
+	partial, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0})
 	if !ok {
 		t.Fatal("partial fallback should also size")
 	}
-	if partial.MaxSeizeAssets.Cmp(mustBig("900000000000000000")) != 0 {
-		t.Fatalf("partial seize = %s, want fixed 90%%", partial.MaxSeizeAssets)
+	if partial.leg.MaxSeizeAssets.Cmp(mustBig("900000000000000000")) != 0 {
+		t.Fatalf("partial seize = %s, want fixed 90%%", partial.leg.MaxSeizeAssets)
 	}
-	if fullProfit.Cmp(partialProfit) <= 0 {
-		t.Fatalf("full bad-debt seize should capture more total profit: full=%s partial=%s", fullProfit, partialProfit)
+	if full.profit.Cmp(partial.profit) <= 0 {
+		t.Fatalf("full bad-debt seize should capture more total profit: full=%s partial=%s", full.profit, partial.profit)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestEvaluateLegRejectsBadPrice(t *testing.T) {
 	q := newQuote("1534500000000000000000", mustBig("100000000000"))
 	sp := SizingParams{AllowFullLiquidation: true}
 	for _, bad := range []*big.Int{big.NewInt(0), big.NewInt(-1), nil} {
-		if _, _, ok := evalLeg(cand, bad, seedAdapter, q, m.LastUpdate, sp); ok {
+		if _, _, ok := evalLeg(cand, bad, q, m.LastUpdate, sp); ok {
 			t.Fatalf("price %v must be rejected", bad)
 		}
 	}
@@ -128,7 +128,7 @@ func TestEvaluateLegSkipsHealthy(t *testing.T) {
 	cand := Candidate{Market: MarketInfo{State: m}, Position: goldenBorrower()}
 	q := newQuote("1534500000000000000000", nil)
 	// Healthy at the live $2000 price.
-	if _, _, ok := evalLeg(cand, mustBig("2000000000000000000000000000"), seedAdapter, q, m.LastUpdate,
+	if _, _, ok := evalLeg(cand, mustBig("2000000000000000000000000000"), q, m.LastUpdate,
 		SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 200}); ok {
 		t.Fatal("must not liquidate a healthy position")
 	}
@@ -139,7 +139,7 @@ func TestEvaluateLegSkipsUnprofitableExit(t *testing.T) {
 	cand := Candidate{Market: MarketInfo{State: m}, Position: goldenBorrower()}
 	q := newQuote("1400000000000000000000", nil)
 	// The position is liquidatable at $1550, but the adapter exit proceeds do not cover repayment.
-	if _, _, ok := evalLeg(cand, mustBig("1550000000000000000000000000"), seedAdapter, q, m.LastUpdate,
+	if _, _, ok := evalLeg(cand, mustBig("1550000000000000000000000000"), q, m.LastUpdate,
 		SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0}); ok {
 		t.Fatal("must skip when adapter output cannot cover repayment")
 	}
@@ -163,53 +163,54 @@ func sizeFixture() (SizingParams, func(b byte) Candidate, *big.Int) {
 }
 
 // TestSizeLegClampsToGetMaxAssets proves the single adapter's getMaxAssets liquidity clamp: when the
-// adapter can't absorb the full target seize, the leg is re-sized down so its requested MaxAssets
-// stays within the adapter's getMaxAssets — never a swap that reverts InsufficientAllocate on-chain.
+// adapter can't absorb the full target seize, the leg is re-sized down so its expected loan output stays
+// within the cached getMaxAssets budget.
 func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	_, cand, price := sizeFixture()
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
 	c := cand(1)
 	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
 
-	// Uncapped first, to learn the full swapOut.
-	full, fullProfit, ok := sizeLeg(c, price, newQuote("1780000000000000000000", nil), accrued, sp)
+	// Uncapped first, to learn the full expectedLoanOut.
+	full, ok := sizeLeg(c, price, newQuote("1780000000000000000000", nil), accrued, sp)
 	if !ok {
 		t.Fatal("uncapped leg should size")
 	}
-	uncapped := full.MaxAssets
 
-	// Cap the adapter to 1.5× of... no: cap below the full swapOut so the clamp binds.
+	// Cap the adapter below the full expectedLoanOut so the clamp binds.
+	uncapped := full.expectedLoanOut
 	budget := new(big.Int).Div(uncapped, big.NewInt(2))
-	capped, cappedProfit, ok := sizeLeg(c, price, newQuote("1780000000000000000000", budget), accrued, sp)
+	capped, ok := sizeLeg(c, price, newQuote("1780000000000000000000", budget), accrued, sp)
 	if !ok {
 		t.Fatal("capped leg should still size (smaller)")
 	}
-	if capped.MaxAssets.Cmp(budget) > 0 {
-		t.Fatalf("leg over-draws the adapter: maxAssets=%s > getMaxAssets=%s", capped.MaxAssets, budget)
+	if capped.expectedLoanOut.Cmp(budget) > 0 {
+		t.Fatalf("leg over-draws the adapter: expectedLoanOut=%s > getMaxAssets=%s", capped.expectedLoanOut, budget)
 	}
-	if capped.MaxAssets.Cmp(uncapped) >= 0 {
-		t.Fatalf("a tight budget must trim below the uncapped swapOut: capped=%s uncapped=%s", capped.MaxAssets, uncapped)
+	if capped.expectedLoanOut.Cmp(uncapped) >= 0 {
+		t.Fatalf("a tight budget must trim below the uncapped expectedLoanOut: capped=%s uncapped=%s", capped.expectedLoanOut, uncapped)
 	}
-	if cappedProfit.Cmp(fullProfit) >= 0 {
-		t.Fatalf("clamped leg should net less profit: capped=%s full=%s", cappedProfit, fullProfit)
+	if capped.profit.Cmp(full.profit) >= 0 {
+		t.Fatalf("clamped leg should net less profit: capped=%s full=%s", capped.profit, full.profit)
 	}
 }
 
-// TestCandidatesEmitsSingleSwapLeg proves the strategy emits one LiquidationLeg per liquidatable
-// candidate with MaxAssets set (one swap per leg, no per-vault Exit split).
-func TestCandidatesEmitsSingleSwapLeg(t *testing.T) {
+// TestSizeLegReturnsExpectedLoanOut proves the strategy computes one adapter output per liquidatable
+// candidate while keeping that output out of the signed callback leg.
+func TestSizeLegReturnsExpectedLoanOut(t *testing.T) {
 	sp, cand, price := sizeFixture()
 	c := cand(1)
 	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
-	leg, _, ok := sizeLeg(c, price, newQuote("1780000000000000000000", mustBig("1000000000000")), accrued, sp)
+	q := newQuote("1780000000000000000000", mustBig("1000000000000"))
+	sized, ok := sizeLeg(c, price, q, accrued, sp)
 	if !ok {
 		t.Fatal("position should liquidate")
 	}
-	if leg.MaxAssets == nil || leg.MaxAssets.Sign() <= 0 {
-		t.Fatalf("leg must carry a positive maxAssets, got %v", leg.MaxAssets)
+	if sized.expectedLoanOut == nil || sized.expectedLoanOut.Sign() <= 0 {
+		t.Fatalf("sizing must return a positive expectedLoanOut, got %v", sized.expectedLoanOut)
 	}
-	if leg.MaxSeizeAssets.Sign() <= 0 {
-		t.Fatalf("leg should seize collateral, got maxSeizeAssets=%s", leg.MaxSeizeAssets)
+	if sized.leg.MaxSeizeAssets.Sign() <= 0 {
+		t.Fatalf("leg should seize collateral, got maxSeizeAssets=%s", sized.leg.MaxSeizeAssets)
 	}
 }
 
@@ -247,19 +248,19 @@ func TestSizeLegClampsSeizeToDebt(t *testing.T) {
 	}
 
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
-	// MaxRate sized so the swap proceeds clear the repayment (profitable): swapOut = collIn·rate·1e6/(1e18·1e18).
+	// MaxRate sized so the swap proceeds clear the repayment (profitable): expectedLoanOut = collIn·rate·1e6/(1e18·1e18).
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
-	leg, _, ok := sizeLeg(c, price, q, accrued, sp)
+	sized, ok := sizeLeg(c, price, q, accrued, sp)
 	if !ok {
 		t.Fatal("a liquidatable position should size a leg")
 	}
-	repaid := morpho.RepaidAssetsForSeizeAt(leg.MaxSeizeAssets, price, morpho.LiquidationIncentiveFactor(lltv), accrued, totalBorrowShares)
+	repaid := morpho.RepaidAssetsForSeizeAt(sized.leg.MaxSeizeAssets, price, morpho.LiquidationIncentiveFactor(lltv), accrued, totalBorrowShares)
 	if repaid.Cmp(debt) > 0 {
 		t.Fatalf("seize over-repays: morpho.RepaidAssetsForSeizeAt(%s)=%s > borrowerDebt=%s → Morpho borrowShares underflow",
-			leg.MaxSeizeAssets, repaid, debt)
+			sized.leg.MaxSeizeAssets, repaid, debt)
 	}
-	if leg.MaxSeizeAssets.Cmp(unclampedTarget) >= 0 {
-		t.Fatalf("seize was not clamped below the 90%% target: seized=%s target=%s", leg.MaxSeizeAssets, unclampedTarget)
+	if sized.leg.MaxSeizeAssets.Cmp(unclampedTarget) >= 0 {
+		t.Fatalf("seize was not clamped below the 90%% target: seized=%s target=%s", sized.leg.MaxSeizeAssets, unclampedTarget)
 	}
 }
 
@@ -295,7 +296,7 @@ func TestSizeLegSkipsDustPosition(t *testing.T) {
 	}
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
-	if _, _, ok := sizeLeg(c, price, q, accrued, sp); ok {
+	if _, ok := sizeLeg(c, price, q, accrued, sp); ok {
 		t.Fatal("a dust position whose full-debt seize floors to 0 must be skipped (ok=false), not over-seized")
 	}
 }

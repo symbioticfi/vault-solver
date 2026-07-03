@@ -395,18 +395,19 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 The on-chain settlement contract is the OEV `SymbioticOevSolver` in rfq `src/oev/`: a single-adapter router
 (Morpho-only on-chain) whose constructor pins ONE immutable `LiquidLaneAdapter` and one `AUTH_SIGNER`.
 The Executor calls `liquidate(bid, solver, operationData)`. The callback verifies the solver-signed
-auction auth (`auctionKey`, `bidAmount`, `minBundleProfit`, and capped legs), marks `auctionKey` used,
-then processes legs fail-soft. It enables exactly that `payBid` only after realized bundle profit clears
-`minBundleProfit`.
+auction auth (`auctionKey`, `bidAmount`, `minBundleProfit`, `deadline`, and capped legs), marks
+`auctionKey` used, then processes legs fail-soft. The deadline is solver-local replay protection for the
+callback auth (`now + bid.authTtlMs`, default 60s); the auction's sub-second `timeoutMs` remains an
+off-chain send gate.
 
-Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, a signed loan-output cap `maxAssets`, and a
-loan-denominated `minProfit`. `SymbioticOevSolver` is a no-preview callback: it reads immutable Morpho
-market params, calls `Morpho.liquidate` directly with the signed `maxSeizeAssets`, and lets
-`onMorphoLiquidate` validate economics from actual `repaidAssets`. Morpho is invoked with `try/catch`, so a
+Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, and a loan-denominated `minProfit`.
+`SymbioticOevSolver` is a no-preview callback: it reads immutable Morpho market params, clamps the signed
+max seize by the borrower's live collateral, calls `Morpho.liquidate`, and lets `onMorphoLiquidate`
+validate economics from actual `repaidAssets`. Morpho is invoked with `try/catch`, so a
 stale/healthy/reverting leg emits `LegResult` and the bundle can continue. During `onMorphoLiquidate`, the
-callback sells the seizure through the immutable `LiquidLaneAdapter` at `min(current adapter rate-out,
-maxAssets)`, approves Morpho repayment, and requires the realized gain to cover repayment plus the leg's
-signed `minProfit`. A skipped or reverted leg contributes **zero** to the bundle profit — the bundle gate
+callback sells the seizure through the immutable `LiquidLaneAdapter` at the current adapter rate, approves
+Morpho repayment, and requires the realized gain to cover repayment plus the leg's signed `minProfit`. A
+skipped or reverted leg contributes **zero** to the bundle profit — the bundle gate
 (`BundleResult.bidAuthorized`) compares only the successful legs' realized profit against the signed
 `minBundleProfit`.
 
@@ -591,6 +592,7 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
 | `loanEthFeed.{ethUsd,loanUsd,maxAgeMs}` | required dual-feed loan↔ETH rate source |
 | `bid.bidEth` / `bid.totalBundleProfitBps` / `bid.minBundleProfitBidBps` | minimum bid, optional gross-profit bid share, and optional bundle margin after gas + bid |
+| `bid.authTtlMs` | solver-signed callback auth replay window; default 60s |
 | `bid.maxTxGasPriceWei` | signed gas-price cap and the gas price used for bundle/deposit gates |
 | `sizing.allowFullLiquidation` / `swapHaircutBps` | full-collateral policy and swap cushion |
 | `breaker.maxFailures` / `windowMs` | failed-liquidation rolling-window halt plus immediate blacklist halt |
@@ -658,8 +660,7 @@ conservative fallback because no cached route state means the solver cannot pric
   toward slashing/blacklisting. Mitigations to evaluate: derive `minBundleProfit` so the gate passes when
   the strongest leg lands; feed `BundleResult.bidAuthorized == false` (from receipt decode) into the
   breaker; prefer single-leg bundles near the profit floor.
-- **`maxAssets` currently signs the haircut expected output**, so `min(rateOut, maxAssets)` on-chain
-  forfeits the `swapHaircutBps` margin of every seizure to the vault. Planned direction: the callback
-  takes the live adapter rate-out unconditionally and lets the per-leg profit floor gate economics
-  (contract change, drops `maxAssets` from the leg); solver-side, keep the per-collateral budget clamp
-  as the `InsufficientAllocate` defense with an over-reserve buffer for rate rises.
+- **Adapter budget calibration.** The callback no longer signs a per-leg `maxAssets`; it takes the live
+  adapter rate and relies on the per-leg profit floor. Solver-side, keep the cached per-collateral
+  `getMaxAssets` budget clamp as the `InsufficientAllocate` defense with an over-reserve buffer for rate
+  rises.

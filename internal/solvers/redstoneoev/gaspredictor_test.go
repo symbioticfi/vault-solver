@@ -9,10 +9,7 @@ import (
 
 func TestGasUnitsForBundleRoutes(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
-	bundle := chosenBundle{
-		legs:        []LiquidationLeg{{MaxAssets: big.NewInt(100)}},
-		collaterals: []common.Address{coll},
-	}
+	bundle := bundleWithExpectedLoanOuts(coll, 100)
 
 	cases := []struct {
 		name string
@@ -63,14 +60,7 @@ func TestGasUnitsForBundleRoutes(t *testing.T) {
 
 func TestGasUnitsForBundleConsumesSharedBudgets(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
-	bundle := chosenBundle{
-		legs: []LiquidationLeg{
-			{MaxAssets: big.NewInt(70)},
-			{MaxAssets: big.NewInt(70)},
-			{MaxAssets: big.NewInt(70)},
-		},
-		collaterals: []common.Address{coll, coll, coll},
-	}
+	bundle := bundleWithExpectedLoanOuts(coll, 70, 70, 70)
 	st := &gasPredictorState{
 		FreeAssets:   big.NewInt(80),
 		Withdrawable: big.NewInt(200),
@@ -91,10 +81,7 @@ func TestGasUnitsForBundleConsumesSharedBudgets(t *testing.T) {
 }
 
 func TestGasPredictionFixedFeedCostAndLimit(t *testing.T) {
-	bundle := chosenBundle{legs: []LiquidationLeg{
-		{MaxAssets: big.NewInt(1)},
-		{MaxAssets: big.NewInt(1)},
-	}}
+	bundle := bundleWithExpectedLoanOuts(common.Address{}, 1, 1)
 	pred := gasPredictionForBundleFeeds(bundle, nil, 3)
 	want := gasBaseUnits + gasExecutorDebitSurcharge + 3*gasPriceUpdatePerFeed + gasFirstUnknownLeg + gasAdditionalUnknownLeg
 	if pred.Units != want {
@@ -110,30 +97,9 @@ func TestGasPredictionFixedFeedCostAndLimit(t *testing.T) {
 
 func TestLiveRedStoneLimitRejectsThreeAllocateLegs(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
-	two := chosenBundle{
-		legs: []LiquidationLeg{
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-		},
-		collaterals: []common.Address{coll, coll},
-	}
-	three := chosenBundle{
-		legs: []LiquidationLeg{
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-		},
-		collaterals: []common.Address{coll, coll, coll},
-	}
-	four := chosenBundle{
-		legs: []LiquidationLeg{
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-			{MaxAssets: big.NewInt(1)},
-		},
-		collaterals: []common.Address{coll, coll, coll, coll},
-	}
+	two := bundleWithExpectedLoanOuts(coll, 1, 1)
+	three := bundleWithExpectedLoanOuts(coll, 1, 1, 1)
+	four := bundleWithExpectedLoanOuts(coll, 1, 1, 1, 1)
 	st := &gasPredictorState{
 		FreeAssets:   big.NewInt(10),
 		Withdrawable: big.NewInt(10),
@@ -154,15 +120,11 @@ func TestLiveRedStoneLimitRejectsThreeAllocateLegs(t *testing.T) {
 func TestGasPredictionTracksForkCalibratedSettlements(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	bundle := func(legs int) chosenBundle {
-		b := chosenBundle{
-			legs:        make([]LiquidationLeg, legs),
-			collaterals: make([]common.Address, legs),
+		outs := make([]int64, legs)
+		for i := range outs {
+			outs[i] = 1
 		}
-		for i := range legs {
-			b.legs[i] = LiquidationLeg{MaxAssets: big.NewInt(1)}
-			b.collaterals[i] = coll
-		}
-		return b
+		return bundleWithExpectedLoanOuts(coll, outs...)
 	}
 	cases := []struct {
 		name     string
@@ -232,4 +194,14 @@ func TestGasPredictionTracksForkCalibratedSettlements(t *testing.T) {
 			}
 		})
 	}
+}
+
+func bundleWithExpectedLoanOuts(coll common.Address, outs ...int64) chosenBundle {
+	b := chosenBundle{
+		legs: make([]bundleLeg, len(outs)),
+	}
+	for i, out := range outs {
+		b.legs[i] = bundleLeg{expectedLoanOut: big.NewInt(out), collateral: coll}
+	}
+	return b
 }

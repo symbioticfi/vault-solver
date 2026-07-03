@@ -95,14 +95,17 @@ func (s *Solver) scoredLegs(a AuctionMessage, now time.Time) []scoredLeg {
 	cands := s.mon.candidates(a, nowTs)
 	out := make([]scoredLeg, 0, len(cands))
 	for _, it := range cands {
-		if leg, profit, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
+		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
 			out = append(out, scoredLeg{
-				leg:        leg,
-				profit:     profit,
-				collateral: it.cand.Market.Params.CollateralToken,
-				maxAssets:  it.quote.MaxAssets, // legs sharing this collateral share its getMaxAssets budget
-				source:     it,
-				replay:     true,
+				bundleLeg: bundleLeg{
+					LiquidationLeg:  sized.leg,
+					expectedLoanOut: sized.expectedLoanOut,
+					collateral:      it.cand.Market.Params.CollateralToken,
+				},
+				profit:    sized.profit,
+				maxAssets: it.quote.MaxAssets,
+				source:    it,
+				replay:    true,
 			})
 		}
 	}

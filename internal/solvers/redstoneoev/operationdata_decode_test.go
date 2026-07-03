@@ -64,7 +64,11 @@ func decodeOperationAuthValue(v reflect.Value) (operationAuth, error) {
 	if !ok {
 		return operationAuth{}, errors.New("decode operationData auth: bad minBundleProfit")
 	}
-	return operationAuth{AuctionKey: key, BidAmount: bid, MinBundleProfit: minBundleProfit}, nil
+	deadline, ok := bigValue(v.FieldByName("Deadline"))
+	if !ok {
+		return operationAuth{}, errors.New("decode operationData auth: bad deadline")
+	}
+	return operationAuth{AuctionKey: key, BidAmount: bid, MinBundleProfit: minBundleProfit, Deadline: deadline}, nil
 }
 
 func decodeOperationLegsValue(v reflect.Value) ([]callbackLeg, error) {
@@ -92,10 +96,6 @@ func decodeOperationLegsValue(v reflect.Value) ([]callbackLeg, error) {
 		if !ok {
 			return nil, errors.Errorf("decode operationData leg %d: bad maxSeizeAssets", i)
 		}
-		maxAssets, ok := bigValue(legV.FieldByName("MaxAssets"))
-		if !ok {
-			return nil, errors.Errorf("decode operationData leg %d: bad maxAssets", i)
-		}
 		minProfit, ok := bigValue(legV.FieldByName("MinProfit"))
 		if !ok {
 			return nil, errors.Errorf("decode operationData leg %d: bad minProfit", i)
@@ -104,7 +104,6 @@ func decodeOperationLegsValue(v reflect.Value) ([]callbackLeg, error) {
 			MarketId:       id,
 			Borrower:       borrower,
 			MaxSeizeAssets: maxSeize,
-			MaxAssets:      maxAssets,
 			MinProfit:      minProfit,
 		}
 	}

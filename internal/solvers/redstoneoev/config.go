@@ -36,6 +36,7 @@ type rawWS struct {
 
 type rawBid struct {
 	BidEth                string `yaml:"bidEth"`
+	AuthTtlMs             *int   `yaml:"authTtlMs"`
 	MinBundleProfitBidBps *int   `yaml:"minBundleProfitBidBps"`
 	TotalBundleProfitBps  *int   `yaml:"totalBundleProfitBps"`
 	MaxTxGasPriceWei      string `yaml:"maxTxGasPriceWei"`
@@ -90,6 +91,7 @@ type Config struct {
 	MaxTrackedPositions int
 
 	BidWei                *big.Int
+	CallbackAuthTTL       time.Duration
 	LoanEthFeed           *loanEthFeed
 	MinBundleProfitBidBps int
 	TotalBundleProfitBps  int
@@ -108,6 +110,7 @@ type Config struct {
 
 const (
 	defaultAllowFullLiquidation = true           // target 100% collateral unless explicitly disabled
+	defaultCallbackAuthTTL      = time.Minute    // replay window for solver-signed callback auth
 	defaultSwapHaircut          = 200            // 2%
 	defaultMaxTxGasPrice        = 60_000_000_000 // 60 gwei
 	defaultFeedMaxAge           = time.Hour      // generous Chainlink-style heartbeat bound
@@ -200,6 +203,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if cfg.BidWei.Sign() <= 0 {
 		return nil, errors.New("bid.bidEth must be > 0")
+	}
+	if cfg.CallbackAuthTTL, err = parse.MsDuration(raw.Bid.AuthTtlMs, defaultCallbackAuthTTL, "bid.authTtlMs"); err != nil {
+		return nil, err
 	}
 	if cfg.LoanEthFeed, err = parseLoanEthFeed(raw.LoanEthFeed); err != nil {
 		return nil, err
