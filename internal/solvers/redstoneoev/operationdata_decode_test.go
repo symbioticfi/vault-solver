@@ -64,7 +64,11 @@ func decodeOperationAuthValue(v reflect.Value) (operationAuth, error) {
 	if !ok {
 		return operationAuth{}, errors.New("decode operationData auth: bad minBundleProfit")
 	}
-	return operationAuth{AuctionKey: key, BidAmount: bid, MinBundleProfit: minBundleProfit}, nil
+	deadline, ok := bigValue(v.FieldByName("Deadline"))
+	if !ok {
+		return operationAuth{}, errors.New("decode operationData auth: bad deadline")
+	}
+	return operationAuth{AuctionKey: key, BidAmount: bid, MinBundleProfit: minBundleProfit, Deadline: deadline}, nil
 }
 
 func decodeOperationLegsValue(v reflect.Value) ([]callbackLeg, error) {

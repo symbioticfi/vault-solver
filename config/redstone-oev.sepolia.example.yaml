@@ -35,6 +35,7 @@ solvers:
 
       bid:
         bidEth: "0.0005"                 # minimum bid in ETH; final bid is max(this, gross profit share)
+        authTtlMs: 60000                 # callback auth replay window; independent from auction timeoutMs
         totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms
         minBundleProfitBidBps: 1000      # extra bundle margin after gas + bid, as bps of the final bid
         maxTxGasPriceWei: "20000000000"  # 20 gwei signed tx.gasprice cap and profitability/deposit assumption

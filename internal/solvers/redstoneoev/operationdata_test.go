@@ -15,6 +15,7 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 		AuctionKey:      common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
 		BidAmount:       mustBig("500000000000000"),
 		MinBundleProfit: mustBig("2200000"),
+		Deadline:        mustBig("1781243700"),
 	}
 	legs := []LiquidationLeg{{
 		MarketId:       common.HexToHash("0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5"),
@@ -33,8 +34,9 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 		"1111111111111111111111111111111111111111111111111111111111111111" +
 		"0000000000000000000000000000000000000000000000000001c6bf52634000" +
 		"00000000000000000000000000000000000000000000000000000000002191c0" +
-		"00000000000000000000000000000000000000000000000000000000000000a0" +
-		"0000000000000000000000000000000000000000000000000000000000000140" +
+		"000000000000000000000000000000000000000000000000000000006a2b9f34" +
+		"00000000000000000000000000000000000000000000000000000000000000c0" +
+		"0000000000000000000000000000000000000000000000000000000000000160" +
 		"0000000000000000000000000000000000000000000000000000000000000001" +
 		"6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5" +
 		"000000000000000000000000629d764ec8563afa701709b52c1a215e865632de" +
@@ -53,7 +55,8 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 	}
 	if back.Auth.AuctionKey != auth.AuctionKey ||
 		back.Auth.BidAmount.Cmp(auth.BidAmount) != 0 ||
-		back.Auth.MinBundleProfit.Cmp(auth.MinBundleProfit) != 0 {
+		back.Auth.MinBundleProfit.Cmp(auth.MinBundleProfit) != 0 ||
+		back.Auth.Deadline.Cmp(auth.Deadline) != 0 {
 		t.Fatalf("auth round-trip mismatch: %+v", back.Auth)
 	}
 	if len(back.Legs) != 1 {
@@ -73,11 +76,18 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 func TestEncodeOperationDataRejectsMissingAuth(t *testing.T) {
 	leg := LiquidationLeg{Borrower: common.Address{19: 1}, MaxSeizeAssets: big.NewInt(1), MinProfit: big.NewInt(1)}
 	for name, auth := range map[string]operationAuth{
-		"no bid":               {MinBundleProfit: big.NewInt(1)},
-		"no min bundle profit": {BidAmount: big.NewInt(1)},
+		"no bid":               {MinBundleProfit: big.NewInt(1), Deadline: big.NewInt(1)},
+		"no min bundle profit": {BidAmount: big.NewInt(1), Deadline: big.NewInt(1)},
+		"no deadline":          {BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1)},
 		"zero min bundle profit": {
 			BidAmount:       big.NewInt(1),
 			MinBundleProfit: big.NewInt(0),
+			Deadline:        big.NewInt(1),
+		},
+		"zero deadline": {
+			BidAmount:       big.NewInt(1),
+			MinBundleProfit: big.NewInt(1),
+			Deadline:        big.NewInt(0),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -86,13 +96,15 @@ func TestEncodeOperationDataRejectsMissingAuth(t *testing.T) {
 			}
 		})
 	}
-	if _, err := EncodeOperationData(operationAuth{BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1)}, nil, nil); err == nil {
+	if _, err := EncodeOperationData(operationAuth{
+		BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1), Deadline: big.NewInt(1),
+	}, nil, nil); err == nil {
 		t.Fatal("expected error for empty legs")
 	}
 }
 
 func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
-	auth := operationAuth{BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1)}
+	auth := operationAuth{BidAmount: big.NewInt(1), MinBundleProfit: big.NewInt(1), Deadline: big.NewInt(1)}
 	valid := LiquidationLeg{
 		Borrower:       common.Address{19: 1},
 		MaxSeizeAssets: big.NewInt(1),
@@ -127,6 +139,7 @@ func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 		AuctionKey:      common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		BidAmount:       big.NewInt(100),
 		MinBundleProfit: big.NewInt(200),
+		Deadline:        big.NewInt(300),
 	}
 	legs := []LiquidationLeg{{
 		MarketId:       common.Hash{31: 1},
@@ -158,5 +171,14 @@ func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 	}
 	if changedDigest == digest {
 		t.Fatal("digest must change when leg minProfit changes")
+	}
+	changedAuth := auth
+	changedAuth.Deadline = big.NewInt(301)
+	changedDigest, err = CallbackAuthDigest(big.NewInt(11155111), common.Address{19: 3}, common.Address{19: 4}, changedAuth, legs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedDigest == digest {
+		t.Fatal("digest must change when auth deadline changes")
 	}
 }

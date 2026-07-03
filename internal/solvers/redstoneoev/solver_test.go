@@ -68,13 +68,14 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 	})
 
 	cfg := &Config{
-		Executor:      common.HexToAddress("0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"),
-		Callback:      common.HexToAddress("0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"),
-		Adapter:       seedAdapter,
-		BidWei:        mustBig("500000000000000"), // 0.0005 ETH flat bid
-		MaxTxGasPrice: big.NewInt(1_000_000_000),
-		MaxStateAge:   defaultMaxStateAge,
-		Sizing:        SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
+		Executor:        common.HexToAddress("0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"),
+		Callback:        common.HexToAddress("0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"),
+		Adapter:         seedAdapter,
+		BidWei:          mustBig("500000000000000"), // 0.0005 ETH flat bid
+		CallbackAuthTTL: defaultCallbackAuthTTL,
+		MaxTxGasPrice:   big.NewInt(1_000_000_000),
+		MaxStateAge:     defaultMaxStateAge,
+		Sizing:          SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
 	}
 
 	s := &Solver{
@@ -167,12 +168,7 @@ func recoverCallbackAuthSigner(t *testing.T, s *Solver, op operationData) common
 	t.Helper()
 	legs := make([]LiquidationLeg, len(op.Legs))
 	for i, leg := range op.Legs {
-		legs[i] = LiquidationLeg{
-			MarketId:       leg.MarketId,
-			Borrower:       leg.Borrower,
-			MaxSeizeAssets: leg.MaxSeizeAssets,
-			MinProfit:      leg.MinProfit,
-		}
+		legs[i] = LiquidationLeg(leg)
 	}
 	digest, err := CallbackAuthDigest(s.chainID, s.cfg.Callback, s.cfg.Executor, op.Auth, legs)
 	if err != nil {
@@ -265,7 +261,8 @@ func TestBuildBidHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode operationData: %v", err)
 	}
-	if op.Auth.AuctionKey != auctionKeyHash(a) || op.Auth.BidAmount.Cmp(s.cfg.BidWei) != 0 || op.Auth.MinBundleProfit.Sign() <= 0 {
+	if op.Auth.AuctionKey != auctionKeyHash(a) || op.Auth.BidAmount.Cmp(s.cfg.BidWei) != 0 ||
+		op.Auth.MinBundleProfit.Sign() <= 0 || op.Auth.Deadline.Cmp(callbackAuthDeadline(auctionClock()(), s.cfg.CallbackAuthTTL)) != 0 {
 		t.Fatalf("bad operation auth: %+v", op.Auth)
 	}
 	if len(op.Legs) != 2 || op.Legs[0].MaxSeizeAssets.Sign() <= 0 || op.Legs[0].MinProfit.Sign() <= 0 {
@@ -967,9 +964,11 @@ func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
 	var b common.Address
 	b[19] = borrowerByte
 	return scoredLeg{
-		leg:             LiquidationLeg{Borrower: b, MarketId: common.Hash{}},
-		expectedLoanOut: profit,
-		profit:          profit,
+		bundleLeg: bundleLeg{
+			LiquidationLeg:  LiquidationLeg{Borrower: b, MarketId: common.Hash{}},
+			expectedLoanOut: profit,
+		},
+		profit: profit,
 	}
 }
 
@@ -983,7 +982,9 @@ func TestBundleSearchBounds(t *testing.T) {
 		scored := make([]scoredLeg, 0, candidates)
 		for i := candidates; i > 0; i-- {
 			scored = append(scored, scoredLeg{
-				leg:    LiquidationLeg{Borrower: common.BigToAddress(big.NewInt(int64(i)))},
+				bundleLeg: bundleLeg{
+					LiquidationLeg: LiquidationLeg{Borrower: common.BigToAddress(big.NewInt(int64(i)))},
+				},
 				profit: big.NewInt(int64(i)),
 			})
 		}
@@ -1134,7 +1135,7 @@ func TestSelectBundleAllowsSameMarketStaticLegs(t *testing.T) {
 	marketB := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	withMarket := func(byteID byte, profit int64, market common.Hash) scoredLeg {
 		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.leg.MarketId = market
+		sl.MarketId = market
 		return sl
 	}
 
@@ -1188,18 +1189,21 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		borrower[19] = byteID
 		pos := morpho.PositionState{BorrowShares: mustBig("1200000000"), Collateral: mustBig("1000000000000000000")}
 		cand := Candidate{MarketID: market, Borrower: borrower, Market: info, Position: pos}
-		leg, _, ok := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, s.cfg.Sizing)
+		sized, ok := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, s.cfg.Sizing)
 		if !ok {
 			t.Fatal("fixture should size")
 		}
+		leg := sized.leg
 		leg.MaxSeizeAssets = big.NewInt(1) // stale/bogus: selection must ignore and recompute from source
 		return scoredLeg{
-			leg:             leg,
-			expectedLoanOut: big.NewInt(1),
-			profit:          mustBig("999999999999999999"),
-			collateral:      coll,
-			source:          evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
-			replay:          true,
+			bundleLeg: bundleLeg{
+				LiquidationLeg:  leg,
+				expectedLoanOut: big.NewInt(1),
+				collateral:      coll,
+			},
+			profit: mustBig("999999999999999999"),
+			source: evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
+			replay: true,
 		}
 	}
 
@@ -1215,7 +1219,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d same-market replayed legs, want 2", len(b.legs))
 	}
-	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.expectedLoanOuts[0].Cmp(big.NewInt(1)) == 0 {
+	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].expectedLoanOut.Cmp(big.NewInt(1)) == 0 {
 		t.Fatalf("selected stale precomputed leg instead of replaying source: %+v", b.legs[0])
 	}
 	if b.grossLoan.Cmp(mustBig("999999999999999999")) >= 0 {
@@ -1263,13 +1267,14 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 	t.Run("searches past gross-only candidate window", func(t *testing.T) {
 		const formerGrossWindow = 512
 		withAddr := func(addr common.Address, profit int64, c common.Address) scoredLeg {
-			sl := scoredLeg{
-				leg:             LiquidationLeg{Borrower: addr},
-				expectedLoanOut: big.NewInt(profit),
-				profit:          big.NewInt(profit),
-				collateral:      c,
+			return scoredLeg{
+				bundleLeg: bundleLeg{
+					LiquidationLeg:  LiquidationLeg{Borrower: addr},
+					expectedLoanOut: big.NewInt(profit),
+					collateral:      c,
+				},
+				profit: big.NewInt(profit),
 			}
-			return sl
 		}
 		scored := make([]scoredLeg, 0, formerGrossWindow+2)
 		for i := 0; i <= formerGrossWindow; i++ {
@@ -1294,7 +1299,7 @@ func TestSelectNetBundleAllowsSameMarketStaticLegs(t *testing.T) {
 	collB := common.HexToAddress("0x00000000000000000000000000000000000000b2")
 	withMarket := func(byteID byte, profit int64, c common.Address) scoredLeg {
 		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.leg.MarketId = market
+		sl.MarketId = market
 		sl.collateral = c
 		return sl
 	}

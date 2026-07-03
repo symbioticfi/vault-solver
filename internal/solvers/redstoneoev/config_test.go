@@ -174,6 +174,9 @@ func TestParseConfigValid(t *testing.T) {
 	if cfg.TotalBundleProfitBps != 500 {
 		t.Fatalf("totalBundleProfitBps=%d, want 500", cfg.TotalBundleProfitBps)
 	}
+	if cfg.CallbackAuthTTL != defaultCallbackAuthTTL {
+		t.Fatalf("callback auth TTL = %v, want %v", cfg.CallbackAuthTTL, defaultCallbackAuthTTL)
+	}
 }
 
 func TestParseConfigDefaults(t *testing.T) {
@@ -200,6 +203,22 @@ bid: {bidEth: "0.0001"}
 	}
 	if cfg.MaxTrackedPositions != defaultMaxTrackedPositions {
 		t.Fatalf("maxTrackedPositions default wrong: %d, want %d", cfg.MaxTrackedPositions, defaultMaxTrackedPositions)
+	}
+	if cfg.CallbackAuthTTL != defaultCallbackAuthTTL {
+		t.Fatalf("callback auth TTL default wrong: %v, want %v", cfg.CallbackAuthTTL, defaultCallbackAuthTTL)
+	}
+}
+
+func TestParseConfigBidAuthTTL(t *testing.T) {
+	cfg, err := decodeCfg(t, wsline+addrs+api+feedLine+`bid: {bidEth: "0.1", authTtlMs: 120000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CallbackAuthTTL != 2*time.Minute {
+		t.Fatalf("callback auth TTL = %v, want 2m", cfg.CallbackAuthTTL)
+	}
+	if _, err := decodeCfg(t, wsline+addrs+api+feedLine+`bid: {bidEth: "0.1", authTtlMs: 0}`); err == nil {
+		t.Fatal("expected error for zero bid.authTtlMs")
 	}
 }
 

@@ -22,6 +22,7 @@ type operationAuth struct {
 	AuctionKey      common.Hash
 	BidAmount       *big.Int
 	MinBundleProfit *big.Int
+	Deadline        *big.Int
 }
 
 type callbackLeg struct {
@@ -48,6 +49,7 @@ var (
 		{Type: mustType("bytes32")},
 		{Type: mustType("uint256")},
 		{Type: mustType("uint256")},
+		{Type: mustType("uint256")},
 		{Type: mustType("bytes32")},
 	}
 	authDomain = crypto.Keccak256Hash([]byte("SYMBIOTIC_OEV_AUTH_V1"))
@@ -58,7 +60,8 @@ func EncodeOperationData(auth operationAuth, legs []LiquidationLeg, authSig []by
 	if len(legs) == 0 {
 		return nil, errors.New("operationData: no legs")
 	}
-	if auth.BidAmount == nil || auth.MinBundleProfit == nil || auth.MinBundleProfit.Sign() <= 0 {
+	if auth.BidAmount == nil || auth.MinBundleProfit == nil || auth.MinBundleProfit.Sign() <= 0 ||
+		auth.Deadline == nil || auth.Deadline.Sign() <= 0 {
 		return nil, errors.New("operationData: invalid auth")
 	}
 	if err := validateOperationLegs(legs); err != nil {
@@ -80,7 +83,10 @@ func CallbackAuthDigest(chainID *big.Int, callback, executor common.Address, aut
 	if err != nil {
 		return common.Hash{}, err
 	}
-	enc, err := authDigestArgs.Pack(authDomain, chainID, callback, executor, auth.AuctionKey, auth.BidAmount, auth.MinBundleProfit, legsHash)
+	enc, err := authDigestArgs.Pack(
+		authDomain, chainID, callback, executor, auth.AuctionKey, auth.BidAmount, auth.MinBundleProfit,
+		auth.Deadline, legsHash,
+	)
 	if err != nil {
 		return common.Hash{}, errors.Errorf("encode callback auth digest: %w", err)
 	}
@@ -110,12 +116,7 @@ func encodedLegsHash(legs []LiquidationLeg) (common.Hash, error) {
 func encodeLegs(legs []LiquidationLeg) []callbackLeg {
 	out := make([]callbackLeg, len(legs))
 	for i, leg := range legs {
-		out[i] = callbackLeg{
-			MarketId:       leg.MarketId,
-			Borrower:       leg.Borrower,
-			MaxSeizeAssets: leg.MaxSeizeAssets,
-			MinProfit:      leg.MinProfit,
-		}
+		out[i] = callbackLeg(leg)
 	}
 	return out
 }
@@ -144,6 +145,7 @@ func mustOperationDataType() abi.Type {
 			{Name: "auctionKey", Type: "bytes32"},
 			{Name: "bidAmount", Type: "uint256"},
 			{Name: "minBundleProfit", Type: "uint256"},
+			{Name: "deadline", Type: "uint256"},
 		}},
 		{Name: "legs", Type: "tuple[]", Components: callbackLegComponents()},
 		{Name: "authSig", Type: "bytes"},

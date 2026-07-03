@@ -198,13 +198,10 @@ func TestGasPredictionTracksForkCalibratedSettlements(t *testing.T) {
 
 func bundleWithExpectedLoanOuts(coll common.Address, outs ...int64) chosenBundle {
 	b := chosenBundle{
-		legs:             make([]LiquidationLeg, len(outs)),
-		expectedLoanOuts: make([]*big.Int, len(outs)),
-		collaterals:      make([]common.Address, len(outs)),
+		legs: make([]bundleLeg, len(outs)),
 	}
 	for i, out := range outs {
-		b.expectedLoanOuts[i] = big.NewInt(out)
-		b.collaterals[i] = coll
+		b.legs[i] = bundleLeg{expectedLoanOut: big.NewInt(out), collateral: coll}
 	}
 	return b
 }

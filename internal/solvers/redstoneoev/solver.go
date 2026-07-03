@@ -572,7 +572,12 @@ func (s *Solver) buildBid(a AuctionMessage, nowFn func() time.Time) bidDecision 
 	}
 	// Encode operationData only after the cheap gates pass — it's the bundle's ABI pack, needed solely as
 	// SignBid's input, so defer it past state.load / signer_locked / deposit_low / callback_balance.
-	auth := operationAuth{AuctionKey: auctionKeyHash(a), BidAmount: priced.bidNative, MinBundleProfit: priced.minBundleProfitLoan}
+	auth := operationAuth{
+		AuctionKey:      auctionKeyHash(a),
+		BidAmount:       priced.bidNative,
+		MinBundleProfit: priced.minBundleProfitLoan,
+		Deadline:        callbackAuthDeadline(now, s.cfg.CallbackAuthTTL),
+	}
 	authDigest, err := CallbackAuthDigest(s.chainID, s.cfg.Callback, s.cfg.Executor, auth, priced.callbackLegs)
 	if err != nil {
 		s.log.Error(err, "encode callback auth digest failed", "auction", a.ID)
@@ -616,7 +621,7 @@ func (s *Solver) buildBid(a AuctionMessage, nowFn func() time.Time) bidDecision 
 				OperationData:     hexutil.Encode(opData),
 				LiquidationSig:    hexutil.Encode(sig),
 				MaxTxGasPrice:     gasPrice.String(),
-				Borrowers:         b.borrowers,
+				Borrowers:         b.borrowers(),
 			},
 		},
 	}
@@ -650,7 +655,7 @@ func dropInFlightLegs(scored []scoredLeg, inFlight map[positionKey]bool) ([]scor
 	}
 	kept := scored[:0]
 	for _, sl := range scored {
-		if !inFlight[positionKey{sl.leg.MarketId, sl.leg.Borrower}] {
+		if !inFlight[positionKey{sl.MarketId, sl.Borrower}] {
 			kept = append(kept, sl)
 		}
 	}
@@ -702,6 +707,10 @@ func sinceEmitMs(emitMs int64, now time.Time) int64 {
 		return 0
 	}
 	return now.UnixMilli() - emitMs
+}
+
+func callbackAuthDeadline(now time.Time, ttl time.Duration) *big.Int {
+	return big.NewInt(now.Add(ttl).Unix())
 }
 
 // clampTsAt derives the accrual timestamp from the auction's (attacker-influenceable) timestamp,

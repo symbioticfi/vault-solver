@@ -89,16 +89,8 @@ func gasLegPredictionForBundle(b chosenBundle, st *gasPredictorState) (uint64, [
 	free := cloneBig(st.FreeAssets)
 	withdrawable := cloneBig(st.Withdrawable)
 	var total uint64
-	for i := range b.legs {
-		coll := common.Address{}
-		if i < len(b.collaterals) {
-			coll = b.collaterals[i]
-		}
-		expectedLoanOut := (*big.Int)(nil)
-		if i < len(b.expectedLoanOuts) {
-			expectedLoanOut = b.expectedLoanOuts[i]
-		}
-		route := predictGasRoute(expectedLoanOut, coll, acquire, free, withdrawable)
+	for i, leg := range b.legs {
+		route := predictGasRoute(leg.expectedLoanOut, leg.collateral, acquire, free, withdrawable)
 		routes = append(routes, route)
 		total = saturatingAddUint64(total, gasUnitsForRouteAt(route, i == 0))
 	}
