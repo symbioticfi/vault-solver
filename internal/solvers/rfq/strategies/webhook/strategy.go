@@ -3,8 +3,6 @@ package webhookstrategy
 import (
 	"context"
 	"math/big"
-	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -16,19 +14,9 @@ import (
 )
 
 const Name = "webhook"
-const fillPlanTTL = 3 * time.Hour
 
 type Strategy struct {
 	client *webhook.Client
-	now    func() time.Time
-
-	mu    sync.Mutex
-	plans map[string]cachedFillPlan
-}
-
-type cachedFillPlan struct {
-	plan      *types.FillPlan
-	createdAt time.Time
 }
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
@@ -49,7 +37,7 @@ func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
 }
 
 func New(client *webhook.Client) *Strategy {
-	return &Strategy{client: client, now: time.Now, plans: make(map[string]cachedFillPlan)}
+	return &Strategy{client: client}
 }
 
 func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
@@ -57,20 +45,14 @@ func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (typ
 	if err := s.client.PostJSON(ctx, input, &out); err != nil {
 		return types.QuoteOutput{}, err
 	}
-	if out.Decision == types.DecisionQuote {
-		plan, err := fillPlanFromQuote(input, out)
-		if err != nil {
-			return types.QuoteOutput{}, err
-		}
-		s.remember(input.QuoteID, plan)
-	}
 	return out, nil
 }
 
+// BuildFillPlan delegates to the external decider on every call and keeps no local cache. The remote
+// implementer owns caching the quote-time decision and validating the fill against the awarded order
+// (the fill request carries the order's AmountIn and RequiredAmountOut). We only assemble the returned
+// candidate legs into a fill plan against the solver's trusted candidate snapshot.
 func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
-	if plan := s.cached(input.QuoteID); plan != nil {
-		return plan, nil
-	}
 	quoteInput := types.QuoteInput(input)
 	quoteInput.AmountIn = cloneBig(input.AmountIn)
 	quoteInput.RequiredAmountOut = cloneBig(input.RequiredAmountOut)
@@ -78,11 +60,7 @@ func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*t
 	if err != nil || out.Decision == types.DecisionDecline {
 		return nil, err
 	}
-	plan := s.cached(input.QuoteID)
-	if plan == nil {
-		return nil, errors.New("rebuilt fill plan was not cached")
-	}
-	return plan, nil
+	return fillPlanFromQuote(quoteInput, out)
 }
 
 func fillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.FillPlan, error) {
@@ -116,51 +94,6 @@ func fillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		QuotedAmountOut: cloneBig(out.QuotedAmountOut),
 		Legs:            legs,
 	}, nil
-}
-
-func (s *Strategy) remember(quoteID string, plan *types.FillPlan) {
-	if quoteID == "" || plan == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now()
-	for id, cached := range s.plans {
-		if now.Sub(cached.createdAt) > fillPlanTTL {
-			delete(s.plans, id)
-		}
-	}
-	s.plans[quoteID] = cachedFillPlan{plan: clonePlan(plan), createdAt: now}
-}
-
-func (s *Strategy) cached(quoteID string) *types.FillPlan {
-	s.mu.Lock()
-	cached, ok := s.plans[quoteID]
-	s.mu.Unlock()
-	if !ok || s.now().Sub(cached.createdAt) > fillPlanTTL {
-		return nil
-	}
-	return clonePlan(cached.plan)
-}
-
-func clonePlan(in *types.FillPlan) *types.FillPlan {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.AmountIn = cloneBig(in.AmountIn)
-	out.QuotedAmountOut = cloneBig(in.QuotedAmountOut)
-	out.Legs = make([]types.FillLeg, len(in.Legs))
-	for i, leg := range in.Legs {
-		out.Legs[i] = types.FillLeg{
-			Adapter:    leg.Adapter,
-			AmountIn:   cloneBig(leg.AmountIn),
-			AmountOut:  cloneBig(leg.AmountOut),
-			MaxRate:    cloneBig(leg.MaxRate),
-			DiscountID: cloneHash(leg.DiscountID),
-		}
-	}
-	return &out
 }
 
 func cloneBig(n *big.Int) *big.Int {
