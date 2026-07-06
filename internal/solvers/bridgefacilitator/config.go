@@ -15,11 +15,17 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
-	APIBaseURL      string       `yaml:"apiBaseUrl"`
-	RedeemBatchSize int          `yaml:"redeemBatchSize"`
-	Adapters        []string     `yaml:"adapters"`
-	HTTPTimeout     string       `yaml:"httpTimeout"`
-	Intervals       rawIntervals `yaml:"intervals"`
+	APIBaseURL      string            `yaml:"apiBaseUrl"`
+	RedeemBatchSize int               `yaml:"redeemBatchSize"`
+	Adapters        []string          `yaml:"adapters"`
+	HTTPTimeout     string            `yaml:"httpTimeout"`
+	Intervals       rawIntervals      `yaml:"intervals"`
+	Strategy        rawStrategyConfig `yaml:"strategy"`
+}
+
+type rawStrategyConfig struct {
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
 
 type rawIntervals struct {
@@ -39,11 +45,17 @@ type Config struct {
 	// Targets is the list of vault+adapter pairs this facilitator serves.
 	Targets   []Target
 	Intervals Intervals
+	Strategy  StrategyConfig
+}
+
+type StrategyConfig struct {
+	Name   string
+	Config yaml.Node
 }
 
 // Target is one adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
-// Collateral (vault.asset()) are resolved on-chain at startup (resolveTargets); exposure/return caps
-// also live on-chain (setExposureLimits), read each poll.
+// Collateral (vault.asset()) are resolved on-chain at startup (resolveTargets); per-request caps also
+// live on-chain (setLimitsPerRequest), read each poll.
 type Target struct {
 	Adapter common.Address
 	// Auctions are matched to this target by their deposit asset equalling Collateral.
@@ -70,6 +82,8 @@ const defaultRedeemBatchSize = 10
 
 // defaultHTTPTimeout bounds each 3F API call when httpTimeout is unset.
 const defaultHTTPTimeout = 30 * time.Second
+
+const defaultStrategyName = "default"
 
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
@@ -109,12 +123,18 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
+	if strategy.Name == "" {
+		strategy.Name = defaultStrategyName
+	}
+
 	return &Config{
 		APIBaseURL:      raw.APIBaseURL,
 		RedeemBatchSize: redeemBatch,
 		HTTPTimeout:     httpTimeout,
 		Targets:         targets,
 		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
+		Strategy:        strategy,
 	}, nil
 }
 

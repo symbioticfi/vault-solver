@@ -40,6 +40,9 @@ func TestParseConfig_RedeemBatchSizeDefaults(t *testing.T) {
 	if cfg.RedeemBatchSize != defaultRedeemBatchSize {
 		t.Fatalf("expected default %d, got %d", defaultRedeemBatchSize, cfg.RedeemBatchSize)
 	}
+	if cfg.Strategy.Name != defaultStrategyName {
+		t.Fatalf("strategy.name = %q, want %q", cfg.Strategy.Name, defaultStrategyName)
+	}
 }
 
 func TestParseConfig_RedeemBatchSizeOverride(t *testing.T) {
@@ -93,6 +96,30 @@ func TestParseConfig_AdaptersList(t *testing.T) {
 		cfg.Targets[0].Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") ||
 		cfg.Targets[1].Adapter != common.HexToAddress("0x0000000000000000000000000000000000000043") {
 		t.Fatalf("targets = %+v", cfg.Targets)
+	}
+}
+
+func TestParseConfig_Strategy(t *testing.T) {
+	cfg, err := parse(t, oneTarget+`
+strategy:
+  name: webhook
+  config:
+    url: https://strategy.example
+`)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.Strategy.Name != "webhook" {
+		t.Fatalf("strategy.name = %q, want webhook", cfg.Strategy.Name)
+	}
+	var raw struct {
+		URL string `yaml:"url"`
+	}
+	if err := cfg.Strategy.Config.Decode(&raw); err != nil {
+		t.Fatalf("decode strategy config: %v", err)
+	}
+	if raw.URL != "https://strategy.example" {
+		t.Fatalf("strategy url = %q", raw.URL)
 	}
 }
 
