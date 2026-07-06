@@ -3,6 +3,7 @@
 package parse
 
 import (
+	"bytes"
 	"math/big"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"gopkg.in/yaml.v3"
 )
 
 func Address(s, field string) (common.Address, error) {
@@ -113,4 +115,21 @@ func Duration(s string, fallback time.Duration, field string) (time.Duration, er
 		return 0, errors.Errorf("%s: duration must be positive, got %q", field, s)
 	}
 	return d, nil
+}
+
+// DecodeStrict decodes a deferred YAML node into out, rejecting unknown keys.
+func DecodeStrict(node yaml.Node, out any) error {
+	if node.Kind == 0 {
+		node = yaml.Node{Kind: yaml.MappingNode}
+	}
+	b, err := yaml.Marshal(&node)
+	if err != nil {
+		return errors.Errorf("re-encode config: %w", err)
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		return errors.Errorf("decode config: %w", err)
+	}
+	return nil
 }
