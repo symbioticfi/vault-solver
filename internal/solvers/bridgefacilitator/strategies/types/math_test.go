@@ -1,4 +1,4 @@
-package strategytypes
+package types
 
 import (
 	"math/big"

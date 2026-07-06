@@ -8,8 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 const Name = "default"
@@ -20,10 +20,10 @@ type Strategy struct{}
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategyregistry.Register(Name, NewFromConfig)
+	strategies.Register(Name, NewFromConfig)
 }
 
-func NewFromConfig(raw yaml.Node, _ strategyregistry.Deps) (strategytypes.Strategy, error) {
+func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
 	var cfg Config
 	if err := decodeConfig(raw, &cfg); err != nil {
 		return nil, err
@@ -44,19 +44,19 @@ func decodeConfig(node yaml.Node, out any) error {
 
 func (s *Strategy) DecideOffers(
 	_ context.Context,
-	input strategytypes.OfferInput,
-) (strategytypes.OfferOutput, error) {
+	input types.OfferInput,
+) (types.OfferOutput, error) {
 	adapters := make(map[string]*adapterState, len(input.Adapters))
 	for _, a := range input.Adapters {
 		adapters[a.ID] = &adapterState{snapshot: a, committed: new(big.Int)}
 	}
 
-	candidatesByAuction := make(map[int64][]strategytypes.OfferCandidate)
+	candidatesByAuction := make(map[int64][]types.OfferCandidate)
 	for _, c := range input.Candidates {
 		candidatesByAuction[c.AuctionID] = append(candidatesByAuction[c.AuctionID], c)
 	}
 
-	var offers []strategytypes.OfferExecution
+	var offers []types.OfferExecution
 	for _, auction := range input.Auctions {
 		remaining := cloneBig(auction.RemainingAmount)
 		if remaining == nil || remaining.Sign() <= 0 {
@@ -82,27 +82,27 @@ func (s *Strategy) DecideOffers(
 			if st.belowMinAssets(principal) {
 				continue
 			}
-			offers = append(offers, strategytypes.OfferExecution{
+			offers = append(offers, types.OfferExecution{
 				AuctionID:      auction.AuctionID,
 				Request:        auction.Request,
 				Maker:          st.snapshot.Adapter,
 				Principal:      principal,
-				ExpectedReturn: strategytypes.ExpectedReturn(principal, auction.MaxRateBps),
+				ExpectedReturn: types.ExpectedReturn(principal, auction.MaxRateBps),
 			})
 			st.committed.Add(st.committed, principal)
 			st.opened++
 			remaining.Sub(remaining, principal)
 		}
 	}
-	return strategytypes.OfferOutput{Offers: offers}, nil
+	return types.OfferOutput{Offers: offers}, nil
 }
 
 func rankEligibleCandidates(
-	auction strategytypes.AuctionSnapshot,
-	candidates []strategytypes.OfferCandidate,
+	auction types.AuctionSnapshot,
+	candidates []types.OfferCandidate,
 	adapters map[string]*adapterState,
-) []strategytypes.OfferCandidate {
-	ranked := make([]strategytypes.OfferCandidate, 0, len(candidates))
+) []types.OfferCandidate {
+	ranked := make([]types.OfferCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		st := adapters[c.AdapterID]
 		if st == nil {
@@ -112,7 +112,7 @@ func rankEligibleCandidates(
 			continue
 		}
 		if st.snapshot.MinYieldBps != nil && st.snapshot.MinYieldBps.Sign() > 0 &&
-			auction.MaxRateBps < strategytypes.BpsToFloat(st.snapshot.MinYieldBps) {
+			auction.MaxRateBps < types.BpsToFloat(st.snapshot.MinYieldBps) {
 			continue
 		}
 		ranked = append(ranked, c)
@@ -125,7 +125,7 @@ func rankEligibleCandidates(
 	return ranked
 }
 
-func candidateCapacity(c strategytypes.OfferCandidate, st *adapterState) *big.Int {
+func candidateCapacity(c types.OfferCandidate, st *adapterState) *big.Int {
 	if st == nil {
 		return new(big.Int)
 	}
@@ -143,7 +143,7 @@ func candidateCapacity(c strategytypes.OfferCandidate, st *adapterState) *big.In
 }
 
 type adapterState struct {
-	snapshot  strategytypes.AdapterSnapshot
+	snapshot  types.AdapterSnapshot
 	committed *big.Int
 	opened    int
 }
@@ -170,4 +170,4 @@ func cloneBig(n *big.Int) *big.Int {
 	return new(big.Int).Set(n)
 }
 
-var _ strategytypes.Strategy = (*Strategy)(nil)
+var _ types.Strategy = (*Strategy)(nil)

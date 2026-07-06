@@ -7,12 +7,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-func testAdapter(id byte, fundable int64) strategytypes.AdapterSnapshot {
+func testAdapter(id byte, fundable int64) types.AdapterSnapshot {
 	addr := common.Address{id}
-	return strategytypes.AdapterSnapshot{
+	return types.AdapterSnapshot{
 		ID:            addr.Hex(),
 		Adapter:       addr,
 		Vault:         common.Address{0x99, id},
@@ -25,8 +25,8 @@ func testAdapter(id byte, fundable int64) strategytypes.AdapterSnapshot {
 	}
 }
 
-func testAuction(id int64, remaining int64) strategytypes.AuctionSnapshot {
-	return strategytypes.AuctionSnapshot{
+func testAuction(id int64, remaining int64) types.AuctionSnapshot {
+	return types.AuctionSnapshot{
 		ID:              big.NewInt(id).String(),
 		AuctionID:       id,
 		OriginalIndex:   int(id),
@@ -39,8 +39,8 @@ func testAuction(id int64, remaining int64) strategytypes.AuctionSnapshot {
 	}
 }
 
-func candidate(adapterID string, auctionID int64, capacity int64) strategytypes.OfferCandidate {
-	return strategytypes.OfferCandidate{
+func candidate(adapterID string, auctionID int64, capacity int64) types.OfferCandidate {
+	return types.OfferCandidate{
 		ID:        adapterID + ":" + big.NewInt(auctionID).String(),
 		AdapterID: adapterID,
 		AuctionID: auctionID,
@@ -51,11 +51,11 @@ func candidate(adapterID string, auctionID int64, capacity int64) strategytypes.
 func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 	a1 := testAdapter(1, 50)
 	a2 := testAdapter(2, 80)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1, a2},
-		Auctions: []strategytypes.AuctionSnapshot{testAuction(10, 100)},
-		Candidates: []strategytypes.OfferCandidate{
+		Adapters: []types.AdapterSnapshot{a1, a2},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 100)},
+		Candidates: []types.OfferCandidate{
 			candidate(a1.ID, 10, 50),
 			candidate(a2.ID, 10, 80),
 		},
@@ -81,11 +81,11 @@ func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 
 func TestStrategyClampsOfferToCandidateCapacity(t *testing.T) {
 	a1 := testAdapter(1, 1000)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1},
-		Auctions: []strategytypes.AuctionSnapshot{testAuction(10, 500)},
-		Candidates: []strategytypes.OfferCandidate{
+		Adapters: []types.AdapterSnapshot{a1},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 500)},
+		Candidates: []types.OfferCandidate{
 			candidate(a1.ID, 10, 100),
 		},
 	}
@@ -104,11 +104,11 @@ func TestStrategyClampsOfferToCandidateCapacity(t *testing.T) {
 
 func TestStrategyRejectsZeroCandidateCapacity(t *testing.T) {
 	a1 := testAdapter(1, 1000)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1},
-		Auctions: []strategytypes.AuctionSnapshot{testAuction(10, 500)},
-		Candidates: []strategytypes.OfferCandidate{
+		Adapters: []types.AdapterSnapshot{a1},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 500)},
+		Candidates: []types.OfferCandidate{
 			candidate(a1.ID, 10, 0),
 		},
 	}
@@ -125,14 +125,14 @@ func TestStrategyRejectsZeroCandidateCapacity(t *testing.T) {
 func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 	a1 := testAdapter(1, 100)
 	a1.MaxAssets = big.NewInt(80)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1},
-		Auctions: []strategytypes.AuctionSnapshot{
+		Adapters: []types.AdapterSnapshot{a1},
+		Auctions: []types.AuctionSnapshot{
 			testAuction(10, 70),
 			testAuction(11, 70),
 		},
-		Candidates: []strategytypes.OfferCandidate{
+		Candidates: []types.OfferCandidate{
 			candidate(a1.ID, 10, 80),
 			candidate(a1.ID, 11, 80),
 		},
@@ -154,11 +154,11 @@ func TestStrategySkipsClampedOfferBelowMinAssets(t *testing.T) {
 	a1 := testAdapter(1, 50)
 	a1.MinAssets = big.NewInt(20)
 	a2 := testAdapter(2, 80)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1, a2},
-		Auctions: []strategytypes.AuctionSnapshot{testAuction(10, 90)},
-		Candidates: []strategytypes.OfferCandidate{
+		Adapters: []types.AdapterSnapshot{a1, a2},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 90)},
+		Candidates: []types.OfferCandidate{
 			candidate(a1.ID, 10, 50),
 			candidate(a2.ID, 10, 80),
 		},
@@ -180,12 +180,12 @@ func TestStrategyOwnsCandidateEligibility(t *testing.T) {
 	a3 := testAdapter(3, 100)
 	a3.MinYieldBps = big.NewInt(300)
 	auction := testAuction(10, 100)
-	input := strategytypes.OfferInput{
+	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{a1, a2, a3},
-		Auctions: []strategytypes.AuctionSnapshot{auction},
-		Candidates: []strategytypes.OfferCandidate{
-			func() strategytypes.OfferCandidate {
+		Adapters: []types.AdapterSnapshot{a1, a2, a3},
+		Auctions: []types.AuctionSnapshot{auction},
+		Candidates: []types.OfferCandidate{
+			func() types.OfferCandidate {
 				c := candidate(a1.ID, 10, 100)
 				c.HasLiveOffer = true
 				return c

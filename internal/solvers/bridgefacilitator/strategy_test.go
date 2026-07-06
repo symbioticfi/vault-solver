@@ -12,9 +12,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
@@ -27,12 +27,12 @@ func mustBig(t *testing.T, s string) *big.Int {
 	return n
 }
 
-func baseOfferInput(t *testing.T) strategytypes.OfferInput {
+func baseOfferInput(t *testing.T) types.OfferInput {
 	t.Helper()
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000001")
-	return strategytypes.OfferInput{
+	return types.OfferInput{
 		Now: time.Unix(0, 0),
-		Adapters: []strategytypes.AdapterSnapshot{{
+		Adapters: []types.AdapterSnapshot{{
 			ID:            adapterID(adapter),
 			Adapter:       adapter,
 			Vault:         common.HexToAddress("0x0000000000000000000000000000000000000002"),
@@ -43,7 +43,7 @@ func baseOfferInput(t *testing.T) strategytypes.OfferInput {
 			MinYieldBps:   new(big.Int),
 			MaxConcurrent: maxRequests,
 		}},
-		Auctions: []strategytypes.AuctionSnapshot{{
+		Auctions: []types.AuctionSnapshot{{
 			ID:              "10",
 			AuctionID:       10,
 			OriginalIndex:   0,
@@ -54,7 +54,7 @@ func baseOfferInput(t *testing.T) strategytypes.OfferInput {
 			RemainingAmount: mustBig(t, "700"),
 			MaxRateBps:      200,
 		}},
-		Candidates: []strategytypes.OfferCandidate{{
+		Candidates: []types.OfferCandidate{{
 			ID:        offerCandidateID(adapterID(adapter), 10),
 			AdapterID: adapterID(adapter),
 			AuctionID: 10,
@@ -71,7 +71,7 @@ func TestStrategyRegistryUsesBuiltIns(t *testing.T) {
 	if got == nil {
 		t.Fatal("newStrategy default returned nil")
 	}
-	names := strategyregistry.Registered()
+	names := strategies.Registered()
 	if len(names) != 2 || names[0] != "default" || names[1] != "webhook" {
 		t.Fatalf("registered strategies = %v, want [default webhook]", names)
 	}

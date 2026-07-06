@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 // offerTTL is how long a signed offer stays valid.
@@ -18,7 +18,7 @@ const offerTTL = 30 * time.Minute
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, offer strategytypes.OfferExecution,
+	av auctionView, offer types.OfferExecution,
 ) (threef.CreateOfferDto, error) {
 	auction := av.dto
 	if offer.Principal == nil || offer.ExpectedReturn == nil {

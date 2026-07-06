@@ -38,7 +38,7 @@ type StrategySpec struct {
 Each solver keeps a local registry/factory:
 
 ```go
-type StrategyFactory func(raw yaml.Node, deps StrategyDeps) (strategytypes.Strategy, error)
+type StrategyFactory func(raw yaml.Node, deps StrategyDeps) (types.Strategy, error)
 ```
 
 `default`, `webhook`, `morpho`, `aave`, or any custom local strategy may self-register from its own

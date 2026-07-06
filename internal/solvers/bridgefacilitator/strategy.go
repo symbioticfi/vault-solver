@@ -9,18 +9,18 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
 )
 
-func newStrategy(spec StrategyConfig) (strategytypes.Strategy, error) {
+func newStrategy(spec StrategyConfig) (types.Strategy, error) {
 	name := spec.Name
 	if name == "" {
 		name = defaultStrategyName
 	}
-	return strategyregistry.New(name, spec.Config, strategyregistry.Deps{})
+	return strategies.New(name, spec.Config, strategies.Deps{})
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
@@ -29,10 +29,10 @@ func buildStrategyInput(
 	offerings []*adapterOffering,
 	offers *offerTracker,
 	now time.Time,
-) strategytypes.OfferInput {
-	adapters := make([]strategytypes.AdapterSnapshot, 0, len(offerings))
+) types.OfferInput {
+	adapters := make([]types.AdapterSnapshot, 0, len(offerings))
 	for _, off := range offerings {
-		adapters = append(adapters, strategytypes.AdapterSnapshot{
+		adapters = append(adapters, types.AdapterSnapshot{
 			ID:            adapterID(off.target.Adapter),
 			Adapter:       off.target.Adapter,
 			Vault:         off.target.Vault,
@@ -46,7 +46,7 @@ func buildStrategyInput(
 		})
 	}
 
-	input := strategytypes.OfferInput{Now: now, Adapters: adapters}
+	input := types.OfferInput{Now: now, Adapters: adapters}
 	for i := range auctions {
 		av := auctionView{auctions[i]}
 		auction, ok := buildAuctionSnapshot(av, i, offers, now)
@@ -75,32 +75,32 @@ func buildAuctionSnapshot(
 	originalIndex int,
 	offers *offerTracker,
 	now time.Time,
-) (strategytypes.AuctionSnapshot, bool) {
+) (types.AuctionSnapshot, bool) {
 	auctionID := int64(av.dto.Id)
 	if !av.isOpen() {
-		return strategytypes.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, false
 	}
 	request := av.requestAddr()
 	if request == (common.Address{}) {
-		return strategytypes.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, false
 	}
 	amountRequested := av.amountRequested()
 	if amountRequested == nil || amountRequested.Sign() <= 0 {
-		return strategytypes.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, false
 	}
 	rateBps, rateOk := av.maxRateBps()
 	if !rateOk {
-		return strategytypes.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, false
 	}
 	depositAsset := av.depositAsset()
 	if !common.IsHexAddress(depositAsset) {
-		return strategytypes.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, false
 	}
 	remaining := new(big.Int).Sub(amountRequested, offers.liveCoverage(auctionID, now))
 	if remaining.Sign() < 0 {
 		remaining = new(big.Int)
 	}
-	return strategytypes.AuctionSnapshot{
+	return types.AuctionSnapshot{
 		ID:              auctionIDString(auctionID),
 		AuctionID:       auctionID,
 		OriginalIndex:   originalIndex,
@@ -114,11 +114,11 @@ func buildAuctionSnapshot(
 }
 
 func buildOfferCandidate(
-	auction strategytypes.AuctionSnapshot,
+	auction types.AuctionSnapshot,
 	off *adapterOffering,
 	offers *offerTracker,
 	now time.Time,
-) strategytypes.OfferCandidate {
+) types.OfferCandidate {
 	capacity, ok := sizeOffer(sizeInputs{
 		fundable:      off.st.fundable,
 		maxAssets:     off.st.maxAssets,
@@ -130,7 +130,7 @@ func buildOfferCandidate(
 		capacity = new(big.Int)
 	}
 	adapter := adapterID(off.target.Adapter)
-	return strategytypes.OfferCandidate{
+	return types.OfferCandidate{
 		ID:           offerCandidateID(adapter, auction.AuctionID),
 		AdapterID:    adapter,
 		AuctionID:    auction.AuctionID,

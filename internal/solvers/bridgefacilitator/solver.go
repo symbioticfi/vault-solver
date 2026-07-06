@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 // offerStatusIgnored are 3F offer statuses that are not live coverage when rebuilding the cache: a
@@ -41,7 +41,7 @@ type Solver struct {
 	deps       solver.Deps
 	api        *apiClient
 	reader     *reader
-	strategy   strategytypes.Strategy
+	strategy   types.Strategy
 	log        logr.Logger
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
 	nonceSeq   atomic.Uint64

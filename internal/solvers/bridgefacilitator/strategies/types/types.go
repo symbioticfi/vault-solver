@@ -1,5 +1,5 @@
-// Package strategytypes defines the 3F-local strategy contract.
-package strategytypes
+// Package types defines the 3F-local strategy contract.
+package types
 
 import (
 	"context"

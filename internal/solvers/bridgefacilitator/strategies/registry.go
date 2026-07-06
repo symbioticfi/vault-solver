@@ -1,4 +1,4 @@
-package strategyregistry
+package strategies
 
 import (
 	"sort"
@@ -7,12 +7,12 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 type Deps struct{}
 
-type Factory func(raw yaml.Node, deps Deps) (strategytypes.Strategy, error)
+type Factory func(raw yaml.Node, deps Deps) (types.Strategy, error)
 
 var (
 	mu       sync.RWMutex
@@ -34,7 +34,7 @@ func Register(name string, f Factory) {
 	registry[name] = f
 }
 
-func New(name string, raw yaml.Node, deps Deps) (strategytypes.Strategy, error) {
+func New(name string, raw yaml.Node, deps Deps) (types.Strategy, error) {
 	mu.RLock()
 	f, ok := registry[name]
 	mu.RUnlock()
