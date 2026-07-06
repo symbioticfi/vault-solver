@@ -168,6 +168,19 @@ Write defensively; this bot holds a signing key and moves funds.
 - Prefer the standard library and already-vendored deps; adding a dependency is a deliberate decision
   (supply-chain surface). Run `make tidy` and keep `go.sum` honest.
 
+## Commits — semantic titles
+
+Commit titles follow [Conventional Commits](https://www.conventionalcommits.org):
+`type(scope): summary`.
+
+- **type** — one of `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `build`, `ci`, `perf`.
+- **scope** — the area touched, lowercase: the solver or subsystem (`rfq`, `3f`, `oev`,
+  `strategy`, `config`, `deps`, `bindings`, …). Optional but preferred.
+- **summary** — imperative mood, lowercase, no trailing period
+  (`feat(rfq): route quotes through pluggable strategies`, `fix(3f): bound 3F API calls with an HTTP timeout`).
+- Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
+- Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
+
 ## Keep the plan in sync — required
 
 The per-solver plans under `docs/` (e.g. `docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) are the source of truth
@@ -190,3 +203,4 @@ for the high-level architecture, design decisions, and the live TODO list. They 
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
 - Keep the plan current: architecture/design or TODO changes must update `docs/*-PLAN.md`
   in the same change.
+- Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

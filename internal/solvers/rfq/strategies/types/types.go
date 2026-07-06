@@ -1,5 +1,5 @@
-// Package strategytypes defines the RFQ-local strategy contract.
-package strategytypes
+// Package types defines the RFQ-local strategy contract.
+package types
 
 import (
 	"context"

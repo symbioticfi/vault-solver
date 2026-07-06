@@ -8,10 +8,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
@@ -27,16 +27,16 @@ type Strategy struct {
 }
 
 type cachedFillPlan struct {
-	plan      *strategytypes.FillPlan
+	plan      *types.FillPlan
 	createdAt time.Time
 }
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategyregistry.Register(Name, NewFromConfig)
+	strategies.Register(Name, NewFromConfig)
 }
 
-func NewFromConfig(raw yaml.Node, _ strategyregistry.Deps) (strategytypes.Strategy, error) {
+func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
 	cfg, err := webhook.ParseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -52,30 +52,30 @@ func New(client *webhook.Client) *Strategy {
 	return &Strategy{client: client, now: time.Now, plans: make(map[string]cachedFillPlan)}
 }
 
-func (s *Strategy) DecideQuote(ctx context.Context, input strategytypes.QuoteInput) (strategytypes.QuoteOutput, error) {
-	var out strategytypes.QuoteOutput
+func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
+	var out types.QuoteOutput
 	if err := s.client.PostJSON(ctx, input, &out); err != nil {
-		return strategytypes.QuoteOutput{}, err
+		return types.QuoteOutput{}, err
 	}
-	if out.Decision == strategytypes.DecisionQuote {
+	if out.Decision == types.DecisionQuote {
 		plan, err := fillPlanFromQuote(input, out)
 		if err != nil {
-			return strategytypes.QuoteOutput{}, err
+			return types.QuoteOutput{}, err
 		}
 		s.remember(input.QuoteID, plan)
 	}
 	return out, nil
 }
 
-func (s *Strategy) BuildFillPlan(ctx context.Context, input strategytypes.FillInput) (*strategytypes.FillPlan, error) {
+func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if plan := s.cached(input.QuoteID); plan != nil {
 		return plan, nil
 	}
-	quoteInput := strategytypes.QuoteInput(input)
+	quoteInput := types.QuoteInput(input)
 	quoteInput.AmountIn = cloneBig(input.AmountIn)
 	quoteInput.RequiredAmountOut = cloneBig(input.RequiredAmountOut)
 	out, err := s.DecideQuote(ctx, quoteInput)
-	if err != nil || out.Decision == strategytypes.DecisionDecline {
+	if err != nil || out.Decision == types.DecisionDecline {
 		return nil, err
 	}
 	plan := s.cached(input.QuoteID)
@@ -85,21 +85,21 @@ func (s *Strategy) BuildFillPlan(ctx context.Context, input strategytypes.FillIn
 	return plan, nil
 }
 
-func fillPlanFromQuote(input strategytypes.QuoteInput, out strategytypes.QuoteOutput) (*strategytypes.FillPlan, error) {
+func fillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.FillPlan, error) {
 	if out.QuotedAmountOut == nil {
 		return nil, errors.New("quote output is missing quotedAmountOut")
 	}
-	candidates := make(map[string]strategytypes.QuoteCandidate, len(input.Candidates))
+	candidates := make(map[string]types.QuoteCandidate, len(input.Candidates))
 	for _, c := range input.Candidates {
 		candidates[c.ID] = c
 	}
-	legs := make([]strategytypes.FillLeg, 0, len(out.Legs))
+	legs := make([]types.FillLeg, 0, len(out.Legs))
 	for _, leg := range out.Legs {
 		c, ok := candidates[leg.CandidateID]
 		if !ok {
 			return nil, errors.Errorf("unknown candidate %q", leg.CandidateID)
 		}
-		legs = append(legs, strategytypes.FillLeg{
+		legs = append(legs, types.FillLeg{
 			Adapter:    c.Adapter,
 			AmountIn:   cloneBig(leg.AmountIn),
 			AmountOut:  cloneBig(leg.AmountOut),
@@ -107,7 +107,7 @@ func fillPlanFromQuote(input strategytypes.QuoteInput, out strategytypes.QuoteOu
 			DiscountID: cloneHash(c.DiscountID),
 		})
 	}
-	return &strategytypes.FillPlan{
+	return &types.FillPlan{
 		QuoteID:         input.QuoteID,
 		RequestID:       input.RequestID,
 		TokenIn:         input.TokenIn,
@@ -118,7 +118,7 @@ func fillPlanFromQuote(input strategytypes.QuoteInput, out strategytypes.QuoteOu
 	}, nil
 }
 
-func (s *Strategy) remember(quoteID string, plan *strategytypes.FillPlan) {
+func (s *Strategy) remember(quoteID string, plan *types.FillPlan) {
 	if quoteID == "" || plan == nil {
 		return
 	}
@@ -133,7 +133,7 @@ func (s *Strategy) remember(quoteID string, plan *strategytypes.FillPlan) {
 	s.plans[quoteID] = cachedFillPlan{plan: clonePlan(plan), createdAt: now}
 }
 
-func (s *Strategy) cached(quoteID string) *strategytypes.FillPlan {
+func (s *Strategy) cached(quoteID string) *types.FillPlan {
 	s.mu.Lock()
 	cached, ok := s.plans[quoteID]
 	s.mu.Unlock()
@@ -143,16 +143,16 @@ func (s *Strategy) cached(quoteID string) *strategytypes.FillPlan {
 	return clonePlan(cached.plan)
 }
 
-func clonePlan(in *strategytypes.FillPlan) *strategytypes.FillPlan {
+func clonePlan(in *types.FillPlan) *types.FillPlan {
 	if in == nil {
 		return nil
 	}
 	out := *in
 	out.AmountIn = cloneBig(in.AmountIn)
 	out.QuotedAmountOut = cloneBig(in.QuotedAmountOut)
-	out.Legs = make([]strategytypes.FillLeg, len(in.Legs))
+	out.Legs = make([]types.FillLeg, len(in.Legs))
 	for i, leg := range in.Legs {
-		out.Legs[i] = strategytypes.FillLeg{
+		out.Legs[i] = types.FillLeg{
 			Adapter:    leg.Adapter,
 			AmountIn:   cloneBig(leg.AmountIn),
 			AmountOut:  cloneBig(leg.AmountOut),

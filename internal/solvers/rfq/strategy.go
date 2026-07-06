@@ -7,18 +7,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
-func newStrategy(spec StrategyConfig, chainClient *chain.Client, log logr.Logger) (strategytypes.Strategy, error) {
+func newStrategy(spec StrategyConfig, chainClient *chain.Client, log logr.Logger) (types.Strategy, error) {
 	name := spec.Name
 	if name == "" {
 		name = defaultStrategyName
 	}
-	return strategyregistry.New(name, spec.Config, strategyregistry.Deps{Chain: chainClient, Log: log})
+	return strategies.New(name, spec.Config, strategies.Deps{Chain: chainClient, Log: log})
 }
 
 // solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
@@ -34,8 +34,8 @@ type solverInventory struct {
 	DiscountID    *common.Hash // nil for a direct leg; set for a discount leg
 }
 
-type fillLeg = strategytypes.FillLeg
-type fillPlan = strategytypes.FillPlan
+type fillLeg = types.FillLeg
+type fillPlan = types.FillPlan
 
 // strategyRequest is the subset of a quote request the selector needs.
 type strategyRequest struct {
@@ -53,14 +53,14 @@ func newQuoteInput(
 	inv []solverInventory,
 	required *big.Int,
 	now time.Time,
-) strategytypes.QuoteInput {
-	candidates := make([]strategytypes.QuoteCandidate, 0, len(inv))
+) types.QuoteInput {
+	candidates := make([]types.QuoteCandidate, 0, len(inv))
 	for i, v := range inv {
 		id := v.ID
 		if id == "" {
 			id = "candidate-" + strconv.Itoa(i)
 		}
-		candidates = append(candidates, strategytypes.QuoteCandidate{
+		candidates = append(candidates, types.QuoteCandidate{
 			ID:            id,
 			Adapter:       v.Adapter,
 			Asset:         v.Asset,
@@ -70,7 +70,7 @@ func newQuoteInput(
 			DiscountID:    cloneHash(v.DiscountID),
 		})
 	}
-	return strategytypes.QuoteInput{
+	return types.QuoteInput{
 		RequestID:         req.RequestID,
 		QuoteID:           req.QuoteID,
 		ChainID:           chainID,
@@ -91,9 +91,9 @@ func newFillInput(
 	inv []solverInventory,
 	required *big.Int,
 	now time.Time,
-) strategytypes.FillInput {
+) types.FillInput {
 	q := newQuoteInput(chainID, executor, req, inv, required, now)
-	return strategytypes.FillInput(q)
+	return types.FillInput(q)
 }
 
 func cloneBig(n *big.Int) *big.Int {
