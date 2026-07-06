@@ -95,7 +95,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	for _, o := range e.store.activeOrders() {
 		e.handleOrder(ctx, o)
 	}
-	e.store.sweep() // evict stale strategies/terminal orders so the maps stay bounded
+	e.store.sweep() // evict stale terminal orders so the maps stay bounded
 }
 
 func (e *executionService) pollOpenOrders(ctx context.Context) error {
@@ -260,7 +260,7 @@ func (e *executionService) buildFillPlan(
 	order executor.IReactorOrder,
 	outputToken common.Address,
 	required *big.Int,
-) (*strategyRecord, error) {
+) (*fillPlan, error) {
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
@@ -286,7 +286,7 @@ func (e *executionService) buildFillPlan(
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and
 // encodes it into the Executor's DiscountSwapInput. Direct-only strategies return nil.
 func (e *executionService) buildDiscountSwapInputs(
-	ctx context.Context, selected *strategyRecord,
+	ctx context.Context, selected *fillPlan,
 ) ([]executor.IReactorDiscountSwapInput, error) {
 	var out []executor.IReactorDiscountSwapInput
 	for _, leg := range selected.Legs {
@@ -366,7 +366,7 @@ var errDiscountsDisabled = errors.New("discount leg present but discounts are di
 
 // toDiscountSwapInput converts a resolved signed discount + its strategy leg into the Executor input.
 func toDiscountSwapInput(
-	r *resolveDiscountResponse, leg strategyLeg, recipient common.Address,
+	r *resolveDiscountResponse, leg fillLeg, recipient common.Address,
 ) (executor.IReactorDiscountSwapInput, error) {
 	d := r.Discount
 	for _, a := range []string{d.Adapter, d.TokenToRedeem, d.Signer, d.Protocol} {

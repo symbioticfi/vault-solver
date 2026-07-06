@@ -64,10 +64,10 @@ type Config struct {
 	// TokensToQuote scope is evaluated against it. Empty means no input token is permissioned.
 	PermissionedTokens map[common.Address]bool
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
-	// scoped to, and the candidate universe used to rebuild a strategy on-chain when the quote-time
-	// strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
+	// scoped to, and the candidate universe used to rebuild a fill plan when the quote-time plan isn't
+	// cached (e.g. after a restart). Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
-	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables recovery.
+	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables fill-plan recovery.
 	Adapters []recoveryVault
 	Strategy StrategyConfig
 }

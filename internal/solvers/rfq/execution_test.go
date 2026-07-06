@@ -47,7 +47,7 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 	return f.discounts, nil
 }
 
-// fakeRecoveryReader is the solver-owned on-chain surface recoverStrategy needs.
+// fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
 	permInv []solverInventory
@@ -210,12 +210,12 @@ func TestExecution_DiscountFill(t *testing.T) {
 }
 
 // TestExecution_DiscountOnlyRecovery_EmptyVaults proves a discount-only solver (no configured vaults)
-// still recovers a strategy after a restart: recoverStrategy skips the direct (vault) read but consults
-// the backend's live discounts, rebuilds a discount-leg strategy, and fills. (Regression: the old
+// still rebuilds a fill plan after a restart: BuildFillPlan skips the direct (vault) read but consults
+// the backend's live discounts, rebuilds a discount-leg plan, and fills. (Regression: the old
 // `len(vaults)==0` guard returned before the discount path ran.)
 func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	_, be := fillFixtures(t)
-	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store: no cached q1 → forces recovery
+	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
@@ -235,8 +235,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
-	// No vaults configured (discount-only solver); recovery reads decimals from the solver reader and
-	// pricing from the default strategy's own dependency.
+	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
+	// strategy's own dependency.
 	e.reader = &fakeRecoveryReader{}
 	e.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(500000)})
 
@@ -326,9 +326,9 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	}
 }
 
-func TestExecution_MissingStrategyFails(t *testing.T) {
+func TestExecution_MissingFillPlanFails(t *testing.T) {
 	_, be := fillFixtures(t)
-	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store: no cached strategy, no vaults
+	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	txm := &fakeTxm{result: txmanager.Result{}}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{}
@@ -336,9 +336,9 @@ func TestExecution_MissingStrategyFails(t *testing.T) {
 	e.syncOnce(context.Background())
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
-		t.Fatalf("status = %v, want failed (missing strategy)", rec)
+		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
 	if txm.lastData != nil {
-		t.Fatalf("should not have sent a tx without a strategy")
+		t.Fatalf("should not have sent a tx without a fill plan")
 	}
 }

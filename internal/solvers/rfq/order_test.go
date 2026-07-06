@@ -45,7 +45,7 @@ func sampleOrder() executor.IReactorOrder {
 func TestEncodeFill_SelectorMatchesMixedOverload(t *testing.T) {
 	want := crypto.Keccak256([]byte(fillSignature))[:4]
 
-	swaps := directSwaps(&strategyRecord{Legs: []strategyLeg{{
+	swaps := directSwaps(&fillPlan{Legs: []fillLeg{{
 		Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 	}}}, tIn, common.HexToAddress("0x0000000000000000000000000000000000000010"))
 
@@ -82,7 +82,7 @@ func TestDecodeOrder_RoundTrip(t *testing.T) {
 
 func TestDirectSwaps_SkipsDiscountLegs(t *testing.T) {
 	h := common.HexToHash("0x01")
-	selected := &strategyRecord{Legs: []strategyLeg{
+	selected := &fillPlan{Legs: []fillLeg{
 		{Adapter: vlt, AmountIn: big.NewInt(1), AmountOut: big.NewInt(2)},
 		{Adapter: vlt, AmountIn: big.NewInt(3), AmountOut: big.NewInt(4), DiscountID: &h}, // discount leg → skipped (P3)
 	}}

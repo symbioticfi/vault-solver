@@ -41,22 +41,21 @@ func newReader(c *chain.Client, log logr.Logger) *reader {
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
 // carries only Adapter; Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at
 // startup (see resolveVaults) and are fixed for the adapter's lifetime. The entries double as the
-// adapter whitelist source (see buildAdapterWhitelist) and the recovery candidate universe.
+// adapter whitelist source (see buildAdapterWhitelist) and the fill-plan recovery candidate universe.
 type recoveryVault struct {
 	Adapter common.Address
 	Vault   common.Address
 	Asset   common.Address
 }
 
-// tokenDecimals returns the ERC-20 decimals for token (cached). Delegates to the shared chain.Decimals
-// so the quote + recovery paths reuse one cache instead of a per-reader copy.
+// tokenDecimals returns the ERC-20 decimals for token (cached). Delegates to the shared chain.Decimals.
 func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, error) {
 	return r.dec.Get(ctx, token)
 }
 
-// readVaultInventories reads each adapter's recovery views (paused, getMaxAssets(tokenIn),
+// readVaultInventories reads each adapter's fill-time views (paused, getMaxAssets(tokenIn),
 // getMaxRate(tokenIn)) in one multicall, using the startup-resolved Vault/Asset (decimals cached). Used
-// to rebuild a strategy when the quote-time one isn't cached (e.g. after a restart). Paused / failing /
+// to rebuild a fill plan when the quote-time one isn't cached (e.g. after a restart). Paused / failing /
 // zero-liquidity adapters are dropped; direct legs only. Mirrors readAdapterInventories in inventories.ts.
 func (r *reader) readVaultInventories(
 	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
@@ -114,9 +113,9 @@ func (r *reader) readVaultInventories(
 // resolveVaults returns a copy of the configured entries with each Vault (adapter.vault()) and Asset
 // (vault.asset()) resolved from chain at startup — config carries only adapter addresses, both fixed
 // for the adapter's lifetime. Returning a fresh slice (rather than mutating the input) keeps the
-// resolved recovery universe independent of the config slice. Two batched multicalls (adapters'
+// resolved fill-plan recovery universe independent of the config slice. Two batched multicalls (adapters'
 // vault(), then those vaults' asset()); an entry whose reads revert is left zero and skipped by
-// recovery (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
+// fill-time reads (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
 func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
 	out := make([]recoveryVault, len(vaults))
 	for i := range vaults {
@@ -163,8 +162,8 @@ func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]r
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
 // authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
-// marketMaker has delegated via adapter.isFiller(marketMaker, executor). Used in recovery so we never
-// build a fill against an unauthorized adapter. Mirrors readPermissionedAdapterInventories in
+// marketMaker has delegated via adapter.isFiller(marketMaker, executor). Used at fill time so we never
+// build inputs for an unauthorized adapter. Mirrors readPermissionedAdapterInventories in
 // inventories.ts (marketMaker / owner / isFiller).
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,

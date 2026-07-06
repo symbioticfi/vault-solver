@@ -101,7 +101,7 @@ func encodeFill(
 // directSwaps maps a strategy's direct (non-discount) legs to the Executor's SwapInputs: each carries
 // its adapter and the per-adapter Swap tuple. The executor itself is the swap recipient (it forwards
 // outputs to the Reactor). Mirrors the swapInputs build in execution.ts (#submitOrder).
-func directSwaps(selected *strategyRecord, tokenIn, executorAddr common.Address) []executor.IReactorSwapInput {
+func directSwaps(selected *fillPlan, tokenIn, executorAddr common.Address) []executor.IReactorSwapInput {
 	swaps := make([]executor.IReactorSwapInput, 0, len(selected.Legs))
 	for _, leg := range selected.Legs {
 		if leg.DiscountID != nil {

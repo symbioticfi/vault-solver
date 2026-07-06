@@ -34,8 +34,8 @@ type solverInventory struct {
 	DiscountID    *common.Hash // nil for a direct leg; set for a discount leg
 }
 
-type strategyLeg = strategytypes.FillLeg
-type strategyRecord = strategytypes.FillPlan
+type fillLeg = strategytypes.FillLeg
+type fillPlan = strategytypes.FillPlan
 
 // strategyRequest is the subset of a quote request the selector needs.
 type strategyRequest struct {

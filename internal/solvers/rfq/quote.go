@@ -12,9 +12,9 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
-// quoteService prices a backend RFQ request and persists the chosen strategy by quoteId. It is
-// safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the reader
-// cache and the store — are individually synchronized, and it holds no mutable state itself.
+// quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
+// for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
+// synchronized, and it holds no mutable state itself.
 type quoteService struct {
 	chainID   int64
 	executor  common.Address
