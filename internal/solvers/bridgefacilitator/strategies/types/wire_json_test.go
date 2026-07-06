@@ -45,10 +45,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 			RemainingAmount: mustBig(t, "700"),
 			MaxRateBps:      200,
 		}},
-		Candidates: []OfferCandidate{{
-			ID: "adapter-1:10", AdapterID: "adapter-1", AuctionID: 10,
-			Capacity: mustBig(t, "500"), HasLiveOffer: true,
-		}},
+		LiveOffers: []LiveOffer{{AdapterID: "adapter-1", AuctionID: 10}},
 	}
 
 	body, err := json.Marshal(input)
@@ -67,11 +64,10 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	if adapter["maxAssets"] != "500" || adapter["minAssets"] != "100" {
 		t.Fatalf("adapter amounts not decimal strings: %#v", adapter)
 	}
-	candidates := raw["candidates"].([]any)
-	candidate := candidates[0].(map[string]any)
-	hasLive, _ := candidate["hasLiveOffer"].(bool)
-	if candidate["capacity"] != "500" || !hasLive {
-		t.Fatalf("candidate capacity not decimal string: %#v", candidate)
+	liveOffers := raw["liveOffers"].([]any)
+	liveOffer := liveOffers[0].(map[string]any)
+	if liveOffer["adapterId"] != "adapter-1" || liveOffer["auctionId"].(float64) != 10 {
+		t.Fatalf("liveOffer wire shape: %#v", liveOffer)
 	}
 }
 

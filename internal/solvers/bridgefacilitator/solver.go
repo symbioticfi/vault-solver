@@ -193,8 +193,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	now := time.Now()
 	s.offers.pruneExpired(now) // keep the dedup map bounded
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
-	if len(input.Candidates) == 0 {
-		return
+	if len(input.Auctions) == 0 {
+		return // no open, offerable auctions this pass
 	}
 	out, err := s.strategy.DecideOffers(ctx, input)
 	if err != nil {

@@ -224,10 +224,10 @@ Package layout:
 
 ```text
 internal/solvers/bridgefacilitator/
-  strategytypes/          # 3F strategy input/output and interface
-  strategyregistry/       # 3F-local strategy registry/factory
-  strategies/default/     # local default strategy
-  strategies/webhook/     # 3F webhook adapter
+  strategies/               # 3F-local strategy registry/factory (package strategies)
+  strategies/types/         # 3F strategy input/output and interface (package types)
+  strategies/default/       # local default strategy
+  strategies/webhook/       # 3F webhook adapter
 ```
 
 Decision:
@@ -237,8 +237,9 @@ DecideOffers(ctx, input) -> output
 ```
 
 The solver calls this once per discover tick after API reads, on-chain adapter reads, and live-offer
-cache pruning. The solver builds a compact snapshot and delegates offer selection, validation, sizing,
-and pricing to the trusted strategy.
+cache pruning. The solver builds a snapshot of **raw facts only** — adapter liquidity/caps, auction
+facts, and the live offers it holds — and delegates every decision (selection, sizing, ordering,
+dedup) to the trusted strategy. The solver computes no capacity or candidate joins.
 
 Input:
 
@@ -247,7 +248,7 @@ type OfferInput struct {
     Now        time
     Adapters   []AdapterSnapshot
     Auctions   []AuctionSnapshot
-    Candidates []OfferCandidate
+    LiveOffers []LiveOffer
 }
 
 type AdapterSnapshot struct {
@@ -256,11 +257,11 @@ type AdapterSnapshot struct {
     Vault         address
     Collateral    address
     Fundable      uint256 // getMaxAssets()
-    OpenCount     uint64  // requestsLength()
+    OpenCount     int     // requestsLength()
     MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
     MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
     MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
-    MaxConcurrent uint64  // MAX_REQUESTS
+    MaxConcurrent int      // MAX_REQUESTS
 }
 
 type AuctionSnapshot struct {
@@ -275,31 +276,16 @@ type AuctionSnapshot struct {
     MaxRateBps      float64
 }
 
-type OfferCandidate struct {
-    ID        string // adapterID + ":" + auctionID
+type LiveOffer struct {
     AdapterID string
     AuctionID int64
-    Capacity  uint256
-    HasLiveOffer bool
 }
 ```
 
-`OfferCandidate` is the join between one adapter snapshot and one auction snapshot. It intentionally
-does not duplicate `AmountRequested`, `RemainingAmount`, `MaxRateBps`, `MinYieldBps`, fundable
-liquidity, or caps; those live in `Adapters` and `Auctions`. This avoids drift inside one input
-snapshot.
-
-`Capacity` is the solver's objective per-offer capacity snapshot for that adapter at this point in
-time, before strategic allocation across multiple candidates. It is computed roughly as:
-
-```text
-min(adapter.Fundable,
-    adapter.MaxAssets)
-```
-
-If sizing cannot produce a usable capacity, `Capacity` is zero and the strategy decides what to do with
-it. `HasLiveOffer` lets the strategy own duplicate-offer policy while the solver still supplies the
-live cache snapshot.
+`LiveOffers` are the offers the solver already holds per (adapter, auction). The strategy uses them to
+own duplicate-offer policy while the solver still supplies the raw live-cache facts. The solver no
+longer computes per-adapter capacity; the strategy derives it from each `AdapterSnapshot`'s raw caps —
+roughly `min(min(Fundable, MaxAssets), Fundable − committed)` gated by concurrency and `MinAssets`.
 
 Output:
 

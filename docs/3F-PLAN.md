@@ -182,13 +182,13 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 
 1. **Solver-owned snapshot** — the solver lists auctions, reads each configured adapter's
    liquidity/exposure in Multicall, prunes its live-offer cache, and builds a compact strategy input.
-   The input contains adapter snapshots, auction snapshots, and candidates. It does not include raw
-   generated API DTOs or contract snapshots.
-2. **Candidates** — the solver builds adapter-auction joins from the normalized snapshots. Each
-   candidate carries the adapter ID, auction ID, solver-computed capacity, and whether this solver
-   already has a live offer for that adapter-auction pair. The solver does not decide which candidates
-   are economically valid; the strategy owns collateral, live-offer, min-yield, ordering, and sizing
-   decisions.
+   The input contains only raw facts — adapter snapshots (liquidity and on-chain caps), normalized
+   auction snapshots, and the live offers the solver already holds. It does not include raw generated
+   API DTOs, and the solver computes no capacity, joins, or candidate scoring.
+2. **No solver-side decisions** — the solver does not size offers, join adapters to auctions, filter
+   eligibility, or rank anything. It provides raw adapter caps and auction facts; the strategy owns
+   every decision (sizing, collateral/live-offer/min-yield eligibility, ordering, and cross-auction
+   budget accounting) built from those facts.
 3. **Strategy decision** — the selected strategy receives:
 
    ```go
@@ -196,7 +196,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        Now        time
        Adapters   []AdapterSnapshot
        Auctions   []AuctionSnapshot
-       Candidates []OfferCandidate
+       LiveOffers []LiveOffer
    }
 
    type AdapterSnapshot struct {
@@ -205,19 +205,16 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        Vault         address
        Collateral    address
        Fundable      uint256 // getMaxAssets()
-       OpenCount     uint64  // requestsLength()
+       OpenCount     int     // requestsLength()
        MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
        MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
        MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
-       MaxConcurrent uint64  // MAX_REQUESTS
+       MaxConcurrent int      // MAX_REQUESTS
    }
 
-   type OfferCandidate struct {
-       ID        string // adapterID + ":" + auctionID
+   type LiveOffer struct {
        AdapterID string
        AuctionID int64
-       Capacity  uint256
-       HasLiveOffer bool
    }
    ```
 
@@ -234,12 +231,12 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    ```
 
    The default local strategy preserves the current behavior: process auctions in API order, filter
-   candidate eligibility (collateral match, no live offer, rate clears `minYieldPerRequest`), rank
-   candidates by available capacity (largest first), clamp each offer to the still-uncovered remainder,
-   and track local adapter commitments across the pass. `Candidate.Capacity` is the solver-owned
-   per-offer capacity snapshot from `sizeOffer(getMaxAssets, maxAssetsPerRequest,
-   minAssetsPerRequest, requestsLength/MAX_REQUESTS)`; `maxAssetsPerRequest` is an always-active ceiling
-   (`0` means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
+   adapter eligibility (collateral match, no live offer for the pair, rate clears `minYieldPerRequest`),
+   compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
+   each offer to the still-uncovered remainder, and track local adapter commitments across the pass.
+   Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
+   concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
+   means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
    integers are decimal strings and unknown response fields are rejected.
 4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
    returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,

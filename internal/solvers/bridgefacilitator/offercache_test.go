@@ -14,22 +14,31 @@ func TestOfferTracker(t *testing.T) {
 	adapterA := common.Address{0xAA}
 	adapterB := common.Address{0xBB}
 
-	if tr.hasLive(adapterA, 42, now) {
-		t.Fatal("empty tracker should report no live offer")
+	live := func(at time.Time, adapter common.Address, auction int64) bool {
+		for _, k := range tr.liveEntries(at) {
+			if k.adapter == adapter && k.auction == auction {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(tr.liveEntries(now)) != 0 {
+		t.Fatal("empty tracker should report no live offers")
 	}
 
 	tr.record(adapterA, 42, now.Add(30*time.Minute), big.NewInt(100))
-	if !tr.hasLive(adapterA, 42, now) {
+	if !live(now, adapterA, 42) {
 		t.Fatal("offer should be live before expiry")
 	}
 	// Dedup is per-adapter: A's offer on auction 42 must not suppress B's offer on the same auction.
-	if tr.hasLive(adapterB, 42, now) {
+	if live(now, adapterB, 42) {
 		t.Fatal("an offer through adapter A must not mark adapter B's offer on the same auction as live")
 	}
-	if tr.hasLive(adapterA, 42, now.Add(31*time.Minute)) {
+	if live(now.Add(31*time.Minute), adapterA, 42) {
 		t.Fatal("offer should be expired after its TTL")
 	}
-	if tr.hasLive(adapterA, 7, now) {
+	if live(now, adapterA, 7) {
 		t.Fatal("unknown auction should not be live")
 	}
 }

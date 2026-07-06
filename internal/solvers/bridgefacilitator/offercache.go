@@ -33,10 +33,16 @@ func newOfferTracker() *offerTracker {
 	return &offerTracker{offers: make(map[offerKey]offerState)}
 }
 
-// hasLive reports whether we hold an unexpired offer through adapter for auctionID as of now.
-func (t *offerTracker) hasLive(adapter common.Address, auctionID int64, now time.Time) bool {
-	st, ok := t.offers[offerKey{adapter, auctionID}]
-	return ok && st.expiry.After(now)
+// liveEntries returns the (adapter, auction) keys of every unexpired offer as of now, for the strategy
+// to dedup against. Cheaper than probing each adapter/auction pair: it walks only the offers we hold.
+func (t *offerTracker) liveEntries(now time.Time) []offerKey {
+	keys := make([]offerKey, 0, len(t.offers))
+	for k, st := range t.offers {
+		if st.expiry.After(now) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // record stores the expiration and principal of an offer we hold through adapter for auctionID.

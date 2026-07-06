@@ -54,12 +54,6 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 			RemainingAmount: mustBig(t, "700"),
 			MaxRateBps:      200,
 		}},
-		Candidates: []types.OfferCandidate{{
-			ID:        offerCandidateID(adapterID(adapter), 10),
-			AdapterID: adapterID(adapter),
-			AuctionID: 10,
-			Capacity:  mustBig(t, "800"),
-		}},
 	}
 }
 
@@ -109,8 +103,9 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	if input.Auctions[0].RemainingAmount.Sign() != 0 {
 		t.Fatalf("remaining = %s, want 0", input.Auctions[0].RemainingAmount)
 	}
-	if len(input.Candidates) != 1 || !input.Candidates[0].HasLiveOffer {
-		t.Fatalf("candidates = %+v, want live-offer candidate context", input.Candidates)
+	if len(input.LiveOffers) != 1 ||
+		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
+		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
 	}
 }
 

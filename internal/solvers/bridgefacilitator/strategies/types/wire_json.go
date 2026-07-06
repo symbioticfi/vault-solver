@@ -16,7 +16,7 @@ type offerInputJSON struct {
 	Now        time.Time             `json:"now"`
 	Adapters   []adapterSnapshotJSON `json:"adapters"`
 	Auctions   []auctionSnapshotJSON `json:"auctions"`
-	Candidates []offerCandidateJSON  `json:"candidates"`
+	LiveOffers []liveOfferJSON       `json:"liveOffers"`
 }
 
 type adapterSnapshotJSON struct {
@@ -48,13 +48,9 @@ type auctionSnapshotJSON struct {
 	MaxRateBps      float64 `json:"maxRateBps"`
 }
 
-type offerCandidateJSON struct {
-	ID string `json:"id"`
-
-	AdapterID    string `json:"adapterId"`
-	AuctionID    int64  `json:"auctionId"`
-	Capacity     string `json:"capacity"`
-	HasLiveOffer bool   `json:"hasLiveOffer"`
+type liveOfferJSON struct {
+	AdapterID string `json:"adapterId"`
+	AuctionID int64  `json:"auctionId"`
 }
 
 type offerOutputJSON struct {
@@ -93,15 +89,12 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 			MaxRateBps:      a.MaxRateBps,
 		})
 	}
-	candidates := make([]offerCandidateJSON, 0, len(in.Candidates))
-	for _, c := range in.Candidates {
-		candidates = append(candidates, offerCandidateJSON{
-			ID: c.ID, AdapterID: c.AdapterID, AuctionID: c.AuctionID,
-			Capacity: bigString(c.Capacity), HasLiveOffer: c.HasLiveOffer,
-		})
+	liveOffers := make([]liveOfferJSON, 0, len(in.LiveOffers))
+	for _, l := range in.LiveOffers {
+		liveOffers = append(liveOffers, liveOfferJSON(l))
 	}
 	return json.Marshal(offerInputJSON{
-		Now: in.Now, Adapters: adapters, Auctions: auctions, Candidates: candidates,
+		Now: in.Now, Adapters: adapters, Auctions: auctions, LiveOffers: liveOffers,
 	})
 }
 
