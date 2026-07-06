@@ -25,6 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         network:
+          - mainnet
           - hoodi
           - sepolia
     uses: ./.github/workflows/deploy.yml
