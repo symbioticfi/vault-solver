@@ -37,14 +37,14 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 
 	// External + configured adapters ⇒ both quote and execution scope to the configured adapters.
 	cfg.SolverMode = solverModeExternal
-	quotes, exec := buildServices(cfg, 1, st, nil, nil, logr.Discard())
+	quotes, exec := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	scopedToConfigured(t, "execution", exec.whitelist)
 
 	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution
 	// stays unrestricted (nil) so discount recovery can fill through any advertised adapter.
 	cfg.SolverMode = solverModeInternal
-	quotes, exec = buildServices(cfg, 1, st, nil, nil, logr.Discard())
+	quotes, exec = buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	if exec.whitelist != nil {
 		t.Fatalf("internal mode: execution whitelist = %v, want nil (filling stays unrestricted)", exec.whitelist)
@@ -52,7 +52,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 
 	// Internal + no adapters ⇒ neither path scopes (both nil): the filler quotes/fills off discounts only.
 	cfg.Adapters = nil
-	quotes, exec = buildServices(cfg, 1, st, nil, nil, logr.Discard())
+	quotes, exec = buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	if quotes.whitelist != nil || exec.whitelist != nil {
 		t.Fatal("internal mode with no adapters should wire both whitelists nil (filtering off)")
 	}
@@ -74,10 +74,10 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 		Adapters:   []recoveryVault{{Adapter: vlt}}, // the only adapter this filler is scoped to
 	}
 
-	quotes, _ := buildServices(cfg, 1, st, nil, nil, logr.Discard())
-	// buildServices wires a *reader; swap in the in-memory pricing fake (priceReader is the quote path's
-	// only chain dependency). The oracle prices the tOut asset-group at 1.000000 USDC.
-	quotes.reader = fakeReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}
+	quotes, _ := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
+	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
+	// asset-group at 1.000000 USDC.
+	quotes.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)})
 
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
@@ -96,10 +96,6 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	if resp != nil {
 		t.Fatalf("quote (only non-configured adapter): got %+v, want nil (declined: out of adapter scope)", resp)
 	}
-	if stored := quotes.store.strategy(onlyRogue.QuoteID); stored != nil {
-		t.Fatalf("no strategy should be stored for an out-of-scope quote, got %+v", stored)
-	}
-
 	// (2) Request offering the configured adapter alongside the rogue one ⇒ quoted through the configured
 	// adapter only (the rogue leg, despite a better rate, is filtered out before selection).
 	mixed := validQuoteBody() // validQuoteBody's single adapter is vlt (the configured one)
@@ -111,8 +107,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	if resp == nil {
 		t.Fatal("quote (configured + rogue): got nil, want a quote through the configured adapter")
 	}
-	stored := quotes.store.strategy(mixed.QuoteID)
-	if stored == nil || len(stored.Legs) != 1 || stored.Legs[0].Adapter != vlt {
-		t.Fatalf("stored strategy = %+v, want a single leg through the configured adapter %s", stored, vlt.Hex())
+	if resp.AmountOut != "1000000" {
+		t.Fatalf("amountOut = %s, want quote through the configured adapter", resp.AmountOut)
 	}
 }

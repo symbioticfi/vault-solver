@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"gopkg.in/yaml.v3"
 )
 
 func TestAddress(t *testing.T) {
@@ -211,5 +212,19 @@ func TestDuration(t *testing.T) {
 				t.Fatalf("Duration(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeStrict(t *testing.T) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte("known: value\nunknown: typo\n"), &doc); err != nil {
+		t.Fatalf("unmarshal yaml: %v", err)
+	}
+	var out struct {
+		Known string `yaml:"known"`
+	}
+	err := DecodeStrict(*doc.Content[0], &out)
+	if err == nil {
+		t.Fatal("expected unknown field error")
 	}
 }

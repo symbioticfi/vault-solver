@@ -14,17 +14,23 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string   `yaml:"backendUrl"`
-	BackendSharedSecretEnv string   `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string   `yaml:"listenAddr"`
-	Executor               string   `yaml:"executor"`
-	Reactor                string   `yaml:"reactor"`
-	PollIntervalMs         int      `yaml:"pollIntervalMs"`
-	OrderLimit             int      `yaml:"orderLimit"`
-	SolverMode             string   `yaml:"solverMode"`
-	TokensToQuote          string   `yaml:"tokensToQuote"`
-	PermissionedTokens     []string `yaml:"permissionedTokens"`
-	Adapters               []string `yaml:"adapters"`
+	BackendURL             string            `yaml:"backendUrl"`
+	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
+	ListenAddr             string            `yaml:"listenAddr"`
+	Executor               string            `yaml:"executor"`
+	Reactor                string            `yaml:"reactor"`
+	PollIntervalMs         int               `yaml:"pollIntervalMs"`
+	OrderLimit             int               `yaml:"orderLimit"`
+	SolverMode             string            `yaml:"solverMode"`
+	TokensToQuote          string            `yaml:"tokensToQuote"`
+	PermissionedTokens     []string          `yaml:"permissionedTokens"`
+	Adapters               []string          `yaml:"adapters"`
+	Strategy               rawStrategyConfig `yaml:"strategy"`
+}
+
+type rawStrategyConfig struct {
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -58,11 +64,17 @@ type Config struct {
 	// TokensToQuote scope is evaluated against it. Empty means no input token is permissioned.
 	PermissionedTokens map[common.Address]bool
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
-	// scoped to, and the candidate universe used to rebuild a strategy on-chain when the quote-time
-	// strategy isn't cached (e.g. after a restart). Config carries only adapter addresses;
+	// scoped to, and the candidate universe used to rebuild a fill plan when the quote-time plan isn't
+	// cached (e.g. after a restart). Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
-	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables recovery.
+	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables fill-plan recovery.
 	Adapters []recoveryVault
+	Strategy StrategyConfig
+}
+
+type StrategyConfig struct {
+	Name   string
+	Config yaml.Node
 }
 
 // Solver-mode profiles (see Config.SolverMode).
@@ -85,6 +97,7 @@ const (
 	defaultPollInterval = 3 * time.Second
 	defaultOrderLimit   = 20
 	defaultSolverMode   = solverModeExternal
+	defaultStrategyName = "default"
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
@@ -122,6 +135,10 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
 		TokensToQuote:          scope,
+		Strategy: StrategyConfig{
+			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
+			Config: raw.Strategy.Config,
+		},
 	}
 	for i, t := range raw.PermissionedTokens {
 		addr, terr := parse.NonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
