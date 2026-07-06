@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -53,6 +54,7 @@ type executionService struct {
 	backend          orderBackend
 	store            *store
 	reader           recoveryReader
+	strategy         strategytypes.Strategy
 	txm              txSender
 	log              logr.Logger
 	now              func() time.Time
@@ -61,11 +63,11 @@ type executionService struct {
 	inflight   map[string]bool
 }
 
-// recoveryReader is the on-chain surface strategy recovery needs (satisfied by *reader). It extends
-// the quote path's priceReader with the permissioned-inventory read; kept an interface so recovery is
-// unit-testable without a chain backend.
+// recoveryReader is the on-chain surface strategy recovery needs (satisfied by *reader). It includes
+// token decimals for replay validation plus the permissioned-inventory read; kept an interface so
+// recovery is unit-testable without a chain backend.
 type recoveryReader interface {
-	priceReader
+	quoteReplayReader
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
@@ -181,10 +183,6 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	// The strategy is looked up by the backend-supplied quoteId, so bind it to the awarded order's
 	// own terms before filling: a reused/mismatched quoteId must not let us fill on stale pricing.
-	if selected.Asset != outputToken {
-		e.fail(orderID, "strategy asset does not match order output token")
-		return
-	}
 	if selected.TokenIn != order.Request.TokenIn || selected.TokenOut != outputToken ||
 		selected.AmountIn.Cmp(order.Request.AmountIn) != 0 {
 		e.fail(orderID, "stored strategy does not match the awarded order (tokenIn/tokenOut/amountIn)")
@@ -303,21 +301,16 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 	if len(inv) == 0 {
 		return nil, nil
 	}
-	tokenInDecimals, err := e.reader.tokenDecimals(ctx, order.Request.TokenIn)
-	if err != nil {
-		return nil, err
-	}
-	matching := matchingInventories(inv, outputToken)
-	oracle, err := e.reader.amountsOut(ctx, order.Request.TokenIn, matching, order.Request.AmountIn)
-	if err != nil {
-		return nil, err
-	}
 	req := strategyRequest{
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, e.now())
-	if best == nil || best.QuotedAmountOut.Cmp(required) < 0 {
+	input := newQuoteInput(e.chainID, e.executor, req, inv, required, e.now())
+	best, err := decideQuote(ctx, input, e.strategy, e.reader)
+	if err != nil {
+		return nil, err
+	}
+	if best == nil {
 		return nil, nil
 	}
 	e.store.putStrategy(best)

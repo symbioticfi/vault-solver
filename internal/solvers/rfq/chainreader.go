@@ -55,38 +55,20 @@ func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, 
 	return r.dec.Get(ctx, token)
 }
 
-// amountsOut prices each distinct asset by calling its representative adapter's getAmountOut(tokenIn,
-// amount). The quote oracle is per asset-group: the representative is the first inventory entry seen
-// for that asset, matching evaluateInventoryGroup in strategy.ts (inventories[0].adapter). Targets are
-// heterogeneous (each call hits that asset's adapter). A reverting sub-call leaves the asset unpriced
-// (the selector then skips it), so the map only holds successfully-priced assets.
 func (r *reader) amountsOut(
-	ctx context.Context, tokenIn common.Address, inventories []solverInventory, amount *big.Int,
-) (map[common.Address]*big.Int, error) {
-	// Pick the representative adapter per distinct asset (first seen), preserving deterministic order.
-	type group struct {
-		asset   common.Address
-		adapter common.Address
+	ctx context.Context,
+	tokenIn common.Address,
+	requests []amountOutRequest,
+) ([]*big.Int, error) {
+	if len(requests) == 0 {
+		return nil, nil
 	}
-	var groups []group
-	seen := make(map[common.Address]bool, len(inventories))
-	for _, inv := range inventories {
-		if seen[inv.Asset] {
-			continue
-		}
-		seen[inv.Asset] = true
-		groups = append(groups, group{asset: inv.Asset, adapter: inv.Adapter})
-	}
-	if len(groups) == 0 {
-		return map[common.Address]*big.Int{}, nil
-	}
-
-	calls := make([]chain.Call, len(groups))
-	for i, g := range groups {
+	calls := make([]chain.Call, len(requests))
+	for i, req := range requests {
 		calls[i] = chain.Call{
-			Target:       g.adapter,
+			Target:       req.Adapter,
 			AllowFailure: true,
-			Data:         llAdapter.PackGetAmountOut(tokenIn, amount),
+			Data:         llAdapter.PackGetAmountOut(tokenIn, req.AmountIn),
 		}
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -94,20 +76,18 @@ func (r *reader) amountsOut(
 		return nil, err
 	}
 	if len(res) != len(calls) {
-		return nil, errors.Errorf("amountsOut: got %d results for %d calls", len(res), len(calls))
+		return nil, errors.Errorf("amountOut replay multicall: got %d results, want %d", len(res), len(calls))
 	}
-	out := make(map[common.Address]*big.Int, len(groups))
+	out := make([]*big.Int, len(requests))
 	for i, rr := range res {
 		if !rr.Success {
-			r.log.V(1).Info("getAmountOut reverted; asset left unpriced", "asset", groups[i].asset.Hex())
-			continue
+			return nil, errors.Errorf("getAmountOut reverted for adapter %s", requests[i].Adapter.Hex())
 		}
 		amt, derr := llAdapter.UnpackGetAmountOut(rr.ReturnData)
 		if derr != nil {
-			r.log.V(1).Error(derr, "getAmountOut decode failed; asset left unpriced", "asset", groups[i].asset.Hex())
-			continue
+			return nil, errors.Errorf("decode getAmountOut for adapter %s: %w", requests[i].Adapter.Hex(), derr)
 		}
-		out[groups[i].asset] = amt
+		out[i] = amt
 	}
 	return out, nil
 }

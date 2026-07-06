@@ -9,18 +9,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
-// priceReader is the on-chain pricing surface the quote path needs (satisfied by *reader). It's an
-// interface so the quote/HTTP logic can be unit-tested without a chain backend.
-type priceReader interface {
-	tokenDecimals(ctx context.Context, token common.Address) (int, error)
-	amountsOut(ctx context.Context, tokenIn common.Address, inventories []solverInventory, amount *big.Int) (map[common.Address]*big.Int, error)
-}
-
 // quoteService prices a backend RFQ request and persists the chosen strategy by quoteId. It is
-// safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the
-// reader cache and the store — are individually synchronized, and it holds no mutable state itself.
+// safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the reader
+// cache and the store — are individually synchronized, and it holds no mutable state itself.
 type quoteService struct {
 	chainID   int64
 	executor  common.Address
@@ -29,7 +24,8 @@ type quoteService struct {
 	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
 	tokensToQuote      string
 	permissionedTokens map[common.Address]bool
-	reader             priceReader
+	reader             quoteReplayReader
+	strategy           strategytypes.Strategy
 	store              *store
 	log                logr.Logger
 	now                func() time.Time
@@ -58,20 +54,10 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	tokenInDecimals, err := qs.reader.tokenDecimals(ctx, req.TokenIn)
+	best, err := qs.decide(ctx, req, inv, nil)
 	if err != nil {
-		return nil, errors.Errorf("quote: tokenIn decimals: %w", err)
+		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
-
-	// Only asset == tokenOut is fillable, so we price exactly those inventories (each priced through
-	// its asset-group's representative adapter — see reader.amountsOut).
-	matching := matchingInventories(inv, req.TokenOut)
-	oracle, err := qs.reader.amountsOut(ctx, req.TokenIn, matching, req.Amount)
-	if err != nil {
-		return nil, errors.Errorf("quote: adapter getAmountOut: %w", err)
-	}
-
-	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, qs.now())
 	if best == nil {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
@@ -95,17 +81,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}, nil
 }
 
-// matchingInventories returns the inventories whose asset equals tokenOut (the only ones this filler
-// can source), so the oracle prices exactly the asset-groups the selector will consider.
-func matchingInventories(inv []solverInventory, tokenOut common.Address) []solverInventory {
-	out := make([]solverInventory, 0, len(inv))
-	for _, v := range inv {
-		if v.Asset != tokenOut {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
+func (qs *quoteService) decide(
+	ctx context.Context, req strategyRequest, inv []solverInventory, required *big.Int,
+) (*strategyRecord, error) {
+	input := newQuoteInput(qs.chainID, qs.executor, req, inv, required, qs.now())
+	return decideQuote(ctx, input, qs.strategy, qs.reader)
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

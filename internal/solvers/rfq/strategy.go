@@ -1,22 +1,47 @@
 package rfq
 
 import (
+	"context"
 	"math/big"
-	"sort"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlanemath"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
-// rateScale is the adapter's fixed-point rate scale (1e18).
-var rateScale = chain.Exp10(18)
+type strategyDeps struct {
+	Chain *chain.Client
+	Log   logr.Logger
+}
+
+func newStrategy(spec StrategyConfig, deps strategyDeps) (strategytypes.Strategy, error) {
+	name := spec.Name
+	if name == "" {
+		name = defaultStrategyName
+	}
+	switch name {
+	case defaultStrategyName:
+		return defaultstrategy.NewFromConfig(spec.Config, deps.Chain, deps.Log)
+	case "webhook":
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, errors.Errorf("unknown RFQ strategy %q", spec.Name)
+	}
+}
 
 // solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
 // (the filler does not re-read maxAssets/maxRate/decimals on-chain in the quote path). "adapter" is
 // the address that fills (placed in the on-chain Swap's vault slot); "asset" is the output token.
 type solverInventory struct {
+	ID            string
 	Adapter       common.Address
 	Asset         common.Address
 	AssetDecimals int
@@ -42,9 +67,6 @@ type strategyRecord struct {
 	TokenIn         common.Address
 	TokenOut        common.Address
 	AmountIn        *big.Int
-	Asset           common.Address
-	AssetDecimals   int
-	AssetAmountOut  *big.Int
 	QuotedAmountOut *big.Int
 	Legs            []strategyLeg
 	CreatedAt       time.Time
@@ -60,231 +82,238 @@ type strategyRequest struct {
 	Amount    *big.Int
 }
 
-// selectBestStrategy picks the best single-asset strategy for the request. It is a pure function:
-// oracleByAsset supplies the pre-fetched adapter.getAmountOut(tokenIn, amount) for each candidate
-// asset, and `now` is injected, so it is fully unit-testable.
-//
-// It groups inventories by asset, evaluates each group whose asset matches tokenOut, and picks the
-// highest quotedAmountOut (tie-broken by assetAmountOut). Groups are iterated in sorted asset order
-// for deterministic ties.
-func selectBestStrategy(
+type amountOutRequest struct {
+	Adapter  common.Address
+	AmountIn *big.Int
+}
+
+type quoteReplayReader interface {
+	tokenDecimals(ctx context.Context, token common.Address) (int, error)
+	amountsOut(ctx context.Context, tokenIn common.Address, requests []amountOutRequest) ([]*big.Int, error)
+}
+
+func newQuoteInput(
+	chainID int64,
+	executor common.Address,
 	req strategyRequest,
-	inventories []solverInventory,
-	tokenInDecimals int,
-	oracleByAsset map[common.Address]*big.Int,
+	inv []solverInventory,
+	required *big.Int,
 	now time.Time,
-) *strategyRecord {
-	groups := groupByAsset(inventories)
-
-	keys := make([]common.Address, 0, len(groups))
-	for k := range groups {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].Hex() < keys[j].Hex() })
-
-	var best *strategyRecord
-	for _, asset := range keys {
-		oracle := oracleByAsset[asset]
-		if oracle == nil {
-			continue // no oracle price fetched for this asset
+) strategytypes.QuoteInput {
+	candidates := make([]strategytypes.QuoteCandidate, 0, len(inv))
+	for i, v := range inv {
+		id := v.ID
+		if id == "" {
+			id = "candidate-" + strconv.Itoa(i)
 		}
-		cand := evaluateGroup(req, groups[asset], tokenInDecimals, oracle, now)
-		if cand == nil {
-			continue
-		}
-		if best == nil ||
-			cand.QuotedAmountOut.Cmp(best.QuotedAmountOut) > 0 ||
-			(cand.QuotedAmountOut.Cmp(best.QuotedAmountOut) == 0 &&
-				cand.AssetAmountOut.Cmp(best.AssetAmountOut) > 0) {
-			best = cand
-		}
-	}
-	return best
-}
-
-func groupByAsset(inventories []solverInventory) map[common.Address][]solverInventory {
-	groups := make(map[common.Address][]solverInventory)
-	for _, inv := range inventories {
-		groups[inv.Asset] = append(groups[inv.Asset], inv)
-	}
-	return groups
-}
-
-// eligibleLeg pairs an inventory with the effective rate it's filled at.
-type eligibleLeg struct {
-	inv  solverInventory
-	rate *big.Int
-}
-
-func evaluateGroup(
-	req strategyRequest,
-	group []solverInventory,
-	tokenInDecimals int,
-	oracleAmountOut *big.Int,
-	now time.Time,
-) *strategyRecord {
-	asset := group[0].Asset
-	assetDecimals := group[0].AssetDecimals
-	if asset != req.TokenOut {
-		return nil // this filler only fills when the output token is the adapter asset
-	}
-
-	// The quoted output is the adapter's oracle amountOut (no extra quote discount is applied).
-	privateRate := rateForAmountOut(oracleAmountOut, req.Amount, tokenInDecimals, assetDecimals)
-
-	eligible := make([]eligibleLeg, 0, len(group))
-	for _, inv := range group {
-		// Direct legs fill at our discounted private rate; discount legs fill at the adapter's
-		// advertised maxRate. A direct adapter that won't honor our private rate is dropped.
-		effRate := privateRate
-		if inv.DiscountID != nil {
-			effRate = inv.MaxRate
-		}
-		if effRate.Sign() <= 0 {
-			continue
-		}
-		if inv.DiscountID == nil && inv.MaxRate.Cmp(effRate) < 0 {
-			continue
-		}
-		eligible = append(eligible, eligibleLeg{inv: inv, rate: effRate})
-	}
-
-	sort.SliceStable(eligible, func(i, j int) bool {
-		if c := eligible[i].rate.Cmp(eligible[j].rate); c != 0 {
-			return c > 0
-		}
-		if c := eligible[i].inv.MaxAssets.Cmp(eligible[j].inv.MaxAssets); c != 0 {
-			return c > 0
-		}
-		return eligible[i].inv.MaxRate.Cmp(eligible[j].inv.MaxRate) > 0
-	})
-	eligible = dedupeByAdapter(eligible)
-	if len(eligible) == 0 {
-		return nil
-	}
-
-	remainingIn := new(big.Int).Set(req.Amount)
-	assetAmountOut := new(big.Int)
-	var legs []strategyLeg
-	for _, e := range eligible {
-		if remainingIn.Sign() == 0 {
-			break
-		}
-		maxAmountIn := maxAmountInForRate(e.inv.MaxAssets, e.rate, tokenInDecimals, e.inv.AssetDecimals)
-		if maxAmountIn.Sign() == 0 {
-			continue
-		}
-		saturated := remainingIn.Cmp(maxAmountIn) > 0
-
-		var amountIn, amountOut *big.Int
-		if saturated {
-			amountIn = minAmountInForAmountOut(e.inv.MaxAssets, e.rate, tokenInDecimals, e.inv.AssetDecimals)
-			amountOut = new(big.Int).Set(e.inv.MaxAssets)
-		} else {
-			amountIn = new(big.Int).Set(remainingIn)
-			amountOut = amountOutForRate(amountIn, e.rate, tokenInDecimals, e.inv.AssetDecimals)
-		}
-		if amountOut.Sign() == 0 {
-			continue
-		}
-
-		remainingIn.Sub(remainingIn, amountIn)
-		assetAmountOut.Add(assetAmountOut, amountOut)
-		legs = append(legs, strategyLeg{
-			Adapter:    e.inv.Adapter,
-			AmountIn:   amountIn,
-			AmountOut:  amountOut,
-			MaxRate:    e.inv.MaxRate,
-			DiscountID: e.inv.DiscountID,
+		candidates = append(candidates, strategytypes.QuoteCandidate{
+			ID:            id,
+			Adapter:       v.Adapter,
+			Asset:         v.Asset,
+			AssetDecimals: v.AssetDecimals,
+			MaxAssets:     cloneBig(v.MaxAssets),
+			MaxRate:       cloneBig(v.MaxRate),
+			DiscountID:    cloneHash(v.DiscountID),
 		})
 	}
-	if len(legs) == 0 {
+	return strategytypes.QuoteInput{
+		RequestID:         req.RequestID,
+		QuoteID:           req.QuoteID,
+		ChainID:           chainID,
+		Executor:          executor,
+		TokenIn:           req.TokenIn,
+		TokenOut:          req.TokenOut,
+		AmountIn:          cloneBig(req.Amount),
+		RequiredAmountOut: cloneBig(required),
+		Candidates:        candidates,
+		Now:               now,
+	}
+}
+
+func decideQuote(
+	ctx context.Context,
+	input strategytypes.QuoteInput,
+	configured strategytypes.Strategy,
+	reader quoteReplayReader,
+) (*strategyRecord, error) {
+	if configured == nil {
+		return nil, errors.New("strategy is not configured")
+	}
+	out, err := configured.DecideQuote(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	tokenInDecimals := 0
+	if out.Decision == strategytypes.DecisionQuote {
+		tokenInDecimals, err = reader.tokenDecimals(ctx, input.TokenIn)
+		if err != nil {
+			return nil, errors.Errorf("tokenIn decimals: %w", err)
+		}
+	}
+	return validateQuoteOutput(ctx, input, out, tokenInDecimals, reader)
+}
+
+func validateQuoteOutput(
+	ctx context.Context,
+	input strategytypes.QuoteInput,
+	out strategytypes.QuoteOutput,
+	tokenInDecimals int,
+	reader livePriceReader,
+) (*strategyRecord, error) {
+	switch out.Decision {
+	case strategytypes.DecisionDecline:
+		if len(out.Legs) != 0 || out.QuotedAmountOut != nil {
+			return nil, errors.New("decline output must not include quote data")
+		}
+		return nil, nil
+	case strategytypes.DecisionQuote:
+	default:
+		return nil, errors.Errorf("invalid decision %q", out.Decision)
+	}
+	if len(out.Legs) == 0 {
+		return nil, errors.New("quote output has no legs")
+	}
+	if out.QuotedAmountOut == nil || out.QuotedAmountOut.Sign() <= 0 {
+		return nil, errors.New("quote output has invalid quotedAmountOut")
+	}
+
+	candidates := make(map[string]strategytypes.QuoteCandidate, len(input.Candidates))
+	for _, c := range input.Candidates {
+		if c.ID == "" {
+			return nil, errors.New("candidate id is empty")
+		}
+		if _, ok := candidates[c.ID]; ok {
+			return nil, errors.Errorf("duplicate candidate id %q", c.ID)
+		}
+		candidates[c.ID] = c
+	}
+
+	sumIn := new(big.Int)
+	sumOut := new(big.Int)
+	seen := make(map[string]bool, len(out.Legs))
+	legs := make([]strategyLeg, 0, len(out.Legs))
+	var liveRequests []amountOutRequest
+	var liveLegs []int
+	for i, leg := range out.Legs {
+		if seen[leg.CandidateID] {
+			return nil, errors.Errorf("duplicate candidate %q", leg.CandidateID)
+		}
+		seen[leg.CandidateID] = true
+		c, ok := candidates[leg.CandidateID]
+		if !ok {
+			return nil, errors.Errorf("unknown candidate %q", leg.CandidateID)
+		}
+		if c.Asset != input.TokenOut {
+			return nil, errors.Errorf("candidate %q asset does not match tokenOut", leg.CandidateID)
+		}
+		if leg.AmountIn == nil || leg.AmountIn.Sign() <= 0 {
+			return nil, errors.Errorf("leg %d has invalid amountIn", i)
+		}
+		if leg.AmountOut == nil || leg.AmountOut.Sign() <= 0 {
+			return nil, errors.Errorf("leg %d has invalid amountOut", i)
+		}
+		if c.MaxAssets == nil || c.MaxAssets.Sign() <= 0 {
+			return nil, errors.Errorf("candidate %q has invalid maxAssets", leg.CandidateID)
+		}
+		if leg.AmountOut.Cmp(c.MaxAssets) > 0 {
+			return nil, errors.Errorf("leg %d exceeds candidate maxAssets", i)
+		}
+		if c.MaxRate == nil || c.MaxRate.Sign() <= 0 {
+			return nil, errors.Errorf("candidate %q has invalid maxRate", leg.CandidateID)
+		}
+		maxAmountOut := liquidlanemath.AmountOutForRate(leg.AmountIn, c.MaxRate, tokenInDecimals, c.AssetDecimals)
+		if leg.AmountOut.Cmp(maxAmountOut) > 0 {
+			return nil, errors.Errorf("leg %d exceeds candidate maxRate", i)
+		}
+		if c.DiscountID == nil {
+			liveRequests = append(liveRequests, amountOutRequest{
+				Adapter:  c.Adapter,
+				AmountIn: cloneBig(leg.AmountIn),
+			})
+			liveLegs = append(liveLegs, i)
+		}
+		sumIn.Add(sumIn, leg.AmountIn)
+		sumOut.Add(sumOut, leg.AmountOut)
+		legs = append(legs, strategyLeg{
+			Adapter:    c.Adapter,
+			AmountIn:   cloneBig(leg.AmountIn),
+			AmountOut:  cloneBig(leg.AmountOut),
+			MaxRate:    cloneBig(c.MaxRate),
+			DiscountID: cloneHash(c.DiscountID),
+		})
+	}
+	if sumIn.Cmp(input.AmountIn) != 0 {
+		return nil, errors.Errorf("strategy amountIn sum %s does not match request %s", sumIn, input.AmountIn)
+	}
+	if sumOut.Cmp(out.QuotedAmountOut) != 0 {
+		return nil, errors.Errorf("strategy amountOut sum %s does not match quotedAmountOut %s", sumOut, out.QuotedAmountOut)
+	}
+	if input.RequiredAmountOut != nil && out.QuotedAmountOut.Cmp(input.RequiredAmountOut) < 0 {
+		return nil, errors.New("strategy output is below required amount out")
+	}
+	if err := validateLivePrices(ctx, input.TokenIn, out.Legs, liveLegs, liveRequests, reader); err != nil {
+		return nil, err
+	}
+	return &strategyRecord{
+		QuoteID:         input.QuoteID,
+		RequestID:       input.RequestID,
+		TokenIn:         input.TokenIn,
+		TokenOut:        input.TokenOut,
+		AmountIn:        cloneBig(input.AmountIn),
+		QuotedAmountOut: cloneBig(out.QuotedAmountOut),
+		Legs:            legs,
+		CreatedAt:       input.Now,
+		UpdatedAt:       input.Now,
+	}, nil
+}
+
+type livePriceReader interface {
+	amountsOut(ctx context.Context, tokenIn common.Address, requests []amountOutRequest) ([]*big.Int, error)
+}
+
+func validateLivePrices(
+	ctx context.Context,
+	tokenIn common.Address,
+	legs []strategytypes.QuoteLeg,
+	liveLegs []int,
+	requests []amountOutRequest,
+	reader livePriceReader,
+) error {
+	if len(requests) == 0 {
 		return nil
 	}
-	// Any input we couldn't place at capacity is folded into the last leg (same output, more input).
-	if remainingIn.Sign() != 0 {
-		last := &legs[len(legs)-1]
-		last.AmountIn = new(big.Int).Add(last.AmountIn, remainingIn)
+	if reader == nil {
+		return errors.New("live pricing reader is required")
 	}
-
-	return &strategyRecord{
-		QuoteID:         req.QuoteID,
-		RequestID:       req.RequestID,
-		TokenIn:         req.TokenIn,
-		TokenOut:        req.TokenOut,
-		AmountIn:        new(big.Int).Set(req.Amount),
-		Asset:           asset,
-		AssetDecimals:   assetDecimals,
-		AssetAmountOut:  assetAmountOut,
-		QuotedAmountOut: assetAmountOut,
-		Legs:            legs,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+	amounts, err := reader.amountsOut(ctx, tokenIn, requests)
+	if err != nil {
+		return errors.Errorf("live amountOut replay: %w", err)
 	}
-}
-
-// dedupeByAdapter keeps the first (highest-sorted) leg per adapter+asset pair.
-func dedupeByAdapter(legs []eligibleLeg) []eligibleLeg {
-	seen := make(map[string]bool, len(legs))
-	out := legs[:0]
-	for _, e := range legs {
-		key := e.inv.Adapter.Hex() + ":" + e.inv.Asset.Hex()
-		if seen[key] {
-			continue
+	if len(amounts) != len(requests) {
+		return errors.Errorf("live amountOut replay: got %d results for %d requests", len(amounts), len(requests))
+	}
+	for i, live := range amounts {
+		if live == nil || live.Sign() <= 0 {
+			return errors.Errorf("leg %d has no live amountOut", liveLegs[i])
 		}
-		seen[key] = true
-		out = append(out, e)
+		if legs[liveLegs[i]].AmountOut.Cmp(live) > 0 {
+			return errors.Errorf("leg %d exceeds live amountOut", liveLegs[i])
+		}
 	}
-	return out
+	return nil
 }
 
-/* ───────── fixed-point rate math ───────── */
-
-func pow10(n int) *big.Int { return chain.Exp10(n) }
-
-// amountOutForRate = amountIn * rate * 10^assetDec / (RATE_SCALE * 10^tokenInDec). Replicates the
-// LiquidLane adapter's getAmountOut; the OEV solver has the same formula inline (redstoneoev/sizing.go
-// adapterOut) — keep both in sync (deliberately not unified into one 5-arg helper, see that site).
-func amountOutForRate(amountIn, rate *big.Int, tokenInDec, assetDec int) *big.Int {
-	num := new(big.Int).Mul(amountIn, rate)
-	num.Mul(num, pow10(assetDec))
-	den := new(big.Int).Mul(rateScale, pow10(tokenInDec))
-	if den.Sign() == 0 {
-		return new(big.Int)
+func cloneBig(n *big.Int) *big.Int {
+	if n == nil {
+		return nil
 	}
-	return num.Div(num, den)
+	return new(big.Int).Set(n)
 }
 
-// maxAmountInForRate = maxAssets * RATE_SCALE * 10^tokenInDec / (rate * 10^assetDec).
-func maxAmountInForRate(maxAssets, rate *big.Int, tokenInDec, assetDec int) *big.Int {
-	den := new(big.Int).Mul(rate, pow10(assetDec))
-	if den.Sign() == 0 {
-		return new(big.Int)
+func cloneHash(h *common.Hash) *common.Hash {
+	if h == nil {
+		return nil
 	}
-	num := new(big.Int).Mul(maxAssets, rateScale)
-	num.Mul(num, pow10(tokenInDec))
-	return num.Div(num, den)
-}
-
-// minAmountInForAmountOut = ceil(amountOut * RATE_SCALE * 10^tokenInDec / (rate * 10^assetDec)).
-func minAmountInForAmountOut(amountOut, rate *big.Int, tokenInDec, assetDec int) *big.Int {
-	den := new(big.Int).Mul(rate, pow10(assetDec))
-	if den.Sign() == 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDec))
-	num.Add(num, new(big.Int).Sub(den, big.NewInt(1))) // ceil
-	return num.Div(num, den)
-}
-
-// rateForAmountOut = amountOut * RATE_SCALE * 10^tokenInDec / (amountIn * 10^assetDec); 0 when amountIn == 0.
-func rateForAmountOut(amountOut, amountIn *big.Int, tokenInDec, assetDec int) *big.Int {
-	if amountIn.Sign() == 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDec))
-	den := new(big.Int).Mul(amountIn, pow10(assetDec))
-	return num.Div(num, den)
+	out := *h
+	return &out
 }

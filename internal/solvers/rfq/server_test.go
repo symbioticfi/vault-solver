@@ -16,10 +16,10 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// fakeReader stands in for the on-chain pricing reads in HTTP tests.
+// fakeReader stands in for the solver-owned on-chain replay reads in HTTP tests.
 type fakeReader struct {
 	decimals int
-	oracle   map[common.Address]*big.Int
+	liveOut  map[common.Address]*big.Int
 }
 
 func (f fakeReader) tokenDecimals(context.Context, common.Address) (int, error) {
@@ -27,12 +27,17 @@ func (f fakeReader) tokenDecimals(context.Context, common.Address) (int, error) 
 }
 
 func (f fakeReader) amountsOut(
-	_ context.Context, _ common.Address, inventories []solverInventory, _ *big.Int,
-) (map[common.Address]*big.Int, error) {
-	out := make(map[common.Address]*big.Int)
-	for _, inv := range inventories {
-		if v, ok := f.oracle[inv.Asset]; ok {
-			out[inv.Asset] = v
+	_ context.Context,
+	_ common.Address,
+	requests []amountOutRequest,
+) ([]*big.Int, error) {
+	out := make([]*big.Int, len(requests))
+	for i, req := range requests {
+		if f.liveOut != nil {
+			out[i] = f.liveOut[req.Adapter]
+		}
+		if out[i] == nil {
+			out[i] = big.NewInt(1_000000)
 		}
 	}
 	return out, nil
@@ -47,7 +52,8 @@ func testServer() *server {
 	q := &quoteService{
 		chainID:  1,
 		executor: execAddr,
-		reader:   fakeReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
+		reader:   fakeReader{decimals: 18, liveOut: map[common.Address]*big.Int{vlt: big.NewInt(1_000000)}},
+		strategy: newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}),
 		store:    st,
 		log:      logr.Discard(),
 		now:      clk,

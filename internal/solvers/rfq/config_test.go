@@ -49,6 +49,33 @@ func TestParseConfig_Defaults(t *testing.T) {
 	if cfg.usesDiscounts() {
 		t.Fatal("external mode should not use discounts")
 	}
+	if cfg.Strategy.Name != defaultStrategyName {
+		t.Fatalf("strategy.name = %q, want %q", cfg.Strategy.Name, defaultStrategyName)
+	}
+}
+
+func TestParseConfig_Strategy(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+`
+strategy:
+  name: webhook
+  config:
+    url: https://strategy.example
+`+oneAdapter)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.Strategy.Name != "webhook" {
+		t.Fatalf("strategy.name = %q, want webhook", cfg.Strategy.Name)
+	}
+	var raw struct {
+		URL string `yaml:"url"`
+	}
+	if err := cfg.Strategy.Config.Decode(&raw); err != nil {
+		t.Fatalf("decode strategy config: %v", err)
+	}
+	if raw.URL != "https://strategy.example" {
+		t.Fatalf("strategy url = %q", raw.URL)
+	}
 }
 
 func TestParseConfig_SolverMode(t *testing.T) {

@@ -46,11 +46,11 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 	return f.discounts, nil
 }
 
-// fakeRecoveryReader is the on-chain surface recoverStrategy needs. readPermissionedVaultInventories
-// is only invoked when vaults are configured; the discount-only path uses tokenDecimals + amountsOut.
+// fakeRecoveryReader is the solver-owned on-chain surface recoverStrategy needs.
+// readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
 	decimals int
-	oracle   map[common.Address]*big.Int
+	liveOut  map[common.Address]*big.Int
 	permInv  []solverInventory
 	permErr  error
 }
@@ -66,9 +66,20 @@ func (f *fakeRecoveryReader) tokenDecimals(context.Context, common.Address) (int
 }
 
 func (f *fakeRecoveryReader) amountsOut(
-	context.Context, common.Address, []solverInventory, *big.Int,
-) (map[common.Address]*big.Int, error) {
-	return f.oracle, nil
+	_ context.Context,
+	_ common.Address,
+	requests []amountOutRequest,
+) ([]*big.Int, error) {
+	out := make([]*big.Int, len(requests))
+	for i, req := range requests {
+		if f.liveOut != nil {
+			out[i] = f.liveOut[req.Adapter]
+		}
+		if out[i] == nil {
+			out[i] = big.NewInt(1_000000)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
@@ -105,8 +116,8 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 	t.Helper()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
 		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000)}},
 	})
 	encoded, err := orderTupleArgs.Pack(sampleOrder())
@@ -160,8 +171,8 @@ func TestExecution_DiscountFill(t *testing.T) {
 	// Replace the cached strategy with a discount leg, and have the backend resolve the discount.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
 		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
 	})
 	be.discount = &resolveDiscountResponse{
@@ -215,8 +226,10 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
-	// No vaults configured (discount-only solver); recovery reads decimals + oracle off the fake reader.
-	e.reader = &fakeRecoveryReader{decimals: 18, oracle: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
+	// No vaults configured (discount-only solver); recovery reads decimals from the solver reader and
+	// pricing from the default strategy's own dependency.
+	e.reader = &fakeRecoveryReader{decimals: 18}
+	e.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(500000)})
 
 	e.syncOnce(context.Background())
 
@@ -240,8 +253,8 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
 		Legs:      []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
 		CreatedAt: time.Unix(0, 0), // matches the frozen test clock so sweep keeps it across cycles
 	})
