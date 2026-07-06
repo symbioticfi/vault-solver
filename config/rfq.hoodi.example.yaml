@@ -24,6 +24,9 @@ observability:
 solvers:
   - name: rfq-filler
     config:
+      strategy:
+        name: default
+        config: {}
       backendUrl: ${RFQ_BACKEND_URL}
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
       listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)

@@ -1,7 +1,7 @@
 # vault-solver configuration (annotated example).
 #
-# The framework parses everything except `solver.config`, which is handed verbatim to the selected
-# solver and typed by it.
+# The framework parses common solver fields. `solver.config` is handed verbatim to the selected
+# solver and typed by it, including any solver-local strategy config.
 #
 # ${VAR} / $VAR are expanded from the environment at load time, for non-secret deploy-injected
 # fields like rpcUrl. Do NOT put the signing key this way — use the *Env name fields below, which
@@ -45,10 +45,10 @@ solvers:
                                             # generates one at startup (EIP-712) and re-auths on 401/403.
       redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
       # httpTimeout: 30s                     # per-call timeout for 3F API requests (default 30s)
-      # The single adapter this facilitator serves (3F registers exactly one offer-address per
-      # facilitator, so this solver is single-pair). The vault and collateral are derived from the
-      # adapter on-chain at startup (adapter.vault() + vault.asset()), not configured here.
-      adapter: "0x0000000000000000000000000000000000000000"     # BridgeFacilitatorAdapter
+      # Adapters this facilitator serves. Vault and collateral are derived from each adapter
+      # on-chain at startup (adapter.vault() + vault.asset()), not configured here.
+      adapters:
+        - "0x0000000000000000000000000000000000000000"  # BridgeFacilitatorAdapter
       # Exposure/return caps (perRequestMaxCollateral, totalMaxCollateral, minRequestYieldBps,
       # maxConcurrentLoans) are NOT config: they live on the adapter (setExposureLimits) and the bot
       # reads them on-chain each poll. The contract enforces them authoritatively at consume time.
