@@ -72,8 +72,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
+	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
-	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.MulticallAddress, log)
+	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
 	if err != nil {
 		return err
 	}
