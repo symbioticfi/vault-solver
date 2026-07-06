@@ -12,6 +12,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -49,37 +50,14 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface recoverStrategy needs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	decimals int
-	liveOut  map[common.Address]*big.Int
-	permInv  []solverInventory
-	permErr  error
+	permInv []solverInventory
+	permErr error
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
 	context.Context, common.Address, common.Address, []recoveryVault,
 ) ([]solverInventory, error) {
 	return f.permInv, f.permErr
-}
-
-func (f *fakeRecoveryReader) tokenDecimals(context.Context, common.Address) (int, error) {
-	return f.decimals, nil
-}
-
-func (f *fakeRecoveryReader) amountsOut(
-	_ context.Context,
-	_ common.Address,
-	requests []amountOutRequest,
-) ([]*big.Int, error) {
-	out := make([]*big.Int, len(requests))
-	for i, req := range requests {
-		if f.liveOut != nil {
-			out[i] = f.liveOut[req.Adapter]
-		}
-		if out[i] == nil {
-			out[i] = big.NewInt(1_000000)
-		}
-	}
-	return out, nil
 }
 
 func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
@@ -106,20 +84,56 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		log: logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
+		strategy: fixedFillStrategy{plan: baseFillPlan()},
+		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}
 }
 
-// seededStrategy + a backend order whose payload matches sampleOrder() from order_test.go.
+type fixedFillStrategy struct {
+	plan *strategytypes.FillPlan
+	err  error
+}
+
+func (s fixedFillStrategy) DecideQuote(
+	context.Context,
+	strategytypes.QuoteInput,
+) (strategytypes.QuoteOutput, error) {
+	return strategytypes.QuoteOutput{}, nil
+}
+
+func (s fixedFillStrategy) BuildFillPlan(
+	context.Context,
+	strategytypes.FillInput,
+) (*strategytypes.FillPlan, error) {
+	return s.plan, s.err
+}
+
+func baseFillPlan() *strategytypes.FillPlan {
+	return &strategytypes.FillPlan{
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
+		Legs: []strategytypes.FillLeg{{
+			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
+		}},
+	}
+}
+
+func discountFillPlan(h common.Hash) *strategytypes.FillPlan {
+	return &strategytypes.FillPlan{
+		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
+		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
+		Legs: []strategytypes.FillLeg{{
+			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
+			MaxRate: big.NewInt(1), DiscountID: &h,
+		}},
+	}
+}
+
+// backend order whose payload matches sampleOrder() from order_test.go.
 func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 	t.Helper()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
-	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000)}},
-	})
 	encoded, err := orderTupleArgs.Pack(sampleOrder())
 	if err != nil {
 		t.Fatalf("pack order: %v", err)
@@ -168,13 +182,7 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
-	// Replace the cached strategy with a discount leg, and have the backend resolve the discount.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
-	})
 	be.discount = &resolveDiscountResponse{
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -186,6 +194,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
+	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
 	e.syncOnce(context.Background())
 
@@ -228,16 +237,13 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); recovery reads decimals from the solver reader and
 	// pricing from the default strategy's own dependency.
-	e.reader = &fakeRecoveryReader{decimals: 18}
+	e.reader = &fakeRecoveryReader{}
 	e.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(500000)})
 
 	e.syncOnce(context.Background())
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
-	}
-	if st.strategy("q1") == nil {
-		t.Fatalf("recovery did not persist a rebuilt strategy for q1")
 	}
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
@@ -252,12 +258,6 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs:      []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
-		CreatedAt: time.Unix(0, 0), // matches the frozen test clock so sweep keeps it across cycles
-	})
 	be.discount = &resolveDiscountResponse{
 		Discount: discountTerms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
@@ -270,6 +270,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
+	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
 	e.syncOnce(context.Background())
 
@@ -330,6 +331,7 @@ func TestExecution_MissingStrategyFails(t *testing.T) {
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store: no cached strategy, no vaults
 	txm := &fakeTxm{result: txmanager.Result{}}
 	e := newExec(t, st, be, txm)
+	e.strategy = fixedFillStrategy{}
 
 	e.syncOnce(context.Background())
 

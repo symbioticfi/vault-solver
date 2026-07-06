@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -16,45 +15,15 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// fakeReader stands in for the solver-owned on-chain replay reads in HTTP tests.
-type fakeReader struct {
-	decimals int
-	liveOut  map[common.Address]*big.Int
-}
-
-func (f fakeReader) tokenDecimals(context.Context, common.Address) (int, error) {
-	return f.decimals, nil
-}
-
-func (f fakeReader) amountsOut(
-	_ context.Context,
-	_ common.Address,
-	requests []amountOutRequest,
-) ([]*big.Int, error) {
-	out := make([]*big.Int, len(requests))
-	for i, req := range requests {
-		if f.liveOut != nil {
-			out[i] = f.liveOut[req.Adapter]
-		}
-		if out[i] == nil {
-			out[i] = big.NewInt(1_000000)
-		}
-	}
-	return out, nil
-}
-
 const testSecret = "s3cr3t"
 
 func testServer() *server {
 	execAddr := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	clk := func() time.Time { return time.Unix(0, 0) }
-	st := newStore(clk)
 	q := &quoteService{
 		chainID:  1,
 		executor: execAddr,
-		reader:   fakeReader{decimals: 18, liveOut: map[common.Address]*big.Int{vlt: big.NewInt(1_000000)}},
 		strategy: newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}),
-		store:    st,
 		log:      logr.Discard(),
 		now:      clk,
 	}
@@ -176,16 +145,14 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 		MaxAssets: "10000000", MaxRate: "2000000000000000000",
 	}
 	cases := map[string]struct {
-		whitelist   adapterWhitelist
-		adapters    []quoteAdapter // nil keeps validQuoteBody's single vlt adapter
-		wantCode    int
-		wantAdapter common.Address // the stored strategy's single leg (200 only)
+		whitelist adapterWhitelist
+		adapters  []quoteAdapter // nil keeps validQuoteBody's single vlt adapter
+		wantCode  int
 	}{
 		"drops non-whitelisted adapters": {
-			whitelist:   buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}}),
-			adapters:    append(validQuoteBody().Adapters, rogueAdapter),
-			wantCode:    http.StatusOK,
-			wantAdapter: vlt,
+			whitelist: buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}}),
+			adapters:  append(validQuoteBody().Adapters, rogueAdapter),
+			wantCode:  http.StatusOK,
 		},
 		"no whitelisted adapter declines": {
 			whitelist: buildAdapterWhitelist(true, []recoveryVault{{Adapter: rogue}}),
@@ -196,10 +163,9 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 			wantCode:  http.StatusNoContent,
 		},
 		"disabled keeps all adapters": {
-			whitelist:   buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}}),
-			adapters:    []quoteAdapter{rogueAdapter}, // only a non-configured adapter: still quoted
-			wantCode:    http.StatusOK,
-			wantAdapter: rogue,
+			whitelist: buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}}),
+			adapters:  []quoteAdapter{rogueAdapter}, // only a non-configured adapter: still quoted
+			wantCode:  http.StatusOK,
 		},
 	}
 	for name, tc := range cases {
@@ -216,15 +182,15 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 				t.Fatalf("quote = %d, want %d (body %s)", rr.Code, tc.wantCode, rr.Body.String())
 			}
 
-			stored := srv.quotes.store.strategy(body.QuoteID)
 			if tc.wantCode == http.StatusNoContent {
-				if stored != nil {
-					t.Fatalf("no strategy should be stored for a declined quote, got %+v", stored)
-				}
 				return
 			}
-			if stored == nil || len(stored.Legs) != 1 || stored.Legs[0].Adapter != tc.wantAdapter {
-				t.Fatalf("stored strategy = %+v, want a single leg through %s", stored, tc.wantAdapter.Hex())
+			var resp quoteResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode quote response: %v", err)
+			}
+			if resp.AmountOut == "" {
+				t.Fatalf("quote response missing amountOut: %+v", resp)
 			}
 		})
 	}

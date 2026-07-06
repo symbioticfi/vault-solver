@@ -26,10 +26,6 @@ func (s orderStatus) active() bool {
 }
 
 const (
-	// strategyTTL bounds how long a quoted strategy is cached before eviction. A later award that
-	// misses the cache is rebuilt from on-chain state by recoverStrategy, so this only caps memory;
-	// it does not drop fillable orders.
-	strategyTTL = 3 * time.Hour
 	// terminalOrderTTL is how long terminal orders (and their attempt counts) are retained for
 	// reconciliation/observability before eviction.
 	terminalOrderTTL = 3 * time.Hour
@@ -56,51 +52,26 @@ type queuedOrder struct {
 // store is the filler's in-memory operational state. The HTTP server and the poll loop touch it
 // concurrently, so every accessor is mutex-guarded.
 type store struct {
-	mu         sync.Mutex
-	strategies map[string]*strategyRecord // by quoteId
-	orders     map[string]*orderRecord    // by orderId
-	attempts   map[string]int             // by orderId
-	now        func() time.Time
+	mu       sync.Mutex
+	orders   map[string]*orderRecord // by orderId
+	attempts map[string]int          // by orderId
+	now      func() time.Time
 }
 
 func newStore(now func() time.Time) *store {
 	return &store{
-		strategies: make(map[string]*strategyRecord),
-		orders:     make(map[string]*orderRecord),
-		attempts:   make(map[string]int),
-		now:        now,
+		orders:   make(map[string]*orderRecord),
+		attempts: make(map[string]int),
+		now:      now,
 	}
 }
 
-/* ───────── strategies ───────── */
-
-func (s *store) putStrategy(rec *strategyRecord) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.strategies[rec.QuoteID] = rec
-}
-
-// strategy returns the cached strategy for quoteID, or nil. It returns the shared pointer (not a
-// clone): a strategyRecord is immutable after putStrategy, so concurrent readers are safe. Do not
-// mutate a returned record in place — copy it, or that invariant (and the lack of a data race) breaks.
-func (s *store) strategy(quoteID string) *strategyRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.strategies[quoteID]
-}
-
 // sweep evicts stale entries so the in-memory maps don't grow without bound over a long run:
-// strategies older than strategyTTL, and terminal orders (with their attempt counts) untouched for
-// longer than terminalOrderTTL. Called from the poll loop.
+// terminal orders (with their attempt counts) untouched for longer than terminalOrderTTL.
 func (s *store) sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	for id, rec := range s.strategies {
-		if now.Sub(rec.CreatedAt) > strategyTTL {
-			delete(s.strategies, id)
-		}
-	}
 	for id, rec := range s.orders {
 		if !rec.Status.active() && now.Sub(rec.UpdatedAt) > terminalOrderTTL {
 			delete(s.orders, id)

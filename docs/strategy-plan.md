@@ -41,8 +41,9 @@ Each solver keeps a local registry/factory:
 type StrategyFactory func(raw yaml.Node, deps StrategyDeps) (strategytypes.Strategy, error)
 ```
 
-`default`, `webhook`, `morpho`, `aave`, or any custom local strategy may define a different typed
-config. The solver must not know those fields unless the solver itself uses them.
+`default`, `webhook`, `morpho`, `aave`, or any custom local strategy may self-register from its own
+package `init()` under a solver-local unique name. The solver only asks the registry for
+`strategy.name`; the selected strategy owns parsing `strategy.config`.
 
 The only shared strategy-adjacent package is `internal/webhook`:
 
@@ -80,28 +81,31 @@ Package layout:
 ```text
 internal/solvers/rfq/
   strategytypes/          # RFQ strategy input/output and interface
+  strategyregistry/       # RFQ-local strategy registry/factory
   strategies/default/   # local default strategy
   strategies/webhook/   # RFQ webhook adapter
 ```
 
-Decision:
+Contract:
 
 ```go
-DecideQuote(ctx, input) -> output
+type Strategy interface {
+    DecideQuote(ctx, input QuoteInput) (QuoteOutput, error)
+    BuildFillPlan(ctx, input FillInput) (*FillPlan, error)
+}
 ```
 
-Both quote and recovery use the same decision. Recovery only adds `RequiredAmountOut`.
+`DecideQuote` is called by the quote server. `BuildFillPlan` is called at fill time. The strategy may
+return a quote-time cached plan or rebuild one from the fill-time input. The strategy is a trusted
+component: semantic validation, replay, cache matching, and recovery correctness live inside the
+strategy implementation, not in the solver skeleton.
 
 RFQ solver owns:
 
 - `/quote` parsing and request validation
 - chain/type/token scope checks
 - adapter whitelist filtering
-- quote/recovery candidate construction
-- token decimals reads for local strategy pricing and solver replay validation
-- pricing dependency exposed to local strategies when they need extra reads
-- output validation and replay
-- storage of execution records
+- quote/fill-time candidate construction
 - discount resolution at fill time
 - calldata, signing, and tx submission
 
@@ -111,8 +115,11 @@ RFQ strategy owns:
 - direct/discount leg selection
 - input split across legs
 - quote/decline decision
+- quote-time fill-plan caching
+- fill-plan recovery after restart/cache miss
+- strategy output validation, if the implementation wants it
 
-Input:
+Quote input:
 
 ```go
 type QuoteInput struct {
@@ -139,7 +146,7 @@ type QuoteCandidate struct {
 }
 ```
 
-Output:
+Quote output:
 
 ```go
 type QuoteOutput struct {
@@ -156,11 +163,46 @@ type QuoteLeg struct {
 }
 ```
 
+Fill input/output:
+
+```go
+type FillInput struct {
+    RequestID         string
+    QuoteID           string
+    ChainID           int64
+    Executor          address
+    TokenIn           address
+    TokenOut          address
+    AmountIn          uint256
+    RequiredAmountOut uint256
+    Candidates        []QuoteCandidate
+    Now               time
+}
+
+type FillPlan struct {
+    QuoteID         string
+    RequestID       string
+    TokenIn         address
+    TokenOut        address
+    AmountIn        uint256
+    QuotedAmountOut uint256
+    Legs            []FillLeg
+}
+
+type FillLeg struct {
+    Adapter    address
+    AmountIn   uint256
+    AmountOut  uint256
+    MaxRate    uint256
+    DiscountID bytes32?
+}
+```
+
 RFQ webhook wire format is RFQ-specific. It uses lower-camel JSON field names and decimal strings for
 big integer values. The strategy input/output types provide their own JSON encoding so the webhook
 adapter does not duplicate the contract.
 
-Validation/replay:
+Default strategy validation/replay:
 
 - `decline` must not include quote data.
 - `quote` must include positive `quotedAmountOut` and at least one leg.
@@ -173,7 +215,8 @@ Validation/replay:
 - sum of leg `amountIn` must equal input `amountIn`.
 - sum of leg `amountOut` must equal `quotedAmountOut`.
 - recovery rejects `quotedAmountOut < requiredAmountOut`.
-- solver rebuilds execution records from input candidates, not from strategy-supplied adapter data.
+- default strategy rebuilds execution records from input candidates, not from strategy-supplied adapter data.
+- webhook strategy treats the remote decider as trusted and only rejects structurally unusable plans.
 
 ## 3F Future Boundary
 

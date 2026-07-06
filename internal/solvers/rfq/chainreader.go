@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -53,43 +52,6 @@ type recoveryVault struct {
 // so the quote + recovery paths reuse one cache instead of a per-reader copy.
 func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, error) {
 	return r.dec.Get(ctx, token)
-}
-
-func (r *reader) amountsOut(
-	ctx context.Context,
-	tokenIn common.Address,
-	requests []amountOutRequest,
-) ([]*big.Int, error) {
-	if len(requests) == 0 {
-		return nil, nil
-	}
-	calls := make([]chain.Call, len(requests))
-	for i, req := range requests {
-		calls[i] = chain.Call{
-			Target:       req.Adapter,
-			AllowFailure: true,
-			Data:         llAdapter.PackGetAmountOut(tokenIn, req.AmountIn),
-		}
-	}
-	res, err := r.chain.Multicall(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("amountOut replay multicall: got %d results, want %d", len(res), len(calls))
-	}
-	out := make([]*big.Int, len(requests))
-	for i, rr := range res {
-		if !rr.Success {
-			return nil, errors.Errorf("getAmountOut reverted for adapter %s", requests[i].Adapter.Hex())
-		}
-		amt, derr := llAdapter.UnpackGetAmountOut(rr.ReturnData)
-		if derr != nil {
-			return nil, errors.Errorf("decode getAmountOut for adapter %s: %w", requests[i].Adapter.Hex(), derr)
-		}
-		out[i] = amt
-	}
-	return out, nil
 }
 
 // readVaultInventories reads each adapter's recovery views (paused, getMaxAssets(tokenIn),

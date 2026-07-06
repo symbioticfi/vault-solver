@@ -1,7 +1,6 @@
 package rfq
 
 import (
-	"context"
 	"io"
 	"math/big"
 	"net/http"
@@ -11,9 +10,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategyregistry"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -53,120 +54,44 @@ func TestDefaultStrategyDecideQuote(t *testing.T) {
 	}
 }
 
-func TestValidateQuoteOutputRejectsUnsafeOutputs(t *testing.T) {
-	input := baseQuoteInput(t)
-	cases := map[string]strategytypes.QuoteOutput{
-		"unknown candidate": {
-			Decision:        strategytypes.DecisionQuote,
-			QuotedAmountOut: mustBig(t, "1000000"),
-			Legs: []strategytypes.QuoteLeg{{
-				CandidateID: "missing",
-				AmountIn:    mustBig(t, "1000000000000000000"),
-				AmountOut:   mustBig(t, "1000000"),
-			}},
-		},
-		"exceeds max assets": {
-			Decision:        strategytypes.DecisionQuote,
-			QuotedAmountOut: mustBig(t, "10000001"),
-			Legs: []strategytypes.QuoteLeg{{
-				CandidateID: "c0",
-				AmountIn:    mustBig(t, "1000000000000000000"),
-				AmountOut:   mustBig(t, "10000001"),
-			}},
-		},
-		"wrong input sum": {
-			Decision:        strategytypes.DecisionQuote,
-			QuotedAmountOut: mustBig(t, "1000000"),
-			Legs: []strategytypes.QuoteLeg{{
-				CandidateID: "c0",
-				AmountIn:    mustBig(t, "1"),
-				AmountOut:   mustBig(t, "1000000"),
-			}},
-		},
-		"exceeds max rate": {
-			Decision:        strategytypes.DecisionQuote,
-			QuotedAmountOut: mustBig(t, "1000001"),
-			Legs: []strategytypes.QuoteLeg{{
-				CandidateID: "c0",
-				AmountIn:    mustBig(t, "1000000000000000000"),
-				AmountOut:   mustBig(t, "1000001"),
-			}},
-		},
-		"zero max assets": {
-			Decision:        strategytypes.DecisionQuote,
-			QuotedAmountOut: mustBig(t, "1000000"),
-			Legs: []strategytypes.QuoteLeg{{
-				CandidateID: "zero-capacity",
-				AmountIn:    mustBig(t, "1000000000000000000"),
-				AmountOut:   mustBig(t, "1000000"),
-			}},
-		},
+func TestNewStrategyUsesRegistry(t *testing.T) {
+	got, err := newStrategy(StrategyConfig{Name: "default"}, nil, logr.Discard())
+	if err != nil {
+		t.Fatalf("newStrategy default: %v", err)
 	}
-	input.Candidates = append(input.Candidates, strategytypes.QuoteCandidate{
-		ID: "zero-capacity", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: big.NewInt(0), MaxRate: mustBig(t, "1000000000000000000"),
-	})
-	for name, out := range cases {
-		t.Run(name, func(t *testing.T) {
-			if rec, err := validateQuoteOutput(t.Context(), input, out, 18, fakeReader{decimals: 18}); err == nil || rec != nil {
-				t.Fatalf("validateQuoteOutput = (%+v, %v), want rejection", rec, err)
-			}
-		})
+	if got == nil {
+		t.Fatal("newStrategy default returned nil")
+	}
+	names := strategyregistry.Registered()
+	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {
+		t.Fatalf("registered strategies = %v, want default and webhook", names)
 	}
 }
 
-func TestValidateQuoteOutputRejectsRecoveryBelowRequired(t *testing.T) {
-	input := baseQuoteInput(t)
-	input.RequiredAmountOut = mustBig(t, "1000001")
-	out := strategytypes.QuoteOutput{
-		Decision:        strategytypes.DecisionQuote,
-		QuotedAmountOut: mustBig(t, "1000000"),
-		Legs: []strategytypes.QuoteLeg{{
-			CandidateID: "c0",
-			AmountIn:    mustBig(t, "1000000000000000000"),
-			AmountOut:   mustBig(t, "1000000"),
-		}},
-	}
-	if rec, err := validateQuoteOutput(t.Context(), input, out, 18, fakeReader{decimals: 18}); err == nil || rec != nil {
-		t.Fatalf("validateQuoteOutput = (%+v, %v), want below-required rejection", rec, err)
-	}
-}
-
-func TestDecideQuoteRejectsStrategyOutputAboveMaxRate(t *testing.T) {
-	input := baseQuoteInput(t)
-	out := strategytypes.QuoteOutput{
-		Decision:        strategytypes.DecisionQuote,
-		QuotedAmountOut: mustBig(t, "1000001"),
-		Legs: []strategytypes.QuoteLeg{{
-			CandidateID: "c0",
-			AmountIn:    mustBig(t, "1000000000000000000"),
-			AmountOut:   mustBig(t, "1000001"),
-		}},
-	}
-	rec, err := decideQuote(t.Context(), input, fixedStrategy{out: out}, fakeReader{decimals: 18})
-	if err == nil || rec != nil || !strings.Contains(err.Error(), "exceeds candidate maxRate") {
-		t.Fatalf("decideQuote = (%+v, %v), want maxRate rejection", rec, err)
-	}
-}
-
-func TestDecideQuoteRejectsStrategyOutputAboveLiveAmountOut(t *testing.T) {
-	input := baseQuoteInput(t)
-	input.Candidates[0].MaxRate = mustBig(t, "2000000000000000000")
-	out := strategytypes.QuoteOutput{
-		Decision:        strategytypes.DecisionQuote,
-		QuotedAmountOut: mustBig(t, "1500000"),
-		Legs: []strategytypes.QuoteLeg{{
-			CandidateID: "c0",
-			AmountIn:    mustBig(t, "1000000000000000000"),
-			AmountOut:   mustBig(t, "1500000"),
-		}},
-	}
-	rec, err := decideQuote(t.Context(), input, fixedStrategy{out: out}, fakeReader{
+func TestDefaultStrategyBuildFillPlanUsesQuoteCache(t *testing.T) {
+	strategy := defaultstrategy.New(&fakeStrategyPricing{
 		decimals: 18,
-		liveOut:  map[common.Address]*big.Int{vlt: mustBig(t, "1000000")},
+		out:      map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
 	})
-	if err == nil || rec != nil || !strings.Contains(err.Error(), "exceeds live amountOut") {
-		t.Fatalf("decideQuote = (%+v, %v), want live amountOut rejection", rec, err)
+	input := baseQuoteInput(t)
+	if _, err := strategy.DecideQuote(t.Context(), input); err != nil {
+		t.Fatalf("DecideQuote: %v", err)
+	}
+	plan, err := strategy.BuildFillPlan(t.Context(), strategytypes.FillInput{
+		RequestID: input.RequestID,
+		QuoteID:   input.QuoteID,
+		ChainID:   input.ChainID,
+		Executor:  input.Executor,
+		TokenIn:   input.TokenIn,
+		TokenOut:  input.TokenOut,
+		AmountIn:  input.AmountIn,
+		Now:       input.Now,
+	})
+	if err != nil {
+		t.Fatalf("BuildFillPlan: %v", err)
+	}
+	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != vlt {
+		t.Fatalf("cached fill plan = %+v, want vlt leg", plan)
 	}
 }
 
@@ -199,12 +124,4 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 		len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
 		t.Fatalf("unexpected webhook output: %+v", out)
 	}
-}
-
-type fixedStrategy struct {
-	out strategytypes.QuoteOutput
-}
-
-func (s fixedStrategy) DecideQuote(_ context.Context, _ strategytypes.QuoteInput) (strategytypes.QuoteOutput, error) {
-	return s.out, nil
 }

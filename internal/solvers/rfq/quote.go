@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 	"strings"
 	"time"
 
@@ -24,9 +23,7 @@ type quoteService struct {
 	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
 	tokensToQuote      string
 	permissionedTokens map[common.Address]bool
-	reader             quoteReplayReader
 	strategy           strategytypes.Strategy
-	store              *store
 	log                logr.Logger
 	now                func() time.Time
 }
@@ -54,24 +51,27 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	best, err := qs.decide(ctx, req, inv, nil)
+	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, qs.now())
+	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
-	if best == nil {
+	if out.Decision == strategytypes.DecisionDecline {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
 	}
-	qs.store.putStrategy(best)
+	if out.QuotedAmountOut == nil {
+		return nil, errors.New("quote: strategy returned quote without amountOut")
+	}
 
 	qs.log.V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
-		"amountOut", best.QuotedAmountOut.String(), "legs", len(best.Legs))
+		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
 	return &quoteResponse{
 		ChainID:   qs.chainID,
 		AmountIn:  req.Amount.String(),
-		AmountOut: best.QuotedAmountOut.String(),
+		AmountOut: out.QuotedAmountOut.String(),
 		Filler:    lowerAddr(qs.executor),
 		RequestID: q.RequestID,
 		Swapper:   lowerAddr(common.HexToAddress(q.Swapper)), // backend payloads use lowercase addresses
@@ -79,13 +79,6 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		TokenOut:  lowerAddr(req.TokenOut),
 		QuoteID:   q.QuoteID,
 	}, nil
-}
-
-func (qs *quoteService) decide(
-	ctx context.Context, req strategyRequest, inv []solverInventory, required *big.Int,
-) (*strategyRecord, error) {
-	input := newQuoteInput(qs.chainID, qs.executor, req, inv, required, qs.now())
-	return decideQuote(ctx, input, qs.strategy, qs.reader)
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
