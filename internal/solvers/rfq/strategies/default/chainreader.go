@@ -7,10 +7,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
 var (
@@ -35,7 +35,7 @@ func (r *ChainReader) TokenDecimals(ctx context.Context, token common.Address) (
 func (r *ChainReader) AmountsOut(
 	ctx context.Context,
 	tokenIn common.Address,
-	candidates []strategytypes.QuoteCandidate,
+	candidates []types.QuoteCandidate,
 	amount *big.Int,
 ) (map[common.Address]*big.Int, error) {
 	type group struct {

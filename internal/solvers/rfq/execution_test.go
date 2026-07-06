@@ -11,8 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -91,39 +91,39 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 }
 
 type fixedFillStrategy struct {
-	plan *strategytypes.FillPlan
+	plan *types.FillPlan
 	err  error
 }
 
 func (s fixedFillStrategy) DecideQuote(
 	context.Context,
-	strategytypes.QuoteInput,
-) (strategytypes.QuoteOutput, error) {
-	return strategytypes.QuoteOutput{}, nil
+	types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
 }
 
 func (s fixedFillStrategy) BuildFillPlan(
 	context.Context,
-	strategytypes.FillInput,
-) (*strategytypes.FillPlan, error) {
+	types.FillInput,
+) (*types.FillPlan, error) {
 	return s.plan, s.err
 }
 
-func baseFillPlan() *strategytypes.FillPlan {
-	return &strategytypes.FillPlan{
+func baseFillPlan() *types.FillPlan {
+	return &types.FillPlan{
 		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
 		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []strategytypes.FillLeg{{
+		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 		}},
 	}
 }
 
-func discountFillPlan(h common.Hash) *strategytypes.FillPlan {
-	return &strategytypes.FillPlan{
+func discountFillPlan(h common.Hash) *types.FillPlan {
+	return &types.FillPlan{
 		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
 		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []strategytypes.FillLeg{{
+		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 			MaxRate: big.NewInt(1), DiscountID: &h,
 		}},

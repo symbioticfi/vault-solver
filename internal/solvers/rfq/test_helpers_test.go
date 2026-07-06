@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -29,7 +29,7 @@ var (
 type fakeStrategyPricing struct {
 	decimals int
 	out      map[common.Address]*big.Int
-	queries  [][]strategytypes.QuoteCandidate
+	queries  [][]types.QuoteCandidate
 }
 
 func (f *fakeStrategyPricing) TokenDecimals(context.Context, common.Address) (int, error) {
@@ -39,13 +39,13 @@ func (f *fakeStrategyPricing) TokenDecimals(context.Context, common.Address) (in
 func (f *fakeStrategyPricing) AmountsOut(
 	_ context.Context,
 	_ common.Address,
-	candidates []strategytypes.QuoteCandidate,
+	candidates []types.QuoteCandidate,
 	_ *big.Int,
 ) (map[common.Address]*big.Int, error) {
 	f.queries = append(f.queries, candidates)
 	return f.out, nil
 }
 
-func newDefaultTestStrategy(decimals int, out map[common.Address]*big.Int) strategytypes.Strategy {
+func newDefaultTestStrategy(decimals int, out map[common.Address]*big.Int) types.Strategy {
 	return defaultstrategy.New(&fakeStrategyPricing{decimals: decimals, out: out})
 }

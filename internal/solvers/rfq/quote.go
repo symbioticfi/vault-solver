@@ -8,8 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
 // quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
@@ -23,7 +22,7 @@ type quoteService struct {
 	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
 	tokensToQuote      string
 	permissionedTokens map[common.Address]bool
-	strategy           strategytypes.Strategy
+	strategy           types.Strategy
 	log                logr.Logger
 	now                func() time.Time
 }
@@ -56,7 +55,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	if err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
-	if out.Decision == strategytypes.DecisionDecline {
+	if out.Decision == types.DecisionDecline {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
 	}
