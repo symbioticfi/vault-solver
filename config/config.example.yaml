@@ -14,6 +14,9 @@ chain:
   # rpcFallbackUrls:                    # optional HTTP(S) fallbacks, tried in order when rpcUrl is down
   #   - ${ETH_RPC_URL_BACKUP}
   #   - https://rpc.backup.example
+  # writeRpcUrl: ${WRITE_RPC_URL}       # optional; used ONLY to broadcast transactions (sends), while
+  #                                     # every read (nonce, gas, receipts) stays on rpcUrl. Point at a
+  #                                     # private/MEV-protected relay to submit txns privately.
   # wsUrl: wss://sepolia.example.org    # optional; enables live log subscriptions (latency only)
 
 signer:

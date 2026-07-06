@@ -127,6 +127,52 @@ solvers:
 	}
 }
 
+func TestLoad_ExpandsWriteRpcUrl(t *testing.T) {
+	t.Setenv("WRITE_RPC_URL", "https://write.from.env")
+	body := `
+chain:
+  rpcUrl: https://read.example
+  writeRpcUrl: ${WRITE_RPC_URL}
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: x
+    config: {}
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Chain.WriteRPCURL != "https://write.from.env" {
+		t.Fatalf("writeRpcUrl not expanded from env: %q", cfg.Chain.WriteRPCURL)
+	}
+	// The read RPC is untouched — writeRpcUrl only affects broadcasts.
+	if cfg.Chain.RPCURL != "https://read.example" {
+		t.Fatalf("rpcUrl changed unexpectedly: %q", cfg.Chain.RPCURL)
+	}
+}
+
+func TestLoad_WriteRpcUrlOptional(t *testing.T) {
+	body := `
+chain:
+  rpcUrl: https://read.example
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: x
+    config: {}
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Chain.WriteRPCURL != "" {
+		t.Fatalf("writeRpcUrl should default to empty, got %q", cfg.Chain.WriteRPCURL)
+	}
+}
+
 func TestLoad_ExpandsEnvInSolverConfigBlock(t *testing.T) {
 	// Expansion runs on the raw bytes before decode, so it reaches the opaque solver.config block
 	// (the deferred two-stage decode) too — not just the framework-level fields.

@@ -40,7 +40,13 @@ type ChainConfig struct {
 	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
 	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
 	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
-	ChainID         uint64   `yaml:"chainId"`
+	// WriteRPCURL, when set, is used ONLY to broadcast signed transactions (eth_sendRawTransaction).
+	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl`. Point this at a
+	// private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while reading from a
+	// normal RPC. Optional; empty means broadcasts also use `rpcUrl`. Expand from the environment
+	// with ${WRITE_RPC_URL}.
+	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
+	ChainID     uint64 `yaml:"chainId"`
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
 	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the

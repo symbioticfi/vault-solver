@@ -6,9 +6,11 @@
 # ${VAR} fields are expanded from the environment at load time.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL_MAINNET} # primary; expanded from env; do not commit a real URL
-  rpcFallbackUrls: # optional HTTP(S) fallbacks tried in order when rpcUrl is down
-    - https://rpc.mevblocker.io/fullprivacy
+  rpcUrl: ${ETH_RPC_URL_MAINNET} # primary READ RPC; expanded from env; do not commit a real URL
+  # writeRpcUrl carries ONLY transaction broadcasts (eth_sendRawTransaction); nonce, gas, receipts
+  # and every other read stay on rpcUrl. Point it at a private/MEV-protected relay to submit fills
+  # privately. Optional — omit to broadcast through rpcUrl.
+  writeRpcUrl: ${WRITE_RPC_URL} # e.g. https://rpc.mevblocker.io/fullprivacy
   chainId: 1
 
 signer:
