@@ -6,23 +6,24 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 // offerTTL is how long a signed offer stays valid.
 const offerTTL = 30 * time.Minute
 
-// buildSignedOffer prices and signs an offer for `request` at `principal` and `rateBps`, with `maker`
-// (the adapter) as the on-chain maker. The caller has already confirmed the rate clears the adapter's
-// return floor (see offerAuction); the contract enforces it again at consume time.
+// buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
+// only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, request, maker common.Address, principal *big.Int, rateBps float64,
+	av auctionView, offer types.OfferExecution,
 ) (threef.CreateOfferDto, error) {
 	auction := av.dto
-	expectedReturn := offerExpectedReturn(principal, rateBps)
+	if offer.Principal == nil || offer.ExpectedReturn == nil {
+		return threef.CreateOfferDto{}, errors.Errorf("auction %v: strategy offer is missing amounts", auction.Id)
+	}
 
 	domain, ok := auction.GetEip712DomainOk()
 	if !ok || domain == nil {
@@ -47,15 +48,15 @@ func (s *Solver) buildSignedOffer(
 	nonce := new(big.Int).SetUint64(s.nextNonce())
 	expiration := big.NewInt(time.Now().Add(offerTTL).Unix())
 
-	offer := Offer{
-		Maker:          maker,
-		Amount:         principal,
-		ExpectedReturn: expectedReturn,
+	signedOffer := Offer{
+		Maker:          offer.Maker,
+		Amount:         offer.Principal,
+		ExpectedReturn: offer.ExpectedReturn,
 		Nonce:          nonce,
 		Expiration:     expiration,
 		UseCallback:    true,
 	}
-	digest := OfferDigest(offer, *domainName, domainVersion, chainID, request)
+	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
 	sig, err := s.deps.Signer.SignHash(digest)
 	if err != nil {
 		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)
@@ -63,9 +64,9 @@ func (s *Solver) buildSignedOffer(
 
 	dto := threef.NewCreateOfferDto(
 		auction.Id,
-		lowerAddr(maker), // API rejects checksummed addresses (confirmed live)
-		principal.String(),
-		expectedReturn.String(),
+		lowerAddr(offer.Maker), // API rejects checksummed addresses (confirmed live)
+		offer.Principal.String(),
+		offer.ExpectedReturn.String(),
 		nonce.String(),
 		expiration.String(),
 		true, // useCallback

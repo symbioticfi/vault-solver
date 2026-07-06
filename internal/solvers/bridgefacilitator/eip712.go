@@ -81,29 +81,6 @@ func boolWord(v bool) []byte {
 	return w
 }
 
-// offerExpectedReturn derives the absolute expected return for `principal` at `rateBps` basis
-// points. Confirmed against the live 3F API: maxRate is "in basis points ... with
-// tenths-of-a-basis-point precision" (the value may carry one decimal, e.g. 694.7), so the
-// denominator is 10_000. We truncate (round down) expectedReturn, which keeps us at or below the
-// auction's max rate.
-func offerExpectedReturn(principal *big.Int, rateBps float64) *big.Int {
-	// expectedReturn = principal * rateBps / RateDenominatorBps
-	num := new(big.Float).Mul(new(big.Float).SetInt(principal), big.NewFloat(rateBps))
-	num.Quo(num, big.NewFloat(RateDenominatorBps))
-	out, _ := num.Int(nil)
-	return out
-}
-
-// bpsToFloat converts an on-chain bps value to float64 for comparison against the auction's float
-// maxRate. An absurdly large floor yields +Inf, which fail-closes (no rate clears it → no bid).
-func bpsToFloat(n *big.Int) float64 {
-	f, _ := new(big.Float).SetInt(n).Float64()
-	return f
-}
-
-// RateDenominatorBps converts a basis-point rate to a fraction (10_000 = 100%).
-const RateDenominatorBps = 10_000.0
-
 // grunt-api EIP-712 domain (no verifyingContract). chainId is per-flow: the (test-only) API-key
 // generation domain uses 1; the GetOffers listing domain uses the bot's operating chain.
 const (

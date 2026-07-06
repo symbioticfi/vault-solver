@@ -14,19 +14,6 @@ type auctionView struct {
 	dto threef.AuctionDto
 }
 
-// matchesAsset reports whether the auction's deposit asset (the stablecoin lent in the auction)
-// equals `want` — the funding vault's collateral. This is the link between a 3F auction and a
-// Symbiotic vault/adapter: the auction's `vault` is the 3F position manager, not the Symbiotic
-// vault, so assets (not vault addresses) are what pair them. The adapter also enforces this on-chain
-// (AssetMismatch), so this is the off-chain pre-filter.
-func (a auctionView) matchesAsset(want common.Address) bool {
-	addr := a.depositAsset()
-	if !common.IsHexAddress(addr) {
-		return false
-	}
-	return common.HexToAddress(addr) == want
-}
-
 // depositAsset returns the auction's deposit-asset address string for logging ("" if absent).
 func (a auctionView) depositAsset() string {
 	da, ok := a.dto.GetDepositAssetOk()

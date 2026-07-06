@@ -1,7 +1,7 @@
 // Package bridgefacilitator implements the 3F (Grunt) Bridge Facilitator solver: it discovers
-// bridge-loan auctions via the 3F API, prices and signs offers sized to vault liquidity and the
-// adapter's on-chain policy, and realizes repaid loans back into the vault. It self-registers with
-// the solver framework via init().
+// bridge-loan auctions via the 3F API, snapshots adapter state for a trusted strategy, signs the
+// returned offers, and realizes repaid loans back into the vault. It self-registers with the solver
+// framework via init().
 package bridgefacilitator
 
 import (
@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 // offerStatusIgnored are 3F offer statuses that are not live coverage when rebuilding the cache: a
@@ -34,12 +35,13 @@ func init() {
 	solver.Register(Name, factory)
 }
 
-// Solver is the 3F Bridge Facilitator strategy.
+// Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
 	cfg        *Config
 	deps       solver.Deps
 	api        *apiClient
 	reader     *reader
+	strategy   types.Strategy
 	log        logr.Logger
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
 	nonceSeq   atomic.Uint64
@@ -53,12 +55,17 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout, deps.Log.WithName(Name))
+	offerStrategy, err := newStrategy(cfg.Strategy)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &Solver{
 		cfg:        cfg,
 		deps:       deps,
 		api:        api,
 		reader:     newReader(deps.Chain),
+		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),
 		offers:     newOfferTracker(),
@@ -150,17 +157,14 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 	s.log.Info("loaded existing offers into dedup cache", "live", live)
 }
 
-// adapterOffering tracks one adapter's liquidity/exposure across an offer pass; committed and opened
-// accumulate as bids land so later auctions see the reduced capacity (no over-commit, no re-read).
+// adapterOffering tracks one adapter's liquidity/exposure snapshot for one offer pass.
 type adapterOffering struct {
-	target    Target
-	st        exposureState
-	committed *big.Int
-	opened    int
+	target Target
+	st     exposureState
 }
 
-// discoverAndOffer lists open auctions and, for each, offers on behalf of the single best-fit adapter
-// (the one that can fund the most). It reads every active adapter's liquidity/exposure once per pass.
+// discoverAndOffer lists open auctions, snapshots adapter liquidity/exposure once, delegates offer
+// selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
 	auctions, err := s.api.listAuctions(ctx)
 	if err != nil {
@@ -180,7 +184,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
 			"minYieldBps", st.minYieldBps.String())
-		offerings = append(offerings, &adapterOffering{target: t, st: st, committed: new(big.Int)})
+		offerings = append(offerings, &adapterOffering{target: t, st: st})
 	}
 	if len(offerings) == 0 {
 		return // every adapter's liquidity read failed this pass
@@ -188,89 +192,37 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 
 	now := time.Now()
 	s.offers.pruneExpired(now) // keep the dedup map bounded
-	for i := range auctions {
-		s.offerAuction(ctx, auctionView{auctions[i]}, offerings, now)
-	}
-}
-
-// offerAuction covers one auction's full requested amount in a single pass: it sizes every eligible
-// adapter to its capacity, then selectOffers ranks them (largest first) and assigns each the principal
-// to offer until the still-uncovered amount is filled. Coverage already held counts, so a fully-covered
-// auction is skipped. One adapter per offer; no aggregation within an offer. Any amount left uncovered
-// (not enough capacity, or a build/submit failure) is retried on a later pass.
-func (s *Solver) offerAuction(ctx context.Context, av auctionView, offerings []*adapterOffering, now time.Time) {
-	auctionID := int64(av.dto.Id)
-	if !av.isOpen() {
-		s.log.V(1).Info("skip auction: status not open/solvable", "auctionId", auctionID, "status", av.dto.Status)
+	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	if len(input.Candidates) == 0 {
 		return
 	}
-	request := av.requestAddr()
-	if request == (common.Address{}) {
-		s.log.V(1).Info("skip auction: missing/invalid requestId", "auctionId", auctionID, "requestId", av.dto.RequestId)
+	out, err := s.strategy.DecideOffers(ctx, input)
+	if err != nil {
+		s.log.Error(err, "offer: strategy")
 		return
 	}
-	amountRequested := av.amountRequested()
-	if amountRequested == nil || amountRequested.Sign() <= 0 {
-		s.log.V(1).Info("skip auction: missing/invalid amountRequested", "auctionId", auctionID)
-		return
-	}
-	rateBps, rateOk := av.maxRateBps()
-	if !rateOk {
-		s.log.V(1).Info("skip auction: maxRate unresolved", "auctionId", auctionID)
-		return
-	}
-
-	// Remaining = requested minus what our live offers (this pass and prior passes) already cover.
-	remaining := new(big.Int).Sub(amountRequested, s.offers.liveCoverage(auctionID, now))
-	if remaining.Sign() <= 0 {
-		s.log.V(1).Info("skip auction: already fully covered by live offers", "auctionId", auctionID)
-		return
-	}
-
-	// Size every eligible adapter to its capacity (collateral match, no live offer of ours, rate clears
-	// its return floor). selectOffers ranks these and clamps each to the uncovered remainder.
-	candidates := make([]adapterSizing, 0, len(offerings))
-	for _, off := range offerings {
-		if !av.matchesAsset(off.target.Collateral) || s.offers.hasLive(off.target.Adapter, auctionID, now) {
-			continue
-		}
-		if off.st.minYieldBps.Sign() > 0 && rateBps < bpsToFloat(off.st.minYieldBps) {
-			s.log.V(1).Info("skip adapter: rate below its on-chain return floor", "auctionId", auctionID,
-				"adapter", off.target.Adapter.Hex(), "maxRateBps", rateBps, "minYieldBps", off.st.minYieldBps.String())
-			continue
-		}
-		capacity, ok := sizeOffer(sizeInputs{
-			fundable:      new(big.Int).Sub(off.st.fundable, off.committed),
-			maxAssets:     off.st.maxAssets,
-			minAssets:     off.st.minAssets,
-			openCount:     off.st.openCount + off.opened,
-			maxConcurrent: maxRequests,
-		})
+	auctionByID := auctionViewsByID(auctions)
+	for _, offer := range out.Offers {
+		av, ok := auctionByID[offer.AuctionID]
 		if !ok {
+			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
 			continue
 		}
-		candidates = append(candidates, adapterSizing{off: off, capacity: capacity})
-	}
-
-	for _, sel := range selectOffers(candidates, remaining) {
-		adapter := sel.off.target.Adapter
-		dto, buildErr := s.buildSignedOffer(av, request, adapter, sel.principal, rateBps)
+		dto, buildErr := s.buildSignedOffer(av, offer)
 		if buildErr != nil {
-			s.log.Error(buildErr, "offer: build", "auctionId", auctionID, "adapter", adapter.Hex())
+			s.log.Error(buildErr, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
-			s.log.Error(subErr, "offer: submit", "auctionId", auctionID, "adapter", adapter.Hex())
+			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
 
-		sel.off.committed.Add(sel.off.committed, sel.principal)
-		sel.off.opened++
 		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
-			s.offers.record(adapter, auctionID, exp, sel.principal)
+			s.offers.record(offer.Maker, offer.AuctionID, exp, offer.Principal)
 		}
-		s.log.Info("offer submitted", "auctionId", auctionID, "adapter", adapter.Hex(),
-			"request", request.Hex(), "principal", sel.principal.String(), "expectedReturn", dto.ExpectedReturn)
+		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
+			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
 }
 
