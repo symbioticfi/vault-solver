@@ -240,7 +240,7 @@ code 2026-07-06 — see §2.1 for the extraction evidence.)
 | 4 | `EXACT_OUTPUT` | Hard-rejected at validation | Shared `QuoteInput` is exact-input-only: **v1 declines `EXACT_OUTPUT`** by default; optional additive contract extension + output-driven loop if flow warrants — §2.1, §5 |
 | 5 | Order ingestion | Polls own backend `GET /orders`, decodes the Symbiotic Reactor order from the backend payload | Polls Uniswap `GET /orders?filler=<executor>` (≤6 RPS); **net-new V2 Dutch order codec + Permit2 witness EIP-712 + cosignature recovery** (`order.go`, the riskiest unit — P2) — §3.3, §4.2 |
 | 6 | Pre-fill validation | Order-deadline + strategy↔order binding checks | Those **plus**: cosigner recovers to configured `cosigner`, `exclusiveFiller == our executor`, decay window still fillable, resolved output at current block ≥ quoted floor — §6 |
-| 7 | Settlement call | `Executor.fill(order, protocolSig, swaps[], discountSwaps[], executorData)` on our Reactor | `UniswapXExecutor.execute(SignedOrder, callbackData)` → Uniswap reactor `executeWithCallback` → `reactorCallback` runs the adapter swaps; callbackData built from the cached `strategyRecord.Legs` (map 1:1 onto `Swap{recipient,tokenIn,amountIn,amountOut}`); **native-ETH outputs unwrap WETH and forward ETH** — §7 |
+| 7 | Settlement call | `Executor.fill(order, protocolSig, swaps[], discountSwaps[], executorData)` on our Reactor | `UniswapXExecutor.execute(SignedOrder, callbackData)` → Uniswap reactor `executeWithCallback` → `reactorCallback` runs the adapter swaps; callbackData built from the cached fill plan (`FillPlan.Legs` returned by `BuildFillPlan`, §2.1) (map 1:1 onto `Swap{recipient,tokenIn,amountIn,amountOut}`); **native-ETH outputs unwrap WETH and forward ETH** — §7 |
 | 8 | Failure economics | Failed fill ⇒ order re-armed next poll; no external penalty | **Fade penalty regime**: fail-closed gates before gas, local breaker, honor `blockUntilTimestamp`, quote only what inventory certainly fills — §6 |
 | 9 | Not ported at all | Discount legs, backend `/discounts`, `solverMode` internal/external split | None of it — direct legs only; scoping is just the configured `adapters` list |
 
@@ -692,7 +692,7 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 
 ### Internal (this monorepo)
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
-- Strategy architecture (solver-local `strategytypes`/`strategyregistry`/`strategies`, shared
+- Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
   `internal/liquidlanemath` + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - On-chain adapters/executor live in the sibling `rfq` repo (consumed via `api/bindings/`)

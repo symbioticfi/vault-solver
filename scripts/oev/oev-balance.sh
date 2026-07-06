@@ -28,7 +28,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST="${OEV_MANIFEST:-$(dirname "$0")/addresses.sepolia.json}"
-CONFIG="${OEV_CONFIG:-$ROOT/config/redstone-oev.sepolia.example.yaml}"
+CONFIG="${OEV_CONFIG:-$ROOT/config/redstone-oev.example.yaml}"
 HARNESS="${OEV_HARNESS:-/tmp/symbiotic/symbiotic}"
 RPC="${ETH_RPC_URL_SEPOLIA:-${OEV_LIVE_RPC:-${RPC:-}}}"
 

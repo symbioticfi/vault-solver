@@ -181,19 +181,35 @@ Commit titles follow [Conventional Commits](https://www.conventionalcommits.org)
 - Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
 - Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
 
-## Keep the plan in sync — required
+## Keep the docs in sync — required
 
-The per-solver plans under `docs/` (e.g. `docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) are the source of truth
-for the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
+Two audiences, two docs, kept current **in the same change** as the code:
+
+**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md`) are the source of truth
+for **internal architecture, design decisions, and the live TODO list** — write for a future
+maintainer.
 
 - **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
   a changed data flow, a new/removed integration, an interface or external-contract change, a
   deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
 - **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
   TODO list (§10 of the relevant solver plan)** so it always reflects reality.
-- A code change that alters architecture/design but leaves the plan stale is **incomplete**. If a
-  change is purely local (a bug fix, a refactor with no design impact), no plan update is needed —
-  use judgement, but err toward recording anything a future reader would be surprised to discover.
+- A code change that alters architecture/design but leaves a plan stale is **incomplete**.
+
+**README** (`README.md`) is the **external, user-facing** entry point — write for an operator or
+integrator running the bot, not a maintainer of it. Keep internal design out of it; keep runtime and
+integration surface in it.
+
+- **Whenever you change something a user observes or configures** — a new or renamed CLI flag or
+  subcommand, a config knob or its default, a new/removed solver or a change to what a solver does, a
+  new strategy or integration surface, quickstart/build/run steps, or requirements — **update the
+  README in the same change.**
+- A user-facing change (flag, config field, solver capability) that lands without a README update is
+  **incomplete**.
+
+If a change is purely internal (a bug fix or refactor with no design impact and nothing a user
+observes), neither doc needs an update — use judgement, but err toward recording anything a future
+reader or operator would be surprised to discover.
 
 ## Quick reference
 
@@ -201,6 +217,6 @@ for the high-level architecture, design decisions, and the live TODO list. They 
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the plan current: architecture/design or TODO changes must update `docs/*-PLAN.md`
-  in the same change.
+- Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
+  user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

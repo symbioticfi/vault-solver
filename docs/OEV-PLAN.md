@@ -582,7 +582,7 @@ submits the actual `Executor.execute`.
 
 All addresses / URLs / caps come from the YAML `solvers[].config` (CLAUDE.md: config is king). Secrets are
 referenced by env-var name and read at point of use. The full annotated profile is
-[`../config/redstone-oev.sepolia.example.yaml`](../config/redstone-oev.sepolia.example.yaml).
+[`../config/redstone-oev.example.yaml`](../config/redstone-oev.example.yaml).
 
 | Field | Meaning |
 |---|---|

@@ -77,8 +77,13 @@ vault-solver/
 │   ├── txmanager/                 # SHARED nonce-serialized tx sender  ← shared infra
 │   ├── solver/                    # generic Solver interface + registry + engine (solver-agnostic)
 │   ├── solvers/bridgefacilitator/ # ALL 3F-specific logic, encapsulated
-│   │   ├── solver.go  config.go  apiclient.go  auctionview.go  sizer.go
-│   │   ├── offer.go   eip712.go  chainreader.go  redeemer.go
+│   │   ├── solver.go  config.go  apiclient.go  auctionview.go  offercache.go
+│   │   ├── offer.go   eip712.go  chainreader.go  redeemer.go  strategy.go
+│   │   ├── strategies/            # pluggable decision layer:
+│   │   │   ├── registry.go        #   package strategies — registry/factory
+│   │   │   ├── types/             #   OfferInput/OfferOutput + Strategy interface
+│   │   │   ├── default/           #   in-process default strategy (owns sizing/selection)
+│   │   │   └── webhook/           #   external-decider adapter
 │   ├── observability/             # logr+zap setup, prometheus, /healthz /readyz
 │   └── version/
 ├── api/
@@ -88,7 +93,7 @@ vault-solver/
 │   │   └── vaultv2/               # shared Symbiotic core, reused by every integration
 │   └── threef/                    # openapi-generator (Java) output (committed)
 ├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
-├── config/{config.example.yaml,3f.sepolia.example.yaml}
+├── config/{3f,rfq,redstone-oev}.example.yaml   # one annotated example per solver
 ├── deploy/{Dockerfile,docker-compose.yml}
 ├── .github/workflows/ci.yml
 ├── .golangci.yml  Makefile  go.mod  README.md  .gitignore
@@ -189,7 +194,9 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    eligibility, or rank anything. It provides raw adapter caps and auction facts; the strategy owns
    every decision (sizing, collateral/live-offer/min-yield eligibility, ordering, and cross-auction
    budget accounting) built from those facts.
-3. **Strategy decision** — the selected strategy receives:
+3. **Strategy decision** — the strategy interface is `DecideOffers(ctx, OfferInput) (OfferOutput, error)`,
+   where `OfferOutput` wraps the returned `[]OfferExecution` (`type OfferOutput struct { Offers []OfferExecution }`).
+   The selected strategy receives:
 
    ```go
    type OfferInput struct {
@@ -227,6 +234,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        Maker          address
        Principal      uint256
        ExpectedReturn uint256
+       Reason         string  // optional, strategy-supplied context
    }
    ```
 
@@ -270,7 +278,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — signed-payload API client, sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
+3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
    implemented across the `bridgefacilitator` package:
@@ -321,5 +329,5 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
 **Testing:**
-- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, sizer caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
+- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
 - **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.

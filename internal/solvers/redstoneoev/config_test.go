@@ -21,7 +21,7 @@ type exampleConfigFile struct {
 // TestExampleConfigParses loads the committed Sepolia profile and runs its solver block through
 // parseConfig, so the example can't drift out of sync with the parser/validation.
 func TestExampleConfigParses(t *testing.T) {
-	data, err := os.ReadFile("../../../config/redstone-oev.sepolia.example.yaml")
+	data, err := os.ReadFile("../../../config/redstone-oev.example.yaml")
 	if err != nil {
 		t.Fatalf("read example config: %v", err)
 	}

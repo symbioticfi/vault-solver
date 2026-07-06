@@ -44,7 +44,7 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cfgPath := getenvDefault("OEV_CONFIG", "../../../config/redstone-oev.sepolia.example.yaml")
+	cfgPath := getenvDefault("OEV_CONFIG", "../../../config/redstone-oev.example.yaml")
 	cfg, err := appconfig.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)

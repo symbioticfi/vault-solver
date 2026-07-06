@@ -1,0 +1,62 @@
+# vault-solver — 3F Bridge Facilitator (`3f-bridge-facilitator`), annotated example.
+#
+# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic BridgeFacilitatorAdapters,
+# funds the loans it wins, and permissionlessly redeems repaid loans back to the vault. Addresses below
+# are the 3F Sepolia dev deployment (the only 3F environment today).
+#
+# Secrets are referenced by env-var NAME and read at point of use; ${VAR} fields are expanded from the
+# environment at load time. Never commit a real key or production endpoint.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_SEPOLIA}   # primary EVM RPC endpoint (expanded from env, or a literal URL)
+  chainId: 11155111                # must match the RPC's chain id (asserted at startup)
+  # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
+  #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
+  # writeRpcUrl: ${WRITE_RPC_URL}  # optional; broadcasts transactions here while every read stays on
+  #                                # rpcUrl. Point at a private/MEV-protected relay to submit privately.
+  # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
+  # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
+
+signer:
+  # The bot's EOA both sends transactions (via txManager) and signs the 3F API key + EIP-712 offers
+  # (authorized on-chain by each adapter's EIP-1271 check). Provide exactly one key source, by env-var
+  # NAME — the key never enters the parsed config.
+  keyEnv: SOLVER_PRIVATE_KEY       # env var holding a hex private key
+  # keystorePath: ./keystore/bot.json    # ...or a go-ethereum keystore file
+  # passphraseEnv: SOLVER_KEYSTORE_PASS  # (required with keystorePath)
+
+txManager:
+  confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
+  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
+  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+
+observability:
+  addr: ":9090"                    # bind address for /metrics, /healthz, /readyz
+  debug: false                     # debug-level logging; the --debug CLI flag overrides this
+  # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+
+solvers:
+  - name: 3f-bridge-facilitator    # registry key selecting the implementation
+    config:                        # opaque to the framework; typed by the 3F solver
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL
+      # apiKeyEnv: SOLVER_3F_API_KEY   # optional pre-generated API key (env var NAME). If unset, the
+      #                                # bot generates one at startup (EIP-712) and re-auths on 401/403.
+      # httpTimeout: 30s               # per-call timeout for 3F API requests (default 30s)
+      redeemBatchSize: 10              # max matured Requests redeemed per redeem() call (gas bound; default 10)
+
+      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md
+        name: default                  #   "default" (in-process sizing/selection) | "webhook" (external decider)
+        config: {}                     #   opaque to the framework; parsed by the named strategy
+
+      # Adapters this facilitator serves. Each must be registered with 3F as a facilitator by its vault
+      # creator, with this solver's signer set as the adapter's EIP-1271 signer. Vault + collateral are
+      # resolved from each adapter on-chain at startup (adapter.vault() + vault.asset()). Per-request
+      # caps (min yield / min & max assets per request), funding headroom (getMaxAssets), and
+      # concurrency (MAX_REQUESTS) live on the adapter and are read on-chain — never configured here.
+      adapters:
+        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed BridgeFacilitatorAdapter
+
+      intervals:
+        discover: 1h                   # how often to poll for open auctions and (re)offer coverage
+        redeemPoll: 5m                 # how often to check for matured loans to redeem
+        reconcile: 15m                 # how often to log each adapter's live open-position set (health tick)
