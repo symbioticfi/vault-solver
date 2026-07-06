@@ -5,8 +5,8 @@ solver-local: the generic solver framework does not parse, validate, or route st
 
 Stage scope:
 
-- implemented: RFQ strategy layer with `default` and `webhook`
-- documented only: 3F and RedStone future strategy boundaries
+- implemented: RFQ and 3F strategy layers with `default` and `webhook`
+- documented only: RedStone future strategy boundary
 
 ## Common Code
 
@@ -218,7 +218,17 @@ Default strategy validation/replay:
 - default strategy rebuilds execution records from input candidates, not from strategy-supplied adapter data.
 - webhook strategy treats the remote decider as trusted and only rejects structurally unusable plans.
 
-## 3F Future Boundary
+## 3F Strategy Boundary
+
+Package layout:
+
+```text
+internal/solvers/bridgefacilitator/
+  strategytypes/          # 3F strategy input/output and interface
+  strategyregistry/       # 3F-local strategy registry/factory
+  strategies/default/     # local default strategy
+  strategies/webhook/     # 3F webhook adapter
+```
 
 Decision:
 
@@ -226,8 +236,9 @@ Decision:
 DecideOffers(ctx, input) -> output
 ```
 
-The solver should call this once per discover tick after API reads, on-chain adapter reads, live-offer
-cache pruning, and hard filtering.
+The solver calls this once per discover tick after API reads, on-chain adapter reads, and live-offer
+cache pruning. The solver builds a compact snapshot and delegates offer selection, validation, sizing,
+and pricing to the trusted strategy.
 
 Input:
 
@@ -240,80 +251,81 @@ type OfferInput struct {
 }
 
 type AdapterSnapshot struct {
-    ID                   string
-    Adapter              address
-    Vault                address
-    Collateral           address
-    Fundable             uint256
-    OutstandingPrincipal uint256
-    OpenCount            uint64
-    PerRequestMax        uint256
-    TotalMax             uint256
-    MinYieldBps          uint256
-    MaxConcurrent        uint64
+    ID            string
+    Adapter       address
+    Vault         address
+    Collateral    address
+    Fundable      uint256 // getMaxAssets()
+    OpenCount     uint64  // requestsLength()
+    MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
+    MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
+    MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
+    MaxConcurrent uint64  // MAX_REQUESTS
 }
 
 type AuctionSnapshot struct {
     ID              string
+    AuctionID       int64
     OriginalIndex   int
-    Request         uint64
+    Request         address
     Status          string
     DepositAsset    address
     AmountRequested uint256
     RemainingAmount uint256
-    MaxRateBps      uint256
+    MaxRateBps      float64
 }
 
 type OfferCandidate struct {
     ID        string // adapterID + ":" + auctionID
     AdapterID string
-    AuctionID string
+    AuctionID int64
     Capacity  uint256
+    HasLiveOffer bool
 }
 ```
 
-`OfferCandidate` is only the join between one adapter snapshot and one auction snapshot that passed
-hard filtering. It intentionally does not duplicate `AmountRequested`, `RemainingAmount`, `MaxRateBps`,
-`MinYieldBps`, fundable liquidity, or caps; those live in `Adapters` and `Auctions`. This avoids drift
-inside one input snapshot.
+`OfferCandidate` is the join between one adapter snapshot and one auction snapshot. It intentionally
+does not duplicate `AmountRequested`, `RemainingAmount`, `MaxRateBps`, `MinYieldBps`, fundable
+liquidity, or caps; those live in `Adapters` and `Auctions`. This avoids drift inside one input
+snapshot.
 
-`Capacity` is the maximum principal the solver can safely offer for that adapter-auction pair at this
-snapshot, before strategic allocation across multiple candidates. It is computed from hard constraints,
-roughly:
+`Capacity` is the solver's objective per-offer capacity snapshot for that adapter at this point in
+time, before strategic allocation across multiple candidates. It is computed roughly as:
 
 ```text
 min(adapter.Fundable,
-    adapter.PerRequestMax,
-    adapter.TotalMax - adapter.OutstandingPrincipal,
-    auction.RemainingAmount)
+    adapter.MaxAssets)
 ```
 
-No candidate is produced when hard constraints already fail, for example incompatible collateral,
-invalid auction status, existing live offer from this solver for the same adapter-auction pair,
-non-positive capacity, exhausted concurrency, or below-min-yield when configured as a hard policy.
+If sizing cannot produce a usable capacity, `Capacity` is zero and the strategy decides what to do with
+it. `HasLiveOffer` lets the strategy own duplicate-offer policy while the solver still supplies the
+live cache snapshot.
 
 Output:
 
 ```go
 type OfferOutput struct {
-    Offers []OfferDecision
-    Reason string?
+    Offers []OfferExecution
 }
 
-type OfferDecision struct {
-    CandidateID    string
+type OfferExecution struct {
+    AuctionID      int64
+    Request        address
+    Maker          address
     Principal      uint256
     ExpectedReturn uint256
     Reason         string?
 }
 ```
 
-3F solver owns hard filtering and replay: auction status, collateral match, live adapter-auction
-offers, positive per-candidate capacity, cumulative fundable liquidity, per-request cap, total cap,
-remaining auction amount, open count, max concurrent loans, signing, submission, and offer cache
-updates. The strategy owns ordering, offer sizing, yield/return preference, and skip reasons. Replay
-must still verify cumulative limits because several candidates for the same adapter can each have
-`Capacity == adapter.Fundable`, while only the combined selected principal must fit.
+3F strategy owns collateral matching, live-offer dedup policy, positive/cumulative capacity checks,
+per-request max/min assets, remaining auction amount, open count, max concurrent requests,
+yield/return preference, ordering, offer sizing, expected return, and skip reasons. The default local
+strategy implements the current most-fundable behavior and validates those invariants internally.
+
+The 3F solver is an execution skeleton. It uses `AuctionID` to recover the raw auction EIP-712 domain,
+signs the trusted strategy's execution offer, calls `createOffer`, and records the live-offer cache
+after successful submission. Strategy output cannot set nonce or signature.
 
 ## RedStone Future Boundary
 

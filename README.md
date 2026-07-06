@@ -50,10 +50,11 @@ Acts as a Bridge Facilitator in 3F's bridge-loan auctions, on top of one or more
 
 - **Discover** open auctions via the 3F API.
 - **Per-auction coverage** — among the configured adapters whose collateral matches the auction, size
-  each against its on-chain liquidity + exposure caps (per-request / total-sleeve / max-concurrent) and,
-  in a single pass, offer through as many (most-fundable first) as needed to cover the auction's full
-  requested amount. One adapter per offer, no aggregation within an offer; coverage already held counts,
-  so a fully-covered auction is never re-offered and any uncovered remainder is retried next pass.
+  each against `getMaxAssets()`, per-request min/max limits, and `MAX_REQUESTS`, then pass the compact
+  candidate set to the configured strategy. The default strategy offers through as many adapters
+  (most-fundable first) as needed to cover the auction's full requested amount. One adapter per offer, no
+  aggregation within an offer; coverage already held counts, so a fully-covered auction is never
+  re-offered and any uncovered remainder is retried next pass.
 - **Sign & submit** the offer (EIP-712) as a **signed payload** — no API key. The adapter is the on-chain
   `maker`, and 3F authorizes offer create + list via the adapter's **EIP-1271 `isValidSignature`** (which
   trusts this solver's signer); listing sends a signed `Authorization` header.
@@ -66,7 +67,7 @@ with 3F **as a facilitator by its vault creator**, who sets this solver's signer
 signer. At startup the solver resolves each adapter's vault/collateral and verifies on-chain that it is the
 adapter's signer — dropping any it isn't, and shutting down if none match. The on-chain
 `BridgeFacilitatorAdapter` lives in the sibling `rfq` repo, consumed via `api/bindings/3f/`. Config block:
-`apiBaseUrl`, `adapters` (a whitelist; a dynamic "list public adapters" API replaces it later),
+`apiBaseUrl`, `strategy`, `adapters` (a whitelist; a dynamic "list public adapters" API replaces it later),
 `intervals` — see [`config/3f.sepolia.example.yaml`](config/3f.sepolia.example.yaml). Design, decisions,
 and the live TODO list: [`docs/3F-PLAN.md`](docs/3F-PLAN.md).
 
@@ -137,7 +138,7 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. A documented
-example lives at `config/config.example.yaml` (per-instance vault selection, exposure caps,
+example lives at `config/config.example.yaml` (per-instance vault selection, solver strategy,
 intervals). The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S)
 endpoints tried in order when the primary is unavailable. **Never commit a real key or live config**
 — keys are supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.

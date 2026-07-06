@@ -23,6 +23,9 @@ solvers:
   - name: 3f-bridge-facilitator
     config:
       apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      strategy:
+        name: default
+        config: {}
       # Adapters this solver maintains offers for. Each must be registered with 3F as a facilitator by
       # its vault creator, with this solver's signer set as the adapter's EIP-1271 signer. Vault +
       # collateral are resolved from each adapter at startup; exposure/return caps live on the adapter

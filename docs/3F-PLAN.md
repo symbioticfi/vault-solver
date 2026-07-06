@@ -35,8 +35,7 @@ repo root) §4 for the functional blueprint of the 3F solver.
 | License | _TBD — not yet added_ |
 | Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
 | API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
-| 3F auth | **Signed payloads — no API key, no offer-address.** Offer create + list authenticate via the EIP-712 offer signature, which 3F verifies through the adapter's **EIP-1271 `isValidSignature`** (the adapter trusts this solver's signer). Auction listing is public. Replaces the old self-generated `x-api-key` + per-facilitator offer-address registration. |
-| Adapter scope | One solver serves a **set of adapters** (config whitelist now; a dynamic "list public 3F adapters" API later). Per auction it covers the **full requested amount** with one or more single-adapter offers (most-fundable first), stopping once covered — **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
+| Adapter scope | One solver serves a **set of adapters** (config whitelist now; a dynamic "list public 3F adapters" API later). Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
 | Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
@@ -154,6 +153,9 @@ solver:
   name: 3f-bridge-facilitator               # ← registry key: selects the impl
   config:                                    # ← opaque to framework; typed by the 3F package
     apiBaseUrl: https://bf.dev.gcp.3f.xyz
+    strategy:
+      name: default                          # default local strategy, or webhook
+      config: {}
     # The adapters this solver maintains offers for. Each must already be registered with 3F as a
     # facilitator by its vault creator, with this solver's signer set as the adapter's EIP-1271 signer.
     # A config whitelist for now; a dynamic "list public 3F adapters" API replaces it later.
@@ -173,33 +175,76 @@ adapter addresses. Funding headroom is the adapter's own `getMaxAssets()` (it fo
 per-adapter `limitOf`, the vault's `withdrawable`, and any pending sweep), so the bot reads no separate
 sleeve cap. Concurrency is the contract's `MAX_REQUESTS` constant (50), mirrored as a bot const.
 
-### Per-auction adapter coverage (the new multi-adapter core)
+### Per-auction adapter coverage and strategy split
 
 Each discover tick lists open auctions (public, unauthenticated), then for each auction covers its
 **full requested amount** with one or more single-adapter offers, in a single pass:
 
-1. **Candidates** — the configured adapters that are **eligible to bid**: collateral (`vault.asset()`)
-   matches the auction's `depositAsset`, no live offer of ours already covers them on this auction, and
-   the auction's `maxRate` clears the adapter's on-chain return floor (`minYieldPerRequest`). The floor is
-   a selection filter, not a late signing-time check — a floor-failing adapter never competes.
-2. **Capacity** — read each candidate's headroom/caps in one Multicall (`getMaxAssets`, the per-request
-   caps, and `requestsLength()` for the open-request count), then `sizeOffer()` it to its
-   **capacity** — the max principal it can fund (`maxAssetsPerRequest` → `getMaxAssets` → `MAX_REQUESTS`
-   concurrency; below `minAssetsPerRequest` it can't bid), independent of the ask. `selectOffers` re-checks
-   the per-request floor after clamping to the uncovered remainder.
-3. **Select offers** — `remaining = amountRequested − liveCoverage(auction)` (coverage already held from
-   this and prior passes, summed across adapters). If `remaining ≤ 0` the auction is already fully
-   covered → skip it (no duplicate offers). Otherwise `selectOffers` ranks the candidates by capacity
-   (largest first) and, in one shot, assigns each the principal it will offer — `min(capacity,
-   still-uncovered)` — until `remaining` is filled or candidates run out. Each adapter offers at most
-   once. **1 adapter per offer, no aggregation within an offer** — a single offer is never split across
-   adapters, but an auction's ask may be covered by several single-adapter offers; any uncovered
-   remainder (insufficient capacity, or a build/submit failure) is retried next pass. A future
-   min-amount exposure param would be enforced here.
-4. **Sign + submit** — each offer is built with `maker = chosen adapter`, the EIP-712 digest signed with
-   the solver signer, and `createOffer`d as a **signed payload** (3F authorizes via the adapter's
-   EIP-1271). Dedup is keyed by **(adapter, auction)** and offers carry their **principal**, so coverage
-   is tracked across adapters and passes.
+1. **Solver-owned snapshot** — the solver lists auctions, reads each configured adapter's
+   liquidity/exposure in Multicall, prunes its live-offer cache, and builds a compact strategy input.
+   The input contains adapter snapshots, auction snapshots, and candidates. It does not include raw
+   generated API DTOs or contract snapshots.
+2. **Candidates** — the solver builds adapter-auction joins from the normalized snapshots. Each
+   candidate carries the adapter ID, auction ID, solver-computed capacity, and whether this solver
+   already has a live offer for that adapter-auction pair. The solver does not decide which candidates
+   are economically valid; the strategy owns collateral, live-offer, min-yield, ordering, and sizing
+   decisions.
+3. **Strategy decision** — the selected strategy receives:
+
+   ```go
+   type OfferInput struct {
+       Now        time
+       Adapters   []AdapterSnapshot
+       Auctions   []AuctionSnapshot
+       Candidates []OfferCandidate
+   }
+
+   type AdapterSnapshot struct {
+       ID            string
+       Adapter       address
+       Vault         address
+       Collateral    address
+       Fundable      uint256 // getMaxAssets()
+       OpenCount     uint64  // requestsLength()
+       MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
+       MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
+       MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
+       MaxConcurrent uint64  // MAX_REQUESTS
+   }
+
+   type OfferCandidate struct {
+       ID        string // adapterID + ":" + auctionID
+       AdapterID string
+       AuctionID int64
+       Capacity  uint256
+       HasLiveOffer bool
+   }
+   ```
+
+   It returns ordered execution offers:
+
+   ```go
+   type OfferExecution struct {
+       AuctionID      int64
+       Request        address
+       Maker          address
+       Principal      uint256
+       ExpectedReturn uint256
+   }
+   ```
+
+   The default local strategy preserves the current behavior: process auctions in API order, filter
+   candidate eligibility (collateral match, no live offer, rate clears `minYieldPerRequest`), rank
+   candidates by available capacity (largest first), clamp each offer to the still-uncovered remainder,
+   and track local adapter commitments across the pass. `Candidate.Capacity` is the solver-owned
+   per-offer capacity snapshot from `sizeOffer(getMaxAssets, maxAssetsPerRequest,
+   minAssetsPerRequest, requestsLength/MAX_REQUESTS)`; `maxAssetsPerRequest` is an always-active ceiling
+   (`0` means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
+   integers are decimal strings and unknown response fields are rejected.
+4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
+   returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,
+   signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
+   after a successful submit. Strategy output cannot set nonce or signature.
 
 ---
 
@@ -228,7 +273,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
+3. **(done)** 3F solver (encapsulated) — signed-payload API client, sizer (`getMaxAssets` headroom + curator per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
    implemented across the `bridgefacilitator` package:
@@ -241,10 +286,9 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      (fail-closed; zero remaining → startup shutdown). **No redeem-only mode** — with ≥1 matching adapter
      the bot runs offers + redeems for the matched set; with none it shuts down.
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
-     more single-adapter offers (most-fundable first) in a single pass, gated on live coverage so a
-     fully-covered auction is never re-offered; uncovered remainder retries next pass. Offer dedup,
-     coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: `selectBestAdapter`, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
+     more single-adapter offers through the configured trusted strategy; uncovered remainder retries
+     next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
+   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 
@@ -271,7 +315,11 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **Dynamic adapter discovery.** The adapter set is a config whitelist; the dynamic "list public 3F adapters" API (§9) replaces it later, filtered to adapters our signer is the EIP-1271 signer for.
-- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and the adapter's on-chain `minYieldPerRequest` is the only floor today.
+- **Custom offer pricing/scoring.** The default local strategy bids at the auction's current `maxRate`
+  and sizes by `getMaxAssets` headroom plus adapter per-request limits. Operators that need spread,
+  risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local
+  custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
+  return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 

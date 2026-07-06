@@ -43,15 +43,18 @@ solvers:
       apiBaseUrl: https://bf.dev.gcp.3f.xyz
       # apiKeyEnv: SOLVER_3F_API_KEY        # optional: pre-generated key. If unset, the bot
                                             # generates one at startup (EIP-712) and re-auths on 401/403.
+      strategy:
+        name: default
+        config: {}
       redeemBatchSize: 10                   # max Requests redeemed per redeem() call (gas bound; default 10)
       # httpTimeout: 30s                     # per-call timeout for 3F API requests (default 30s)
       # Adapters this facilitator serves. Vault and collateral are derived from each adapter
       # on-chain at startup (adapter.vault() + vault.asset()), not configured here.
       adapters:
         - "0x0000000000000000000000000000000000000000"  # BridgeFacilitatorAdapter
-      # Exposure/return caps (perRequestMaxCollateral, totalMaxCollateral, minRequestYieldBps,
-      # maxConcurrentLoans) are NOT config: they live on the adapter (setExposureLimits) and the bot
-      # reads them on-chain each poll. The contract enforces them authoritatively at consume time.
+      # Per-request caps (minYieldPerRequest, minAssetsPerRequest, maxAssetsPerRequest) are NOT config:
+      # they live on the adapter (setLimitsPerRequest). Funding headroom is adapter.getMaxAssets(),
+      # and concurrency is the adapter's MAX_REQUESTS limit; the bot reads/pre-screens these on-chain.
       intervals:
         discover: 1h
         redeemPoll: 5m
