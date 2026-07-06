@@ -3,12 +3,15 @@ package chain
 import (
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 )
 
@@ -158,7 +161,7 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	defer srv.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
 	if err != nil {
 		t.Fatalf("Dial single http endpoint: %v", err)
 	}
@@ -187,12 +190,110 @@ func TestDial_FallbackServesChainID(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
 	if err != nil {
 		t.Fatalf("Dial via fallback: %v", err)
 	}
 	defer c.Close()
 	if got := c.ChainID().Uint64(); got != 31337 {
 		t.Fatalf("chainID = %d, want 31337 (served by fallback)", got)
+	}
+}
+
+// rpcRecorder is a JSON-RPC httptest server that records the methods it is asked and replies with a
+// canned result per method.
+func rpcRecorder(methods *[]string, result func(method string) string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		*methods = append(*methods, req.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result(req.Method) + `}`))
+	}))
+}
+
+// TestDial_WriteRPCRoutesOnlyBroadcasts confirms a separate writeRpcUrl carries ONLY the transaction
+// broadcast (eth_sendRawTransaction); chain id, block number, and every other read stay on the
+// primary endpoint. This is the mevblocker-style split: submit fills privately, read from a normal RPC.
+func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
+	var readMethods, writeMethods []string
+	read := rpcRecorder(&readMethods, func(m string) string {
+		if m == "eth_chainId" {
+			return `"0x7a69"` // 31337
+		}
+		return `"0x1"`
+	})
+	defer read.Close()
+	write := rpcRecorder(&writeMethods, func(string) string {
+		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
+	})
+	defer write.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	// A read hits the primary endpoint.
+	if _, err := c.BlockNumber(t.Context()); err != nil {
+		t.Fatalf("BlockNumber: %v", err)
+	}
+	// A broadcast hits the write endpoint only.
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   big.NewInt(31337),
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(1),
+		Gas:       21000,
+		Value:     big.NewInt(0),
+	})
+	if err := c.SendTransaction(t.Context(), tx); err != nil {
+		t.Fatalf("SendTransaction: %v", err)
+	}
+
+	if !slices.Contains(writeMethods, "eth_sendRawTransaction") {
+		t.Fatalf("write endpoint did not receive the broadcast, saw: %v", writeMethods)
+	}
+	if slices.Contains(writeMethods, "eth_chainId") || slices.Contains(writeMethods, "eth_blockNumber") {
+		t.Fatalf("reads leaked onto the write endpoint: %v", writeMethods)
+	}
+	if slices.Contains(readMethods, "eth_sendRawTransaction") {
+		t.Fatalf("broadcast leaked onto the read endpoint: %v", readMethods)
+	}
+	if !slices.Contains(readMethods, "eth_blockNumber") {
+		t.Fatalf("read endpoint did not receive the read, saw: %v", readMethods)
+	}
+}
+
+// TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts fall back to the
+// primary endpoint (unchanged behaviour).
+func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
+	var methods []string
+	srv := rpcRecorder(&methods, func(m string) string {
+		if m == "eth_chainId" {
+			return `"0x7a69"`
+		}
+		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
+	})
+	defer srv.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(31337), GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 21000, Value: big.NewInt(0)})
+	if err := c.SendTransaction(t.Context(), tx); err != nil {
+		t.Fatalf("SendTransaction: %v", err)
+	}
+	if !slices.Contains(methods, "eth_sendRawTransaction") {
+		t.Fatalf("primary endpoint did not receive the broadcast, saw: %v", methods)
 	}
 }

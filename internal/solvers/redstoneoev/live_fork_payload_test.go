@@ -52,7 +52,7 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if len(cfg.Solvers) != 1 || cfg.Solvers[0].Name != Name {
 		t.Fatalf("expected single %s solver in %s", Name, cfgPath)
 	}
-	chainClient, err := chain.Dial(ctx, []string{cfg.Chain.RPCURL}, cfg.Chain.MulticallAddress, logr.Discard())
+	chainClient, err := chain.Dial(ctx, []string{cfg.Chain.RPCURL}, "", cfg.Chain.MulticallAddress, logr.Discard())
 	if err != nil {
 		t.Fatalf("dial chain: %v", err)
 	}
