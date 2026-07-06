@@ -50,7 +50,7 @@ func recoverSolveSigner(t *testing.T, s *Solver, d SolveData) common.Address {
 	if err != nil {
 		t.Fatalf("parse bid: %v", err)
 	}
-	digest, err := ExecutorV6Digest(s.chainID, s.cfg.Callback, crypto.Keccak256Hash(opData), bid, mustBig(d.Nonce), mustBig(d.MaxTxGasPrice))
+	digest, err := ExecutorV6Digest(s.chainID, common.HexToAddress(d.OperationCallback), crypto.Keccak256Hash(opData), bid, mustBig(d.Nonce), mustBig(d.MaxTxGasPrice))
 	if err != nil {
 		t.Fatalf("digest: %v", err)
 	}

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -22,20 +24,13 @@ const (
 	defaultWebhookMaxBodyBytes = 1 << 20
 )
 
-// HeaderValue is one configured HTTP header. Value is for non-secret literals; Env names an env var
-// whose value is resolved when the webhook client is built.
-type HeaderValue struct {
-	Value string `yaml:"value"`
-	Env   string `yaml:"env"`
-}
-
-// Config is the shared HTTP transport config for webhook-style strategies.
+// Config is runtime HTTP transport config for JSON webhook clients.
 type Config struct {
 	URL              string
 	Timeout          time.Duration
 	MaxRequestBytes  int64
 	MaxResponseBytes int64
-	Headers          map[string]HeaderValue
+	Headers          map[string]string
 }
 
 type rawConfig struct {
@@ -43,41 +38,34 @@ type rawConfig struct {
 	Timeout          string                 `yaml:"timeout"`
 	MaxRequestBytes  int64                  `yaml:"maxRequestBytes"`
 	MaxResponseBytes int64                  `yaml:"maxResponseBytes"`
-	Headers          map[string]HeaderValue `yaml:"headers"`
+	Headers          map[string]headerValue `yaml:"headers"`
 }
 
-// ParseConfig decodes a strict webhook config.
+type headerValue struct {
+	Value string `yaml:"value"`
+	Env   string `yaml:"env"`
+}
+
+// ParseConfig decodes common webhook YAML config into runtime HTTP client config.
 func ParseConfig(node yaml.Node) (Config, error) {
 	var raw rawConfig
 	if err := parse.DecodeStrict(node, &raw); err != nil {
-		return Config{}, err
-	}
-	if raw.URL == "" {
-		return Config{}, errors.New("url is required")
-	}
-	if err := validateURL(raw.URL); err != nil {
 		return Config{}, err
 	}
 	timeout, err := parse.Duration(raw.Timeout, defaultWebhookTimeout, "timeout")
 	if err != nil {
 		return Config{}, err
 	}
-	for name, h := range raw.Headers {
-		switch {
-		case name == "":
-			return Config{}, errors.New("headers: empty header name")
-		case h.Value != "" && h.Env != "":
-			return Config{}, errors.Errorf("headers.%s: set value or env, not both", name)
-		case h.Value == "" && h.Env == "":
-			return Config{}, errors.Errorf("headers.%s: value or env is required", name)
-		}
+	headers, err := parseHeaders(raw.Headers)
+	if err != nil {
+		return Config{}, err
 	}
 	return normalizeConfig(Config{
 		URL:              raw.URL,
 		Timeout:          timeout,
 		MaxRequestBytes:  raw.MaxRequestBytes,
 		MaxResponseBytes: raw.MaxResponseBytes,
-		Headers:          raw.Headers,
+		Headers:          headers,
 	})
 }
 
@@ -116,9 +104,32 @@ func parseSize(n int64, field string) (int64, error) {
 	return n, nil
 }
 
-// Client posts JSON strategy requests to an external decider.
+func parseHeaders(raw map[string]headerValue) (map[string]string, error) {
+	out := make(map[string]string, len(raw))
+	for name, h := range raw {
+		switch {
+		case name == "":
+			return nil, errors.New("headers: empty header name")
+		case h.Value != "" && h.Env != "":
+			return nil, errors.Errorf("headers.%s: set value or env, not both", name)
+		case h.Value == "" && h.Env == "":
+			return nil, errors.Errorf("headers.%s: value or env is required", name)
+		}
+		value := h.Value
+		if h.Env != "" {
+			value = os.Getenv(h.Env)
+			if value == "" {
+				return nil, errors.Errorf("headers.%s: env %q is empty", name, h.Env)
+			}
+		}
+		out[name] = value
+	}
+	return out, nil
+}
+
+// Client sends strict JSON requests to an external HTTP endpoint.
 type Client struct {
-	url              string
+	baseURL          *url.URL
 	client           *http.Client
 	maxRequestBytes  int64
 	maxResponseBytes int64
@@ -128,6 +139,12 @@ type Client struct {
 func normalizeConfig(cfg Config) (Config, error) {
 	if err := validateURL(cfg.URL); err != nil {
 		return Config{}, err
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = defaultWebhookTimeout
+	}
+	if cfg.Timeout < 0 {
+		return Config{}, errors.New("timeout must be > 0")
 	}
 	var err error
 	cfg.MaxRequestBytes, err = parseSize(cfg.MaxRequestBytes, "maxRequestBytes")
@@ -141,25 +158,20 @@ func normalizeConfig(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
-// NewClient resolves env-backed headers and builds a client.
+// NewClient validates config, copies headers, and builds a client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg, err := normalizeConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	headers := make(map[string]string, len(cfg.Headers))
-	for name, h := range cfg.Headers {
-		v := h.Value
-		if h.Env != "" {
-			v = os.Getenv(h.Env)
-			if v == "" {
-				return nil, errors.Errorf("headers.%s: env %q is empty", name, h.Env)
-			}
-		}
-		headers[name] = v
+	baseURL, err := url.Parse(cfg.URL)
+	if err != nil {
+		return nil, errors.Errorf("url: %w", err)
 	}
+	headers := make(map[string]string, len(cfg.Headers))
+	maps.Copy(headers, cfg.Headers)
 	return &Client{
-		url: cfg.URL,
+		baseURL: baseURL,
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 			// Do not follow redirects: the https/loopback guard in validateURL only vets the configured
@@ -173,26 +185,40 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// PostJSON sends req as JSON and decodes a strict JSON response into resp.
-func (c *Client) PostJSON(ctx context.Context, req, resp any) error {
-	body, err := json.Marshal(req)
+// DoJSON sends an optional JSON request body and decodes a strict JSON response into resp.
+func (c *Client) DoJSON(ctx context.Context, method, route string, req, resp any) error {
+	if resp == nil {
+		return errors.New("webhook: response target is nil")
+	}
+	var body io.Reader
+	if req != nil {
+		b, err := json.Marshal(req)
+		if err != nil {
+			return errors.Errorf("webhook: encode request: %w", err)
+		}
+		if int64(len(b)) > c.maxRequestBytes {
+			return errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
+		}
+		body = bytes.NewReader(b)
+	}
+	endpoint, err := c.endpoint(route)
 	if err != nil {
-		return errors.Errorf("webhook: encode request: %w", err)
+		return err
 	}
-	if int64(len(body)) > c.maxRequestBytes {
-		return errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return errors.Errorf("webhook: build request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	if req != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	httpReq.Header.Set("Accept", "application/json")
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return errors.Errorf("webhook: post: %w", err)
+		return errors.Errorf("webhook: %s: %w", method, err)
 	}
 	defer httpResp.Body.Close()
 
@@ -220,6 +246,37 @@ func (c *Client) PostJSON(ctx context.Context, req, resp any) error {
 		return errors.Errorf("webhook: decode response: %w", err)
 	}
 	return nil
+}
+
+// PostJSON sends req as JSON to the configured base URL and decodes a strict JSON response into resp.
+func (c *Client) PostJSON(ctx context.Context, req, resp any) error {
+	return c.DoJSON(ctx, http.MethodPost, "", req, resp)
+}
+
+// GetJSON sends a GET request and decodes a strict JSON response into resp.
+func (c *Client) GetJSON(ctx context.Context, route string, resp any) error {
+	return c.DoJSON(ctx, http.MethodGet, route, nil, resp)
+}
+
+func (c *Client) endpoint(route string) (string, error) {
+	if route == "" {
+		return c.baseURL.String(), nil
+	}
+	ref, err := url.Parse(route)
+	if err != nil {
+		return "", errors.Errorf("webhook: route: %w", err)
+	}
+	if ref.IsAbs() || ref.Host != "" {
+		return "", errors.New("webhook: route must be relative")
+	}
+	base := *c.baseURL
+	base.Path = path.Join(base.Path, ref.Path)
+	if !path.IsAbs(base.Path) {
+		base.Path = "/" + base.Path
+	}
+	base.RawQuery = ref.RawQuery
+	base.Fragment = ""
+	return base.String(), nil
 }
 
 func readLimited(r io.Reader, limit int64, label string) ([]byte, error) {

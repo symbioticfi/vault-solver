@@ -11,29 +11,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func testYAMLNode(t *testing.T, body string) yaml.Node {
+func testYAMLNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
-	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
 		t.Fatalf("unmarshal yaml: %v", err)
 	}
-	return *doc.Content[0]
+	if len(node.Content) == 0 {
+		return yaml.Node{}
+	}
+	return *node.Content[0]
 }
 
 func TestParseConfigAndResolveHeaders(t *testing.T) {
-	t.Setenv("TEST_AUTH_HEADER", "Bearer test")
-	_, err := ParseConfig(testYAMLNode(t, `
-url: http://strategy.example
-timeout: 250ms
-headers:
-  x-client:
-    value: vault-solver
-  authorization:
-    env: TEST_AUTH_HEADER
-`))
-	if err == nil {
-		t.Fatal("expected non-loopback http url to be rejected")
-	}
+	t.Setenv("STRATEGY_AUTH_HEADER", "Bearer test")
 	cfg, err := ParseConfig(testYAMLNode(t, `
 url: https://strategy.example
 timeout: 250ms
@@ -43,66 +34,143 @@ headers:
   x-client:
     value: vault-solver
   authorization:
-    env: TEST_AUTH_HEADER
+    env: STRATEGY_AUTH_HEADER
 `))
 	if err != nil {
-		t.Fatalf("ParseConfig https: %v", err)
+		t.Fatalf("ParseConfig: %v", err)
 	}
 	if cfg.URL != "https://strategy.example" || cfg.Timeout != 250*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if cfg.MaxRequestBytes != 2048 || cfg.MaxResponseBytes != 4096 {
-		t.Fatalf("unexpected byte limits: %+v", cfg)
+		t.Fatalf("unexpected limits: request=%d response=%d", cfg.MaxRequestBytes, cfg.MaxResponseBytes)
 	}
-	client, err := NewClient(cfg)
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	if client.headers["x-client"] != "vault-solver" || client.headers["authorization"] != "Bearer test" {
-		t.Fatalf("unexpected headers: %+v", client.headers)
+	if cfg.Headers["x-client"] != "vault-solver" || cfg.Headers["authorization"] != "Bearer test" {
+		t.Fatalf("unexpected headers: %+v", cfg.Headers)
 	}
 }
 
 func TestParseConfigRejectsUnknownFields(t *testing.T) {
 	_, err := ParseConfig(testYAMLNode(t, `
 url: https://strategy.example
-retries: 3
+extra: true
 `))
-	if err == nil {
-		t.Fatal("expected unknown field error")
+	if err == nil || !strings.Contains(err.Error(), "field extra not found") {
+		t.Fatalf("ParseConfig error = %v, want unknown field", err)
 	}
 }
 
-func TestParseConfigRejectsInvalidByteLimits(t *testing.T) {
-	for _, field := range []string{"maxRequestBytes", "maxResponseBytes"} {
-		t.Run(field, func(t *testing.T) {
-			_, err := ParseConfig(testYAMLNode(t, "url: https://strategy.example\n"+field+": -1\n"))
-			if err == nil {
-				t.Fatalf("expected %s to be rejected", field)
+func TestParseConfigRejectsInvalidHeaders(t *testing.T) {
+	cases := map[string]string{
+		"empty name": `
+url: https://strategy.example
+headers:
+  "":
+    value: bad
+`,
+		"empty value": `
+url: https://strategy.example
+headers:
+  x-client: {}
+`,
+		"value and env": `
+url: https://strategy.example
+headers:
+  x-client:
+    value: vault-solver
+    env: STRATEGY_AUTH_HEADER
+`,
+		"empty env": `
+url: https://strategy.example
+headers:
+  authorization:
+    env: STRATEGY_AUTH_HEADER
+`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("STRATEGY_AUTH_HEADER", "")
+			if _, err := ParseConfig(testYAMLNode(t, raw)); err == nil {
+				t.Fatal("expected ParseConfig to reject header config")
 			}
 		})
 	}
 }
 
-func TestParseConfigAllowsLoopbackHTTP(t *testing.T) {
+func TestParseConfigRejectsInvalidByteLimits(t *testing.T) {
+	for name, raw := range map[string]string{
+		"request":  "maxRequestBytes: -1",
+		"response": "maxResponseBytes: -1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseConfig(testYAMLNode(t, "url: https://strategy.example\n"+raw))
+			if err == nil {
+				t.Fatal("expected invalid byte limit to be rejected")
+			}
+		})
+	}
+}
+
+func TestNewClientConfig(t *testing.T) {
+	_, err := NewClient(Config{URL: "http://strategy.example"})
+	if err == nil {
+		t.Fatal("expected non-loopback http url to be rejected")
+	}
+
+	client, err := NewClient(Config{
+		URL:              "https://strategy.example",
+		Timeout:          250 * time.Millisecond,
+		MaxRequestBytes:  2048,
+		MaxResponseBytes: 4096,
+		Headers: map[string]string{
+			"x-client":      "vault-solver",
+			"authorization": "Bearer test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if client.client.Timeout != 250*time.Millisecond || client.maxRequestBytes != 2048 || client.maxResponseBytes != 4096 {
+		t.Fatalf("unexpected client config: timeout=%v request=%d response=%d",
+			client.client.Timeout, client.maxRequestBytes, client.maxResponseBytes)
+	}
+	if client.headers["x-client"] != "vault-solver" || client.headers["authorization"] != "Bearer test" {
+		t.Fatalf("unexpected headers: %+v", client.headers)
+	}
+}
+
+func TestNewClientRejectsInvalidByteLimits(t *testing.T) {
+	for _, tc := range []Config{
+		{URL: "https://strategy.example", MaxRequestBytes: -1},
+		{URL: "https://strategy.example", MaxResponseBytes: -1},
+	} {
+		if _, err := NewClient(tc); err == nil {
+			t.Fatalf("expected invalid byte limit to be rejected: %+v", tc)
+		}
+	}
+}
+
+func TestNewClientAllowsLoopbackHTTP(t *testing.T) {
 	for _, rawURL := range []string{
 		"http://localhost:8080/strategy",
 		"http://127.0.0.1:8080/strategy",
 		"http://[::1]:8080/strategy",
 	} {
 		t.Run(rawURL, func(t *testing.T) {
-			_, err := ParseConfig(testYAMLNode(t, "url: "+rawURL+"\n"))
-			if err != nil {
-				t.Fatalf("ParseConfig: %v", err)
+			if _, err := NewClient(Config{URL: rawURL}); err != nil {
+				t.Fatalf("NewClient: %v", err)
 			}
 		})
 	}
 }
 
-func TestWebhookClientPostJSON(t *testing.T) {
+func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/strategy/quote" {
+			t.Fatalf("path = %q, want /strategy/quote", r.URL.Path)
 		}
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Fatalf("content-type = %q, want application/json", got)
@@ -124,10 +192,10 @@ func TestWebhookClientPostJSON(t *testing.T) {
 	defer srv.Close()
 
 	client, err := NewClient(Config{
-		URL:     srv.URL,
+		URL:     srv.URL + "/strategy",
 		Timeout: time.Second,
-		Headers: map[string]HeaderValue{
-			"x-client": {Value: "vault-solver"},
+		Headers: map[string]string{
+			"x-client": "vault-solver",
 		},
 	})
 	if err != nil {
@@ -136,13 +204,58 @@ func TestWebhookClientPostJSON(t *testing.T) {
 	var resp struct {
 		Decision string `json:"decision"`
 	}
-	if err := client.PostJSON(t.Context(), struct {
+	if err := client.DoJSON(t.Context(), http.MethodPost, "/quote", struct {
 		ID string `json:"id"`
 	}{ID: "q1"}, &resp); err != nil {
-		t.Fatalf("PostJSON: %v", err)
+		t.Fatalf("DoJSON: %v", err)
 	}
 	if resp.Decision != "quote" {
 		t.Fatalf("decision = %q, want quote", resp.Decision)
+	}
+}
+
+func TestWebhookClientGetJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/strategy/callbacks" {
+			t.Fatalf("path = %q, want /strategy/callbacks", r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "" {
+			t.Fatalf("content-type = %q, want unset", got)
+		}
+		if got := r.Header.Get("Accept"); got != "application/json" {
+			t.Fatalf("accept = %q, want application/json", got)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(Config{URL: srv.URL + "/strategy", Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := client.GetJSON(t.Context(), "callbacks", &resp); err != nil {
+		t.Fatalf("GetJSON: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q, want ok", resp.Status)
+	}
+}
+
+func TestWebhookClientRejectsAbsoluteRoute(t *testing.T) {
+	client, err := NewClient(Config{URL: "https://strategy.example/base", Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	var resp struct{}
+	err = client.GetJSON(t.Context(), "https://other.example/callbacks", &resp)
+	if err == nil || !strings.Contains(err.Error(), "route must be relative") {
+		t.Fatalf("GetJSON error = %v, want route must be relative", err)
 	}
 }
 
@@ -211,5 +324,16 @@ func TestWebhookClientRejectsOversizedRequest(t *testing.T) {
 	}
 	if called {
 		t.Fatal("server was called for an oversized request")
+	}
+}
+
+func TestWebhookClientRejectsNilResponseTarget(t *testing.T) {
+	client, err := NewClient(Config{URL: "https://strategy.example", Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	err = client.GetJSON(t.Context(), "", nil)
+	if err == nil || !strings.Contains(err.Error(), "response target is nil") {
+		t.Fatalf("GetJSON error = %v, want response target is nil", err)
 	}
 }

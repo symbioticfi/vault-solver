@@ -70,7 +70,7 @@ func AccruedTotalBorrowAssets(m MarketState, nowTs uint64) *big.Int {
 // AccruedMarketState returns Morpho's market accounting after `_accrueInterest`, including the supply side
 // needed for bad-debt replay. Borrow shares never change on accrual.
 func AccruedMarketState(m MarketState, nowTs uint64) MarketState {
-	out := cloneMarketState(m)
+	out := CloneMarketState(m)
 	if out.BorrowRatePerSec == nil || out.BorrowRatePerSec.Sign() == 0 || nowTs <= out.LastUpdate {
 		return out
 	}
@@ -160,8 +160,8 @@ func ApplySeizeLiquidation(m MarketState, p PositionState, seizedAssets, collate
 		return LiquidationReplay{}, false
 	}
 	out := LiquidationReplay{
-		Market:        cloneMarketState(m),
-		Position:      clonePositionState(p),
+		Market:        CloneMarketState(m),
+		Position:      ClonePositionState(p),
 		RepaidAssets:  repaidAssets,
 		RepaidShares:  repaidShares,
 		BadDebtAssets: new(big.Int),
@@ -263,7 +263,8 @@ func MulDivUp(x, y, d *big.Int) *big.Int {
 	return num.Div(num, d)
 }
 
-func cloneMarketState(m MarketState) MarketState {
+// CloneMarketState returns a deep copy of a Morpho market state snapshot.
+func CloneMarketState(m MarketState) MarketState {
 	return MarketState{
 		TotalSupplyAssets: cloneBig(m.TotalSupplyAssets),
 		TotalSupplyShares: cloneBig(m.TotalSupplyShares),
@@ -276,22 +277,16 @@ func cloneMarketState(m MarketState) MarketState {
 	}
 }
 
-func clonePositionState(p PositionState) PositionState {
+// ClonePositionState returns a deep copy of a Morpho position snapshot.
+func ClonePositionState(p PositionState) PositionState {
 	return PositionState{BorrowShares: cloneBig(p.BorrowShares), Collateral: cloneBig(p.Collateral)}
 }
 
-func cloneBig(n *big.Int) *big.Int {
-	if n == nil {
+func cloneBig(v *big.Int) *big.Int {
+	if v == nil {
 		return nil
 	}
-	return new(big.Int).Set(n)
-}
-
-func zeroFloorSub(x, y *big.Int) *big.Int {
-	if x.Cmp(y) <= 0 {
-		return new(big.Int)
-	}
-	return new(big.Int).Sub(x, y)
+	return new(big.Int).Set(v)
 }
 
 func minBig(a, b *big.Int) *big.Int {
@@ -299,4 +294,11 @@ func minBig(a, b *big.Int) *big.Int {
 		return new(big.Int).Set(a)
 	}
 	return new(big.Int).Set(b)
+}
+
+func zeroFloorSub(x, y *big.Int) *big.Int {
+	if x.Cmp(y) <= 0 {
+		return new(big.Int)
+	}
+	return new(big.Int).Sub(x, y)
 }

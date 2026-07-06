@@ -30,41 +30,46 @@ solvers:
         apiKeyEnv: OEV_REDSTONE_API_KEY                      # env var NAME of the RedStone WS API key
 
       executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"   # RedStone Atom Executor (proxy) — verifies our bid signature
-      callback: "0x065B612a182f360D4428cD00a8094049B3c92168"   # SymbioticOevSolver — sells each seized leg through the adapter and pays the bid
-      adapter:  "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # the LiquidLane adapter the callback pins (TLOAN vault / TCOL collateral)
+      adapter:  "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # LiquidLane adapter served by this solver (TLOAN vault / TCOL collateral)
+      callback: "0x065B612a182f360D4428cD00a8094049B3c92168"   # SymbioticOevSolver — receives Executor callback and pays the bid
 
-      # Morpho GraphQL endpoint polled for market state + at-risk positions (required by the prod monitor).
-      # Public api.morpho.org does not index this custom Sepolia Morpho, so the Sepolia harness leaves it
-      # empty and uses OEV_TEST_MONITOR=true + OEV_TEST_MARKETS/OEV_TEST_POSITIONS instead.
-      morphoApiUrl: ""
-      # discoveryMaxHealthFactor: 1.30  # only snapshot positions with health factor <= this (default 1.30);
-      #                                 # local Morpho math then decides real liquidatability at the auction price
-      # maxTrackedPositions: 10000      # Morpho API page size + in-memory at-risk position cap (default 10000)
+      strategy:
+        name: default
+        config:
+          # Morpho GraphQL endpoint polled for market state + at-risk positions (required by the prod monitor).
+          # Public api.morpho.org does not index this custom Sepolia Morpho, so the Sepolia harness leaves it
+          # empty and uses OEV_TEST_MONITOR=true + OEV_TEST_MARKETS/OEV_TEST_POSITIONS instead.
+          morphoApiUrl: ""
+          # discoveryMaxHealthFactor: 1.30  # only snapshot positions with health factor <= this (default 1.30);
+          #                                 # local Morpho math then decides real liquidatability at the auction price
+          # maxTrackedPositions: 10000      # Morpho API page size + in-memory at-risk position cap (default 10000)
 
-      # ETH price feeds used to value gas/bid/profit in USD. loanUsd prices the loan token; on the
-      # testbed TLOAN is a $1 token, so it reuses Chainlink's Sepolia USDC/USD feed.
-      loanEthFeed:
-        ethUsd: "0x694AA1769357215DE4FAC081bf1f309aDC325306"    # Chainlink Sepolia ETH / USD
-        loanUsd: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"   # Chainlink Sepolia USDC / USD (proxy for TLOAN)
-        maxAgeMs: 86400000                                      # max feed staleness before a read fails (default 3600000 = 1h)
+          # ETH price feeds used to value gas/bid/profit in USD. loanUsd prices the loan token; on the
+          # testbed TLOAN is a $1 token, so it reuses Chainlink's Sepolia USDC/USD feed.
+          loanEthFeed:
+            ethUsd: "0x694AA1769357215DE4FAC081bf1f309aDC325306"    # Chainlink Sepolia ETH / USD
+            loanUsd: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"   # Chainlink Sepolia USDC / USD (proxy for TLOAN)
+            maxAgeMs: 86400000                                      # max feed staleness before a read fails (default 3600000 = 1h)
 
-      bid:
-        bidEth: "0.0005"                 # minimum bid in ETH; the final bid is max(this, gross-profit share)
-        authTtlMs: 60000                 # callback-auth replay window (default 60000); independent of the auction timeout
-        totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms (default 0)
-        minBundleProfitBidBps: 1000      # required extra bundle margin after gas + bid, as bps of the final bid
-        maxTxGasPriceWei: "20000000000"  # signed tx.gasprice ceiling + profitability/deposit assumption (default 60000000000 = 60 gwei)
+          bid:
+            bidEth: "0.0005"                 # minimum bid in ETH; the final bid is max(this, gross-profit share)
+            authTtlMs: 60000                 # callback-auth replay window (default 60000); independent of the auction timeout
+            totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms (default 0)
+            minBundleProfitBidBps: 1000      # required extra bundle margin after gas + bid, as bps of the final bid
 
-      sizing:
-        allowFullLiquidation: true       # seize full collateral when profitable (default true); false forces fixed 90% partial mode
-        swapHaircutBps: 100              # extra safety margin on the adapter's discounted rate for slippage/staleness (default 200 = 2%)
+          sizing:
+            allowFullLiquidation: true       # seize full collateral when profitable (default true); false forces fixed 90% partial mode
+            swapHaircutBps: 100              # extra safety margin on the adapter's discounted rate for slippage/staleness (default 200 = 2%)
+
+          monitorPollMs: 10000               # default strategy monitor snapshot poll (API in prod, testMonitor on Sepolia)
+          maxStateAgeMs: 90000               # max default-strategy cache age before stale_state
+
+      maxTxGasPriceWei: "20000000000"        # signed tx.gasprice ceiling + solver envelope assumption
 
       breaker:
         maxFailures: 3                   # halt bidding after this many failed liquidations… (default 3)
         windowMs: 3600000                # …within this window (default 3600000 = 1h); a `blacklisted` frame halts immediately
 
       intervals:
-        opsPollMs: 30000                 # cadence of ops checks — balances, filler status (default 30000)
-        monitorPollMs: 10000             # cadence of the monitor snapshot poll (default 10000)
-        maxStateAgeMs: 90000             # max age of any background cache before bidding fails closed on stale_state
-                                         # (default 90000); MUST exceed every poll interval above
+        opsPollMs: 30000                 # cadence of solver ops checks — Executor state (default 10000)
+        executorStateMaxAgeMs: 90000     # max Executor cache age before executor_state_stale
