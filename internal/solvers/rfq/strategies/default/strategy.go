@@ -9,12 +9,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlanemath"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 )
 
 const Name = "default"
@@ -23,7 +23,7 @@ const fillPlanTTL = 3 * time.Hour
 type Config struct{}
 
 type Strategy struct {
-	pricing strategytypes.Pricing
+	pricing types.Pricing
 	now     func() time.Time
 
 	mu    sync.Mutex
@@ -31,16 +31,16 @@ type Strategy struct {
 }
 
 type cachedFillPlan struct {
-	plan      *strategytypes.FillPlan
+	plan      *types.FillPlan
 	createdAt time.Time
 }
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategyregistry.Register(Name, NewFromConfig)
+	strategies.Register(Name, NewFromConfig)
 }
 
-func NewFromConfig(raw yaml.Node, deps strategyregistry.Deps) (strategytypes.Strategy, error) {
+func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
 	var cfg Config
 	if err := decodeConfig(raw, &cfg); err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ func NewFromConfig(raw yaml.Node, deps strategyregistry.Deps) (strategytypes.Str
 	return New(NewChainReader(deps.Chain, deps.Log)), nil
 }
 
-func New(pricing strategytypes.Pricing) *Strategy {
+func New(pricing types.Pricing) *Strategy {
 	return &Strategy{pricing: pricing, now: time.Now, plans: make(map[string]cachedFillPlan)}
 }
 
@@ -59,37 +59,37 @@ func decodeConfig(node yaml.Node, out any) error {
 	return solver.DecodeStrict(node, out)
 }
 
-func (s *Strategy) DecideQuote(ctx context.Context, input strategytypes.QuoteInput) (strategytypes.QuoteOutput, error) {
+func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	tokenInDecimals, err := s.pricing.TokenDecimals(ctx, input.TokenIn)
 	if err != nil {
-		return strategytypes.QuoteOutput{}, errors.Errorf("tokenIn decimals: %w", err)
+		return types.QuoteOutput{}, errors.Errorf("tokenIn decimals: %w", err)
 	}
 	candidates := matchingCandidates(input.Candidates, input.TokenOut)
 	oracle, err := s.pricing.AmountsOut(ctx, input.TokenIn, candidates, input.AmountIn)
 	if err != nil {
-		return strategytypes.QuoteOutput{}, err
+		return types.QuoteOutput{}, err
 	}
 	out, ok := selectBest(input, candidates, tokenInDecimals, oracle)
 	if !ok {
-		return strategytypes.QuoteOutput{Decision: strategytypes.DecisionDecline, Reason: "no viable strategy"}, nil
+		return types.QuoteOutput{Decision: types.DecisionDecline, Reason: "no viable strategy"}, nil
 	}
 	plan, err := s.fillPlanFromQuote(input, out, tokenInDecimals)
 	if err != nil {
-		return strategytypes.QuoteOutput{}, err
+		return types.QuoteOutput{}, err
 	}
 	s.remember(input.QuoteID, plan)
 	return out, nil
 }
 
-func (s *Strategy) BuildFillPlan(ctx context.Context, input strategytypes.FillInput) (*strategytypes.FillPlan, error) {
+func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if plan := s.cached(input); plan != nil {
 		return plan, nil
 	}
-	quoteInput := strategytypes.QuoteInput(input)
+	quoteInput := types.QuoteInput(input)
 	quoteInput.AmountIn = cloneBig(input.AmountIn)
 	quoteInput.RequiredAmountOut = cloneBig(input.RequiredAmountOut)
 	out, err := s.DecideQuote(ctx, quoteInput)
-	if err != nil || out.Decision == strategytypes.DecisionDecline {
+	if err != nil || out.Decision == types.DecisionDecline {
 		return nil, err
 	}
 	plan := s.cached(input)
@@ -100,10 +100,10 @@ func (s *Strategy) BuildFillPlan(ctx context.Context, input strategytypes.FillIn
 }
 
 func matchingCandidates(
-	candidates []strategytypes.QuoteCandidate,
+	candidates []types.QuoteCandidate,
 	tokenOut common.Address,
-) []strategytypes.QuoteCandidate {
-	out := make([]strategytypes.QuoteCandidate, 0, len(candidates))
+) []types.QuoteCandidate {
+	out := make([]types.QuoteCandidate, 0, len(candidates))
 	for _, c := range candidates {
 		if c.Asset != tokenOut {
 			continue
@@ -116,11 +116,11 @@ func matchingCandidates(
 // selectBest picks the best single-asset strategy for the request. It is a pure function:
 // oracleByAsset supplies adapter.getAmountOut(tokenIn, amount) per candidate asset.
 func selectBest(
-	input strategytypes.QuoteInput,
-	candidates []strategytypes.QuoteCandidate,
+	input types.QuoteInput,
+	candidates []types.QuoteCandidate,
 	tokenInDecimals int,
 	oracleByAsset map[common.Address]*big.Int,
-) (strategytypes.QuoteOutput, bool) {
+) (types.QuoteOutput, bool) {
 	groups := groupByAsset(candidates)
 
 	keys := make([]common.Address, 0, len(groups))
@@ -129,7 +129,7 @@ func selectBest(
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].Hex() < keys[j].Hex() })
 
-	var best *strategytypes.QuoteOutput
+	var best *types.QuoteOutput
 	for _, asset := range keys {
 		oracle := oracleByAsset[asset]
 		if oracle == nil {
@@ -145,13 +145,13 @@ func selectBest(
 		}
 	}
 	if best == nil {
-		return strategytypes.QuoteOutput{}, false
+		return types.QuoteOutput{}, false
 	}
 	return *best, true
 }
 
-func groupByAsset(candidates []strategytypes.QuoteCandidate) map[common.Address][]strategytypes.QuoteCandidate {
-	groups := make(map[common.Address][]strategytypes.QuoteCandidate)
+func groupByAsset(candidates []types.QuoteCandidate) map[common.Address][]types.QuoteCandidate {
+	groups := make(map[common.Address][]types.QuoteCandidate)
 	for _, c := range candidates {
 		groups[c.Asset] = append(groups[c.Asset], c)
 	}
@@ -159,16 +159,16 @@ func groupByAsset(candidates []strategytypes.QuoteCandidate) map[common.Address]
 }
 
 type eligibleLeg struct {
-	candidate strategytypes.QuoteCandidate
+	candidate types.QuoteCandidate
 	rate      *big.Int
 }
 
 func evaluateGroup(
-	input strategytypes.QuoteInput,
-	group []strategytypes.QuoteCandidate,
+	input types.QuoteInput,
+	group []types.QuoteCandidate,
 	tokenInDecimals int,
 	oracleAmountOut *big.Int,
-) *strategytypes.QuoteOutput {
+) *types.QuoteOutput {
 	asset := group[0].Asset
 	assetDecimals := group[0].AssetDecimals
 	if asset != input.TokenOut {
@@ -208,7 +208,7 @@ func evaluateGroup(
 
 	remainingIn := new(big.Int).Set(input.AmountIn)
 	quotedAmountOut := new(big.Int)
-	var legs []strategytypes.QuoteLeg
+	var legs []types.QuoteLeg
 	for _, e := range eligible {
 		if remainingIn.Sign() == 0 {
 			break
@@ -234,7 +234,7 @@ func evaluateGroup(
 
 		remainingIn.Sub(remainingIn, amountIn)
 		quotedAmountOut.Add(quotedAmountOut, amountOut)
-		legs = append(legs, strategytypes.QuoteLeg{
+		legs = append(legs, types.QuoteLeg{
 			CandidateID: c.ID,
 			AmountIn:    amountIn,
 			AmountOut:   amountOut,
@@ -247,8 +247,8 @@ func evaluateGroup(
 		return nil
 	}
 
-	return &strategytypes.QuoteOutput{
-		Decision:        strategytypes.DecisionQuote,
+	return &types.QuoteOutput{
+		Decision:        types.DecisionQuote,
 		QuotedAmountOut: quotedAmountOut,
 		Legs:            legs,
 	}
@@ -269,11 +269,11 @@ func dedupeByAdapter(legs []eligibleLeg) []eligibleLeg {
 }
 
 func (s *Strategy) fillPlanFromQuote(
-	input strategytypes.QuoteInput,
-	out strategytypes.QuoteOutput,
+	input types.QuoteInput,
+	out types.QuoteOutput,
 	tokenInDecimals int,
-) (*strategytypes.FillPlan, error) {
-	if out.Decision != strategytypes.DecisionQuote {
+) (*types.FillPlan, error) {
+	if out.Decision != types.DecisionQuote {
 		return nil, errors.Errorf("invalid fill-plan decision %q", out.Decision)
 	}
 	if len(out.Legs) == 0 {
@@ -283,7 +283,7 @@ func (s *Strategy) fillPlanFromQuote(
 		return nil, errors.New("quote output has invalid quotedAmountOut")
 	}
 
-	candidates := make(map[string]strategytypes.QuoteCandidate, len(input.Candidates))
+	candidates := make(map[string]types.QuoteCandidate, len(input.Candidates))
 	for _, c := range input.Candidates {
 		if c.ID == "" {
 			return nil, errors.New("candidate id is empty")
@@ -297,7 +297,7 @@ func (s *Strategy) fillPlanFromQuote(
 	sumIn := new(big.Int)
 	sumOut := new(big.Int)
 	seen := make(map[string]bool, len(out.Legs))
-	legs := make([]strategytypes.FillLeg, 0, len(out.Legs))
+	legs := make([]types.FillLeg, 0, len(out.Legs))
 	for i, leg := range out.Legs {
 		if seen[leg.CandidateID] {
 			return nil, errors.Errorf("duplicate candidate %q", leg.CandidateID)
@@ -331,7 +331,7 @@ func (s *Strategy) fillPlanFromQuote(
 		}
 		sumIn.Add(sumIn, leg.AmountIn)
 		sumOut.Add(sumOut, leg.AmountOut)
-		legs = append(legs, strategytypes.FillLeg{
+		legs = append(legs, types.FillLeg{
 			Adapter:    c.Adapter,
 			AmountIn:   cloneBig(leg.AmountIn),
 			AmountOut:  cloneBig(leg.AmountOut),
@@ -348,7 +348,7 @@ func (s *Strategy) fillPlanFromQuote(
 	if input.RequiredAmountOut != nil && out.QuotedAmountOut.Cmp(input.RequiredAmountOut) < 0 {
 		return nil, errors.New("strategy output is below required amount out")
 	}
-	return &strategytypes.FillPlan{
+	return &types.FillPlan{
 		QuoteID:         input.QuoteID,
 		RequestID:       input.RequestID,
 		TokenIn:         input.TokenIn,
@@ -359,7 +359,7 @@ func (s *Strategy) fillPlanFromQuote(
 	}, nil
 }
 
-func (s *Strategy) remember(quoteID string, plan *strategytypes.FillPlan) {
+func (s *Strategy) remember(quoteID string, plan *types.FillPlan) {
 	if quoteID == "" || plan == nil {
 		return
 	}
@@ -374,7 +374,7 @@ func (s *Strategy) remember(quoteID string, plan *strategytypes.FillPlan) {
 	s.plans[quoteID] = cachedFillPlan{plan: clonePlan(plan), createdAt: now}
 }
 
-func (s *Strategy) cached(input strategytypes.FillInput) *strategytypes.FillPlan {
+func (s *Strategy) cached(input types.FillInput) *types.FillPlan {
 	s.mu.Lock()
 	cached, ok := s.plans[input.QuoteID]
 	s.mu.Unlock()
@@ -388,7 +388,7 @@ func (s *Strategy) cached(input strategytypes.FillInput) *strategytypes.FillPlan
 	return plan
 }
 
-func validateCachedPlan(input strategytypes.FillInput, plan *strategytypes.FillPlan) error {
+func validateCachedPlan(input types.FillInput, plan *types.FillPlan) error {
 	if plan == nil {
 		return errors.New("cached fill plan is nil")
 	}
@@ -405,16 +405,16 @@ func validateCachedPlan(input strategytypes.FillInput, plan *strategytypes.FillP
 	return nil
 }
 
-func clonePlan(in *strategytypes.FillPlan) *strategytypes.FillPlan {
+func clonePlan(in *types.FillPlan) *types.FillPlan {
 	if in == nil {
 		return nil
 	}
 	out := *in
 	out.AmountIn = cloneBig(in.AmountIn)
 	out.QuotedAmountOut = cloneBig(in.QuotedAmountOut)
-	out.Legs = make([]strategytypes.FillLeg, len(in.Legs))
+	out.Legs = make([]types.FillLeg, len(in.Legs))
 	for i, leg := range in.Legs {
-		out.Legs[i] = strategytypes.FillLeg{
+		out.Legs[i] = types.FillLeg{
 			Adapter:    leg.Adapter,
 			AmountIn:   cloneBig(leg.AmountIn),
 			AmountOut:  cloneBig(leg.AmountOut),

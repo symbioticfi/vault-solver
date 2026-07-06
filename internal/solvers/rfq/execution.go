@@ -10,9 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -54,7 +54,7 @@ type executionService struct {
 	backend          orderBackend
 	store            *store
 	reader           recoveryReader
-	strategy         strategytypes.Strategy
+	strategy         types.Strategy
 	txm              txSender
 	log              logr.Logger
 	now              func() time.Time

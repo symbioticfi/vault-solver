@@ -11,21 +11,21 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategyregistry"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
-func baseQuoteInput(t *testing.T) strategytypes.QuoteInput {
+func baseQuoteInput(t *testing.T) types.QuoteInput {
 	t.Helper()
-	return strategytypes.QuoteInput{
+	return types.QuoteInput{
 		RequestID: "r", QuoteID: "q", ChainID: 1,
 		Executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		TokenIn:  tIn, TokenOut: tOut, AmountIn: mustBig(t, "1000000000000000000"),
-		Candidates: []strategytypes.QuoteCandidate{{
+		Candidates: []types.QuoteCandidate{{
 			ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 			MaxAssets: mustBig(t, "10000000"),
 			MaxRate:   mustBig(t, "1000000000000000000"),
@@ -43,7 +43,7 @@ func TestDefaultStrategyDecideQuote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if out.Decision != strategytypes.DecisionQuote || out.QuotedAmountOut.String() != "1000000" {
+	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" {
 		t.Fatalf("unexpected output: %+v", out)
 	}
 	if len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
@@ -62,7 +62,7 @@ func TestNewStrategyUsesRegistry(t *testing.T) {
 	if got == nil {
 		t.Fatal("newStrategy default returned nil")
 	}
-	names := strategyregistry.Registered()
+	names := strategies.Registered()
 	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {
 		t.Fatalf("registered strategies = %v, want default and webhook", names)
 	}
@@ -77,7 +77,7 @@ func TestDefaultStrategyBuildFillPlanUsesQuoteCache(t *testing.T) {
 	if _, err := strategy.DecideQuote(t.Context(), input); err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	plan, err := strategy.BuildFillPlan(t.Context(), strategytypes.FillInput{
+	plan, err := strategy.BuildFillPlan(t.Context(), types.FillInput{
 		RequestID: input.RequestID,
 		QuoteID:   input.QuoteID,
 		ChainID:   input.ChainID,
@@ -120,7 +120,7 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if out.Decision != strategytypes.DecisionQuote || out.QuotedAmountOut.String() != "1000000" ||
+	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" ||
 		len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
 		t.Fatalf("unexpected webhook output: %+v", out)
 	}

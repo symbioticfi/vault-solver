@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategytypes"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -28,7 +27,7 @@ var (
 
 type fakePricing struct {
 	out     map[common.Address]*big.Int
-	queries *[][]strategytypes.QuoteCandidate
+	queries *[][]types.QuoteCandidate
 }
 
 func (f fakePricing) TokenDecimals(context.Context, common.Address) (int, error) {
@@ -38,18 +37,18 @@ func (f fakePricing) TokenDecimals(context.Context, common.Address) (int, error)
 func (f fakePricing) AmountsOut(
 	_ context.Context,
 	_ common.Address,
-	candidates []strategytypes.QuoteCandidate,
+	candidates []types.QuoteCandidate,
 	_ *big.Int,
 ) (map[common.Address]*big.Int, error) {
 	if f.queries != nil {
-		*f.queries = append(*f.queries, append([]strategytypes.QuoteCandidate(nil), candidates...))
+		*f.queries = append(*f.queries, append([]types.QuoteCandidate(nil), candidates...))
 	}
 	return f.out, nil
 }
 
-func baseInput(t *testing.T, candidates []strategytypes.QuoteCandidate) strategytypes.QuoteInput {
+func baseInput(t *testing.T, candidates []types.QuoteCandidate) types.QuoteInput {
 	t.Helper()
-	return strategytypes.QuoteInput{
+	return types.QuoteInput{
 		RequestID:  "r",
 		QuoteID:    "q",
 		ChainID:    1,
@@ -63,7 +62,7 @@ func baseInput(t *testing.T, candidates []strategytypes.QuoteCandidate) strategy
 }
 
 func TestStrategyDirectFill(t *testing.T) {
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 		MaxAssets: mustBig(t, "10000000"),
 		MaxRate:   mustBig(t, "1000000000000000000"),
@@ -72,7 +71,7 @@ func TestStrategyDirectFill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
+	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
 		t.Fatalf("output = %+v, want 1.000000 quote", got)
 	}
 	if len(got.Legs) != 1 {
@@ -86,7 +85,7 @@ func TestStrategyDirectFill(t *testing.T) {
 }
 
 func TestStrategyRejectsMaxRateBelowPrivateRate(t *testing.T) {
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 		MaxAssets: mustBig(t, "10000000"),
 		MaxRate:   mustBig(t, "800000000000000000"),
@@ -95,14 +94,14 @@ func TestStrategyRejectsMaxRateBelowPrivateRate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionDecline {
+	if got.Decision != types.DecisionDecline {
 		t.Fatalf("decision = %q, want decline", got.Decision)
 	}
 }
 
 func TestStrategyAssetMustEqualTokenOut(t *testing.T) {
 	other := common.HexToAddress("0x00000000000000000000000000000000000000ff")
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: other, AssetDecimals: 6,
 		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
 	}})
@@ -110,14 +109,14 @@ func TestStrategyAssetMustEqualTokenOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionDecline {
+	if got.Decision != types.DecisionDecline {
 		t.Fatalf("decision = %q, want decline", got.Decision)
 	}
 }
 
 func TestStrategyPricesAndSelectsOnlyMatchingCandidates(t *testing.T) {
 	other := common.HexToAddress("0x00000000000000000000000000000000000000ff")
-	input := baseInput(t, []strategytypes.QuoteCandidate{
+	input := baseInput(t, []types.QuoteCandidate{
 		{
 			ID: "wrong", Adapter: vlt, Asset: other, AssetDecimals: 6,
 			MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
@@ -127,7 +126,7 @@ func TestStrategyPricesAndSelectsOnlyMatchingCandidates(t *testing.T) {
 			MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
 		},
 	})
-	var queries [][]strategytypes.QuoteCandidate
+	var queries [][]types.QuoteCandidate
 	got, err := New(fakePricing{
 		out:     map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
 		queries: &queries,
@@ -135,7 +134,7 @@ func TestStrategyPricesAndSelectsOnlyMatchingCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionQuote || len(got.Legs) != 1 || got.Legs[0].CandidateID != "match" {
+	if got.Decision != types.DecisionQuote || len(got.Legs) != 1 || got.Legs[0].CandidateID != "match" {
 		t.Fatalf("output = %+v, want quote through matching candidate", got)
 	}
 	if len(queries) != 1 || len(queries[0]) != 1 || queries[0][0].ID != "match" {
@@ -144,7 +143,7 @@ func TestStrategyPricesAndSelectsOnlyMatchingCandidates(t *testing.T) {
 }
 
 func TestStrategyNoOraclePriceSkips(t *testing.T) {
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
 	}})
@@ -152,14 +151,14 @@ func TestStrategyNoOraclePriceSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionDecline {
+	if got.Decision != types.DecisionDecline {
 		t.Fatalf("decision = %q, want decline", got.Decision)
 	}
 }
 
 func TestStrategyDiscountLegUsesMaxRate(t *testing.T) {
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 		MaxAssets:  mustBig(t, "10000000"),
 		MaxRate:    mustBig(t, "1000000000000000000"),
@@ -169,13 +168,13 @@ func TestStrategyDiscountLegUsesMaxRate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
+	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
 		t.Fatalf("output = %+v, want discount quote at maxRate", got)
 	}
 }
 
 func TestStrategyDeclinesWhenCapacityCannotCoverInput(t *testing.T) {
-	input := baseInput(t, []strategytypes.QuoteCandidate{{
+	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
 		MaxAssets: mustBig(t, "500000"),
 		MaxRate:   mustBig(t, "1000000000000000000"),
@@ -184,7 +183,7 @@ func TestStrategyDeclinesWhenCapacityCannotCoverInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != strategytypes.DecisionDecline {
+	if got.Decision != types.DecisionDecline {
 		t.Fatalf("decision = %q, want decline", got.Decision)
 	}
 }
