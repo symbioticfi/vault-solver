@@ -191,8 +191,12 @@ test-oev-refuel: ## OEV gas-refuel orchestration on an anvil Sepolia fork (needs
 	./scripts/oev/oev-fork-refuel.sh
 
 .PHONY: format
-format: ## Run golangci-lint
+format: ## Run golangci-lint with autofix
 	golangci-lint run --fix
+
+.PHONY: lint
+lint: ## Run golangci-lint (no autofix; must report 0 issues)
+	golangci-lint run
 
 .PHONY: tidy
 tidy: ## Tidy and verify go.mod / go.sum

@@ -54,9 +54,12 @@ func buildStrategyInput(
 			continue
 		}
 		input.Auctions = append(input.Auctions, auction)
-		for _, off := range offerings {
-			input.Candidates = append(input.Candidates, buildOfferCandidate(auction, off, offers, now))
-		}
+	}
+	for _, k := range offers.liveEntries(now) {
+		input.LiveOffers = append(input.LiveOffers, types.LiveOffer{
+			AdapterID: adapterID(k.adapter),
+			AuctionID: k.auction,
+		})
 	}
 	return input
 }
@@ -113,42 +116,12 @@ func buildAuctionSnapshot(
 	}, true
 }
 
-func buildOfferCandidate(
-	auction types.AuctionSnapshot,
-	off *adapterOffering,
-	offers *offerTracker,
-	now time.Time,
-) types.OfferCandidate {
-	capacity, ok := sizeOffer(sizeInputs{
-		fundable:      off.st.fundable,
-		maxAssets:     off.st.maxAssets,
-		minAssets:     off.st.minAssets,
-		openCount:     off.st.openCount,
-		maxConcurrent: maxRequests,
-	})
-	if !ok {
-		capacity = new(big.Int)
-	}
-	adapter := adapterID(off.target.Adapter)
-	return types.OfferCandidate{
-		ID:           offerCandidateID(adapter, auction.AuctionID),
-		AdapterID:    adapter,
-		AuctionID:    auction.AuctionID,
-		Capacity:     capacity,
-		HasLiveOffer: offers.hasLive(off.target.Adapter, auction.AuctionID, now),
-	}
-}
-
 func adapterID(adapter common.Address) string {
 	return strings.ToLower(adapter.Hex())
 }
 
 func auctionIDString(auctionID int64) string {
 	return strconv.FormatInt(auctionID, 10)
-}
-
-func offerCandidateID(adapter string, auctionID int64) string {
-	return adapter + ":" + auctionIDString(auctionID)
 }
 
 func cloneBig(n *big.Int) *big.Int {

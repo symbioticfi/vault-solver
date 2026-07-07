@@ -39,26 +39,13 @@ func testAuction(id int64, remaining int64) types.AuctionSnapshot {
 	}
 }
 
-func candidate(adapterID string, auctionID int64, capacity int64) types.OfferCandidate {
-	return types.OfferCandidate{
-		ID:        adapterID + ":" + big.NewInt(auctionID).String(),
-		AdapterID: adapterID,
-		AuctionID: auctionID,
-		Capacity:  big.NewInt(capacity),
-	}
-}
-
 func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
-	a1 := testAdapter(1, 50)
-	a2 := testAdapter(2, 80)
+	a1 := testAdapter(1, 50) // capacity 50
+	a2 := testAdapter(2, 80) // capacity 80
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1, a2},
 		Auctions: []types.AuctionSnapshot{testAuction(10, 100)},
-		Candidates: []types.OfferCandidate{
-			candidate(a1.ID, 10, 50),
-			candidate(a2.ID, 10, 80),
-		},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
@@ -79,15 +66,13 @@ func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 	}
 }
 
-func TestStrategyClampsOfferToCandidateCapacity(t *testing.T) {
+func TestStrategyClampsOfferToAdapterCapacity(t *testing.T) {
 	a1 := testAdapter(1, 1000)
+	a1.MaxAssets = big.NewInt(100) // per-request ceiling below fundable ⇒ capacity 100
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1},
 		Auctions: []types.AuctionSnapshot{testAuction(10, 500)},
-		Candidates: []types.OfferCandidate{
-			candidate(a1.ID, 10, 100),
-		},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
@@ -98,19 +83,17 @@ func TestStrategyClampsOfferToCandidateCapacity(t *testing.T) {
 		t.Fatalf("offers = %d, want 1", len(got.Offers))
 	}
 	if got.Offers[0].Principal.Int64() != 100 {
-		t.Fatalf("principal = %s, want candidate capacity 100", got.Offers[0].Principal)
+		t.Fatalf("principal = %s, want adapter capacity 100", got.Offers[0].Principal)
 	}
 }
 
-func TestStrategyRejectsZeroCandidateCapacity(t *testing.T) {
+func TestStrategyRejectsZeroAdapterCapacity(t *testing.T) {
 	a1 := testAdapter(1, 1000)
+	a1.MaxAssets = new(big.Int) // maxAssets 0 ⇒ reject-all
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1},
 		Auctions: []types.AuctionSnapshot{testAuction(10, 500)},
-		Candidates: []types.OfferCandidate{
-			candidate(a1.ID, 10, 0),
-		},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
@@ -118,7 +101,7 @@ func TestStrategyRejectsZeroCandidateCapacity(t *testing.T) {
 		t.Fatalf("DecideOffers: %v", err)
 	}
 	if len(got.Offers) != 0 {
-		t.Fatalf("offers = %+v, want none because candidate capacity is zero", got.Offers)
+		t.Fatalf("offers = %+v, want none because adapter capacity is zero", got.Offers)
 	}
 }
 
@@ -132,10 +115,6 @@ func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 			testAuction(10, 70),
 			testAuction(11, 70),
 		},
-		Candidates: []types.OfferCandidate{
-			candidate(a1.ID, 10, 80),
-			candidate(a1.ID, 11, 80),
-		},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
@@ -145,6 +124,7 @@ func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 	if len(got.Offers) != 2 {
 		t.Fatalf("offers = %d, want 2", len(got.Offers))
 	}
+	// Auction 10 takes 70 of the 80 ceiling; auction 11 sees only 100-70=30 of budget left.
 	if got.Offers[0].Principal.Int64() != 70 || got.Offers[1].Principal.Int64() != 30 {
 		t.Fatalf("principals = %s/%s, want 70/30", got.Offers[0].Principal, got.Offers[1].Principal)
 	}
@@ -158,41 +138,30 @@ func TestStrategySkipsClampedOfferBelowMinAssets(t *testing.T) {
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1, a2},
 		Auctions: []types.AuctionSnapshot{testAuction(10, 90)},
-		Candidates: []types.OfferCandidate{
-			candidate(a1.ID, 10, 50),
-			candidate(a2.ID, 10, 80),
-		},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
 	if err != nil {
 		t.Fatalf("DecideOffers: %v", err)
 	}
+	// a2 (80) fills first, leaving 10 for a1 — below a1's min-request size of 20, so a1 is skipped.
 	if len(got.Offers) != 1 || got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 80 {
 		t.Fatalf("offers = %+v, want only adapter 2 / 80", got.Offers)
 	}
 }
 
-func TestStrategyOwnsCandidateEligibility(t *testing.T) {
-	a1 := testAdapter(1, 100)
+func TestStrategyOwnsEligibility(t *testing.T) {
+	a1 := testAdapter(1, 100) // filtered by an existing live offer
 	a2 := testAdapter(2, 100)
-	a2.Collateral = common.Address{0xbb}
+	a2.Collateral = common.Address{0xbb} // collateral mismatch
 	a3 := testAdapter(3, 100)
-	a3.MinYieldBps = big.NewInt(300)
+	a3.MinYieldBps = big.NewInt(300) // min-yield above the auction's max rate (200)
 	auction := testAuction(10, 100)
 	input := types.OfferInput{
-		Now:      time.Unix(0, 0),
-		Adapters: []types.AdapterSnapshot{a1, a2, a3},
-		Auctions: []types.AuctionSnapshot{auction},
-		Candidates: []types.OfferCandidate{
-			func() types.OfferCandidate {
-				c := candidate(a1.ID, 10, 100)
-				c.HasLiveOffer = true
-				return c
-			}(),
-			candidate(a2.ID, 10, 100),
-			candidate(a3.ID, 10, 100),
-		},
+		Now:        time.Unix(0, 0),
+		Adapters:   []types.AdapterSnapshot{a1, a2, a3},
+		Auctions:   []types.AuctionSnapshot{auction},
+		LiveOffers: []types.LiveOffer{{AdapterID: a1.ID, AuctionID: 10}},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)

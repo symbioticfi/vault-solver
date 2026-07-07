@@ -74,7 +74,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   `IVaultV2`/`IERC4626` (from a standalone `core-mirror` build) are vendored via `make refresh-abi` +
   `bindings` (two `FORGE_OUT`/`CORE_MIRROR_OUT` sources). The nested `fill`/order ABI is encoded/decoded
   via the generated bindings, never hand-rolled.
-- **Signer** — the framework's single EOA is the RFQ **caller** (holds `CALLER_ROLE` on the Executor).
+- **Signer** — the framework's single EOA is the RFQ **caller** (must be in the Executor's `callers`
+  allowlist, added by the owner via `setCallers`).
 
 ### Component port map (TS → Go)
 
@@ -82,15 +83,36 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 |---|---|
 | `index.ts` + `server.ts` (Hono) | `solver.go` (`Run`: HTTP server + poll loop) + `server.go` (Huma routes/auth) |
 | `api.ts` (Zod schemas) | `apitypes.go` (request/response structs + Huma validation tags) |
-| `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (pricing, discount, leg selection) |
-| `execution.ts` | `execution.go` (poll loop, order state machine, fill, recovery) |
+| `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (quote-server wiring) + `strategies/` (the pluggable decision layer: `default` = pricing/discount/leg selection, `webhook` = external decider) |
+| `execution.ts` | `execution.go` (poll loop, order state machine, fill; fill-plan production/recovery lives in the strategy) |
 | `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
 | `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client: `/orders`, `/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
-| `domain.ts` | `store.go` types + `strategy.go` types (records, legs, inventories) |
+| `domain.ts` | `store.go` types + `strategies/types` (strategy input/output, fill plan, legs, candidates) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
 | `db`/repositories | `store.go` (in-memory strategies/orders/attempts) |
 | `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
+
+### Pluggable strategy layer
+
+Pricing, discount, and leg-selection are not baked into the solver — they live behind a per-solver
+**strategy** interface (`DecideQuote` at quote time, `BuildFillPlan` at fill time), selected by a
+`strategy: { name, config }` block. The solver owns transport (HTTP, chain reads, signing,
+submission) and hands the strategy a snapshot of raw facts (the request, the per-adapter inventory
+candidates); the strategy owns the decision. Two ship in-tree:
+
+- **`default`** — the in-process faithful port (greedy discount + leg selection). It caches its
+  quote-time plan by `quoteId` and, on a cold cache, rebuilds from live on-chain state, re-binding the
+  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`).
+- **`webhook`** — a transport-only adapter that delegates to an external decider over JSON. It keeps
+  **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
+  `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.
+
+The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
+brain; the solver executes the output verbatim) are documented once in
+[`strategy-plan.md`](strategy-plan.md), shared with every solver. The concrete RFQ input/output types
+(`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`, `QuoteCandidate`) live in
+`internal/solvers/rfq/strategies/types`.
 
 ---
 
@@ -99,19 +121,22 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 One code path; per-environment differences are pure YAML. Sketch of `solver.config` for `rfq`:
 
 ```yaml
-solver:
-  name: rfq-filler
-  config:
-    backendUrl: https://rfq-backend.example
-    backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET   # env var NAME (secret never in config)
-    listenAddr: ":42073"                                # quote HTTP server (poll-only; no /notify)
-    executor:             "0x…"                         # Executor (bot EOA holds CALLER_ROLE)
-    reactor:              "0x…"
-    pollIntervalMs: 3000
-    orderLimit: 20
-    solverMode: external                                # "external" (default) | "internal" — see below
-    adapters:                                           # LiquidLane adapter addresses (whitelist + recovery)
-      - "0x…liquidLaneAdapter"                          # vault + collateral resolved on-chain at startup
+solvers:
+  - name: rfq-filler
+    config:
+      strategy:                                         # pluggable decision layer (omit ⇒ default)
+        name: default                                   #   "default" (in-process) | "webhook" (external decider)
+        config: {}
+      backendUrl: https://rfq-backend.example
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+      listenAddr: ":42073"                              # quote HTTP server (poll-only; no /notify)
+      executor:             "0x…"                       # Executor (bot EOA is an authorized caller — setCallers allowlist)
+      reactor:              "0x…"
+      pollIntervalMs: 3000
+      orderLimit: 20
+      solverMode: external                              # "external" (default) | "internal" — see below
+      adapters:                                         # LiquidLane adapter addresses (whitelist + recovery)
+        - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
 ```
 
 **`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
@@ -194,7 +219,8 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 
 ## 5. Open items / prerequisites
 
-- **`CALLER_ROLE` on the `Executor`** — the bot EOA must be granted it before fills land (onboarding
+- **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
+  allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
 - **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
   LiquidLane adapter address list (`vaults`; adapter whitelist + recovery — each adapter's vault and
@@ -207,8 +233,9 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing is a faithful port for now** — same discount + greedy-leg selection as the TS
-  `selectBestStrategy`; a richer quoting strategy is a later follow-up (mirrors the 3F pricing TODO).
+- **Pricing is a faithful port for now** — the `default` strategy is a faithful port of the TS greedy
+  discount + leg selection; a richer quoting strategy is a later follow-up (mirrors the 3F pricing
+  TODO), or an operator can plug their own via the `webhook` strategy (see the strategy layer below).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.

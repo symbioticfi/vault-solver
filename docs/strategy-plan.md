@@ -1,69 +1,153 @@
 # vault-solver — Solver-Local Strategy Architecture
 
-This document records the strategy boundary for vault-solver. Strategy selection is intentionally
-solver-local: the generic solver framework does not parse, validate, or route strategy configs.
+The **strategy** is the decision-making core of a solver. This document records the *generic* strategy
+boundary shared by every solver. Concrete per-solver contracts (the actual input/output types) live in
+that solver's own plan under `docs/` and in its `strategies/types` package — never here.
 
-Stage scope:
+## Core principle
 
-- implemented: RFQ and 3F strategy layers with `default` and `webhook`
-- documented only: RedStone future strategy boundary
+A solver splits into two parts:
 
-## Common Code
+- **The solver skeleton** — everything that faces the outside world: discovering work, reading
+  chain/API state, assembling a snapshot of **raw facts**, then signing and submitting whatever the
+  strategy decides. It holds the key and moves funds, but it makes no economic decision.
+- **The strategy** — the brain. Given the solver's input snapshot, it decides what to do and returns a
+  concrete, ready-to-execute plan.
 
-The common framework still owns only solver lifecycle:
+The flow is one-directional and trusted:
+
+```
+solver builds input (raw facts)  →  strategy decides  →  solver executes the output verbatim
+```
+
+**The strategy is a trusted module, and it is the core of the solver.** The solver does not re-verify,
+re-price, clamp, re-rank, or otherwise modify the strategy's output — it executes it as given. Any
+validation, sizing bounds, eligibility filtering, replay, caching, or recovery that a decision needs
+lives *inside* the strategy implementation, not in the solver skeleton. This keeps the boundary crisp:
+swapping in a different strategy (including an external one) never requires the solver to grow — or
+second-guess — decision logic.
+
+Concretely:
+
+- The solver provides **raw facts, not decisions** — available liquidity and caps, discovered work
+  items, current state, things it already holds. It never pre-computes a sizing, a ranking, or a
+  candidate selection for the strategy.
+- The strategy returns a **complete plan the solver runs as-is**. The solver's only remaining
+  responsibility is execution integrity — values that are properties of the transaction rather than
+  the decision (nonce, signature, EIP-712 domain). Those the solver sets itself, and the strategy can
+  never supply them.
+
+## The contract
+
+Each solver defines its own decision interface — one method per decision point — in its own
+`strategies/types` package. **There is no single cross-solver `Strategy` type: each solver's interface
+is unique to its workflow** (a quote/fill solver's differs from an auction solver's, which differs from
+a bidding solver's). What every solver shares is the *pattern*, not the signature — a solver-built
+input of raw facts in, a strategy-decided output out.
+
+For direction, the 3F solver's interface looks like this:
+
+```go
+// package types — internal/solvers/bridgefacilitator/strategies/types
+type Strategy interface {
+    DecideOffers(ctx, OfferInput) (OfferOutput, error)
+}
+```
+
+where `OfferInput` carries only raw facts (adapter liquidity/caps, open auctions, offers already held)
+and `OfferOutput` is the list of offers for the solver to sign and submit. A quote/fill solver instead
+exposes a quote decision and a fill decision; a bidding solver a single bid decision. The concrete
+types are documented in each solver's plan (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`, …) and defined in
+its `strategies/types` package — this document intentionally does not restate them.
+
+## Selection and configuration
+
+Strategy selection is solver-local: the generic framework does not parse, validate, or route strategy
+configs. It owns only solver lifecycle.
 
 ```yaml
 solvers:
-  - name: rfq-filler
+  - name: <solver>
     config:
       strategy:
-        name: default
-        config: {}
-      backendUrl: ${RFQ_BACKEND_URL}
+        name: default        # solver-local strategy name (omit ⇒ default)
+        config: {}            # opaque to the framework and the solver skeleton
 ```
 
-`solvers[].config` is opaque to the framework. Each solver decides whether it supports a strategy
-field and which strategy names exist. The solver-level strategy factory only routes by `name`; the
-selected strategy implementation owns parsing and validating its own `config` node.
-
-The common shape inside a solver config is:
+`solvers[].config` is opaque to the framework; each solver decides whether it supports a `strategy`
+field and which names exist. Inside a solver:
 
 ```go
 type StrategySpec struct {
     Name   string
     Config yaml.Node
 }
-```
 
-Each solver keeps a local registry/factory:
-
-```go
 type StrategyFactory func(raw yaml.Node, deps StrategyDeps) (types.Strategy, error)
 ```
 
-`default`, `webhook`, `morpho`, `aave`, or any custom local strategy may self-register from its own
-package `init()` under a solver-local unique name. The solver only asks the registry for
-`strategy.name`; the selected strategy owns parsing `strategy.config`.
+Each solver keeps a local registry/factory. A strategy self-registers from its own package `init()`
+under a solver-local unique name; the solver-level factory only routes by `name`, and the selected
+strategy owns parsing and validating its own `config` node.
 
-The only shared strategy-adjacent package is `internal/webhook`:
+## Built-in strategies
 
-- HTTP JSON `POST`
-- timeout
-- request/response body byte limits
-- literal/env-backed headers
-- strict response decode
-- non-2xx and empty body errors
+Two strategy kinds are conventional across solvers:
 
-`internal/webhook` is only a transport client. It has no solver names, no strategy registry, and no
-RFQ/3F/RedStone DTOs.
+- **`default`** — the in-process strategy that ships with the solver. It is the reference decision
+  logic and needs no external service. It may validate its own output as thoroughly as it likes; that
+  is internal to the strategy.
+- **`webhook`** — delegates the decision to an external HTTP service. It POSTs the solver's input
+  snapshot as JSON and hands back the plan the service returns. The external decider is the brain; the
+  in-process handler is transport-only and adds no decision logic and no second-guessing of its own.
+  This is the seam for running custom decision logic out-of-process without forking the solver.
 
-Webhook strategy config:
+Both plug into the same trusted boundary: the solver executes their output the same way, so a solver
+is never coupled to which strategy is loaded.
+
+## Adding your own strategy
+
+Strategies are pluggable per solver, and there are two ways to add one.
+
+**Out-of-tree, no Go changes — run a `webhook`.** Point the solver's `strategy` at your own HTTP
+service (see below). It receives the solver's raw-facts input as JSON and returns the plan to execute;
+the solver runs it verbatim. This is the fastest path and keeps your decision logic in your own
+codebase and language.
+
+**In-tree — register a new strategy on the solver.** To ship a strategy alongside a solver, implement
+that solver's interface (each is unique — you implement the one the target solver defines):
+
+1. Create a package under the solver's `strategies/<name>/` and implement the solver's strategy
+   interface (e.g. `DecideOffers` for 3F), consuming its `strategies/types` input and returning its
+   output type.
+2. Add a `NewFromConfig(raw yaml.Node, deps) (types.Strategy, error)` constructor that parses your own
+   `strategy.config` node — the framework hands it to you opaque, so you own its schema and validation.
+3. Self-register from your package `init()` via the solver's local
+   `strategies.Register("<name>", NewFromConfig)`, under a name unique within that solver.
+4. Ensure the package is imported so its `init()` runs (blank-import it where the solver wires its
+   strategies).
+5. Select it in config: `strategy: { name: <name>, config: { … } }`.
+
+Either way the solver skeleton is untouched: it provides the same input and executes whatever plan your
+strategy returns — so the correctness of the decision is entirely yours to own.
+
+## Shared transport: `internal/webhook`
+
+The only shared strategy-adjacent package is `internal/webhook`, a generic HTTP JSON client:
+
+- HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
+- literal or env-backed headers (secrets by env-var name, never inlined)
+- strict response decode; non-2xx and empty-body responses are errors
+
+It has no solver names, no strategy registry, and no per-solver DTOs — each solver's webhook strategy
+owns its own wire types (conventionally lower-camel JSON with decimal strings for big integers,
+provided by that solver's `strategies/types`).
 
 ```yaml
 strategy:
   name: webhook
   config:
-    url: https://strategy.example.com/rfq
+    url: https://strategy.example.com/decide
     timeout: 500ms
     maxRequestBytes: 1048576
     maxResponseBytes: 1048576
@@ -71,327 +155,3 @@ strategy:
       authorization:
         env: STRATEGY_AUTH_HEADER
 ```
-
-The size limits cap JSON request/response bodies. Omitted limits default to 1 MiB each.
-
-## RFQ
-
-Package layout:
-
-```text
-internal/solvers/rfq/
-  strategytypes/          # RFQ strategy input/output and interface
-  strategyregistry/       # RFQ-local strategy registry/factory
-  strategies/default/   # local default strategy
-  strategies/webhook/   # RFQ webhook adapter
-```
-
-Contract:
-
-```go
-type Strategy interface {
-    DecideQuote(ctx, input QuoteInput) (QuoteOutput, error)
-    BuildFillPlan(ctx, input FillInput) (*FillPlan, error)
-}
-```
-
-`DecideQuote` is called by the quote server. `BuildFillPlan` is called at fill time. The strategy may
-return a quote-time cached plan or rebuild one from the fill-time input. The strategy is a trusted
-component: semantic validation, replay, cache matching, and recovery correctness live inside the
-strategy implementation, not in the solver skeleton.
-
-RFQ solver owns:
-
-- `/quote` parsing and request validation
-- chain/type/token scope checks
-- adapter whitelist filtering
-- quote/fill-time candidate construction
-- discount resolution at fill time
-- calldata, signing, and tx submission
-
-RFQ strategy owns:
-
-- candidate scoring
-- direct/discount leg selection
-- input split across legs
-- quote/decline decision
-- quote-time fill-plan caching
-- fill-plan recovery after restart/cache miss
-- strategy output validation, if the implementation wants it
-
-Quote input:
-
-```go
-type QuoteInput struct {
-    RequestID         string
-    QuoteID           string
-    ChainID           int64
-    Executor          address
-    TokenIn           address
-    TokenOut          address
-    AmountIn          uint256
-    RequiredAmountOut uint256?  // recovery only
-    Candidates        []QuoteCandidate
-    Now               time
-}
-
-type QuoteCandidate struct {
-    ID            string
-    Adapter       address
-    Asset         address
-    AssetDecimals int
-    MaxAssets     uint256
-    MaxRate       uint256
-    DiscountID    bytes32?
-}
-```
-
-Quote output:
-
-```go
-type QuoteOutput struct {
-    Decision        Decision // quote | decline
-    Reason          string?
-    QuotedAmountOut uint256?
-    Legs            []QuoteLeg
-}
-
-type QuoteLeg struct {
-    CandidateID string
-    AmountIn    uint256
-    AmountOut   uint256
-}
-```
-
-Fill input/output:
-
-```go
-type FillInput struct {
-    RequestID         string
-    QuoteID           string
-    ChainID           int64
-    Executor          address
-    TokenIn           address
-    TokenOut          address
-    AmountIn          uint256
-    RequiredAmountOut uint256
-    Candidates        []QuoteCandidate
-    Now               time
-}
-
-type FillPlan struct {
-    QuoteID         string
-    RequestID       string
-    TokenIn         address
-    TokenOut        address
-    AmountIn        uint256
-    QuotedAmountOut uint256
-    Legs            []FillLeg
-}
-
-type FillLeg struct {
-    Adapter    address
-    AmountIn   uint256
-    AmountOut  uint256
-    MaxRate    uint256
-    DiscountID bytes32?
-}
-```
-
-RFQ webhook wire format is RFQ-specific. It uses lower-camel JSON field names and decimal strings for
-big integer values. The strategy input/output types provide their own JSON encoding so the webhook
-adapter does not duplicate the contract.
-
-Default strategy validation/replay:
-
-- `decline` must not include quote data.
-- `quote` must include positive `quotedAmountOut` and at least one leg.
-- every leg must reference an input candidate.
-- duplicate candidate use is rejected.
-- candidate asset must equal `tokenOut`.
-- leg `amountIn` and `amountOut` must be positive.
-- leg `amountOut` must not exceed candidate `maxAssets`.
-- leg `amountOut` must be achievable under candidate `maxRate`.
-- sum of leg `amountIn` must equal input `amountIn`.
-- sum of leg `amountOut` must equal `quotedAmountOut`.
-- recovery rejects `quotedAmountOut < requiredAmountOut`.
-- default strategy rebuilds execution records from input candidates, not from strategy-supplied adapter data.
-- webhook strategy treats the remote decider as trusted and only rejects structurally unusable plans.
-
-## 3F Strategy Boundary
-
-Package layout:
-
-```text
-internal/solvers/bridgefacilitator/
-  strategytypes/          # 3F strategy input/output and interface
-  strategyregistry/       # 3F-local strategy registry/factory
-  strategies/default/     # local default strategy
-  strategies/webhook/     # 3F webhook adapter
-```
-
-Decision:
-
-```go
-DecideOffers(ctx, input) -> output
-```
-
-The solver calls this once per discover tick after API reads, on-chain adapter reads, and live-offer
-cache pruning. The solver builds a compact snapshot and delegates offer selection, validation, sizing,
-and pricing to the trusted strategy.
-
-Input:
-
-```go
-type OfferInput struct {
-    Now        time
-    Adapters   []AdapterSnapshot
-    Auctions   []AuctionSnapshot
-    Candidates []OfferCandidate
-}
-
-type AdapterSnapshot struct {
-    ID            string
-    Adapter       address
-    Vault         address
-    Collateral    address
-    Fundable      uint256 // getMaxAssets()
-    OpenCount     uint64  // requestsLength()
-    MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
-    MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
-    MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
-    MaxConcurrent uint64  // MAX_REQUESTS
-}
-
-type AuctionSnapshot struct {
-    ID              string
-    AuctionID       int64
-    OriginalIndex   int
-    Request         address
-    Status          string
-    DepositAsset    address
-    AmountRequested uint256
-    RemainingAmount uint256
-    MaxRateBps      float64
-}
-
-type OfferCandidate struct {
-    ID        string // adapterID + ":" + auctionID
-    AdapterID string
-    AuctionID int64
-    Capacity  uint256
-    HasLiveOffer bool
-}
-```
-
-`OfferCandidate` is the join between one adapter snapshot and one auction snapshot. It intentionally
-does not duplicate `AmountRequested`, `RemainingAmount`, `MaxRateBps`, `MinYieldBps`, fundable
-liquidity, or caps; those live in `Adapters` and `Auctions`. This avoids drift inside one input
-snapshot.
-
-`Capacity` is the solver's objective per-offer capacity snapshot for that adapter at this point in
-time, before strategic allocation across multiple candidates. It is computed roughly as:
-
-```text
-min(adapter.Fundable,
-    adapter.MaxAssets)
-```
-
-If sizing cannot produce a usable capacity, `Capacity` is zero and the strategy decides what to do with
-it. `HasLiveOffer` lets the strategy own duplicate-offer policy while the solver still supplies the
-live cache snapshot.
-
-Output:
-
-```go
-type OfferOutput struct {
-    Offers []OfferExecution
-}
-
-type OfferExecution struct {
-    AuctionID      int64
-    Request        address
-    Maker          address
-    Principal      uint256
-    ExpectedReturn uint256
-    Reason         string?
-}
-```
-
-3F strategy owns collateral matching, live-offer dedup policy, positive/cumulative capacity checks,
-per-request max/min assets, remaining auction amount, open count, max concurrent requests,
-yield/return preference, ordering, offer sizing, expected return, and skip reasons. The default local
-strategy implements the current most-fundable behavior and validates those invariants internally.
-
-The 3F solver is an execution skeleton. It uses `AuctionID` to recover the raw auction EIP-712 domain,
-signs the trusted strategy's execution offer, calls `createOffer`, and records the live-offer cache
-after successful submission. Strategy output cannot set nonce or signature.
-
-## RedStone Future Boundary
-
-Decision:
-
-```go
-DecideBid(ctx, input) -> output
-```
-
-The solver should call this per RedStone auction frame. Strategies can have their own discovery
-state, for example a default Morpho strategy.
-
-Input:
-
-```go
-type BidInput struct {
-    Now     time
-    Context BidContext
-    Auction AuctionSnapshot
-    Adapter AdapterSnapshot
-}
-
-type BidContext struct {
-    ChainID               uint64
-    Executor              address
-    ExecutorNativeDeposit uint256
-    Callback              address
-    CallbackNativeBalance uint256
-}
-
-type AuctionSnapshot struct {
-    ID       string
-    Deadline time
-    Prices   []PriceUpdate
-}
-
-type AdapterSnapshot struct {
-    Adapter    address
-    Vault      address
-    Collateral address
-
-    // State read by the solver from the adapter/vault/backend before the bid decision.
-    AvailableAssets uint256
-    MaxAssets       uint256
-    MaxRate         uint256
-    Redeemable      uint256
-}
-
-```
-
-Output:
-
-```go
-type BidOutput struct {
-    Decision      Decision // bid | skip
-    Reason        string?
-    BidAmount     uint256?
-    OperationData bytes?
-}
-```
-
-RedStone is planned as single-adapter in this stage, so the input carries one `AdapterSnapshot`, not an
-adapter list. `BidContext` holds addresses and native balances/deposits that describe the execution
-envelope; auction and adapter snapshots stay focused on protocol state. Supported operation kinds are
-not part of the input in this stage: the solver knows the callback/executor envelope and validates
-returned `OperationData` before signing. The solver owns WebSocket lifecycle, auction deduplication,
-deadlines, adapter reads, executor/callback envelope constraints, signing, WS send, and final
-validation. Strategy owns opportunity scoring, bid sizing, operation data construction, and skip
-reason.

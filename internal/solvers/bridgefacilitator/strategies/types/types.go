@@ -13,12 +13,14 @@ type Strategy interface {
 	DecideOffers(ctx context.Context, input OfferInput) (OfferOutput, error)
 }
 
-// OfferInput is the 3F strategy decision snapshot. It is intentionally solver-local.
+// OfferInput is the 3F strategy decision snapshot. It is intentionally solver-local. The solver only
+// supplies raw facts — adapter liquidity/caps, open auctions, and the live offers it already holds; the
+// strategy owns every decision (sizing, selection, dedup) built from them.
 type OfferInput struct {
 	Now        time.Time
 	Adapters   []AdapterSnapshot
 	Auctions   []AuctionSnapshot
-	Candidates []OfferCandidate
+	LiveOffers []LiveOffer
 }
 
 type AdapterSnapshot struct {
@@ -50,13 +52,11 @@ type AuctionSnapshot struct {
 	MaxRateBps      float64
 }
 
-type OfferCandidate struct {
-	ID string
-
-	AdapterID    string
-	AuctionID    int64
-	Capacity     *big.Int
-	HasLiveOffer bool
+// LiveOffer is one offer the solver already holds through an adapter on an auction. The strategy uses
+// these to avoid re-offering through the same adapter while one is live.
+type LiveOffer struct {
+	AdapterID string
+	AuctionID int64
 }
 
 type OfferOutput struct {

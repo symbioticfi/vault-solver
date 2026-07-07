@@ -1,0 +1,72 @@
+# vault-solver — RFQ Filler (`rfq-filler`), annotated example.
+#
+# A quote server + order-filling poller for Symbiotic RFQ, on top of per-vault LiquidLaneAdapters.
+# Addresses below are the Ethereum mainnet (chainId 1) deployment; for a testnet (e.g. Hoodi,
+# chainId 560048) swap chainId and the executor/reactor/adapter addresses.
+#
+# Provide secrets by env-var NAME (read at point of use, never in the parsed config):
+#   SOLVER_PRIVATE_KEY          — the caller EOA; must be an authorized caller of the Executor
+#                                 (the Executor `setCallers` allowlist), granted out-of-band by its owner
+#   RFQ_BACKEND_SHARED_SECRET   — shared secret authenticating the backend peer on POST /quote
+# ${VAR} fields are expanded from the environment at load time. Never commit a real key or endpoint.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary READ RPC (nonce, gas, receipts, and all contract reads)
+  chainId: 1                       # must match the RPC's chain id (asserted at startup)
+  # writeRpcUrl carries ONLY transaction broadcasts (eth_sendRawTransaction); every read stays on
+  # rpcUrl. Point at a private/MEV-protected relay to submit fills privately. Omit to send via rpcUrl.
+  writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy
+  # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
+  #   - ${ETH_RPC_URL_MAINNET_BACKUP}
+
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY       # env var holding the caller EOA's hex private key (submits Executor.fill)
+  # keystorePath / passphraseEnv are also supported (see the 3f example) — provide exactly one key source.
+
+txManager:
+  confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
+  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
+  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+
+observability:
+  addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)
+  debug: false                     # debug-level logging; the --debug CLI flag overrides this
+  # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+
+solvers:
+  - name: rfq-filler
+    config:
+      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md
+        name: default                  #   "default" (in-process pricing/selection) | "webhook" (external decider)
+        config: {}                     #   opaque to the framework; parsed by the named strategy
+
+      backendUrl: ${RFQ_BACKEND_URL}   # RFQ backend base URL (host root; the client adds the /api/v1 prefix)
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
+      listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
+      pollIntervalMs: 3000             # how often to poll the backend for awarded open orders
+      orderLimit: 20                   # max open orders fetched per poll
+
+      # RFQ contract deployment (mainnet):
+      executor: "0xe60E84218BB81539cc599A1E213d6F67058C69Cf"   # Executor — the bot calls Executor.fill to settle
+      reactor:  "0x5eB54c47837cC84249F697e3CD8C5D88bCc35dac"   # Reactor — invoked by the Executor at fill time
+
+      # solverMode: "external" (default) | "internal".
+      #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
+      #              scopes both quoting and filling (an empty list is a startup error).
+      #   internal — Symbiotic-internal: uses the public discounts flow and accepts every advertised
+      #              adapter; `adapters` is optional (extra permissioned recovery inventory).
+      solverMode: external
+
+      # tokensToQuote scopes which input tokens the filler will quote, evaluated against
+      # permissionedTokens: "all" (default) | "permissioned" (only tokens in the list below) |
+      # "permissionless" (only tokens NOT in the list). Often set per instance via env.
+      # tokensToQuote: all
+      # permissionedTokens:            # input-token addresses treated as permissioned for the scope above
+      #   - "0x..."
+
+      # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
+      # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode
+      # these scope quoting/filling and are required; the Executor must additionally be an authorized
+      # filler on each adapter (its marketMaker or owner, or a delegated isFiller).
+      adapters:
+        - "0x..."   # TODO: concrete per-token LiquidLane adapter instance(s) for this network

@@ -98,7 +98,7 @@ func Load(path string) (*Config, error) {
 
 	// Expand ${VAR}/$VAR from the environment so non-secret, deploy-injected fields (e.g. rpcUrl)
 	// can come from the environment. Secrets must NOT use this: they belong in the *Env name fields
-	// (keyEnv, passphraseEnv, apiKeyEnv), which os.Getenv at point of use and never place the secret
+	// (keyEnv, passphraseEnv, backendSharedSecretEnv, …), which os.Getenv at point of use and never place the secret
 	// into this Config struct (so dumping/logging the config can't leak it). An undefined var
 	// expands to "", which surfaces via Validate for required fields.
 	raw = []byte(os.ExpandEnv(string(raw)))
@@ -146,7 +146,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if len(c.Solvers) == 0 {
-		return errors.New("at least one solver is required (set `solver` or `solvers`)")
+		return errors.New("at least one solver is required (set `solvers`)")
 	}
 	seen := make(map[string]bool, len(c.Solvers))
 	for i, s := range c.Solvers {

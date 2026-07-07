@@ -11,7 +11,7 @@
 #       OEV_HARNESS=/path/to/symbiotic        (default: /tmp/symbiotic/symbiotic)
 #   - Our bot config tuned for the dev testbed (price + dry-run are env knobs, exported below —
 #     OEV_ONCHAIN_PRICE_FOR_TEST=true, OEV_DRY_RUN unset → real bidding):
-#       OEV_CONFIG=config/redstone-oev.sepolia.example.yaml
+#       OEV_CONFIG=config/redstone-oev.example.yaml
 #   - Our bot secrets in env: OEV_SIGNER_PRIVATE_KEY, OEV_REDSTONE_API_KEY, ETH_RPC_URL_SEPOLIA
 #   - Sepolia uses OEV_TEST_MONITOR=true because public api.morpho.org does not index this custom Morpho.
 #   - One-time on-chain setup done (docs/OEV-PLAN.md §5–§6): the callback is wired
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 HARNESS="${OEV_HARNESS:-/tmp/symbiotic/symbiotic}"
-CONFIG="${OEV_CONFIG:-config/redstone-oev.sepolia.example.yaml}"
+CONFIG="${OEV_CONFIG:-config/redstone-oev.example.yaml}"
 MANIFEST="${OEV_MANIFEST:-$(dirname "$0")/addresses.sepolia.json}"
 PRICE_USD="${PRICE_USD:-1550}"
 RUN_SECONDS="${RUN_SECONDS:-120}"
