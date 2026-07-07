@@ -14,9 +14,10 @@ func TestBidInputMarshalJSON(t *testing.T) {
 	input := BidInput{
 		Now: time.Unix(10, 0).UTC(),
 		Auction: AuctionSnapshot{
-			ID:        "a1",
-			Timestamp: 123,
-			TimeoutMs: 400,
+			ID:            "a1",
+			Timestamp:     123,
+			TimeoutMs:     400,
+			RawPriceCount: 2,
 			Prices: []AuctionPrice{{
 				Oracle: common.HexToAddress("0x00000000000000000000000000000000000000aa"),
 				Price:  big.NewInt(123456789),
@@ -43,7 +44,6 @@ func TestBidInputMarshalJSON(t *testing.T) {
 			Executor:        common.HexToAddress("0x00000000000000000000000000000000000000bb"),
 			Callback:        common.HexToAddress("0x00000000000000000000000000000000000000ab"),
 			Signer:          common.HexToAddress("0x00000000000000000000000000000000000000dd"),
-			ExecutorNonce:   7,
 			ExecutorDeposit: big.NewInt(1000),
 			MaxTxGasPrice:   big.NewInt(30),
 			GasLimit:        2_000_000,
@@ -62,6 +62,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 	js := string(b)
 	for _, want := range []string{
 		`"timeoutMs":400`,
+		`"rawPriceCount":2`,
 		`"adapter":{"address":"0x00000000000000000000000000000000000000cc"`,
 		`"vault":"0x00000000000000000000000000000000000000cd"`,
 		`"loan":"0x00000000000000000000000000000000000000ee"`,

@@ -53,7 +53,10 @@ func (s *Solver) opsLoop(ctx context.Context) {
 // callback/funding state is read inside strategies.
 func (s *Solver) refreshState(ctx context.Context) {
 	now := time.Now()
-	gasLimit := s.readGasLimit(ctx)
+	startHead, ok := s.readHead(ctx)
+	if !ok {
+		return
+	}
 	st, err := s.reader.ReadExecutorState(ctx, s.cfg.Executor, s.deps.Signer.Address())
 	if err != nil {
 		s.log.Error(err, "read executor state failed; keeping cache")
@@ -64,21 +67,35 @@ func (s *Solver) refreshState(ctx context.Context) {
 		s.log.Error(err, "read adapter snapshot failed; keeping cache", "adapter", s.cfg.Adapter.Hex())
 		return
 	}
-	s.state.store(cachedState{Exec: st, Adapter: adapter, GasLimit: gasLimit, UpdatedAt: now})
+	endHead, ok := s.readHead(ctx)
+	if !ok {
+		return
+	}
+	if endHead.Number != startHead.Number {
+		s.log.V(1).Info("state refresh crossed block boundary; keeping cache",
+			"startBlock", startHead.Number, "endBlock", endHead.Number)
+		return
+	}
+	s.state.store(cachedState{Exec: st, Adapter: adapter, GasLimit: startHead.GasLimit, UpdatedAt: now})
 	s.applyExecutorState(st, now)
 }
 
-func (s *Solver) readGasLimit(ctx context.Context) uint64 {
+type headSnapshot struct {
+	Number   uint64
+	GasLimit uint64
+}
+
+func (s *Solver) readHead(ctx context.Context) (headSnapshot, bool) {
 	header, err := s.deps.Chain.HeaderByNumber(ctx, nil)
 	if err != nil {
-		s.log.Error(err, "read latest header failed; using zero gas limit")
-		return 0
+		s.log.Error(err, "read latest header failed; keeping cache")
+		return headSnapshot{}, false
 	}
 	if header == nil {
-		s.log.Error(errors.New("latest header missing"), "using zero gas limit")
-		return 0
+		s.log.Error(errors.New("latest header missing"), "keeping cache")
+		return headSnapshot{}, false
 	}
-	return header.GasLimit
+	return headSnapshot{Number: header.Number.Uint64(), GasLimit: header.GasLimit}, true
 }
 
 // applyExecutorState reconciles bookkeeping derived from the Executor state read.

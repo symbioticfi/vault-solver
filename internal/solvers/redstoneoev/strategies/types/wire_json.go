@@ -23,10 +23,11 @@ type bidInputJSON struct {
 }
 
 type auctionSnapshotJSON struct {
-	ID        string             `json:"id"`
-	Timestamp int64              `json:"timestamp"`
-	TimeoutMs int                `json:"timeoutMs"`
-	Prices    []auctionPriceJSON `json:"prices"`
+	ID            string             `json:"id"`
+	Timestamp     int64              `json:"timestamp"`
+	TimeoutMs     int                `json:"timeoutMs"`
+	RawPriceCount int                `json:"rawPriceCount"`
+	Prices        []auctionPriceJSON `json:"prices"`
 }
 
 type auctionPriceJSON struct {
@@ -59,9 +60,7 @@ type bidContextJSON struct {
 	Executor        common.Address `json:"executor"`
 	Callback        common.Address `json:"callback"`
 	Signer          common.Address `json:"signer"`
-	ExecutorNonce   uint64         `json:"executorNonce"`
 	ExecutorDeposit string         `json:"executorDeposit"`
-	ExecutorLocked  bool           `json:"executorLocked"`
 	MaxTxGasPrice   string         `json:"maxTxGasPrice"`
 	GasLimit        uint64         `json:"gasLimit"`
 }
@@ -102,10 +101,11 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 	return json.Marshal(bidInputJSON{
 		Now: in.Now,
 		Auction: auctionSnapshotJSON{
-			ID:        in.Auction.ID,
-			Timestamp: in.Auction.Timestamp,
-			TimeoutMs: in.Auction.TimeoutMs,
-			Prices:    prices,
+			ID:            in.Auction.ID,
+			Timestamp:     in.Auction.Timestamp,
+			TimeoutMs:     in.Auction.TimeoutMs,
+			RawPriceCount: in.Auction.RawPriceCount,
+			Prices:        prices,
 		},
 		Adapter: adapterSnapshotJSON{
 			Address:      in.Adapter.Address,
@@ -123,9 +123,7 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 			Executor:        in.Context.Executor,
 			Callback:        in.Context.Callback,
 			Signer:          in.Context.Signer,
-			ExecutorNonce:   in.Context.ExecutorNonce,
 			ExecutorDeposit: bigStringZero(in.Context.ExecutorDeposit),
-			ExecutorLocked:  in.Context.ExecutorLocked,
 			MaxTxGasPrice:   bigStringZero(in.Context.MaxTxGasPrice),
 			GasLimit:        in.Context.GasLimit,
 		},

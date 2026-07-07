@@ -31,10 +31,11 @@ func (s *Solver) bidInput(
 	return types.BidInput{
 		Now: now,
 		Auction: types.AuctionSnapshot{
-			ID:        a.ID,
-			Timestamp: a.Timestamp,
-			TimeoutMs: a.TimeoutMs,
-			Prices:    auctionPricesForStrategy(a),
+			ID:            a.ID,
+			Timestamp:     a.Timestamp,
+			TimeoutMs:     a.TimeoutMs,
+			RawPriceCount: len(a.Payload.Prices),
+			Prices:        auctionPricesForStrategy(a),
 		},
 		Adapter: cloneAdapterSnapshot(st.Adapter),
 		Context: types.BidContext{
@@ -42,9 +43,7 @@ func (s *Solver) bidInput(
 			Executor:        s.cfg.Executor,
 			Callback:        s.cfg.Callback,
 			Signer:          s.deps.Signer.Address(),
-			ExecutorNonce:   st.Exec.Nonce.Uint64(),
 			ExecutorDeposit: cloneBig(st.Exec.Deposit),
-			ExecutorLocked:  st.Exec.Locked,
 			MaxTxGasPrice:   cloneBig(gasPrice),
 			GasLimit:        st.GasLimit,
 		},

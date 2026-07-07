@@ -30,16 +30,6 @@ func candidatesFromAuctionWithAdapter(log logr.Logger, snap *snapshot, auction t
 	})
 }
 
-func candidatesFromCachedPrices(snap *snapshot, nowTs uint64) []evalItem {
-	return candidatesFromCachedPricesWithAdapter(snap, nowTs, types.AdapterSnapshot{})
-}
-
-func candidatesFromCachedPricesWithAdapter(snap *snapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromSnapshot(snap, nowTs, adapter, func(id common.Hash, _ MarketInfo) *big.Int {
-		return snap.prices[id]
-	})
-}
-
 func auctionPriceForMarket(frame map[common.Address]*big.Int, info MarketInfo) *big.Int {
 	oracle := info.Params.Oracle
 	if oracle == (common.Address{}) {

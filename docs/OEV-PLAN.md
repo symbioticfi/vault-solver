@@ -93,7 +93,7 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   receipt for diagnostics. Realized profit is read off the callback's loan-token balance / balance sheet,
   not event accounting.
 - **`Run(ctx)`** owns the resilient WS client (connect with `x-api-key`, subscribe `oev/liquidations` +
-  every `oev/notify/<callback>` returned by the strategy, reconnect with backoff + jitter, ~7 h proactive
+  `oev/notify/<callback>` for the solver-configured callback, reconnect with backoff + jitter, ~7 h proactive
   rotation, staleness watchdog), the hot-path handler, the strategy's refresh loops, and the Executor-state
   ops loop. It joins every background loop on shutdown (`sync.WaitGroup`) so no goroutine outlives `Run`.
   Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
@@ -118,8 +118,9 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   count is bounded; a paused/dry/unserved vault yields no quote → no bid; malformed fields skip the leg,
   never panic. Solver-owned pre-bid gates cover the breaker, fresh Executor state, Executor deposit floor,
   locked signer, and the generic execution envelope. Strategy-owned gates cover snapshot block epoch,
-  callback balance, bundle-level gas profitability, and the adapter's `isFiller` gate. The bid is bounded **off-chain** by the
-  configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec §8) — the contract carries no on-chain bid cap.
+  callback balance, bundle-level gas profitability, and the adapter's `isFiller` gate. The default strategy computes the bid **off-chain** from the
+  configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec §8); optional solver-owned `maxBidWei`
+  caps the final signed bid for every strategy. The contract carries no on-chain bid cap.
 - **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): auctions/bids/wins/
   failed-liquidations counters, a `skips_total{reason}` vector, a hot-path latency histogram, and deposit
   gauges. The breaker halts bidding after N failed liquidations in a rolling window,
@@ -153,19 +154,18 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
 | `strategies/webhook/` | OEV webhook strategy adapter over the shared `internal/webhook` JSON client |
-| `strategies/default/candidates.go` | auction frame → `[]evalItem` (production uses the auctioned frame price; Sepolia test monitor uses cached on-chain oracle prices) + default strategy candidate sizing (`candidates` → `sizeLeg`); the candidate set is our own tracked positions (`workerCandidates`) — the frame's pushed positions are not consumed |
+| `strategies/default/candidates.go` | auction frame → `[]evalItem` (production and Sepolia test monitor both use the auctioned frame price) + default strategy candidate sizing (`candidates` → `sizeLeg`); the candidate set is our own tracked positions (`workerCandidates`) — the frame's pushed positions are not consumed |
 | `strategies/default/bundle.go` | single-token leg selection (`selectNetBundle`/`selectBundle`, `scoredLeg`/`chosenBundle`): live bidding chooses the bundle by bounded after-cost net search; dry-run/no-rate fallback ranks by gross loan profit; bid is `max(bidEth, grossProfitNative * totalBundleProfitBps / 10000)` |
 | `strategies/default/sizing.go` | adapter pricing primitives (`swapOutFor`/`collForBudget`) and `sizeLeg`, the per-candidate single-swap leg sizing/decision over the shared Morpho math |
 | `strategies/default/chainreader.go` | default-strategy on-chain reads: Morpho params/test state, adapter pair discovery for monitor scoping, loan↔ETH feeds, and callback balance |
 | `strategies/default/operationdata.go` | ABI-encode Morpho callback `operationData`: auction auth, capped max-seize legs, loan-denominated profit floors, and callback-auth signature |
 | `internal/morpho/math.go` | shared Morpho Blue math: health, LIF, share/asset conversions, Taylor accrual (exact big.Int rounding) |
-| `internal/liquidlane/math` | shared LiquidLane fixed-point rate/amount math |
 | `internal/liquidlane/gas` | shared LiquidLane route prediction (`acquire`/`allocate`/`deallocate`/`unknown`) and adapter swap gas units only |
 | `strategies/default/monitor.go` | Morpho API snapshot, atomic hot-path state, and adapter-scoped market filtering |
 | `strategies/default/morphoapi.go` | OEV-local adapter over generated Morpho GraphQL operations: `markets` returns adapter-scoped market state (§3.4), `marketPositions` returns at-risk position state capped at `maxTrackedPositions` (§3.2) |
 | `api/morphographql` | generated Morpho GraphQL binding from vendored schema + explicit operation documents |
 | `chainreader.go` | solver-owned on-chain reads: Executor accounting and adapter snapshot |
-| `reservations.go` | in-flight payBid/gas reservation + pending-auction snapshot + auction-id de-dup (`seenAuctions`) |
+| `reservations.go` | in-flight auction reservation + pending-auction snapshot + auction-id de-dup (`seenAuctions`) |
 | `wsclient.go` | resilient WS client: reconnect/backoff/jitter, ~7 h rotation, heartbeat, subscribe replay |
 | `wsmessages.go` | wire types pinned to RedStone's zod + a captured auction frame, including auction identity/key hashing |
 | `eip191.go` | EXECUTOR_V6 digest + EIP-191 `SignBid` via `Signer.SignHash` (golden + parity tests) |
@@ -345,8 +345,8 @@ deterministic gross-ordered subsets, so a locally best leg cannot block a lower-
 shared-liquidity/gas economics. Every scored leg is expected-positive before gas; the final bundle must clear
 gas, bid, and `strategy.config.bid.minBundleProfitBidBps`.
 
-Bundle depth is not configured. Each trial bundle must fit the gas envelope. Rate math lives in
-`internal/liquidlane/math`.
+Bundle depth is not configured. Each trial bundle must fit the gas envelope. Adapter amount/rate math
+stays in the default strategy sizing path, because it is tied to Morpho liquidation economics here.
 Adapter route prediction and swap gas units live in `internal/liquidlane/gas`, while RedStone settlement
 overhead stays in the default strategy:
 `predictedGas <= 85% * min(latestHeader.gasLimit, observed RedStone settlement cap 2M)`. Predicted gas is fixed bundle gas
@@ -397,10 +397,10 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 - **Other pre-bid gates**: solver Executor cache age (`executor_state_stale`, vs
   `intervals.executorStateMaxAgeMs`), default-strategy cache age (`stale_state`, vs
   `strategy.config.maxStateAgeMs`), snapshot block epoch (`stale_epoch`), duplicate-auction
-  de-dup + `timeoutMs` drop, after-cost profitability (`gas_unprofitable`), Executor deposit floor
+  de-dup + `timeoutMs` drop, optional operator bid cap (`bid_cap`), after-cost profitability (`gas_unprofitable`), Executor deposit floor
   (`deposit_low`) + callback-native funding. The default bid is bounded **off-chain** by
-  `strategy.config.bid.bidEth` plus optional `strategy.config.bid.totalBundleProfitBps` — there is no
-  on-chain bid cap. A deposit below MIN_DEPOSIT raises an `oev_deposit_below_floor` gauge + error log.
+  `strategy.config.bid.bidEth` plus optional `strategy.config.bid.totalBundleProfitBps`, and the solver can cap the final signed bid with `maxBidWei`.
+  There is no on-chain bid cap. A deposit below MIN_DEPOSIT raises an `oev_deposit_below_floor` gauge + error log.
   The operator tops up that deposit and the callback's payBid native balance out-of-band.
 - **No self-funding.** The bot moves no funds outside the signed settlement: the callback's payBid native
   pool is owner-refilled out-of-band and the signer's Executor gas deposit is topped up out-of-band. The
@@ -614,7 +614,8 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `strategy.config.loanEthFeed.{ethUsd,loanUsd,maxAgeMs}` | default-strategy required dual-feed loan↔ETH rate source |
 | `strategy.config.bid.{bidEth,authTtlMs,totalBundleProfitBps,minBundleProfitBidBps}` | default-strategy minimum bid, callback-auth replay window, optional gross-profit bid share, and optional bundle margin after gas + bid |
 | `strategy.config.{monitorPollMs,maxStateAgeMs}` | default-strategy refresh cadence and cache staleness cutoff |
-| `maxTxGasPriceWei` | signed gas-price cap and the gas price used for bundle/deposit gates |
+| `maxTxGasPriceWei` | signed gas-price cap and the gas price passed to strategy bundle economics |
+| `maxBidWei` | optional solver-owned per-auction cap on the final signed bid; unset means no solver cap |
 | `strategy.config.sizing.{allowFullLiquidation,swapHaircutBps}` | default-strategy full-collateral policy and swap cushion |
 | `breaker.maxFailures` / `windowMs` | failed-liquidation rolling-window halt plus immediate blacklist halt |
 | `intervals.opsPollMs` | solver Executor-state refresh cadence |

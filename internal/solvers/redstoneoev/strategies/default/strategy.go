@@ -203,12 +203,12 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	rate := validRate(st.Rate)
 	if rate == nil {
 		s.log.Info("bid skipped: loan/ETH rate unavailable",
-			"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", len(input.Auction.Prices))
+			"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", auctionFeedCount(input.Auction))
 		return skipBid(skipGasUnprofitable), nil
 	}
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
-	feedCount := len(input.Auction.Prices)
+	feedCount := auctionFeedCount(input.Auction)
 	b, skip := s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
 	if skip != "" {
 		if skip == skipGasUnprofitable && len(b.legs) > 0 {
@@ -247,6 +247,13 @@ func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter ty
 		}
 	}
 	return out
+}
+
+func auctionFeedCount(a types.AuctionSnapshot) int {
+	if a.RawPriceCount > 0 {
+		return a.RawPriceCount
+	}
+	return len(a.Prices)
 }
 
 func skipBid(reason string) types.BidOutput {

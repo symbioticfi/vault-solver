@@ -80,7 +80,8 @@ On settlement it liquidates the position and exits the seized collateral through
 `LiquidLaneAdapter`, realizing the spread and paying its bid. It signs and bids but never submits the
 settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
 LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
-`operationData`. Design, config, and roadmap:
+`operationData`. Operators can set `maxBidWei` as an optional per-auction spend ceiling over any
+strategy. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 

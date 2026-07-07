@@ -49,10 +49,11 @@ type BidInput struct {
 }
 
 type AuctionSnapshot struct {
-	ID        string
-	Timestamp int64
-	TimeoutMs int
-	Prices    []AuctionPrice
+	ID            string
+	Timestamp     int64
+	TimeoutMs     int
+	RawPriceCount int
+	Prices        []AuctionPrice
 }
 
 type AuctionPrice struct {
@@ -85,9 +86,7 @@ type BidContext struct {
 	Executor        common.Address
 	Callback        common.Address
 	Signer          common.Address
-	ExecutorNonce   uint64
 	ExecutorDeposit *big.Int
-	ExecutorLocked  bool
 	MaxTxGasPrice   *big.Int
 	GasLimit        uint64
 }

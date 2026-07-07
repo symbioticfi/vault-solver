@@ -19,6 +19,7 @@ type rawConfig struct {
 	Callback         string            `yaml:"callback"`
 	Strategy         rawStrategyConfig `yaml:"strategy"`
 	MaxTxGasPriceWei string            `yaml:"maxTxGasPriceWei"`
+	MaxBidWei        string            `yaml:"maxBidWei"`
 	Breaker          rawBreaker        `yaml:"breaker"`
 	Intervals        rawIntervals      `yaml:"intervals"`
 }
@@ -57,6 +58,7 @@ type Config struct {
 	Strategy StrategyConfig
 
 	MaxTxGasPrice *big.Int
+	MaxBidWei     *big.Int
 
 	BreakerMaxFailures int
 	BreakerWindow      time.Duration
@@ -142,6 +144,14 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if cfg.MaxTxGasPrice.Sign() <= 0 { // signed into the EXECUTOR_V6 bid as the tx.gasprice ceiling; the contract requires it > 0
 		return nil, errors.New("maxTxGasPriceWei must be > 0")
+	}
+	if raw.MaxBidWei != "" {
+		if cfg.MaxBidWei, err = parse.Big(raw.MaxBidWei, "maxBidWei"); err != nil {
+			return nil, err
+		}
+		if cfg.MaxBidWei.Sign() <= 0 {
+			return nil, errors.New("maxBidWei must be > 0")
+		}
 	}
 	return cfg, nil
 }

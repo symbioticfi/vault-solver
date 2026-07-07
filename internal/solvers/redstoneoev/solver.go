@@ -36,7 +36,7 @@ type Solver struct {
 	breaker      *breaker
 	metrics      *metrics
 	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids (WS-goroutine-only)
+	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
 	log          logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
@@ -46,6 +46,10 @@ type Solver struct {
 	// reservationTTL as a last-resort cleanup for missed result frames.
 	resMu sync.Mutex
 	res   []reservedBid
+
+	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
+	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.
+	bidMu sync.Mutex
 }
 
 // Name identifies the solver.

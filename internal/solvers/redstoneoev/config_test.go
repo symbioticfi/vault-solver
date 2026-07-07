@@ -177,6 +177,7 @@ strategy:
       allowFullLiquidation: true
       swapHaircutBps: 200
 maxTxGasPriceWei: "60000000000"
+maxBidWei: "1000000000000000"
 `
 
 func TestParseConfigValid(t *testing.T) {
@@ -206,6 +207,9 @@ func TestParseConfigValid(t *testing.T) {
 	if strategyCfg.CallbackAuthTTL != time.Minute {
 		t.Fatalf("callback auth TTL = %v, want %v", strategyCfg.CallbackAuthTTL, time.Minute)
 	}
+	if cfg.MaxBidWei == nil || cfg.MaxBidWei.String() != "1000000000000000" {
+		t.Fatalf("maxBidWei = %v, want 1000000000000000", cfg.MaxBidWei)
+	}
 }
 
 func TestParseConfigDefaults(t *testing.T) {
@@ -233,6 +237,9 @@ strategy:
 	}
 	if cfg.ExecutorStateMaxAge != defaultExecutorStateMaxAge {
 		t.Fatalf("executorStateMaxAge default wrong: %v, want %v", cfg.ExecutorStateMaxAge, defaultExecutorStateMaxAge)
+	}
+	if cfg.MaxBidWei != nil {
+		t.Fatalf("maxBidWei default = %s, want nil", cfg.MaxBidWei)
 	}
 	if strategyCfg.MaxTrackedPositions != 10_000 {
 		t.Fatalf("maxTrackedPositions default wrong: %d, want %d", strategyCfg.MaxTrackedPositions, 10_000)
@@ -328,6 +335,8 @@ func TestParseConfigErrors(t *testing.T) {
 		"negative minBundleProfitBidBps": wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", minBundleProfitBidBps: -1}\n") + feedLine,
 		"bad totalBundleProfitBps":       wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", totalBundleProfitBps: 10001}\n") + feedLine,
 		"zero maxTxGasPrice":             wsline + addrs + api + feedLine + "maxTxGasPriceWei: \"0\"",
+		"zero maxBidWei":                 wsline + addrs + api + feedLine + "maxBidWei: \"0\"",
+		"bad maxBidWei":                  wsline + addrs + api + feedLine + "maxBidWei: nope",
 		"removed gas multiplier":         wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", gasPriceMultiplierBps: 20000}",
 		"removed priority fee":           wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", priorityFeeWei: \"1\"}",
 		"removed market poll":            wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\"}\nintervals: {marketPollMs: 5000}",

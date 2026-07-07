@@ -59,7 +59,7 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		Markets: map[common.Hash]defaultstrategy.MarketInfo{
 			id: {Params: defaultstrategy.MarketParams{Oracle: oracle, CollateralToken: seedCollateral, Lltv: mustBig("860000000000000000")}, State: goldenMarket()},
 		},
-		// Cached on-chain oracle price ($1550) — used by testMonitor.
+		// Cached API/test state price. The hot path still evaluates candidates at the auction frame price.
 		Prices: map[common.Hash]*big.Int{id: mustBig(seedLiquidatablePrice)},
 		Quotes: map[common.Hash]defaultstrategy.AdapterQuote{
 			// The single adapter's quote: sells the RWA at ~$1780 (≈1% under the auctioned $1800.9); ample liquidity.
@@ -67,7 +67,7 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		},
 		// Independently-tracked at-risk positions — the SOLE candidate source
 		// now that the frame's pushed positions are no longer consumed. Both fixture borrowers are seeded so
-		// workerCandidates surfaces them, evaluated at the frame/onchain price. The captured frame still
+		// workerCandidates surfaces them, evaluated at the auction frame price. The captured frame still
 		// carries these same positions, but they're ignored: candidates come from snap.Positions.
 		Positions: map[common.Hash]map[common.Address]morpho.PositionState{
 			id: {
@@ -196,6 +196,26 @@ func (s *recordingBidStrategy) DecideBid(_ context.Context, input types.BidInput
 		BidAmount:     big.NewInt(1),
 		OperationData: []byte{0x01},
 	}, nil
+}
+
+type blockingBidStrategy struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingBidStrategy) Run(context.Context) {}
+
+func (s *blockingBidStrategy) DecideBid(ctx context.Context, _ types.BidInput) (types.BidOutput, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+		return types.BidOutput{Decision: types.DecisionSkip, Reason: "released"}, nil
+	case <-ctx.Done():
+		return types.BidOutput{}, ctx.Err()
+	}
 }
 
 // setSnapshotBlockTime re-stamps the cached snapshot (and the ops state) for tests that drive
@@ -391,8 +411,7 @@ func TestFactoryRejectsLiveBiddingWithoutRateSource(t *testing.T) {
 }
 
 // TestBuildBidPriceSource proves buildBid trusts the auction frame price: a healthy frame skips, while a
-// liquidatable frame drives a full sized bid. Monitor-level cached price resolution is covered by
-// TestMarketPriceSource.
+// liquidatable frame drives a full sized bid.
 func TestBuildBidPriceSource(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -431,6 +450,42 @@ func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
 
 	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "callback_balance" {
 		t.Fatalf("callback balance is strategy-owned; skip = %q, want callback_balance", d.skip)
+	}
+}
+
+func TestBuildBidSkipsSolverEnvelopeBeforeStrategy(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ExecutorState
+		want  string
+	}{
+		{
+			name:  "signer locked",
+			state: ExecutorState{Nonce: big.NewInt(7), Deposit: mustBig("100000000000000000"), Locked: true},
+			want:  "signer_locked",
+		},
+		{
+			name:  "deposit below floor",
+			state: ExecutorState{Nonce: big.NewInt(7), Deposit: big.NewInt(1), Locked: false},
+			want:  "deposit_low",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := seededSolver(t)
+			st, _ := s.state.load()
+			st.Exec = tc.state
+			s.state.store(st)
+
+			strategy := &recordingBidStrategy{}
+			s.strategy = strategy
+			if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != tc.want {
+				t.Fatalf("skip = %q, want %q", d.skip, tc.want)
+			}
+			if strategy.called {
+				t.Fatal("strategy should not be called after solver-owned envelope skip")
+			}
+		})
 	}
 }
 
@@ -590,7 +645,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	fresh.Timestamp = time.Now().UnixMilli()
 	setSnapshotBlockTime(t, s, fresh.Timestamp)
 	s.handleMessage(t.Context(), marshal(fresh))
-	frame := drainSend(s)
+	frame := waitSend(t, s)
 	if frame == nil {
 		t.Fatal("expected a solve to be sent for a liquidatable auction")
 	}
@@ -628,9 +683,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	a.Timestamp = time.Now().UnixMilli()
 	setSnapshotBlockTime(t, s, a.Timestamp)
 	s.handleMessage(t.Context(), marshal(a))
-	if extra := drainSend(s); extra != nil {
-		t.Fatalf("breaker tripped — expected no solve, got one: %s", extra)
-	}
+	expectNoSend(t, s, "breaker tripped")
 }
 
 // drainSend returns the next buffered outbound frame, or nil if none is queued.
@@ -640,6 +693,25 @@ func drainSend(s *Solver) []byte {
 		return f
 	default:
 		return nil
+	}
+}
+
+func waitSend(t *testing.T, s *Solver) []byte {
+	t.Helper()
+	select {
+	case f := <-s.ws.send:
+		return f
+	case <-time.After(time.Second):
+		return nil
+	}
+}
+
+func expectNoSend(t *testing.T, s *Solver, why string) {
+	t.Helper()
+	select {
+	case f := <-s.ws.send:
+		t.Fatalf("%s: expected no solve, got one: %s", why, f)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -653,6 +725,38 @@ func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 	s.handleMessage(t.Context(), raw)
 	if frame := drainSend(s); frame != nil {
 		t.Fatalf("feed auction must not produce a liquidation solve: %s", frame)
+	}
+}
+
+func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
+	s, _ := seededSolver(t)
+	blocking := &blockingBidStrategy{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	defer close(blocking.release)
+
+	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
+	a.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, a.Timestamp)
+	s.strategy = blocking
+
+	done := make(chan struct{})
+	go func() {
+		s.handleMessage(t.Context(), marshal(a))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("handleMessage blocked behind bid strategy")
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("bid strategy was not called")
 	}
 }
 
@@ -898,6 +1002,34 @@ func TestTooLate(t *testing.T) {
 	}
 }
 
+func TestAuctionBidContextDeadline(t *testing.T) {
+	start := time.Unix(100, 0)
+	a := AuctionMessage{Timestamp: start.Add(-100 * time.Millisecond).UnixMilli(), TimeoutMs: 500}
+
+	ctx, cancel := auctionBidContext(t.Context(), a, start)
+	defer cancel()
+	got, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("bid context missing deadline")
+	}
+	want := time.UnixMilli(a.Timestamp).Add(time.Duration(a.TimeoutMs)*time.Millisecond - bidDecisionDeadlineMargin)
+	if !got.Equal(want) {
+		t.Fatalf("deadline = %s, want %s", got, want)
+	}
+
+	future := AuctionMessage{Timestamp: start.Add(time.Second).UnixMilli(), TimeoutMs: 500}
+	ctx, cancel = auctionBidContext(t.Context(), future, start)
+	defer cancel()
+	got, ok = ctx.Deadline()
+	if !ok {
+		t.Fatal("fallback bid context missing deadline")
+	}
+	want = start.Add(time.Duration(future.TimeoutMs)*time.Millisecond - bidDecisionDeadlineMargin)
+	if !got.Equal(want) {
+		t.Fatalf("fallback deadline = %s, want %s", got, want)
+	}
+}
+
 func TestBuildBidSkips(t *testing.T) {
 	clock := auctionClock()
 	healthy := mustBig("100000000000000000000000000000000000000000000")
@@ -920,6 +1052,9 @@ func TestBuildBidSkips(t *testing.T) {
 		{name: "deposit_low", mut: func(s *Solver) {
 			s.state.store(stateWith(s, big.NewInt(1), false)) // below MIN_DEPOSIT (1e13)
 		}, want: "deposit_low"},
+		{name: "bid_cap", mut: func(s *Solver) {
+			s.cfg.MaxBidWei = big.NewInt(1)
+		}, want: "bid_cap"},
 		{name: "callback_balance", mut: func(s *Solver) {
 			seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("2500000000"), big.NewInt(1), clock())
 		}, want: "callback_balance"},

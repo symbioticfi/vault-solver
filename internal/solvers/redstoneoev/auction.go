@@ -16,9 +16,12 @@ import (
 var weiPerEth = exp10(18)
 
 const (
+	skipBidCap             = "bid_cap"
 	skipDepositLow         = "deposit_low"
 	skipEmptyAuctionID     = "empty_auction_id"
 	skipExecutorStateStale = "executor_state_stale"
+
+	bidDecisionDeadlineMargin = 50 * time.Millisecond
 )
 
 // bidDecision is the outcome of evaluating one auction: either a ready-to-send solve or a bounded skip.
@@ -42,7 +45,11 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 			s.log.V(1).Info("ignoring feed auction")
 			return
 		}
-		s.handleAuctionWithContext(ctx, raw)
+		a, start, ok := s.parseAuctionFrame(raw)
+		if !ok {
+			return
+		}
+		go s.handleAuction(ctx, a, start)
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":
@@ -99,25 +106,47 @@ func (s *Solver) handleBlacklisted(raw []byte) {
 }
 
 func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
+	a, start, ok := s.parseAuctionFrame(raw)
+	if !ok {
+		return
+	}
+	s.handleAuction(ctx, a, start)
+}
+
+func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool) {
 	start := time.Now()
 	var a AuctionMessage
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.log.V(1).Error(err, "drop malformed auction")
-		return
+		return AuctionMessage{}, time.Time{}, false
 	}
 	s.metrics.auction()
 	key := a.dedupKey()
 	if key == "" {
 		s.metrics.skip(skipEmptyAuctionID)
 		s.log.Info("auction with empty id received; dropping", "timestamp", a.Timestamp, "timeoutMs", a.TimeoutMs)
-		return
+		return AuctionMessage{}, time.Time{}, false
 	}
 	if s.seen.seen(key) {
 		s.metrics.skip("duplicate")
 		s.log.V(1).Info("duplicate auction; already processed", "auction", a.ID)
+		return AuctionMessage{}, time.Time{}, false
+	}
+	return a, start, true
+}
+
+func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time.Time) {
+	s.bidMu.Lock()
+	defer s.bidMu.Unlock()
+	if ctx.Err() != nil {
 		return
 	}
-	d := s.buildBidWithContext(ctx, a, time.Now)
+	if s.bidExpired(a, start) {
+		return
+	}
+	bidCtx, cancel := auctionBidContext(ctx, a, start)
+	defer cancel()
+	d := s.buildBidWithContext(bidCtx, a, time.Now)
 	s.metrics.latency(time.Since(start))
 
 	if d.skip != "" {
@@ -142,6 +171,17 @@ func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
 	s.metrics.bid()
 	s.log.Info("bid sent", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid)
+}
+
+func auctionBidContext(ctx context.Context, a AuctionMessage, start time.Time) (context.Context, context.CancelFunc) {
+	if a.TimeoutMs <= 0 {
+		return context.WithCancel(ctx)
+	}
+	deadline := auctionDeadline(a, start).Add(-bidDecisionDeadlineMargin)
+	if deadline.Before(start) {
+		deadline = start
+	}
+	return context.WithDeadline(ctx, deadline)
 }
 
 func (s *Solver) logSkip(auctionID string, d bidDecision) {
@@ -202,11 +242,17 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	if skip := s.staleStateGate(a.ID, now); skip != "" {
 		return bidDecision{skip: skip}
 	}
-	inFlight := s.inFlightSnapshot()
 	st, ok := s.state.load()
 	if !ok {
 		return bidDecision{skip: "state_unknown"}
 	}
+	if st.Exec.Locked {
+		return bidDecision{skip: "signer_locked"}
+	}
+	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
+		return bidDecision{skip: depositSkip}
+	}
+	inFlight := s.inFlightSnapshot()
 	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
 		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
@@ -224,12 +270,9 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	if out.Decision == types.DecisionSkip {
 		return bidDecision{skip: types.BoundedSkipReason(out.Reason), skipDetail: out.Reason}
 	}
-	if st.Exec.Locked {
-		return bidDecision{skip: "signer_locked"}
-	}
 	bidNative := cloneBig(out.BidAmount)
-	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
-		return bidDecision{skip: depositSkip}
+	if s.bidCapExceeded(a, bidNative) {
+		return bidDecision{skip: skipBidCap}
 	}
 	nonce := s.nonces.next(st.Exec.Nonce.Uint64())
 	callback := s.cfg.Callback
@@ -256,6 +299,15 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	}
 }
 
+func (s *Solver) bidCapExceeded(a AuctionMessage, bidNative *big.Int) bool {
+	if s.cfg.MaxBidWei == nil || bidNative.Cmp(s.cfg.MaxBidWei) <= 0 {
+		return false
+	}
+	s.log.Info("bid skipped: strategy bid exceeds configured cap",
+		"auction", a.ID, "bidWei", bidNative, "maxBidWei", s.cfg.MaxBidWei)
+	return true
+}
+
 func (s *Solver) depositSkip(a AuctionMessage, st cachedState) string {
 	if orZero(st.Exec.Deposit).Cmp(minDeposit) < 0 {
 		s.log.Info("bid skipped: executor deposit below minimum",
@@ -271,6 +323,14 @@ func tooLate(emitMs int64, timeoutMs int, start, now time.Time) bool {
 		return now.Sub(start) > window
 	}
 	return now.UnixMilli()-emitMs > int64(timeoutMs)
+}
+
+func auctionDeadline(a AuctionMessage, start time.Time) time.Time {
+	window := time.Duration(a.TimeoutMs) * time.Millisecond
+	if a.Timestamp <= 0 || a.Timestamp > start.UnixMilli() {
+		return start.Add(window)
+	}
+	return time.UnixMilli(a.Timestamp).Add(window)
 }
 
 func sinceEmitMs(emitMs int64, now time.Time) int64 {

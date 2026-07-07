@@ -39,9 +39,12 @@ func TestCandidatePriceSource(t *testing.T) {
 		t.Fatalf("auction path price = %+v, want %v", apiCands, framePx)
 	}
 
-	testCands := candidatesFromCachedPrices(snap, snap.markets[id].State.LastUpdate)
-	if len(testCands) != 1 || testCands[0].price.Cmp(onchain) != 0 {
-		t.Fatalf("cached-price path price = %+v, want %v", testCands, onchain)
+	var testMon testMonitor
+	testMon.log = logr.Discard()
+	testMon.snap.Store(snap)
+	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
+	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
+		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
 	}
 }
 

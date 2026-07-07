@@ -1,6 +1,6 @@
 package redstoneoev
 
-// reservations.go holds the in-flight-bid headroom reservation subsystem and the auction-id dedup ring.
+// reservations.go holds the in-flight auction lifecycle state and auction-id dedup ring.
 
 import (
 	"slices"
@@ -102,8 +102,8 @@ func (r reservedBid) resolved(onChainNonce uint64, now time.Time) bool {
 const maxSeenAuctions = 1024
 
 // seenAuctions is a bounded, insertion-ordered de-dup set for auction ids: a re-subscribe on reconnect can
-// replay a frame, and bidding twice for one auction burns a second nonce + reserves a second headroom.
-// Touched only by the single WS read goroutine (handleMessage), so it needs no lock.
+// replay a frame, and bidding twice for one auction burns a second nonce for the same opportunity.
+// Touched only while parsing auction frames before bid work is dispatched, so it needs no lock.
 type seenAuctions struct {
 	set   map[string]struct{}
 	order []string

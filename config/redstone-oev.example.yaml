@@ -65,6 +65,7 @@ solvers:
           maxStateAgeMs: 90000               # max default-strategy cache age before stale_state
 
       maxTxGasPriceWei: "20000000000"        # signed tx.gasprice ceiling + solver envelope assumption
+      # maxBidWei: "1000000000000000"        # optional operator spend cap per auction; unset means strategy-owned bid only
 
       breaker:
         maxFailures: 3                   # halt bidding after this many failed liquidations… (default 3)
