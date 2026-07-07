@@ -59,7 +59,8 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 |---|---|---|
 | `LiquidLaneLifiExecutor` (Solidity) | `../rfq/src/lifi/` | OIF `IInputCallback` callback: redeem input via adapter → `fill` → `setAttestation`. Contract-of-record. |
 | Vendored OIF interfaces/structs | `../rfq/src/lifi/interfaces/` | `IInputCallback`, `MandateOutput`, `StandardOrder`, OutputSettler `fill`/`setAttestation` surface. |
-| `lifi` solver (Go) | `internal/solvers/lifi/` | Order-server client, pricing, decision, `openForAndFinalise` calldata, submit. |
+| `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, `openForAndFinalise` calldata, submit. |
+| Order-server client (Go, generated) | `api/lifiorder/` ← `openapi/lifi-order.openapi.json` | Typed HTTP client for register / `quotes/submit` / `orders` (vendor→generate→commit, like `api/rfqbackend`). The WebSocket order feed is a thin hand-written client. |
 | `strategies/{default,webhook}` (Go) | `internal/solvers/lifi/strategies/` | Fill decision (price/skip/size). |
 | LI.FI order server | external | Discovery: standing quotes + matched-order WS feed. |
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
@@ -168,18 +169,35 @@ permit2 / 0x01 3009) || sig`; `destination` = our executor (receives inputs, is 
 
 ### 5.1 Discovery (LI.FI order server)
 
-One-time onboarding (self-serve, no KYC): create a solver identity + API key in the solver UI
-(prod `intents.li.fi`, testnet `devintents.li.fi`), then register the framework EOA as the solver
-address by signing a registration message and `POST /solver-api/account/register` (with `api-key`
-header). One address ↔ one API key.
+The REST surface is the **generated `api/lifiorder` client** (from the vendored
+`openapi/lifi-order.openapi.json`); all calls carry the `api-key` header (`LIFI_SOLVER_API_KEY`). Wire
+shapes below are verified against the live `order-dev.li.fi` OpenAPI.
 
-Runtime:
-- **Standing quotes** — every `quoteRefresh` interval, compute a price curve for each configured
-  RWA→underlying route from `adapter.getMaxRate` / `getAmountOut` / `getMaxAssets`, and
-  `POST /quotes/submit` with `exclusiveFor = <our solver address>` so the order server routes matched
-  orders exclusively to us (we are the only party with the executor + adapter filler auth).
-- **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event; each message carries a
-  signed `StandardOrder` matched to one of our quotes. Dedup on `orderId`.
+**One-time onboarding** (self-serve, no KYC): create a solver identity + API key in the solver UI
+(prod `intents.li.fi`, testnet `devintents.li.fi`), then register the framework EOA:
+`POST /solver-api/account/register` with `{ address, message, signature, chainId? }` (sign the
+server-issued message; `chainId` only for EIP-1271). One address ↔ one API key.
+
+**Standing quotes** — every `quoteRefresh`, compute a price curve per configured RWA→underlying route
+from `adapter.getMaxRate` / `getAmountOut` / `getMaxAssets`, and `POST /quotes/submit`:
+```
+{ quotes: [{ fromChain, toChain,        // toChain == fromChain for our same-chain routes
+             fromAsset, toAsset, fromDecimals, toDecimals,
+             ranges: [{ minAmount, maxAmount, quote }],   // quote = toAsset per 1 fromAsset, decimal string
+             expiry, exclusiveFor }] }  // exclusiveFor = our solver address → matched orders route only to us
+```
+
+**Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
+`pong`; dedup on `orderId`). Each message is a `SubmitOrderDto`:
+```
+{ orderType, quoteId,
+  inputSettler,        // escrow-vs-Compact discriminator — must be the ESCROW settler for our callback path
+  sponsorSignature,    // user's permit2/3009 signature — required by openForAndFinalise
+  order: StandardOrder, meta: { orderStatus: Signed|Delivered|Settled, onChainOrderId, ... } }
+```
+The callback (no-inventory) path requires `inputSettler` = the escrow settler, `orderStatus: Signed`
+(unopened), and a permit2/3009 `sponsorSignature` (see §10). Registering our executor as the callback
+destination is likely `PUT /api/v1/solver/supported-contracts` — confirmed in P1.
 
 ### 5.2 Pricing & decision (the strategy)
 
@@ -327,9 +345,11 @@ Testnet-first: the executor is on Sepolia from P0 so every later phase integrate
    `LiquidLaneLifiExecutor` + foundry unit/integration tests (self-deployed settlers + adapter, the
    §8.3 local loop). Then **deploy to Ethereum Sepolia and register the executor as an adapter filler**.
    CGO-free rfq build stays green; `forge fmt`/`forge test`/coverage pass.
-1. **Order-server client** — Go client for register / `POST /quotes/submit` / the WS order feed, wired
-   to the live `order-dev.li.fi`; register the solver EOA; config parsing + framework wiring
-   (`solver.Register`, blank-import). `httptest`-backed unit tests, validated live.
+1. **Order-server client** — the vendored `openapi/lifi-order.openapi.json` + generated `api/lifiorder`
+   client (register / `quotes/submit` / `orders`) plus a thin hand-written WS client for
+   `user:vm-order-submit`, wired to the live `order-dev.li.fi`; register the solver EOA; config parsing
+   + framework wiring (`solver.Register`, blank-import). `httptest`-backed unit tests, validated live.
+   (The spec + generated client land in the plan PR; P1 wires them into the solver.)
 2. **Pricing + decision + tx build** — `default` strategy (getAmountOut/getMaxAssets, margin, asset
    match); `FillCall` encoding + `openForAndFinalise` calldata via generated bindings; txmanager submit.
    Validated end-to-end on Sepolia by self-filling a `lintent.org` order matched to our exclusive quote.
@@ -342,13 +362,30 @@ Testnet-first: the executor is on Sepolia from P0 so every later phase integrate
 
 ## 10. Open items / prerequisites
 
-- **Order-server same-chain settlement contract** — confirm in P1 that the order server routes a
-  matched same-chain order with the user's permit2 signature such that *we* self-settle via
-  `openForAndFinalise` (the atomic path is proven in the foundry test; the public `filling-orders` doc
-  documents the cross-chain `fillOrderOutputs` path — verify the same-chain wrapper is what the order
-  server expects, or whether it drives a different settlement call).
-- **Exact WS endpoint + quote schema** — the `POST /quotes/submit` body (price-curve/range shape) and
-  the `user:vm-order-submit` payload; pull from `order-dev.li.fi/docs` during P1.
+- **Callback flow: CONFIRMED supported; only the opt-in wiring remains for P1.** The inventory-free
+  path our design uses is a documented, first-class LI.FI same-chain flow — the **"Same Chain Intent
+  with callback"** diagram in [`architecture/overview`](https://docs.li.fi/lifi-intents/architecture/overview)
+  and `for-solvers/settlement` state that the solver **receives inputs before delivering outputs** via
+  `orderFinalised(uint256[2][] inputs, bytes call)` and must "fill and setAttestations for the intent
+  outputs within the callback." That is exactly our `openForAndFinalise(destination = executor)` design.
+  It is **opt-in** ("your solver has to support `orderFinalised`"). What remains is the wiring, verified
+  on `order-dev` in P1: how the order server is told to route callback-model orders to our executor and
+  deliver the matched order as **escrow-typed** (`inputSettler` = the escrow settler), **unopened**
+  (`orderStatus: Signed`), carrying the user's `sponsorSignature` (permit2/3009) — likely by registering
+  the executor via `PUT /api/v1/solver/supported-contracts`. Fallback if callback routing is
+  unavailable for a given order: a small revolving inventory buffer (fill from buffer, then replenish by
+  redeeming the claimed input) — Plan-B only.
+- **Wire schemas: RESOLVED** — the order-server OpenAPI is vendored (`openapi/lifi-order.openapi.json`)
+  and the Go client generated (`api/lifiorder`); the quote / order / register shapes are in §5.1. The
+  WebSocket `user:vm-order-submit` event is a socket event (not in the OpenAPI); its payload is captured
+  in §5.1 from the reference client — confirm the exact WS URL/handshake on `order-dev` in P1.
+- **Upstream OpenAPI defects (report to LI.FI)** — the `order-dev` spec is mislabelled `3.0.0` but uses
+  3.1 constructs, has 3 dangling `oneOf` `$ref`s (`Oif{3009,Escrow,UserOpenIntent}OrderDto` are
+  referenced but never defined), and 2 multi-tag operations (`/quote/request`, `/quotes/submit`) — so
+  the raw spec does not generate a compiling Go client. `make refresh-lifi-client` applies a documented
+  normalization shim (`hack/lifi-openapi-normalize.py`: passthrough the undefined order schema,
+  single-tag the ops) to generate `api/lifiorder`. Report the defects upstream and drop the shim once
+  fixed. The vendored spec stays raw (contract of record); the shim runs only at codegen time.
 - **Adapter filler registration** — our executor must be granted filler rights on each LiquidLane
   adapter (`marketMaker`/`owner`/`isFiller`), by the adapter's vault creator. Onboarding prereq.
 - **Sepolia testnet adapter (pin first, blocks P0/§8.2)** — confirm a Sepolia LiquidLane adapter that
