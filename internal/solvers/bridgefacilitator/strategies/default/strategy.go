@@ -42,7 +42,7 @@ func decodeConfig(node yaml.Node, out any) error {
 	return solver.DecodeStrict(node, out)
 }
 
-func (s *Strategy)  DecideOffers(
+func (s *Strategy) DecideOffers(
 	_ context.Context,
 	input types.OfferInput,
 ) (types.OfferOutput, error) {
