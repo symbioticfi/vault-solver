@@ -1,0 +1,55 @@
+configMap:
+  data:
+    config.yaml: |
+      # vault-solver — RFQ filler, Ethereum mainnet (chainId 1) profile.
+      #
+      # Addresses are the mainnet deployment of the RFQ contracts. Provide secrets via env:
+      #   SOLVER_PRIVATE_KEY            — the caller EOA (must hold CALLER_ROLE on the Executor)
+      #   BACKEND_SHARED_SECRET     — shared secret authenticating the backend peer on /quote
+      # ${VAR} fields are expanded from the environment at load time.
+
+      chain:
+        rpcUrl: ${ETH_RPC_URL} # primary READ RPC; expanded from env; do not commit a real URL
+        # writeRpcUrl carries ONLY transaction broadcasts (eth_sendRawTransaction); nonce, gas,
+        # receipts and every other read stay on rpcUrl. Point it at a private/MEV-protected relay
+        # so fills submit privately. Optional — omit to broadcast through rpcUrl.
+        writeRpcUrl: ${WRITE_RPC_URL} # e.g. https://rpc.mevblocker.io/fullprivacy
+        chainId: 1
+
+      signer:
+        keyEnv: SOLVER_PRIVATE_KEY # the CALLER_ROLE EOA that submits Executor.fill (P2)
+
+      txManager:
+        confirmations: 2
+
+      observability:
+        addr: ":9090" # /metrics, /healthz, /readyz (separate from the quote server below)
+        # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+
+      solvers:
+        - name: rfq-filler
+          config:
+            strategy:
+              name: default
+              config: {}
+            backendUrl: http://rfq-backend:42072
+            backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+            listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)
+            # Mainnet RFQ deployment:
+            executor: ${EXECUTOR} # per-instance: deploy.yml sets EXECUTOR (non-secret env, not vault)
+            reactor: "0x5eB54c47837cC84249F697e3CD8C5D88bCc35dac" # used at execution time
+            pollIntervalMs: 166 # backend order poll cadence
+            orderLimit: 20 # max open orders fetched per poll
+            # internal — public discounts + every advertised adapter; `adapters` optional. (external
+            # would REQUIRE a concrete adapter and error on empty; we don't have the mainnet instance
+            # yet, so stay internal to quote permissionlessly via the discounts API.)
+            solverMode: internal
+            # Token routing: quote scope ("all"|"permissioned"|"permissionless") is set per-instance
+            # via env (deploy.yml). mGLOBAL is not yet launched on mainnet (tabled), so there is no
+            # local permissioned set to evaluate against.
+            tokensToQuote: ${TOKENS_TO_QUOTE}
+            permissionedTokens: []
+            # LiquidLane adapters (optional in internal mode = extra recovery inventory). Left empty
+            # until the concrete mainnet mF-ONE LiquidLane adapter INSTANCE is known — a deployed
+            # instance of factory 0x3b5Bb07d7af98EBdD5A715fa09C5c10aF1749460, NOT the factory itself.
+            adapters: []

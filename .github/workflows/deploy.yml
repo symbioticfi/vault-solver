@@ -28,7 +28,7 @@ jobs:
           -f .github/chart/${{ inputs.network }}.yaml
           -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
           --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
-          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
+          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || inputs.network == 'mainnet' && '0xe60E84218BB81539cc599A1E213d6F67058C69Cf' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
           --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissionless
           --set deployment.containers.vault-solver.env.RFQ_ADAPTER.value='${{ inputs.network == 'hoodi' && '"0x788Ab0D58bC7E5537109064F95875013c886ACC8"\, "0x9292Ad3e9C3747cFA31885657B5A458002205281"' || '"0x8F38656B85fb440018c109A5118aFfDfD923721c"\, "0xe4eb1E756F2d78F77B9ebE304515fA61B2451A33"' }}'
           --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
@@ -36,6 +36,10 @@ jobs:
 
   vault-solver:
     name: Deploy ${{ matrix.name }}
+    # The first/second/third solvers are the dedicated mGLOBAL fillers. mGLOBAL is
+    # not launched on mainnet yet (tabled), so skip them on mainnet — only the
+    # permissionless mF-ONE daemon deploys there.
+    if: ${{ inputs.network != 'mainnet' }}
     uses: symbioticfi/github-workflows-common/.github/workflows/deploy.yml@main
     secrets: inherit
     strategy:
