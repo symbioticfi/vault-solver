@@ -1,0 +1,10 @@
+---
+networkPolicy:
+  internet:  # rpc.mevblocker.io
+    egress:
+      nsSelect: kube-public
+      selector:
+        name: ips
+        value: pl-to-internet
+      ports:
+        - 443
