@@ -28,6 +28,10 @@ OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
 RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
+# LI.FI order-server OpenAPI spec (testnet/dev). The NestJS app serves a Scalar UI at /docs with NO raw
+# JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and
+# extracts it via hack/scalar-openapi-extract.py (see that target).
+LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
@@ -113,6 +117,12 @@ refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=..
 	curl -fsSL "$(RFQ_OPENAPI_URL)" | jq . > openapi/rfq-backend.openapi.json
 	@echo "vendored openapi/rfq-backend.openapi.json (verify field names — see docs/RFQ-PLAN.md)"
 
+.PHONY: refresh-lifi-openapi
+refresh-lifi-openapi: ## Re-pull the LI.FI order-server OpenAPI spec (LIFI_OPENAPI_URL=...)
+	@mkdir -p openapi
+	curl -fsSL "$(LIFI_OPENAPI_URL)" | python3 hack/scalar-openapi-extract.py > openapi/lifi-order.openapi.json
+	@echo "vendored openapi/lifi-order.openapi.json (extracted from the Scalar /docs page)"
+
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
 	@mkdir -p api/graphql/morpho
@@ -131,14 +141,18 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 		echo "generated api/bindings/$$rel/$$c.go (v2)"; \
 	done
 
-# Both OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,
+# All three OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,
 # which downloads the pinned jar on demand — needs a JRE). It is the only generator that ingests the RFQ
-# backend's OpenAPI 3.1 spec; we use it for the 3F (3.0) spec too for one toolchain. $(OPENAPI_GENERATOR_VERSION)
-# is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is stdlib-only (no go.mod change);
-# the recipes strip the generator's non-package cruft, keeping just the Go client.
+# backend's OpenAPI 3.1 spec; we use it for the 3F (3.0) and LI.FI order-server specs too for one toolchain.
+# $(OPENAPI_GENERATOR_VERSION) is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is
+# stdlib-only (no go.mod change); the recipes strip the generator's non-package cruft, keeping just the Go
+# client. $(4) is optional extra generator flags — used only by the LI.FI recipe to pass
+# --skip-validate-spec (its spec is labelled OpenAPI 3.0.0 but uses 3.1 JSON-Schema constructs — prefixItems /
+# propertyNames — and has dangling oneOf $refs; the generator handles them fine but its strict validator
+# rejects them). 3f/rfq keep validation on.
 define gen_openapi_client
 	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
-		generate --enable-post-process-file -i ./$(1) -g go -o ./$(2) --package-name $(3)
+		generate --enable-post-process-file $(4) -i ./$(1) -g go -o ./$(2) --package-name $(3)
 	cd $(2) && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
 endef
 
@@ -152,6 +166,22 @@ refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) f
 	@rm -f api/rfqbackend/*.go
 	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend)
 
+.PHONY: refresh-lifi-client
+refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generator, Go) from the vendored spec
+	@rm -f api/lifiorder/*.go
+	@# The raw vendored spec has two upstream defects that make the generated Go uncompilable (dangling
+	@# oneOf $refs in QuoteDto.order; multi-tag operations that duplicate request structs). We keep the
+	@# vendored file raw (contract of record) and generate from a normalized temp copy produced by
+	@# hack/lifi-openapi-normalize.py (see that script for the exact, documented fixes). Inlined rather than
+	@# using gen_openapi_client so the normalization + temp-file plumbing lives in one shell block;
+	@# --skip-validate-spec is still needed (the spec is labelled 3.0.0 but uses 3.1 JSON-Schema constructs).
+	tmp="$$(mktemp -p . --suffix=.lifi-normalized.json)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		python3 hack/lifi-openapi-normalize.py < openapi/lifi-order.openapi.json > "$$tmp"; \
+		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
+			generate --enable-post-process-file --skip-validate-spec -i "$$tmp" -g go -o ./api/lifiorder --package-name lifiorder
+	cd api/lifiorder && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+
 .PHONY: refresh-morpho-graphql-client
 refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient) from the vendored schema + operations
 	@mkdir -p api/morphographql
@@ -164,7 +194,7 @@ refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient)
 	@gofmt -w api/morphographql/generated.go
 
 .PHONY: openapi-client
-openapi-client: refresh-3f-client refresh-rfq-client ## Generate both OpenAPI clients
+openapi-client: refresh-3f-client refresh-rfq-client refresh-lifi-client ## Generate all OpenAPI clients
 
 .PHONY: graphql-client
 graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients
