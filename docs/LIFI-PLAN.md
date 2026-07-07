@@ -50,8 +50,9 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
   *not* an on-chain signer for the intent (the user signs that); it only sends `openForAndFinalise`.
 - **Config, secrets** — order-server URL + `apiKeyEnv`, settler/executor/adapter addresses via
   `solver.config`; the LI.FI API key via `*Env` indirection.
-- **Pluggable strategy** — the fill decision (price, skip, size) is a strategy
-  (`default` in-process; `webhook` optional later), per [`strategy-plan.md`](strategy-plan.md).
+- **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
+  (`DecideQuotes` + `DecideFill`; `default` in-process, `webhook` optional later), per
+  [`strategy-plan.md`](strategy-plan.md). See §5.2.
 
 ### Component / repo map
 
@@ -61,7 +62,7 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 | Vendored OIF interfaces/structs | `../rfq/src/lifi/interfaces/` | `IInputCallback`, `MandateOutput`, `StandardOrder`, OutputSettler `fill`/`setAttestation` surface. |
 | `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, `openForAndFinalise` calldata, submit. |
 | Order-server client (Go, generated) | `api/lifiorder/` ← `openapi/lifi-order.openapi.json` | Typed HTTP client for register / `quotes/submit` / `orders` (vendor→generate→commit, like `api/rfqbackend`). The WebSocket order feed is a thin hand-written client. |
-| `strategies/{default,webhook}` (Go) | `internal/solvers/lifi/strategies/` | Fill decision (price/skip/size). |
+| `strategies/{default,webhook}` (Go) | `internal/solvers/lifi/strategies/` | Quote curve + fill decision (`DecideQuotes` + `DecideFill`). |
 | LI.FI order server | external | Discovery: standing quotes + matched-order WS feed. |
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
 
@@ -204,17 +205,35 @@ The callback (no-inventory) path requires `inputSettler` = the escrow settler, `
 (unopened), and a permit2/3009 `sponsorSignature` (see §10). Registering our executor as the callback
 destination is likely `PUT /api/v1/solver/supported-contracts` — confirmed in P1.
 
-### 5.2 Pricing & decision (the strategy)
+### 5.2 The strategy — owns both decisions
 
-For a matched order: read live `adapter.getAmountOut(tokenIn, amountIn)` → `redeemed`, and
-`adapter.getMaxAssets(tokenIn)` → capacity. Fill iff:
-- `redeemed >= output.amount + minMargin` (profitable after the surplus we keep),
-- `amountIn <= capacity` (adapter can absorb the redemption this request),
-- the adapter's collateral/asset matches `output.token`, and the order isn't past `fillDeadline` /
-  `expires`.
+All pricing lives in a pluggable strategy (per [`strategy-plan.md`](strategy-plan.md)): the solver
+supplies **raw facts** (adapter reads) and **executes** (publish quotes, send the tx); the strategy is
+the brain for **both** decision points — the standing-quote curve *and* the fill decision — mirroring
+rfq's `DecideQuote`/`BuildFillPlan`.
 
-Otherwise skip. The `default` strategy implements this in-process; a `webhook` strategy can delegate it
-later (same trusted-strategy model as rfq/3f/oev).
+```go
+type Strategy interface {
+    // §5.1 standing-quote curve, from configured routes + live adapter facts.
+    DecideQuotes(ctx, QuoteInput) (QuoteOutput, error)   // → per-route ranges[] {minAmount,maxAmount,quote}
+    // A matched WS order + fresh adapter reads → fill-or-skip and the FillCall params.
+    DecideFill(ctx, FillInput) (*FillPlan, error)
+}
+```
+
+- **`QuoteInput`** = the configured routes plus, per route, the adapter facts the solver read
+  (`getMaxRate`, `getAmountOut` at tier points, `getMaxAssets`, token decimals). `DecideQuotes` returns
+  the `ranges[]` curve the solver POSTs to `/quotes/submit`; the `default` sets
+  `quote = adapterRate × (1 − minMarginBps)` and caps `maxAmount` at `getMaxAssets`.
+- **`FillInput`** = the matched signed `StandardOrder` plus a fresh `getAmountOut(tokenIn, amountIn)` /
+  `getMaxAssets(tokenIn)` read. `DecideFill` returns a `*FillPlan` (fill) or `nil` (skip). The `default`
+  fills iff `redeemed ≥ output.amount + minMargin`, `amountIn ≤ getMaxAssets`, the adapter asset matches
+  `output.token`, and the order is within `fillDeadline`/`expires`.
+
+The solver then executes the result — publish the curve, or build + send
+`openForAndFinalise(destination = executor)` from the `FillPlan`'s `FillCall`. `default` = in-process;
+`webhook` = external decider — same trusted-strategy model as rfq/3f/oev, so swapping the pricing brain
+never touches the solver skeleton.
 
 ### 5.3 Build & submit
 
