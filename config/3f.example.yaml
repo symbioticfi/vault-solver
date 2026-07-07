@@ -18,9 +18,9 @@ chain:
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
 signer:
-  # The bot's EOA both sends transactions (via txManager) and signs the 3F API key + EIP-712 offers
-  # (authorized on-chain by each adapter's EIP-1271 check). Provide exactly one key source, by env-var
-  # NAME — the key never enters the parsed config.
+  # The bot's EOA both sends transactions (via txManager) and signs EIP-712 offers (authorized on-chain
+  # by each adapter's EIP-1271 check) and the offer-listing Authorization header — no API key. Provide
+  # exactly one key source, by env-var NAME — the key never enters the parsed config.
   keyEnv: SOLVER_PRIVATE_KEY       # env var holding a hex private key
   # keystorePath: ./keystore/bot.json    # ...or a go-ethereum keystore file
   # passphraseEnv: SOLVER_KEYSTORE_PASS  # (required with keystorePath)
@@ -38,9 +38,7 @@ observability:
 solvers:
   - name: 3f-bridge-facilitator    # registry key selecting the implementation
     config:                        # opaque to the framework; typed by the 3F solver
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL
-      # apiKeyEnv: SOLVER_3F_API_KEY   # optional pre-generated API key (env var NAME). If unset, the
-      #                                # bot generates one at startup (EIP-712) and re-auths on 401/403.
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL (no API key — auth is by signature)
       # httpTimeout: 30s               # per-call timeout for 3F API requests (default 30s)
       redeemBatchSize: 10              # max matured Requests redeemed per redeem() call (gas bound; default 10)
 

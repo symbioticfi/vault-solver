@@ -154,22 +154,22 @@ chain: { rpcUrl, chainId, rpcFallbackUrls?, wsUrl? }   # rpcFallbackUrls: HTTP(S
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, tipGwei }
 
-solver:
-  name: 3f-bridge-facilitator               # ← registry key: selects the impl
-  config:                                    # ← opaque to framework; typed by the 3F package
-    apiBaseUrl: https://bf.dev.gcp.3f.xyz
-    strategy:
-      name: default                          # default local strategy, or webhook
-      config: {}
-    # The adapters this solver maintains offers for. Each must already be registered with 3F as a
-    # facilitator by its vault creator, with this solver's signer set as the adapter's EIP-1271 signer.
-    # A config whitelist for now; a dynamic "list public 3F adapters" API replaces it later.
-    adapters:
-      - "0x…adapterA"
-      - "0x…adapterB"
-    redeemBatchSize: 10                       # optional (default 10)
-    httpTimeout: 30s                          # optional
-    intervals: { discover: 1h, redeemPoll: 5m, reconcile: 15m }
+solvers:
+  - name: 3f-bridge-facilitator             # ← registry key: selects the impl
+    config:                                  # ← opaque to framework; typed by the 3F package
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      strategy:
+        name: default                        # default local strategy, or webhook
+        config: {}
+      # The adapters this solver maintains offers for. Each must already be registered with 3F as a
+      # facilitator by its vault creator, with this solver's signer set as the adapter's EIP-1271 signer.
+      # A config whitelist for now; a dynamic "list public 3F adapters" API replaces it later.
+      adapters:
+        - "0x…adapterA"
+        - "0x…adapterB"
+      redeemBatchSize: 10                     # optional (default 10)
+      httpTimeout: 30s                        # optional
+      intervals: { discover: 1h, redeemPoll: 5m, reconcile: 15m }
 ```
 
 `apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each

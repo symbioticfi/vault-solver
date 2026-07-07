@@ -42,7 +42,8 @@ type Config struct {
 	BackendSharedSecretEnv string
 	// ListenAddr is the bind address for the quote HTTP server.
 	ListenAddr string
-	// Executor is the Executor contract (the on-chain filler identity; the bot EOA holds CALLER_ROLE).
+	// Executor is the Executor contract (the on-chain filler identity; the bot EOA must be an authorized
+	// caller — added to the Executor's callers allowlist via setCallers by its owner).
 	Executor common.Address
 	// Reactor is the RFQ Reactor (used at execution time); optional.
 	Reactor common.Address

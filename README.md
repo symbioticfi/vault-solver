@@ -40,8 +40,9 @@ and validated by its own solver. Adding a solver touches **no** framework code �
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
 
-Each solver's decision logic is a pluggable **strategy** — the built-in `default` or an external
-`webhook` you run; see [Strategies](#strategies).
+The `3f-bridge-facilitator` and `rfq-filler` solvers expose a pluggable **strategy** — the built-in
+`default` or an external `webhook` you run; see [Strategies](#strategies). (`redstone-oev` has a single
+built-in decision path and no `strategy` config.)
 
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
@@ -63,7 +64,8 @@ that fills the orders it is awarded, settling on-chain through the adapter.
 
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
-must hold `CALLER_ROLE` on the RFQ `Executor`. Design, config, and roadmap:
+must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
 
@@ -82,8 +84,8 @@ settlement transaction — RedStone's auctioneer does. Design, config, and roadm
 
 ### Strategies
 
-A solver's on-chain plumbing (reads, signing, submission) is fixed, but its **decision** — how to size,
-price, and select — is a pluggable *strategy*, chosen per solver in config:
+The 3F and RFQ solvers split on-chain plumbing (reads, signing, submission — fixed) from the
+**decision** — how to size, price, and select — which is a pluggable *strategy*, chosen in config:
 
 - **`default`** — the built-in in-process strategy; used when the `strategy` block is omitted.
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
@@ -142,5 +144,5 @@ make generate                           # regenerate bindings + API client
 
 Engineering conventions — the modular framework/integration boundary, config-driven configuration,
 modern Go 1.26 style, the required test/lint/format gate, and secure-coding rules — are in
-[`CLAUDE.md`](./CLAUDE.md) ([`AGENTS.md`](./AGENTS.md) points there). Every change must keep
+[`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.

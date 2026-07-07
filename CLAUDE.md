@@ -1,7 +1,7 @@
 # CLAUDE.md — working agreement for this repo
 
 This file is the source of truth for how code is written here. Read it before making changes.
-It applies to AI agents and humans alike. `AGENTS.md` points here.
+It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 
 ## Purpose
 
@@ -122,8 +122,9 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   renamed method or changed signature in a refreshed ABI breaks the build at the call site instead of
   panicking at runtime. **Never reintroduce stringly-typed `abi.Pack("method", …)`/`abi.Unpack` in
   solver code** — use the generated `Pack`/`Unpack` (or `TryPack` for the error-returning variant).
-  Multicall3 stays on v1 (`BINDINGS_V1`): it's the transport (`chain.Multicall` binds its `Aggregate3`
-  caller), where v2's pure helpers buy nothing. An ABI that can't be sourced from a build (e.g.
+  Multicall3 is v2 like every other binding: `chain.Multicall` builds its sub-calls with the generated
+  `PackAggregate3`/`UnpackAggregate3` pure helpers and does its own `eth_call`. An ABI that can't be
+  sourced from a build (e.g.
   Multicall3, or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile
   overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
   hand-bound.

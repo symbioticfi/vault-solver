@@ -159,8 +159,14 @@ func NewClient(cfg Config) (*Client, error) {
 		headers[name] = v
 	}
 	return &Client{
-		url:              cfg.URL,
-		client:           &http.Client{Timeout: cfg.Timeout},
+		url: cfg.URL,
+		client: &http.Client{
+			Timeout: cfg.Timeout,
+			// Do not follow redirects: the https/loopback guard in validateURL only vets the configured
+			// URL, and Go forwards custom (secret-bearing) headers on same-host redirects. A redirect to
+			// an internal address would defeat both. Surface the 3xx to the caller instead (SSRF guard).
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		maxRequestBytes:  cfg.MaxRequestBytes,
 		maxResponseBytes: cfg.MaxResponseBytes,
 		headers:          headers,

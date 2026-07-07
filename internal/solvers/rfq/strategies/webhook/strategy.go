@@ -64,8 +64,11 @@ func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*t
 }
 
 func fillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.FillPlan, error) {
-	if out.QuotedAmountOut == nil {
-		return nil, errors.New("quote output is missing quotedAmountOut")
+	if out.QuotedAmountOut == nil || out.QuotedAmountOut.Sign() <= 0 {
+		return nil, errors.New("quote output is missing a positive quotedAmountOut")
+	}
+	if len(out.Legs) == 0 {
+		return nil, errors.New("quote output has no legs")
 	}
 	candidates := make(map[string]types.QuoteCandidate, len(input.Candidates))
 	for _, c := range input.Candidates {
@@ -76,6 +79,11 @@ func fillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		c, ok := candidates[leg.CandidateID]
 		if !ok {
 			return nil, errors.Errorf("unknown candidate %q", leg.CandidateID)
+		}
+		// Crash-safety only (not economic re-validation): the strategy is trusted for pricing, but a
+		// missing/omitted amount would be a nil *big.Int that panics downstream in directSwaps.
+		if leg.AmountIn == nil || leg.AmountIn.Sign() <= 0 || leg.AmountOut == nil || leg.AmountOut.Sign() <= 0 {
+			return nil, errors.Errorf("leg %q has non-positive amounts", leg.CandidateID)
 		}
 		legs = append(legs, types.FillLeg{
 			Adapter:    c.Adapter,

@@ -74,7 +74,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   `IVaultV2`/`IERC4626` (from a standalone `core-mirror` build) are vendored via `make refresh-abi` +
   `bindings` (two `FORGE_OUT`/`CORE_MIRROR_OUT` sources). The nested `fill`/order ABI is encoded/decoded
   via the generated bindings, never hand-rolled.
-- **Signer** — the framework's single EOA is the RFQ **caller** (holds `CALLER_ROLE` on the Executor).
+- **Signer** — the framework's single EOA is the RFQ **caller** (must be in the Executor's `callers`
+  allowlist, added by the owner via `setCallers`).
 
 ### Component port map (TS → Go)
 
@@ -120,22 +121,22 @@ brain; the solver executes the output verbatim) are documented once in
 One code path; per-environment differences are pure YAML. Sketch of `solver.config` for `rfq`:
 
 ```yaml
-solver:
-  name: rfq-filler
-  config:
-    strategy:                                           # pluggable decision layer (omit ⇒ default)
-      name: default                                     #   "default" (in-process) | "webhook" (external decider)
-      config: {}
-    backendUrl: https://rfq-backend.example
-    backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET   # env var NAME (secret never in config)
-    listenAddr: ":42073"                                # quote HTTP server (poll-only; no /notify)
-    executor:             "0x…"                         # Executor (bot EOA holds CALLER_ROLE)
-    reactor:              "0x…"
-    pollIntervalMs: 3000
-    orderLimit: 20
-    solverMode: external                                # "external" (default) | "internal" — see below
-    adapters:                                           # LiquidLane adapter addresses (whitelist + recovery)
-      - "0x…liquidLaneAdapter"                          # vault + collateral resolved on-chain at startup
+solvers:
+  - name: rfq-filler
+    config:
+      strategy:                                         # pluggable decision layer (omit ⇒ default)
+        name: default                                   #   "default" (in-process) | "webhook" (external decider)
+        config: {}
+      backendUrl: https://rfq-backend.example
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
+      listenAddr: ":42073"                              # quote HTTP server (poll-only; no /notify)
+      executor:             "0x…"                       # Executor (bot EOA is an authorized caller — setCallers allowlist)
+      reactor:              "0x…"
+      pollIntervalMs: 3000
+      orderLimit: 20
+      solverMode: external                              # "external" (default) | "internal" — see below
+      adapters:                                         # LiquidLane adapter addresses (whitelist + recovery)
+        - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
 ```
 
 **`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
@@ -218,7 +219,8 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 
 ## 5. Open items / prerequisites
 
-- **`CALLER_ROLE` on the `Executor`** — the bot EOA must be granted it before fills land (onboarding
+- **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
+  allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
 - **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
   LiquidLane adapter address list (`vaults`; adapter whitelist + recovery — each adapter's vault and
