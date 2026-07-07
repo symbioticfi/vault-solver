@@ -173,10 +173,15 @@ The REST surface is the **generated `api/lifiorder` client** (from the vendored
 `openapi/lifi-order.openapi.json`); all calls carry the `api-key` header (`LIFI_SOLVER_API_KEY`). Wire
 shapes below are verified against the live `order-dev.li.fi` OpenAPI.
 
-**One-time onboarding** (self-serve, no KYC): create a solver identity + API key in the solver UI
-(prod `intents.li.fi`, testnet `devintents.li.fi`), then register the framework EOA:
-`POST /solver-api/account/register` with `{ address, message, signature, chainId? }` (sign the
-server-issued message; `chainId` only for EIP-1271). One address ↔ one API key.
+**One-time onboarding** (self-serve, no KYC):
+1. Create a solver identity + API key in the solver UI (prod `intents.li.fi`, testnet `devintents.li.fi`).
+2. Register the framework EOA: `POST /solver-api/account/register` with `{ address, message, signature,
+   chainId? }` (sign the server-issued message; `chainId` only for EIP-1271). One address ↔ one API key.
+3. **Opt into the escrow callback path:** `PUT /api/v1/solver/supported-contracts` with
+   `{ inputSettler:[{chain, address}], outputSettler:[…], oracle:[…] }` (CAIP-2 chains) listing the
+   **escrow** `InputSettlerEscrowLIFI` + OutputSettler + oracle (§4 addresses). This is how the order
+   server routes us escrow orders; our executor is never registered here — it's the `openForAndFinalise`
+   `destination`.
 
 **Standing quotes** — every `quoteRefresh`, compute a price curve per configured RWA→underlying route
 from `adapter.getMaxRate` / `getAmountOut` / `getMaxAssets`, and `POST /quotes/submit`:
@@ -295,15 +300,19 @@ canonical OIF settlers (deployed there, §4 addresses), and an existing Symbioti
 (the redstone-oev / rfq work already runs on Sepolia LiquidLane adapters). Confirm one adapter that
 redeems a testnet RWA → its underlying, or point at/deploy one (an open item, §10).
 
+The v1 route is **TCOL → TLOAN** (redstone-oev testbed): adapter `0xB5951fec…70b`, TCOL (RWA)
+`0x17e892…A4D3`, TLOAN (underlying) `0x468BB3…4C9d`.
+
 One-time setup:
 1. **Executor** — deploy `LiquidLaneLifiExecutor` to Sepolia (`INPUT_SETTLER`/`OUTPUT_SETTLER` = the
-   LI.FI addresses in §4; adapter allowlist = the Sepolia LiquidLane adapter).
-2. **Filler auth** — the adapter's vault creator registers our executor as a filler
-   (`marketMaker`/`owner`/`isFiller` == executor), or we target an adapter where we already are.
-3. **Solver identity** — register the framework EOA on `devintents.li.fi` + `POST .../register`; fund
-   it with Sepolia ETH for gas.
-4. **Config** — a `config/lifi.sepolia.example.yaml` pointing `orderServer` at `order-dev.li.fi`, the
-   §4 settler addresses, our deployed executor, and the Sepolia adapter(s).
+   LI.FI addresses in §4; adapter allowlist = `0xB5951fec…70b`).
+2. **Filler auth** — the testbed owner `0x8124…7309` registers our executor as a filler on the adapter
+   (`marketMaker`/`owner`/`isFiller` == executor).
+3. **Solver identity + opt-in** — register the framework EOA on `devintents.li.fi` + `POST
+   /solver-api/account/register`, then `PUT /api/v1/solver/supported-contracts` listing the escrow
+   settler + OutputSettler + oracle for `eip155:11155111`; fund the EOA with Sepolia ETH for gas.
+4. **Config** — a `config/lifi.sepolia.example.yaml` pointing `orderServer` at `order-dev.li.fi`, the §4
+   settler addresses, our deployed executor, and the TCOL→TLOAN adapter above.
 
 The loop, on every change:
 1. Run the bot → it submits an **exclusive** standing quote (`exclusiveFor = our solver addr`) for the
@@ -368,13 +377,16 @@ Testnet-first: the executor is on Sepolia from P0 so every later phase integrate
   and `for-solvers/settlement` state that the solver **receives inputs before delivering outputs** via
   `orderFinalised(uint256[2][] inputs, bytes call)` and must "fill and setAttestations for the intent
   outputs within the callback." That is exactly our `openForAndFinalise(destination = executor)` design.
-  It is **opt-in** ("your solver has to support `orderFinalised`"). What remains is the wiring, verified
-  on `order-dev` in P1: how the order server is told to route callback-model orders to our executor and
-  deliver the matched order as **escrow-typed** (`inputSettler` = the escrow settler), **unopened**
-  (`orderStatus: Signed`), carrying the user's `sponsorSignature` (permit2/3009) — likely by registering
-  the executor via `PUT /api/v1/solver/supported-contracts`. Fallback if callback routing is
-  unavailable for a given order: a small revolving inventory buffer (fill from buffer, then replenish by
-  redeeming the claimed input) — Plan-B only.
+  It is **opt-in** ("your solver has to support `orderFinalised`"). **Opt-in mechanism = resolved:** we
+  register the **escrow `InputSettlerEscrowLIFI`** (plus the OutputSettler + oracle) via
+  `PUT /api/v1/solver/supported-contracts` — the vendored spec's `PutSupportedContractsDto` takes
+  `{ oracle[], inputSettler[], outputSettler[] }` keyed by CAIP-2 chain, i.e. the settler/oracle set the
+  solver supports. Our executor is **not** registered with the order server; it is only the `destination`
+  argument we pass to `openForAndFinalise` at settlement. **Residual (empirical, P1 spike on `order-dev`):**
+  confirm that supporting the escrow settler yields matched orders delivered **escrow-typed**
+  (`inputSettler` = escrow), **unopened** (`orderStatus: Signed`), carrying the user's permit2/3009
+  `sponsorSignature`. Fallback if a given order arrives Compact/pre-opened: a small revolving inventory
+  buffer (fill from buffer, then replenish by redeeming the claimed input) — Plan-B only.
 - **Wire schemas: RESOLVED** — the order-server OpenAPI is vendored (`openapi/lifi-order.openapi.json`)
   and the Go client generated (`api/lifiorder`); the quote / order / register shapes are in §5.1. The
   WebSocket `user:vm-order-submit` event is a socket event (not in the OpenAPI); its payload is captured
@@ -388,11 +400,15 @@ Testnet-first: the executor is on Sepolia from P0 so every later phase integrate
   fixed. The vendored spec stays raw (contract of record); the shim runs only at codegen time.
 - **Adapter filler registration** — our executor must be granted filler rights on each LiquidLane
   adapter (`marketMaker`/`owner`/`isFiller`), by the adapter's vault creator. Onboarding prereq.
-- **Sepolia testnet adapter (pin first, blocks P0/§8.2)** — confirm a Sepolia LiquidLane adapter that
-  redeems a testnet RWA → underlying for the dev loop. The redstone-oev harness already uses a Sepolia
-  LiquidLane adapter (the TLOAN vault / TCOL testbed); confirm it (or a similar one) is reusable and
-  that our executor can be registered as its filler — otherwise deploy/point at one.
-- **v1 scope** — which RWA↔underlying adapter(s), token(s), and chain(s) to launch on.
+- **Sepolia testnet adapter — resolved (v1 dev route).** The redstone-oev testbed provides a usable
+  Sepolia LiquidLane adapter: `0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b` (vault
+  `0xb99F1FeA50f40Bb7C5E568c2De6D79dd0b61EB3A`), redeeming **TCOL** `0x17e892d4E802B01d7DA49Ca3542560f6851AA4D3`
+  (RWA) → **TLOAN** `0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d` (underlying). v1 same-chain route =
+  TCOL→TLOAN on Ethereum Sepolia. Confirm the exact `tokenToRedeem`/underlying and that direct redemption
+  (not only the OEV-seizure path) is permitted, via adapter reads. **Filler auth:** the testbed owner
+  `0x812492C36b003837C30cB0B63960b86eC9B27309` grants our executor `isFiller` on the adapter.
+- **v1 scope** — TCOL→TLOAN on Sepolia for dev; the mainnet RWA↔underlying adapter(s)/token(s)/chain(s)
+  are a launch decision once the Sepolia loop is proven.
 - **Reputation thresholds** — the numeric fill-rate/speed cutoffs that gate exclusive orders are
   undocumented; `exclusiveFor` on our own quotes should make this moot for v1.
 - **`getMaxAssets` is non-view** (mutates) — read via a call, not a static-call, in the pricing path
