@@ -2,25 +2,18 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
-// priceReader is the on-chain pricing surface the quote path needs (satisfied by *reader). It's an
-// interface so the quote/HTTP logic can be unit-tested without a chain backend.
-type priceReader interface {
-	tokenDecimals(ctx context.Context, token common.Address) (int, error)
-	amountsOut(ctx context.Context, tokenIn common.Address, inventories []solverInventory, amount *big.Int) (map[common.Address]*big.Int, error)
-}
-
-// quoteService prices a backend RFQ request and persists the chosen strategy by quoteId. It is
-// safe for concurrent use (the HTTP server serves quotes in parallel): its dependencies — the
-// reader cache and the store — are individually synchronized, and it holds no mutable state itself.
+// quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
+// for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
+// synchronized, and it holds no mutable state itself.
 type quoteService struct {
 	chainID   int64
 	executor  common.Address
@@ -29,8 +22,7 @@ type quoteService struct {
 	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
 	tokensToQuote      string
 	permissionedTokens map[common.Address]bool
-	reader             priceReader
-	store              *store
+	strategy           types.Strategy
 	log                logr.Logger
 	now                func() time.Time
 }
@@ -58,34 +50,27 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	tokenInDecimals, err := qs.reader.tokenDecimals(ctx, req.TokenIn)
+	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, qs.now())
+	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
-		return nil, errors.Errorf("quote: tokenIn decimals: %w", err)
+		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
-
-	// Only asset == tokenOut is fillable, so we price exactly those inventories (each priced through
-	// its asset-group's representative adapter — see reader.amountsOut).
-	matching := matchingInventories(inv, req.TokenOut)
-	oracle, err := qs.reader.amountsOut(ctx, req.TokenIn, matching, req.Amount)
-	if err != nil {
-		return nil, errors.Errorf("quote: adapter getAmountOut: %w", err)
-	}
-
-	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, qs.now())
-	if best == nil {
+	if out.Decision != types.DecisionQuote {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
 	}
-	qs.store.putStrategy(best)
+	if out.QuotedAmountOut == nil {
+		return nil, errors.New("quote: strategy returned quote without amountOut")
+	}
 
 	qs.log.V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
-		"amountOut", best.QuotedAmountOut.String(), "legs", len(best.Legs))
+		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
 	return &quoteResponse{
 		ChainID:   qs.chainID,
 		AmountIn:  req.Amount.String(),
-		AmountOut: best.QuotedAmountOut.String(),
+		AmountOut: out.QuotedAmountOut.String(),
 		Filler:    lowerAddr(qs.executor),
 		RequestID: q.RequestID,
 		Swapper:   lowerAddr(common.HexToAddress(q.Swapper)), // backend payloads use lowercase addresses
@@ -93,19 +78,6 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		TokenOut:  lowerAddr(req.TokenOut),
 		QuoteID:   q.QuoteID,
 	}, nil
-}
-
-// matchingInventories returns the inventories whose asset equals tokenOut (the only ones this filler
-// can source), so the oracle prices exactly the asset-groups the selector will consider.
-func matchingInventories(inv []solverInventory, tokenOut common.Address) []solverInventory {
-	out := make([]solverInventory, 0, len(inv))
-	for _, v := range inv {
-		if v.Asset != tokenOut {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

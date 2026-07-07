@@ -1,8 +1,14 @@
 package bridgefacilitator
 
 import (
+	"context"
+	"fmt"
 	"math/big"
+	"net/http"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -111,12 +117,116 @@ func TestAPIKeyDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 	}
 }
 
-func TestOfferExpectedReturn(t *testing.T) {
-	// 100,000 USDC (6 dp) at 200 bps (2%) => 2,000 USDC.
-	principal := new(big.Int).SetUint64(100_000_000_000)
-	got := offerExpectedReturn(principal, 200)
-	want := new(big.Int).SetUint64(2_000_000_000)
-	if got.Cmp(want) != 0 {
-		t.Fatalf("expected %s, got %s", want, got)
+func TestGetOffersDigest_Golden(t *testing.T) {
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	got := GetOffersDigest(maker, big.NewInt(4102444800), big.NewInt(apiKeyDomainChainID)).Hex()
+	// GOLDEN: pinned from TestGetOffersDigest_MatchesApitypes cross-check (chainId 1).
+	want := "0x9d4c2e5ccaaeb6884d2d2fd8e306e57cf781ef424db9e8801c703eac794fa6a5"
+	if got != want {
+		t.Fatalf("digest = %s, want %s", got, want)
 	}
+}
+
+// TestGetOffersDigest_MatchesApitypes cross-checks our hand-rolled GetOffers digest against
+// go-ethereum's independent EIP-712 implementation. The grunt-api domain has no verifyingContract
+// (name/version/chainId=1 only), matching the same domain as APIKeyDigest.
+func TestGetOffersDigest_MatchesApitypes(t *testing.T) {
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	deadline := big.NewInt(4102444800)
+
+	got := GetOffersDigest(maker, deadline, big.NewInt(apiKeyDomainChainID))
+
+	typed := apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+			},
+			"GetOffers": {
+				{Name: "maker", Type: "address"},
+				{Name: "deadline", Type: "uint256"},
+			},
+		},
+		PrimaryType: "GetOffers",
+		Domain: apitypes.TypedDataDomain{
+			Name:    apiKeyDomainName,
+			Version: apiKeyDomainVersion,
+			ChainId: math.NewHexOrDecimal256(apiKeyDomainChainID),
+		},
+		Message: apitypes.TypedDataMessage{
+			"maker":    maker.Hex(),
+			"deadline": deadline.String(),
+		},
+	}
+	domainSep, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
+	if err != nil {
+		t.Fatalf("hash domain: %v", err)
+	}
+	msgHash, err := typed.HashStruct("GetOffers", typed.Message)
+	if err != nil {
+		t.Fatalf("hash message: %v", err)
+	}
+	want := crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSep, msgHash)
+
+	if got != want {
+		t.Fatalf("digest mismatch:\n manual   %s\n apitypes %s", got.Hex(), want.Hex())
+	}
+}
+
+// TestGetOffersDigest_MatchesLiveAcceptedSignature verifies that the scaffolded GetOffers type
+// string is accepted by the live 3F API. Skipped offline (SOLVER_LIVE_AUTH != "1").
+// A correctly-formed sig returns 200/empty or 403 (unauthorized maker) — NOT a signature error.
+// If the type string is wrong the API returns a 401/signature-error, which fails the test.
+func TestGetOffersDigest_MatchesLiveAcceptedSignature(t *testing.T) {
+	if os.Getenv("SOLVER_LIVE_AUTH") != "1" {
+		t.Skip("set SOLVER_LIVE_AUTH=1 and SOLVER_PRIVATE_KEY to run the live 3F GetOffers auth check")
+	}
+	pk := os.Getenv("SOLVER_PRIVATE_KEY")
+	if pk == "" {
+		t.Fatal("SOLVER_PRIVATE_KEY not set")
+	}
+	key, err := crypto.HexToECDSA(strings.TrimPrefix(pk, "0x"))
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	maker := crypto.PubkeyToAddress(key.PublicKey)
+	deadline := big.NewInt(4_102_444_800)
+	chainID := big.NewInt(11155111) // Sepolia; the grunt-api domain + query chainId must agree
+	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
+		chainID, _ = new(big.Int).SetString(v, 10)
+	}
+
+	sig, err := crypto.Sign(GetOffersDigest(maker, deadline, chainID).Bytes(), key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	sig[64] += 27 // normalize V to {27,28}
+
+	baseURL := os.Getenv("SOLVER_3F_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://bf.dev.gcp.3f.xyz"
+	}
+
+	url := fmt.Sprintf("%s/v1/offer?maker=%s&chainId=%s&deadline=%s",
+		baseURL, strings.ToLower(maker.Hex()), chainID.String(), deadline.String())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil) //nolint:gosec // G704: URL is operator-supplied via SOLVER_3F_BASE_URL in this live integration test
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+hexutil.Encode(sig))
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req) //nolint:gosec // G704: intentional operator-controlled target in live integration test
+	if err != nil {
+		t.Fatalf("GET /v1/offer: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 200 (authorized) or 403 (maker not registered) both mean signature verification passed.
+	// Anything in the 4xx range that is specifically a signature error means the type string is wrong.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status %d — expected 200 or 403 (sig accepted); a 401 means the type string may be wrong", resp.StatusCode)
+	}
+	t.Logf("GET /v1/offer status %d (maker=%s) — signature accepted by 3F API", resp.StatusCode, maker.Hex())
 }

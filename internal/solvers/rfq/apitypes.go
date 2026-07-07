@@ -6,6 +6,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 // quoteRequest is the backend → filler RFQ quote request (POST /quote). The validation tags drive
@@ -80,11 +82,11 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	if !common.IsHexAddress(q.Swapper) {
 		return nil, errors.Errorf("swapper: invalid address %q", q.Swapper)
 	}
-	tokenIn, err := parseAddress(q.TokenIn, "tokenIn")
+	tokenIn, err := parse.Address(q.TokenIn, "tokenIn")
 	if err != nil {
 		return nil, err
 	}
-	tokenOut, err := parseAddress(q.TokenOut, "tokenOut")
+	tokenOut, err := parse.Address(q.TokenOut, "tokenOut")
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +120,11 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 }
 
 func (v *quoteAdapter) parse(index int) (solverInventory, error) {
-	adapter, err := parseAddress(v.Adapter, idxField(index, "adapter"))
+	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
 		return solverInventory{}, err
 	}
-	asset, err := parseAddress(v.Asset, idxField(index, "asset"))
+	asset, err := parse.Address(v.Asset, idxField(index, "asset"))
 	if err != nil {
 		return solverInventory{}, err
 	}

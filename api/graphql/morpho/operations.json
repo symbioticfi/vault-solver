@@ -1,0 +1,14 @@
+{
+  "operations": [
+    {
+      "operationName": "MorphoDiscoverMarkets",
+      "query": "\nquery MorphoDiscoverMarkets ($loan: [String!]!, $coll: [String!]!, $chains: [Int!]!, $first: Int!) {\n\tmarkets(first: $first, where: {loanAssetAddress_in:$loan,collateralAssetAddress_in:$coll,chainId_in:$chains}) {\n\t\titems {\n\t\t\tmarketId\n\t\t\toracleAddress\n\t\t\tirmAddress\n\t\t\tlltv\n\t\t\tloanAsset {\n\t\t\t\taddress\n\t\t\t}\n\t\t\tcollateralAsset {\n\t\t\t\taddress\n\t\t\t}\n\t\t\tstate {\n\t\t\t\tblockNumber\n\t\t\t\tborrowAssets\n\t\t\t\tborrowShares\n\t\t\t\tsupplyAssets\n\t\t\t\tsupplyShares\n\t\t\t\ttimestamp\n\t\t\t\tprice\n\t\t\t}\n\t\t}\n\t}\n}\n",
+      "sourceLocation": "operations/discovery.graphql"
+    },
+    {
+      "operationName": "MorphoPositionsByMarket",
+      "query": "\nquery MorphoPositionsByMarket ($ids: [String!]!, $first: Int!, $skip: Int!, $maxHf: Float) {\n\tmarketPositions(first: $first, skip: $skip, orderBy: HealthFactor, orderDirection: Asc, where: {marketUniqueKey_in:$ids,healthFactor_lte:$maxHf}) {\n\t\titems {\n\t\t\tuser {\n\t\t\t\taddress\n\t\t\t}\n\t\t\tmarket {\n\t\t\t\tmarketId\n\t\t\t}\n\t\t\tstate {\n\t\t\t\tborrowShares\n\t\t\t\tcollateral\n\t\t\t}\n\t\t\thealthFactor\n\t\t}\n\t}\n}\n",
+      "sourceLocation": "operations/discovery.graphql"
+    }
+  ]
+}

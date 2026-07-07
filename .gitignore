@@ -28,3 +28,6 @@ dev-account.local.txt
 .vscode/
 *.swp
 .DS_Store
+
+# Local debug tooling (not part of the solver)
+/cmd/3f-debug/

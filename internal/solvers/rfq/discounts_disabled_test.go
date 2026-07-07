@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 	"testing"
 	"time"
 
@@ -27,6 +26,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	e.discountsEnabled = false // external solver; no vaults configured
+	e.strategy = fixedFillStrategy{}
 
 	e.syncOnce(context.Background())
 
@@ -48,15 +48,10 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	st.putStrategy(&strategyRecord{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut, Asset: tOut, AssetDecimals: 6,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000), AssetAmountOut: big.NewInt(900000),
-		Legs:      []strategyLeg{{Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000), MaxRate: big.NewInt(1), DiscountID: &h}},
-		CreatedAt: time.Unix(0, 0),
-	})
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	e.discountsEnabled = false
+	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
 	e.syncOnce(context.Background())
 

@@ -44,7 +44,7 @@ executor: "0x0000000000000000000000000000000000000010"
 solverMode: internal
 `
 
-	cfg, err := parse(t, base+`
+	cfg, err := parseCfg(t, base+`
 tokensToQuote: permissioned
 permissionedTokens:
   - "0x2Ee6f1A395Bce7a7c5bF1D07bAaF9F8A0828A8d3"
@@ -59,7 +59,7 @@ permissionedTokens:
 		t.Errorf("expected mGLOBAL in PermissionedTokens")
 	}
 
-	def, err := parse(t, base)
+	def, err := parseCfg(t, base)
 	if err != nil {
 		t.Fatalf("parse default: %v", err)
 	}
@@ -67,7 +67,7 @@ permissionedTokens:
 		t.Errorf("default TokensToQuote = %q, want %q", def.TokensToQuote, tokensToQuoteAll)
 	}
 
-	if _, err := parse(t, base+"tokensToQuote: bogus\n"); err == nil {
+	if _, err := parseCfg(t, base+"tokensToQuote: bogus\n"); err == nil {
 		t.Errorf("expected error for invalid tokensToQuote")
 	}
 }

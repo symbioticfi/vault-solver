@@ -1,31 +1,26 @@
-// Code generated - DO NOT EDIT.
+// Code generated via abigen V2 - DO NOT EDIT.
 // This file is a generated binding and any manual changes will be lost.
 
 package multicall3
 
 import (
+	"bytes"
 	"errors"
 	"math/big"
-	"strings"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/event"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
 var (
+	_ = bytes.Equal
 	_ = errors.New
 	_ = big.NewInt
-	_ = strings.NewReader
-	_ = ethereum.NotFound
-	_ = bind.Bind
 	_ = common.Big1
 	_ = types.BloomLookup
-	_ = event.NewSubscription
 	_ = abi.ConvertType
 )
 
@@ -43,183 +38,62 @@ type Multicall3Result struct {
 }
 
 // Multicall3MetaData contains all meta data concerning the Multicall3 contract.
-var Multicall3MetaData = &bind.MetaData{
+var Multicall3MetaData = bind.MetaData{
 	ABI: "[{\"inputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"target\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"allowFailure\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"callData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Call3[]\",\"name\":\"calls\",\"type\":\"tuple[]\"}],\"name\":\"aggregate3\",\"outputs\":[{\"components\":[{\"internalType\":\"bool\",\"name\":\"success\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"returnData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Result[]\",\"name\":\"returnData\",\"type\":\"tuple[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ID:  "Multicall3",
 }
-
-// Multicall3ABI is the input ABI used to generate the binding from.
-// Deprecated: Use Multicall3MetaData.ABI instead.
-var Multicall3ABI = Multicall3MetaData.ABI
 
 // Multicall3 is an auto generated Go binding around an Ethereum contract.
 type Multicall3 struct {
-	Multicall3Caller     // Read-only binding to the contract
-	Multicall3Transactor // Write-only binding to the contract
-	Multicall3Filterer   // Log filterer for contract events
+	abi abi.ABI
 }
 
-// Multicall3Caller is an auto generated read-only Go binding around an Ethereum contract.
-type Multicall3Caller struct {
-	contract *bind.BoundContract // Generic contract wrapper for the low level calls
-}
-
-// Multicall3Transactor is an auto generated write-only Go binding around an Ethereum contract.
-type Multicall3Transactor struct {
-	contract *bind.BoundContract // Generic contract wrapper for the low level calls
-}
-
-// Multicall3Filterer is an auto generated log filtering Go binding around an Ethereum contract events.
-type Multicall3Filterer struct {
-	contract *bind.BoundContract // Generic contract wrapper for the low level calls
-}
-
-// Multicall3Session is an auto generated Go binding around an Ethereum contract,
-// with pre-set call and transact options.
-type Multicall3Session struct {
-	Contract     *Multicall3       // Generic contract binding to set the session for
-	CallOpts     bind.CallOpts     // Call options to use throughout this session
-	TransactOpts bind.TransactOpts // Transaction auth options to use throughout this session
-}
-
-// Multicall3CallerSession is an auto generated read-only Go binding around an Ethereum contract,
-// with pre-set call options.
-type Multicall3CallerSession struct {
-	Contract *Multicall3Caller // Generic contract caller binding to set the session for
-	CallOpts bind.CallOpts     // Call options to use throughout this session
-}
-
-// Multicall3TransactorSession is an auto generated write-only Go binding around an Ethereum contract,
-// with pre-set transact options.
-type Multicall3TransactorSession struct {
-	Contract     *Multicall3Transactor // Generic contract transactor binding to set the session for
-	TransactOpts bind.TransactOpts     // Transaction auth options to use throughout this session
-}
-
-// Multicall3Raw is an auto generated low-level Go binding around an Ethereum contract.
-type Multicall3Raw struct {
-	Contract *Multicall3 // Generic contract binding to access the raw methods on
-}
-
-// Multicall3CallerRaw is an auto generated low-level read-only Go binding around an Ethereum contract.
-type Multicall3CallerRaw struct {
-	Contract *Multicall3Caller // Generic read-only contract binding to access the raw methods on
-}
-
-// Multicall3TransactorRaw is an auto generated low-level write-only Go binding around an Ethereum contract.
-type Multicall3TransactorRaw struct {
-	Contract *Multicall3Transactor // Generic write-only contract binding to access the raw methods on
-}
-
-// NewMulticall3 creates a new instance of Multicall3, bound to a specific deployed contract.
-func NewMulticall3(address common.Address, backend bind.ContractBackend) (*Multicall3, error) {
-	contract, err := bindMulticall3(address, backend, backend, backend)
+// NewMulticall3 creates a new instance of Multicall3.
+func NewMulticall3() *Multicall3 {
+	parsed, err := Multicall3MetaData.ParseABI()
 	if err != nil {
-		return nil, err
+		panic(errors.New("invalid ABI: " + err.Error()))
 	}
-	return &Multicall3{Multicall3Caller: Multicall3Caller{contract: contract}, Multicall3Transactor: Multicall3Transactor{contract: contract}, Multicall3Filterer: Multicall3Filterer{contract: contract}}, nil
+	return &Multicall3{abi: *parsed}
 }
 
-// NewMulticall3Caller creates a new read-only instance of Multicall3, bound to a specific deployed contract.
-func NewMulticall3Caller(address common.Address, caller bind.ContractCaller) (*Multicall3Caller, error) {
-	contract, err := bindMulticall3(address, caller, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &Multicall3Caller{contract: contract}, nil
+// Instance creates a wrapper for a deployed contract instance at the given address.
+// Use this to create the instance object passed to abigen v2 library functions Call, Transact, etc.
+func (c *Multicall3) Instance(backend bind.ContractBackend, addr common.Address) *bind.BoundContract {
+	return bind.NewBoundContract(addr, c.abi, backend, backend, backend)
 }
 
-// NewMulticall3Transactor creates a new write-only instance of Multicall3, bound to a specific deployed contract.
-func NewMulticall3Transactor(address common.Address, transactor bind.ContractTransactor) (*Multicall3Transactor, error) {
-	contract, err := bindMulticall3(address, nil, transactor, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &Multicall3Transactor{contract: contract}, nil
-}
-
-// NewMulticall3Filterer creates a new log filterer instance of Multicall3, bound to a specific deployed contract.
-func NewMulticall3Filterer(address common.Address, filterer bind.ContractFilterer) (*Multicall3Filterer, error) {
-	contract, err := bindMulticall3(address, nil, nil, filterer)
-	if err != nil {
-		return nil, err
-	}
-	return &Multicall3Filterer{contract: contract}, nil
-}
-
-// bindMulticall3 binds a generic wrapper to an already deployed contract.
-func bindMulticall3(address common.Address, caller bind.ContractCaller, transactor bind.ContractTransactor, filterer bind.ContractFilterer) (*bind.BoundContract, error) {
-	parsed, err := Multicall3MetaData.GetAbi()
-	if err != nil {
-		return nil, err
-	}
-	return bind.NewBoundContract(address, *parsed, caller, transactor, filterer), nil
-}
-
-// Call invokes the (constant) contract method with params as input values and
-// sets the output to result. The result type might be a single field for simple
-// returns, a slice of interfaces for anonymous returns and a struct for named
-// returns.
-func (_Multicall3 *Multicall3Raw) Call(opts *bind.CallOpts, result *[]interface{}, method string, params ...interface{}) error {
-	return _Multicall3.Contract.Multicall3Caller.contract.Call(opts, result, method, params...)
-}
-
-// Transfer initiates a plain transaction to move funds to the contract, calling
-// its default method if one is available.
-func (_Multicall3 *Multicall3Raw) Transfer(opts *bind.TransactOpts) (*types.Transaction, error) {
-	return _Multicall3.Contract.Multicall3Transactor.contract.Transfer(opts)
-}
-
-// Transact invokes the (paid) contract method with params as input values.
-func (_Multicall3 *Multicall3Raw) Transact(opts *bind.TransactOpts, method string, params ...interface{}) (*types.Transaction, error) {
-	return _Multicall3.Contract.Multicall3Transactor.contract.Transact(opts, method, params...)
-}
-
-// Call invokes the (constant) contract method with params as input values and
-// sets the output to result. The result type might be a single field for simple
-// returns, a slice of interfaces for anonymous returns and a struct for named
-// returns.
-func (_Multicall3 *Multicall3CallerRaw) Call(opts *bind.CallOpts, result *[]interface{}, method string, params ...interface{}) error {
-	return _Multicall3.Contract.contract.Call(opts, result, method, params...)
-}
-
-// Transfer initiates a plain transaction to move funds to the contract, calling
-// its default method if one is available.
-func (_Multicall3 *Multicall3TransactorRaw) Transfer(opts *bind.TransactOpts) (*types.Transaction, error) {
-	return _Multicall3.Contract.contract.Transfer(opts)
-}
-
-// Transact invokes the (paid) contract method with params as input values.
-func (_Multicall3 *Multicall3TransactorRaw) Transact(opts *bind.TransactOpts, method string, params ...interface{}) (*types.Transaction, error) {
-	return _Multicall3.Contract.contract.Transact(opts, method, params...)
-}
-
-// Aggregate3 is a free data retrieval call binding the contract method 0x82ad56cb.
+// PackAggregate3 is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x82ad56cb.  This method will panic if any
+// invalid/nil inputs are passed.
 //
 // Solidity: function aggregate3((address,bool,bytes)[] calls) view returns((bool,bytes)[] returnData)
-func (_Multicall3 *Multicall3Caller) Aggregate3(opts *bind.CallOpts, calls []Multicall3Call3) ([]Multicall3Result, error) {
-	var out []interface{}
-	err := _Multicall3.contract.Call(opts, &out, "aggregate3", calls)
+func (multicall3 *Multicall3) PackAggregate3(calls []Multicall3Call3) []byte {
+	enc, err := multicall3.abi.Pack("aggregate3", calls)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
 
+// TryPackAggregate3 is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x82ad56cb.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function aggregate3((address,bool,bytes)[] calls) view returns((bool,bytes)[] returnData)
+func (multicall3 *Multicall3) TryPackAggregate3(calls []Multicall3Call3) ([]byte, error) {
+	return multicall3.abi.Pack("aggregate3", calls)
+}
+
+// UnpackAggregate3 is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x82ad56cb.
+//
+// Solidity: function aggregate3((address,bool,bytes)[] calls) view returns((bool,bytes)[] returnData)
+func (multicall3 *Multicall3) UnpackAggregate3(data []byte) ([]Multicall3Result, error) {
+	out, err := multicall3.abi.Unpack("aggregate3", data)
 	if err != nil {
 		return *new([]Multicall3Result), err
 	}
-
 	out0 := *abi.ConvertType(out[0], new([]Multicall3Result)).(*[]Multicall3Result)
-
-	return out0, err
-
-}
-
-// Aggregate3 is a free data retrieval call binding the contract method 0x82ad56cb.
-//
-// Solidity: function aggregate3((address,bool,bytes)[] calls) view returns((bool,bytes)[] returnData)
-func (_Multicall3 *Multicall3Session) Aggregate3(calls []Multicall3Call3) ([]Multicall3Result, error) {
-	return _Multicall3.Contract.Aggregate3(&_Multicall3.CallOpts, calls)
-}
-
-// Aggregate3 is a free data retrieval call binding the contract method 0x82ad56cb.
-//
-// Solidity: function aggregate3((address,bool,bytes)[] calls) view returns((bool,bytes)[] returnData)
-func (_Multicall3 *Multicall3CallerSession) Aggregate3(calls []Multicall3Call3) ([]Multicall3Result, error) {
-	return _Multicall3.Contract.Aggregate3(&_Multicall3.CallOpts, calls)
+	return out0, nil
 }

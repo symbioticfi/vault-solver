@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -53,6 +54,7 @@ type executionService struct {
 	backend          orderBackend
 	store            *store
 	reader           recoveryReader
+	strategy         types.Strategy
 	txm              txSender
 	log              logr.Logger
 	now              func() time.Time
@@ -61,11 +63,8 @@ type executionService struct {
 	inflight   map[string]bool
 }
 
-// recoveryReader is the on-chain surface strategy recovery needs (satisfied by *reader). It extends
-// the quote path's priceReader with the permissioned-inventory read; kept an interface so recovery is
-// unit-testable without a chain backend.
+// recoveryReader is the on-chain surface used to assemble fill-time strategy inputs.
 type recoveryReader interface {
-	priceReader
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
@@ -96,7 +95,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	for _, o := range e.store.activeOrders() {
 		e.handleOrder(ctx, o)
 	}
-	e.store.sweep() // evict stale strategies/terminal orders so the maps stay bounded
+	e.store.sweep() // evict stale terminal orders so the maps stay bounded
 }
 
 func (e *executionService) pollOpenOrders(ctx context.Context) error {
@@ -151,14 +150,6 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 
-	selected := e.store.strategy(exec.quoteID)
-	if selected == nil {
-		if selected, err = e.recoverStrategy(ctx, exec); err != nil || selected == nil {
-			e.fail(orderID, "missing strategy for quoteId "+exec.quoteID)
-			return
-		}
-	}
-
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
 		e.fail(orderID, "decode order: "+err.Error())
@@ -179,19 +170,10 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(orderID, "sum outputs: "+err.Error())
 		return
 	}
-	// The strategy is looked up by the backend-supplied quoteId, so bind it to the awarded order's
-	// own terms before filling: a reused/mismatched quoteId must not let us fill on stale pricing.
-	if selected.Asset != outputToken {
-		e.fail(orderID, "strategy asset does not match order output token")
-		return
-	}
-	if selected.TokenIn != order.Request.TokenIn || selected.TokenOut != outputToken ||
-		selected.AmountIn.Cmp(order.Request.AmountIn) != 0 {
-		e.fail(orderID, "stored strategy does not match the awarded order (tokenIn/tokenOut/amountIn)")
-		return
-	}
-	if selected.QuotedAmountOut.Cmp(required) < 0 {
-		e.fail(orderID, "stored strategy output is below the required order output")
+
+	selected, err := e.buildFillPlan(ctx, exec, order, outputToken, required)
+	if err != nil || selected == nil {
+		e.fail(orderID, "strategy fill plan: "+errString(err))
 		return
 	}
 
@@ -269,23 +251,16 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	}
 }
 
-// recoverStrategy rebuilds a strategy from current on-chain + backend state when the quote-time
-// strategy is not cached (e.g. after a restart). Direct inventories come from the configured candidate
-// vault universe; discount inventories come from the backend (independent of config), so a discount-only
-// solver recovers with an empty `vaults` list. Bails only when neither source yields any inventory.
-func (e *executionService) recoverStrategy(ctx context.Context, exec *executable) (*strategyRecord, error) {
-	order, err := decodeOrder(exec.encodedOrder)
-	if err != nil {
-		return nil, err
-	}
-	outputToken, ok := singleOutputToken(exec.outputs)
-	if !ok {
-		return nil, nil
-	}
-	required, err := sumOutputs(exec.outputs)
-	if err != nil {
-		return nil, err
-	}
+// buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
+// strategy owns cached quote lookup and recovery; solver only assembles the snapshot and executes the
+// returned plan.
+func (e *executionService) buildFillPlan(
+	ctx context.Context,
+	exec *executable,
+	order executor.IReactorOrder,
+	outputToken common.Address,
+	required *big.Int,
+) (*fillPlan, error) {
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
@@ -300,34 +275,18 @@ func (e *executionService) recoverStrategy(ctx context.Context, exec *executable
 	if e.discountsEnabled {
 		inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
 	}
-	if len(inv) == 0 {
-		return nil, nil
-	}
-	tokenInDecimals, err := e.reader.tokenDecimals(ctx, order.Request.TokenIn)
-	if err != nil {
-		return nil, err
-	}
-	matching := matchingInventories(inv, outputToken)
-	oracle, err := e.reader.amountsOut(ctx, order.Request.TokenIn, matching, order.Request.AmountIn)
-	if err != nil {
-		return nil, err
-	}
 	req := strategyRequest{
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	best := selectBestStrategy(req, inv, tokenInDecimals, oracle, e.now())
-	if best == nil || best.QuotedAmountOut.Cmp(required) < 0 {
-		return nil, nil
-	}
-	e.store.putStrategy(best)
-	return best, nil
+	input := newFillInput(e.chainID, e.executor, req, inv, required, e.now())
+	return e.strategy.BuildFillPlan(ctx, input)
 }
 
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and
 // encodes it into the Executor's DiscountSwapInput. Direct-only strategies return nil.
 func (e *executionService) buildDiscountSwapInputs(
-	ctx context.Context, selected *strategyRecord,
+	ctx context.Context, selected *fillPlan,
 ) ([]executor.IReactorDiscountSwapInput, error) {
 	var out []executor.IReactorDiscountSwapInput
 	for _, leg := range selected.Legs {
@@ -407,7 +366,7 @@ var errDiscountsDisabled = errors.New("discount leg present but discounts are di
 
 // toDiscountSwapInput converts a resolved signed discount + its strategy leg into the Executor input.
 func toDiscountSwapInput(
-	r *resolveDiscountResponse, leg strategyLeg, recipient common.Address,
+	r *resolveDiscountResponse, leg fillLeg, recipient common.Address,
 ) (executor.IReactorDiscountSwapInput, error) {
 	d := r.Discount
 	for _, a := range []string{d.Adapter, d.TokenToRedeem, d.Signer, d.Protocol} {
@@ -458,6 +417,13 @@ func toDiscountSwapInput(
 func (e *executionService) fail(orderID, msg string) {
 	e.log.Info("order failed", "orderId", orderID, "reason", msg)
 	e.store.markStatus(orderID, statusFailed, common.Hash{}, msg)
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "not available"
+	}
+	return err.Error()
 }
 
 func (e *executionService) acquire(orderID string) bool {

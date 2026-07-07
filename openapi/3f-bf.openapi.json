@@ -146,7 +146,7 @@
     },
     "/v1/offer": {
       "post": {
-        "description": "Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, it is verified as an EIP-712 signature and the `maker` must be a registered facilitator. Contract wallets are supported via EIP-1271. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nSigned offer requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to the request contract address for the selected auction. If the contract exposes a `salt`, include it; otherwise omit that field.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit the resulting signature in the request body `signature` field. All `uint256` request fields stay decimal strings in the HTTP payload.",
+        "description": "Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, the `maker` must be a registered facilitator address or that facilitator's configured offer address; signature executability is checked by the relayer before on-chain `consume`, so ERC-1271 approvals may become valid asynchronously. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nSigned offer requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to the request contract address for the selected auction. If the contract exposes a `salt`, include it; otherwise omit that field.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit the signature bytes in the request body `signature` field. For deferred ERC-1271 approval, submit `0x` while the contract approval transaction is pending. All `uint256` request fields stay decimal strings in the HTTP payload.",
         "operationId": "OfferController_create_v1",
         "parameters": [
           {
@@ -720,7 +720,7 @@
         "properties": {
           "chainId": {
             "type": "number",
-            "description": "Chain ID for signature verification",
+            "description": "Chain ID for resolving the request EIP-712 domain",
             "example": 1
           },
           "auctionId": {
@@ -761,9 +761,8 @@
           },
           "signature": {
             "type": "string",
-            "pattern": "^0x[a-fA-F0-9]{130}$",
-            "description": "EIP-712 signature (required if chainId is provided)",
-            "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+            "description": "EIP-712/EIP-1271 signature bytes. Use `0x` while deferred EIP-1271 approval is pending. Required if chainId is provided.",
+            "example": "0x"
           }
         },
         "required": [
@@ -815,7 +814,6 @@
           },
           "signature": {
             "type": "string",
-            "pattern": "^0x[a-fA-F0-9]{130}$",
             "description": "EIP-712 signature (required if chainId is provided)",
             "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
           }
@@ -1159,14 +1157,14 @@
             ]
           },
           "direction": {
-            "type": "string",
+            "nullable": true,
             "enum": [
               "subscription",
               "redemption"
             ],
+            "type": "string",
             "description": "Auction direction derived from the first facility-intent operation, or null if no operation has been recorded yet",
-            "example": "subscription",
-            "nullable": true
+            "example": "subscription"
           },
           "eip712Domain": {
             "nullable": true,

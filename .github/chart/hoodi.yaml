@@ -27,6 +27,9 @@ configMap:
       solvers:
         - name: rfq-filler
           config:
+            strategy:
+              name: default
+              config: {}
             backendUrl: http://rfq-backend:42072
             backendSharedSecretEnv: BACKEND_SHARED_SECRET # env var NAME (secret never in config)
             listenAddr: ":42073" # quote HTTP server (poll-only; no /notify)

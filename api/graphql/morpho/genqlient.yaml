@@ -1,0 +1,16 @@
+schema: schema.graphql
+operations:
+  - operations/*.graphql
+generated: ../../morphographql/generated.go
+export_operations: operations.json
+package: morphographql
+optional: pointer
+bindings:
+  Address:
+    type: string
+  BigInt:
+    type: github.com/symbioticfi/vault-solver/api/morphographql/scalars.BigIntString
+  HexString:
+    type: string
+  MarketId:
+    type: string

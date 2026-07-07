@@ -1,119 +1,127 @@
 package rfq
 
 import (
+	"io"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
+	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
-func mustBig(t *testing.T, s string) *big.Int {
+func baseQuoteInput(t *testing.T) types.QuoteInput {
 	t.Helper()
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		t.Fatalf("bad big.Int %q", s)
+	return types.QuoteInput{
+		RequestID: "r", QuoteID: "q", ChainID: 1,
+		Executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		TokenIn:  tIn, TokenOut: tOut, AmountIn: mustBig(t, "1000000000000000000"),
+		Candidates: []types.QuoteCandidate{{
+			ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
+			MaxAssets: mustBig(t, "10000000"),
+			MaxRate:   mustBig(t, "1000000000000000000"),
+		}},
+		Now: time.Unix(0, 0),
 	}
-	return n
 }
 
-var (
-	tIn  = common.HexToAddress("0x0000000000000000000000000000000000000001")
-	tOut = common.HexToAddress("0x0000000000000000000000000000000000000002")
-	vlt  = common.HexToAddress("0x0000000000000000000000000000000000000003")
-)
-
-// baseReq: swap 1e18 of an 18-decimal tokenIn for a 6-decimal asset (tokenOut).
-func baseReq(t *testing.T) strategyRequest {
-	t.Helper()
-	return strategyRequest{RequestID: "r", QuoteID: "q", TokenIn: tIn, TokenOut: tOut, Amount: mustBig(t, "1000000000000000000")}
+func TestDefaultStrategyDecideQuote(t *testing.T) {
+	pricing := &fakeStrategyPricing{
+		decimals: 18,
+		out:      map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
+	}
+	out, err := defaultstrategy.New(pricing).DecideQuote(t.Context(), baseQuoteInput(t))
+	if err != nil {
+		t.Fatalf("DecideQuote: %v", err)
+	}
+	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" {
+		t.Fatalf("unexpected output: %+v", out)
+	}
+	if len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
+		t.Fatalf("legs = %+v, want candidate c0", out.Legs)
+	}
+	if len(pricing.queries) != 1 || len(pricing.queries[0]) != 1 || pricing.queries[0][0].Adapter != vlt {
+		t.Fatalf("pricing queries = %+v, want one batched query for %s", pricing.queries, vlt.Hex())
+	}
 }
 
-func TestSelectBestStrategy_DirectFill(t *testing.T) {
-	req := baseReq(t)
-	inv := []solverInventory{{
-		Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"),            // 10 USDC of liquidity
-		MaxRate:   mustBig(t, "1000000000000000000"), // 1e18 ≥ our private rate
-	}}
-	oracle := map[common.Address]*big.Int{tOut: mustBig(t, "1000000")} // oracle: 1e18 tokenIn → 1.000000 USDC
-
-	got := selectBestStrategy(req, inv, 18, oracle, time.Unix(0, 0))
+func TestNewStrategyUsesRegistry(t *testing.T) {
+	got, err := newStrategy(StrategyConfig{Name: "default"}, nil, logr.Discard())
+	if err != nil {
+		t.Fatalf("newStrategy default: %v", err)
+	}
 	if got == nil {
-		t.Fatal("expected a strategy")
+		t.Fatal("newStrategy default returned nil")
 	}
-	// 1.0 USDC oracle, no quote discount = 1.000000 USDC = 1000000 base units.
-	if got.QuotedAmountOut.String() != "1000000" {
-		t.Fatalf("quotedAmountOut = %s, want 1000000", got.QuotedAmountOut)
-	}
-	if len(got.Legs) != 1 {
-		t.Fatalf("legs = %d, want 1", len(got.Legs))
-	}
-	if got.Legs[0].AmountIn.String() != "1000000000000000000" || got.Legs[0].AmountOut.String() != "1000000" {
-		t.Fatalf("leg = (in %s, out %s), want (1e18, 1000000)", got.Legs[0].AmountIn, got.Legs[0].AmountOut)
-	}
-	if got.Legs[0].DiscountID != nil {
-		t.Fatalf("direct leg should have nil discountId")
+	names := strategies.Registered()
+	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {
+		t.Fatalf("registered strategies = %v, want default and webhook", names)
 	}
 }
 
-func TestSelectBestStrategy_RejectsMaxRateBelowPrivateRate(t *testing.T) {
-	req := baseReq(t)
-	inv := []solverInventory{{
-		Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"),
-		MaxRate:   mustBig(t, "800000000000000000"), // 0.8e18 < private rate (1.0e18, no discount) → ineligible
-	}}
-	oracle := map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}
-
-	if got := selectBestStrategy(req, inv, 18, oracle, time.Unix(0, 0)); got != nil {
-		t.Fatalf("expected nil (vault won't honor the rate), got %v", got)
+func TestDefaultStrategyBuildFillPlanUsesQuoteCache(t *testing.T) {
+	strategy := defaultstrategy.New(&fakeStrategyPricing{
+		decimals: 18,
+		out:      map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
+	})
+	input := baseQuoteInput(t)
+	if _, err := strategy.DecideQuote(t.Context(), input); err != nil {
+		t.Fatalf("DecideQuote: %v", err)
+	}
+	plan, err := strategy.BuildFillPlan(t.Context(), types.FillInput{
+		RequestID: input.RequestID,
+		QuoteID:   input.QuoteID,
+		ChainID:   input.ChainID,
+		Executor:  input.Executor,
+		TokenIn:   input.TokenIn,
+		TokenOut:  input.TokenOut,
+		AmountIn:  input.AmountIn,
+		Now:       input.Now,
+	})
+	if err != nil {
+		t.Fatalf("BuildFillPlan: %v", err)
+	}
+	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != vlt {
+		t.Fatalf("cached fill plan = %+v, want vlt leg", plan)
 	}
 }
 
-func TestSelectBestStrategy_AssetMustEqualTokenOut(t *testing.T) {
-	req := baseReq(t)
-	other := common.HexToAddress("0x00000000000000000000000000000000000000ff")
-	inv := []solverInventory{{
-		Adapter: vlt, Asset: other, AssetDecimals: 6, // asset != tokenOut
-		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-	}}
-	oracle := map[common.Address]*big.Int{other: mustBig(t, "1000000")}
-
-	if got := selectBestStrategy(req, inv, 18, oracle, time.Unix(0, 0)); got != nil {
-		t.Fatalf("expected nil (asset != tokenOut), got %v", got)
+func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if !strings.Contains(string(body), `"amountIn":"1000000000000000000"`) ||
+			strings.Contains(string(body), `"AmountIn"`) {
+			t.Fatalf("request body does not use decimal-string lower-camel JSON: %s", string(body))
+		}
+		_, _ = w.Write([]byte(`{
+			"decision": "quote",
+			"quotedAmountOut": "1000000",
+			"legs": [{"candidateId": "c0", "amountIn": "1000000000000000000", "amountOut": "1000000"}]
+		}`))
+	}))
+	defer srv.Close()
+	client, err := webhook.NewClient(webhook.Config{URL: srv.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
 	}
-}
-
-func TestSelectBestStrategy_NoOraclePriceSkips(t *testing.T) {
-	req := baseReq(t)
-	inv := []solverInventory{{
-		Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-	}}
-	// Empty oracle map → collateral can't be priced → no strategy.
-	if got := selectBestStrategy(req, inv, 18, map[common.Address]*big.Int{}, time.Unix(0, 0)); got != nil {
-		t.Fatalf("expected nil (no oracle price), got %v", got)
+	out, err := webhookstrategy.New(client).DecideQuote(t.Context(), baseQuoteInput(t))
+	if err != nil {
+		t.Fatalf("DecideQuote: %v", err)
 	}
-}
-
-func TestSelectBestStrategy_DiscountLegUsesMaxRate(t *testing.T) {
-	req := baseReq(t)
-	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	inv := []solverInventory{{
-		Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets:  mustBig(t, "10000000"),
-		MaxRate:    mustBig(t, "1000000000000000000"), // 1.0 — the vault's advertised discount rate
-		DiscountID: &h,
-	}}
-	// Oracle is deliberately lower than the discount rate; a discount leg must price off maxRate, not it.
-	oracle := map[common.Address]*big.Int{tOut: mustBig(t, "500000")}
-
-	got := selectBestStrategy(req, inv, 18, oracle, time.Unix(0, 0))
-	if got == nil || len(got.Legs) != 1 || got.Legs[0].DiscountID == nil {
-		t.Fatalf("expected one discount leg, got %v", got)
-	}
-	if got.QuotedAmountOut.String() != "1000000" { // 1e18 * 1.0 → 1.000000 collateral, ignoring the oracle
-		t.Fatalf("quotedAmountOut = %s, want 1000000 (maxRate, not discounted oracle)", got.QuotedAmountOut)
+	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" ||
+		len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
+		t.Fatalf("unexpected webhook output: %+v", out)
 	}
 }

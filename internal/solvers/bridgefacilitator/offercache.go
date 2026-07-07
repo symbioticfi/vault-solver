@@ -1,37 +1,72 @@
 package bridgefacilitator
 
 import (
+	"math/big"
 	"strconv"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
-// offerTracker remembers, per auction, when our currently-outstanding offer expires, so we don't
-// re-offer while a live offer exists. It is rebuilt from the 3F API at startup (restart-safe) and
-// updated in memory as offers are submitted. Accessed only from the Run goroutine; no locking.
+// offerKey identifies our offer on a given auction made on behalf of a given adapter (the maker).
+// Dedup is per-adapter: two adapters may each hold a live offer on the same auction.
+type offerKey struct {
+	adapter common.Address
+	auction int64
+}
+
+// offerState is one outstanding offer: when it expires and the principal it covers.
+type offerState struct {
+	expiry    time.Time
+	principal *big.Int
+}
+
+// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through
+// the same adapter while one is live, and so we can tell when an auction is fully covered. Rebuilt
+// from the 3F API at startup (restart-safe), updated in memory as offers are submitted; Run goroutine
+// only, no locking.
 type offerTracker struct {
-	expiry map[int64]time.Time // auctionID -> our offer's expiration
+	offers map[offerKey]offerState
 }
 
 func newOfferTracker() *offerTracker {
-	return &offerTracker{expiry: make(map[int64]time.Time)}
+	return &offerTracker{offers: make(map[offerKey]offerState)}
 }
 
-// hasLive reports whether we hold an unexpired offer for auctionID as of now.
-func (t *offerTracker) hasLive(auctionID int64, now time.Time) bool {
-	exp, ok := t.expiry[auctionID]
-	return ok && exp.After(now)
+// liveEntries returns the (adapter, auction) keys of every unexpired offer as of now, for the strategy
+// to dedup against. Cheaper than probing each adapter/auction pair: it walks only the offers we hold.
+func (t *offerTracker) liveEntries(now time.Time) []offerKey {
+	keys := make([]offerKey, 0, len(t.offers))
+	for k, st := range t.offers {
+		if st.expiry.After(now) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
-// record stores the expiration of an offer we hold for auctionID.
-func (t *offerTracker) record(auctionID int64, expiration time.Time) {
-	t.expiry[auctionID] = expiration
+// record stores the expiration and principal of an offer we hold through adapter for auctionID.
+func (t *offerTracker) record(adapter common.Address, auctionID int64, expiration time.Time, principal *big.Int) {
+	t.offers[offerKey{adapter, auctionID}] = offerState{expiry: expiration, principal: new(big.Int).Set(principal)}
+}
+
+// liveCoverage sums the principal of our unexpired offers on auctionID across every adapter — how much
+// of the auction's requested amount we already cover.
+func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
+	total := new(big.Int)
+	for k, st := range t.offers {
+		if k.auction == auctionID && st.expiry.After(now) {
+			total.Add(total, st.principal)
+		}
+	}
+	return total
 }
 
 // pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
 func (t *offerTracker) pruneExpired(now time.Time) {
-	for id, exp := range t.expiry {
-		if !exp.After(now) {
-			delete(t.expiry, id)
+	for k, st := range t.offers {
+		if !st.expiry.After(now) {
+			delete(t.offers, k)
 		}
 	}
 }

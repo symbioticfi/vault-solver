@@ -1,7 +1,7 @@
 # CLAUDE.md — working agreement for this repo
 
 This file is the source of truth for how code is written here. Read it before making changes.
-It applies to AI agents and humans alike. `AGENTS.md` points here.
+It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 
 ## Purpose
 
@@ -26,6 +26,13 @@ Two layers, and code lives in exactly one:
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/`
   (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
   live here.
+
+**Shared protocol code** used by ≥2 solvers lives in its own shared package or generated binding — e.g.
+Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/morphographql`, or neutral
+contract bindings like `api/bindings/liquidlane/adapter` / `api/bindings/erc4626` (shared by redstone-oev +
+rfq). Hand-written domain adapters stay inside the solver that owns the workflow unless a second solver
+actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
+helper package — `internal/parse`.
 
 To add a new integration (e.g. `rfq`):
 1. Create `internal/solvers/rfq/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
@@ -104,7 +111,7 @@ bot's view of an external surface honest (it comes from the source of truth, not
 that silently drifts), keeps the build hermetic (generated code is committed, so a clean checkout
 builds with no network/toolchain surprises), and turns an upstream change into a reviewable diff.
 
-Two instances of the same pattern — **vendor → generate → commit, regenerated only via `make`:**
+Three instances of the same pattern — **vendor → generate → commit, regenerated only via `make`:**
 
 - **Contract bindings (ABI → abigen).** Vendor the ABI JSON under `api/abi/` (from a `forge build`
   out-dir; `make refresh-abi` extracts `.abi` from the build artifacts of `ABIS`/`CORE_MIRROR_ABIS`),
@@ -115,8 +122,9 @@ Two instances of the same pattern — **vendor → generate → commit, regenera
   renamed method or changed signature in a refreshed ABI breaks the build at the call site instead of
   panicking at runtime. **Never reintroduce stringly-typed `abi.Pack("method", …)`/`abi.Unpack` in
   solver code** — use the generated `Pack`/`Unpack` (or `TryPack` for the error-returning variant).
-  Multicall3 stays on v1 (`BINDINGS_V1`): it's the transport (`chain.Multicall` binds its `Aggregate3`
-  caller), where v2's pure helpers buy nothing. An ABI that can't be sourced from a build (e.g.
+  Multicall3 is v2 like every other binding: `chain.Multicall` builds its sub-calls with the generated
+  `PackAggregate3`/`UnpackAggregate3` pure helpers and does its own `eth_call`. An ABI that can't be
+  sourced from a build (e.g.
   Multicall3, or a minimal hand-pruned `UniversalDelegator` whose full ABI has an abigen-hostile
   overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
   hand-bound.
@@ -127,8 +135,14 @@ Two instances of the same pattern — **vendor → generate → commit, regenera
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
   `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
   (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+- **GraphQL clients (schema SDL + operations → genqlient).** Vendor the upstream schema SDL under
+  `api/graphql/<name>/` (`make refresh-morpho-graphql-schema` pulls Morpho's live schema), keep named
+  operation documents under `operations/`, then `make refresh-morpho-graphql-client` runs pinned
+  `genqlient` into `api/<client>/` and emits `operations.json` for review/safelisting. The generated package
+  is the shared binding; hand-written adapters that parse generated response types into domain types live in
+  the owning integration until reuse proves they belong elsewhere.
 
-Rules for both: the vendored artifact (ABI/spec) is the **contract of record** — when upstream changes,
+Rules for every generated surface: the vendored artifact (ABI/spec/schema) is the **contract of record** — when upstream changes,
 re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps
 the generated client/binding behind a thin adapter so generated types (nullable pointers, response
 wrappers) stay contained at the boundary and don't leak into solver logic. Reach for this pattern
@@ -155,19 +169,48 @@ Write defensively; this bot holds a signing key and moves funds.
 - Prefer the standard library and already-vendored deps; adding a dependency is a deliberate decision
   (supply-chain surface). Run `make tidy` and keep `go.sum` honest.
 
-## Keep the plan in sync — required
+## Commits — semantic titles
 
-The per-solver plans under `docs/` (e.g. `docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) are the source of truth
-for the high-level architecture, design decisions, and the live TODO list. They are not write-once docs.
+Commit titles follow [Conventional Commits](https://www.conventionalcommits.org):
+`type(scope): summary`.
+
+- **type** — one of `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `build`, `ci`, `perf`.
+- **scope** — the area touched, lowercase: the solver or subsystem (`rfq`, `3f`, `oev`,
+  `strategy`, `config`, `deps`, `bindings`, …). Optional but preferred.
+- **summary** — imperative mood, lowercase, no trailing period
+  (`feat(rfq): route quotes through pluggable strategies`, `fix(3f): bound 3F API calls with an HTTP timeout`).
+- Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
+- Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
+
+## Keep the docs in sync — required
+
+Two audiences, two docs, kept current **in the same change** as the code:
+
+**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md`) are the source of truth
+for **internal architecture, design decisions, and the live TODO list** — write for a future
+maintainer.
 
 - **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
   a changed data flow, a new/removed integration, an interface or external-contract change, a
   deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
 - **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
   TODO list (§10 of the relevant solver plan)** so it always reflects reality.
-- A code change that alters architecture/design but leaves the plan stale is **incomplete**. If a
-  change is purely local (a bug fix, a refactor with no design impact), no plan update is needed —
-  use judgement, but err toward recording anything a future reader would be surprised to discover.
+- A code change that alters architecture/design but leaves a plan stale is **incomplete**.
+
+**README** (`README.md`) is the **external, user-facing** entry point — write for an operator or
+integrator running the bot, not a maintainer of it. Keep internal design out of it; keep runtime and
+integration surface in it.
+
+- **Whenever you change something a user observes or configures** — a new or renamed CLI flag or
+  subcommand, a config knob or its default, a new/removed solver or a change to what a solver does, a
+  new strategy or integration surface, quickstart/build/run steps, or requirements — **update the
+  README in the same change.**
+- A user-facing change (flag, config field, solver capability) that lands without a README update is
+  **incomplete**.
+
+If a change is purely internal (a bug fix or refactor with no design impact and nothing a user
+observes), neither doc needs an update — use judgement, but err toward recording anything a future
+reader or operator would be surprised to discover.
 
 ## Quick reference
 
@@ -175,5 +218,6 @@ for the high-level architecture, design decisions, and the live TODO list. They 
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the plan current: architecture/design or TODO changes must update `docs/*-PLAN.md`
-  in the same change.
+- Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
+  user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
+- Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

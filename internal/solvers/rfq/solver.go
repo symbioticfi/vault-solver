@@ -11,9 +11,12 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 // Name is the registry key that selects this solver from config.
@@ -46,6 +49,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log)
+	quoteStrategy, err := newStrategy(cfg.Strategy, deps.Chain, log)
+	if err != nil {
+		return nil, err
+	}
 
 	var metrics *httpMetrics
 	if deps.Metrics != nil {
@@ -54,7 +61,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}
 
-	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, log)
+	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,
@@ -72,7 +79,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 // Split from factory so the config → service wiring (notably the adapter whitelist reaching both
 // services) is unit-testable without a chain client.
 func buildServices(
-	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, log logr.Logger,
+	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, quoteStrategy types.Strategy, log logr.Logger,
 ) (*quoteService, *executionService) {
 	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
 	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
@@ -88,8 +95,7 @@ func buildServices(
 		whitelist:          quoteWhitelist,
 		tokensToQuote:      cfg.TokensToQuote,
 		permissionedTokens: cfg.PermissionedTokens,
-		reader:             rdr,
-		store:              st,
+		strategy:           quoteStrategy,
 		log:                log,
 		now:                time.Now,
 	}
@@ -103,6 +109,7 @@ func buildServices(
 		backend:          newBackendClient(cfg.BackendURL),
 		store:            st,
 		reader:           rdr,
+		strategy:         quoteStrategy,
 		txm:              txm,
 		log:              log,
 		now:              time.Now,

@@ -14,12 +14,14 @@ repo root) §4 for the functional blueprint of the 3F solver.
 
 ## 1. Scope
 
-- **In scope:** the off-chain Go bot — auction discovery, offer pricing/sizing/signing,
+- **In scope:** the off-chain Go bot, serving **multiple `BridgeFacilitatorAdapter`s** — auction
+  discovery, **per-auction multi-adapter coverage**, offer pricing/sizing/signing (signed payloads),
   on-chain reads for liquidity, position reconciliation, and redemption.
-- **Out of scope:** the on-chain `BridgeFacilitatorAdapter` (Solidity). It lives in a
-  separate repo and is consumed here only via generated ABI bindings.
-- **First target network:** 3F Sepolia dev (`chainId 11155111`), which has a live
-  deployment and a public-readable dev API. Mainnet config slots in later.
+- **Out of scope:** the on-chain `BridgeFacilitatorAdapter` (Solidity, consumed via generated ABI
+  bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
+  **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
+  **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
+- **First target network:** 3F Sepolia dev (`chainId 11155111`). Mainnet config slots in later.
 
 ---
 
@@ -33,9 +35,10 @@ repo root) §4 for the functional blueprint of the 3F solver.
 | License | _TBD — not yet added_ |
 | Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
 | API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
-| Persistence | **Stateless + periodic on-chain resync.** No DB. Open positions come from `adapter.activeRequests()`; redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
-| Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). |
-| Multi-solver shape | 3F logic fully encapsulated in its own package; `main` initializes one solver today. A name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
+| Adapter scope | One solver serves a **set of adapters** (config whitelist now; a dynamic "list public 3F adapters" API later). Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
+| Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
+| Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
+| Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
 
 ---
 
@@ -45,13 +48,14 @@ Everything the bot needs is reachable from view functions + the 3F API:
 
 | Need | Source | Type |
 |---|---|---|
-| Open position set | `adapter.activeRequests()` | on-chain view |
-| Per-position detail (principal, ytExpected, openedAt) | `adapter.positions(request)` | on-chain view |
-| Realized / recallable principal | `realizedPrincipal()`, `deallocatable()`, `skimmable()` | on-chain view |
-| Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across `activeRequests()` | on-chain view |
-| Offer won / consumed | next `activeRequests()` resync | on-chain view |
+| Open request count | `adapter.requestsLength()` (single read) | on-chain view |
+| Open request set | `adapter.requests(i)` enumerated `0..requestsLength()-1` | on-chain view |
+| Per-request valuation | folded into `adapter.totalAssets()` (values each request's PT/YT live) | on-chain view |
+| Funding headroom | `adapter.getMaxAssets()` (min(limitOf − totalAssets, withdrawable), 0 if sweep pending) | on-chain view |
+| Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across the enumerated `requests(i)` | on-chain view |
+| Offer won / consumed | next `requests(i)` resync | on-chain view |
 | Auction discovery + offer status | `GET /v1/auction`, `GET /v1/offer` | 3F API (off-chain) |
-| Realized loss/gain per loan | `PositionRedeemed` log parsed from the bot's **own** `redeem` receipt | self-emitted |
+| Realized loss/gain per loan | `FinalizeRequest` log parsed from the bot's **own** `multicall(finalizeRequest…)` receipt | self-emitted |
 
 Trade-off accepted: view-only loses *latency* (learn of consume/repay on the next
 poll tick) and *historical analytics*. Neither matters for 3F — funding pull time is
@@ -73,8 +77,13 @@ vault-solver/
 │   ├── txmanager/                 # SHARED nonce-serialized tx sender  ← shared infra
 │   ├── solver/                    # generic Solver interface + registry + engine (solver-agnostic)
 │   ├── solvers/bridgefacilitator/ # ALL 3F-specific logic, encapsulated
-│   │   ├── solver.go  config.go  apiclient.go  auctionview.go  sizer.go
-│   │   ├── offer.go   eip712.go  chainreader.go  redeemer.go
+│   │   ├── solver.go  config.go  apiclient.go  auctionview.go  offercache.go
+│   │   ├── offer.go   eip712.go  chainreader.go  redeemer.go  strategy.go
+│   │   ├── strategies/            # pluggable decision layer:
+│   │   │   ├── registry.go        #   package strategies — registry/factory
+│   │   │   ├── types/             #   OfferInput/OfferOutput + Strategy interface
+│   │   │   ├── default/           #   in-process default strategy (owns sizing/selection)
+│   │   │   └── webhook/           #   external-decider adapter
 │   ├── observability/             # logr+zap setup, prometheus, /healthz /readyz
 │   └── version/
 ├── api/
@@ -84,7 +93,7 @@ vault-solver/
 │   │   └── vaultv2/               # shared Symbiotic core, reused by every integration
 │   └── threef/                    # openapi-generator (Java) output (committed)
 ├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
-├── config/{config.example.yaml,3f.sepolia.example.yaml}
+├── config/{3f,rfq,redstone-oev}.example.yaml   # one annotated example per solver
 ├── deploy/{Dockerfile,docker-compose.yml}
 ├── .github/workflows/ci.yml
 ├── .golangci.yml  Makefile  go.mod  README.md  .gitignore
@@ -101,7 +110,7 @@ of `TxRequest{To, Data, Value, GasLimit?, Label}`; for each it tracks the nonce
 locally (seeded from the pending nonce, monotonic), sets EIP-1559 fees, signs via the
 `Signer`, sends, waits for the receipt, and handles `nonce too low` / stuck-tx bump +
 resync. Solvers **never** send directly — they build calldata (packed via the abigen
-ABI, e.g. `adapter.Pack("redeem", requests)`) and hand it to the txmanager, receiving
+ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
 a `TxResult{Hash, Receipt, Err}`. Serializing through one worker eliminates
 parallel-nonce races across solvers.
 
@@ -134,7 +143,7 @@ Adding a future solver is a register + config switch, no framework edit.
 
 ---
 
-## 6. Configuration
+## 6. Configuration & per-offer adapter selection
 
 Two-stage decode keeps solver config encapsulated. The generic layer reads only
 `solver.name` to pick the impl and keeps `solver.config` as a deferred `yaml.Node`;
@@ -142,19 +151,105 @@ the chosen solver decodes it into its own typed struct.
 
 ```yaml
 chain: { rpcUrl, chainId, rpcFallbackUrls?, wsUrl? }   # rpcFallbackUrls: HTTP(S), tried on primary failure
-signer: { keyEnv: SOLVER_PRIVATE_KEY }     # or keystorePath + passphraseEnv
+signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, tipGwei }
 
-solver:
-  name: 3f-bridge-facilitator               # ← registry key: selects the impl
-  config:                                    # ← opaque to framework; typed by the 3F package
-    apiBaseUrl: https://bf.dev.gcp.3f.xyz
-    # Single vault+adapter pair: 3F registers exactly one offer-address per facilitator.
-    vault:   "0x…"
-    adapter: "0x…"                           # BridgeFacilitatorAdapter (single-vault by construction)
-    exposure: { perRequestMaxUsdc: "…", totalSleeveMaxUsdc: "…", maxConcurrentLoans: 10 }
-    intervals: { discover: 1h, redeemPoll: 5m, reconcile: 15m }
+solvers:
+  - name: 3f-bridge-facilitator             # ← registry key: selects the impl
+    config:                                  # ← opaque to framework; typed by the 3F package
+      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      strategy:
+        name: default                        # default local strategy, or webhook
+        config: {}
+      # The adapters this solver maintains offers for. Each must already be registered with 3F as a
+      # facilitator by its vault creator, with this solver's signer set as the adapter's EIP-1271 signer.
+      # A config whitelist for now; a dynamic "list public 3F adapters" API replaces it later.
+      adapters:
+        - "0x…adapterA"
+        - "0x…adapterB"
+      redeemBatchSize: 10                     # optional (default 10)
+      httpTimeout: 30s                        # optional
+      intervals: { discover: 1h, redeemPoll: 5m, reconcile: 15m }
 ```
+
+`apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each
+adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
+**per-request caps are read on-chain** (`minYieldPerRequest` — ppm, converted to bps by the reader;
+`minAssetsPerRequest`; `maxAssetsPerRequest` — set via `setLimitsPerRequest`) — config carries only the
+adapter addresses. Funding headroom is the adapter's own `getMaxAssets()` (it folds in the delegator's
+per-adapter `limitOf`, the vault's `withdrawable`, and any pending sweep), so the bot reads no separate
+sleeve cap. Concurrency is the contract's `MAX_REQUESTS` constant (50), mirrored as a bot const.
+
+### Per-auction adapter coverage and strategy split
+
+Each discover tick lists open auctions (public, unauthenticated), then for each auction covers its
+**full requested amount** with one or more single-adapter offers, in a single pass:
+
+1. **Solver-owned snapshot** — the solver lists auctions, reads each configured adapter's
+   liquidity/exposure in Multicall, prunes its live-offer cache, and builds a compact strategy input.
+   The input contains only raw facts — adapter snapshots (liquidity and on-chain caps), normalized
+   auction snapshots, and the live offers the solver already holds. It does not include raw generated
+   API DTOs, and the solver computes no capacity, joins, or candidate scoring.
+2. **No solver-side decisions** — the solver does not size offers, join adapters to auctions, filter
+   eligibility, or rank anything. It provides raw adapter caps and auction facts; the strategy owns
+   every decision (sizing, collateral/live-offer/min-yield eligibility, ordering, and cross-auction
+   budget accounting) built from those facts.
+3. **Strategy decision** — the strategy interface is `DecideOffers(ctx, OfferInput) (OfferOutput, error)`,
+   where `OfferOutput` wraps the returned `[]OfferExecution` (`type OfferOutput struct { Offers []OfferExecution }`).
+   The selected strategy receives:
+
+   ```go
+   type OfferInput struct {
+       Now        time
+       Adapters   []AdapterSnapshot
+       Auctions   []AuctionSnapshot
+       LiveOffers []LiveOffer
+   }
+
+   type AdapterSnapshot struct {
+       ID            string
+       Adapter       address
+       Vault         address
+       Collateral    address
+       Fundable      uint256 // getMaxAssets()
+       OpenCount     int     // requestsLength()
+       MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
+       MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
+       MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
+       MaxConcurrent int      // MAX_REQUESTS
+   }
+
+   type LiveOffer struct {
+       AdapterID string
+       AuctionID int64
+   }
+   ```
+
+   It returns ordered execution offers:
+
+   ```go
+   type OfferExecution struct {
+       AuctionID      int64
+       Request        address
+       Maker          address
+       Principal      uint256
+       ExpectedReturn uint256
+       Reason         string  // optional, strategy-supplied context
+   }
+   ```
+
+   The default local strategy preserves the current behavior: process auctions in API order, filter
+   adapter eligibility (collateral match, no live offer for the pair, rate clears `minYieldPerRequest`),
+   compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
+   each offer to the still-uncovered remainder, and track local adapter commitments across the pass.
+   Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
+   concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
+   means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
+   integers are decimal strings and unknown response fields are rejected.
+4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
+   returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,
+   signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
+   after a successful submit. Strategy output cannot set nonce or signature.
 
 ---
 
@@ -171,25 +266,46 @@ solver:
 | `make lint` / `test` / `build` / `docker` | golangci-lint; `go test -race -cover ./...`; build; image |
 
 Generated code is committed (hermetic build); refresh targets regenerate from upstream
-on demand. ABIs required: `BridgeFacilitatorAdapter`, `IRequest`/`IVaultController`,
+on demand. ABIs required: `ThreeFAdapter` (from core-mirror), `IRequest`/`IVaultController`,
 `IWhitelist`, `IVaultV2`.
 
 ---
 
 ## 8. Build phases
 
-Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `rfq` repo (`src/3f/`), 25 tests, ABI vendored here. This is what the bot binds against.
+Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contracts/adapters/ThreeFAdapter.sol`, ABI vendored here from the core-mirror Foundry build. This is what the bot binds against (it replaced rfq's `BridgeFacilitatorAdapter`).
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
 2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — API client (x-api-key auctions/offers), sizer (fundable-liquidity + curator exposure caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` → pack `redeem` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
+3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
+5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
+   implemented across the `bridgefacilitator` package:
+   - **Dropped the API key + offer-address.** `listOffers` is now a per-adapter **signed** query (EIP-712
+     `GetOffers` in an `Authorization: Bearer` header); `createOffer` sends no `x-api-key`. Removed the
+     key-gen, `apiKeyEnv`, and the `ensureOfferAddress`/`setOfferAddress` onboarding. Onboarding (deploy
+     adapter → register with 3F → set this signer as EIP-1271 signer) is the vault creator's job.
+   - **`adapter` → `adapters[]`.** Config whitelist; each adapter's vault/collateral resolved once at
+     startup; on-chain EIP-1271 signer check drops any adapter this solver isn't authorised for
+     (fail-closed; zero remaining → startup shutdown). **No redeem-only mode** — with ≥1 matching adapter
+     the bot runs offers + redeems for the matched set; with none it shuts down.
+   - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
+     more single-adapter offers through the configured trusted strategy; uncovered remainder retries
+     next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
+   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
+     Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
+     and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 
 ---
 
 ## 9. Open items to confirm during implementation
 
+- **Signed-payload API contract** — confirm with 3F the exact request shape for creating *and listing*
+  offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
+  and that 3F verifies offer creation via the adapter's EIP-1271 `isValidSignature`.
+- **Dynamic "list public 3F adapters" API** — the endpoint that replaces the config whitelist (what
+  marks an adapter public/eligible, and how we filter to ones our signer is the EIP-1271 signer for).
 - Mainnet `RequestWhitelist` address and prod API base URL — supplied by 3F when prod lands.
 - Go module path (`github.com/symbioticfi/vault-solver` placeholder) — adjust to the real org.
 
@@ -200,12 +316,18 @@ Prerequisite (done). **`BridgeFacilitatorAdapter` contract** — built in the `r
 Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
-- **Move exposure / risk params on-chain.** Today the caps (`perRequestMaxUsdc`, `totalSleeveMaxUsdc`, `maxConcurrentLoans`, `minReturnBps`) live in the bot config and are enforced only off-chain in `sizeOffer` — a buggy or rogue bot could exceed them. Hoisting them into the `BridgeFacilitatorAdapter` (e.g. owner-set caps re-checked in `onRequestConsumed`, mirroring the removed `requestMetadata` budget but at the adapter level) makes the limits trust-minimized and curator-governed; the bot's config caps then become a redundant client-side guard. Needs a contract change in the `rfq` repo + binding regen; the bot reads the on-chain caps instead of (or in addition to) config.
-- **Offer pricing is naive.** The bot bids at the auction's current `maxRate`, then caps to exposure + fundable liquidity — it models no spread, risk-adjusted target rate, time-in-auction, or competing offers. A real quoting strategy (e.g. the RFQ solver's strategy logic) is the main follow-up; `buildSignedOffer` is the seam to extend, and `MinReturnBps` is the only knob today.
-- **API key logged at debug (`V(1)`).** Convenience for out-of-band replay; it is a secret in logs — disable or scrub before production.
+- **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
+- **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
+- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
+- **Dynamic adapter discovery.** The adapter set is a config whitelist; the dynamic "list public 3F adapters" API (§9) replaces it later, filtered to adapters our signer is the EIP-1271 signer for.
+- **Custom offer pricing/scoring.** The default local strategy bids at the auction's current `maxRate`
+  and sizes by `getMaxAssets` headroom plus adapter per-request limits. Operators that need spread,
+  risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local
+  custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
+  return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
 **Testing:**
-- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, sizer caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
+- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
 - **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
