@@ -48,7 +48,7 @@ solvers:
 
       # RFQ contract deployment (mainnet):
       executor: "0xe60E84218BB81539cc599A1E213d6F67058C69Cf"   # Executor — the bot calls Executor.fill to settle
-      reactor:  "0x5eB54c47837cC84249F697e3CD8C5D88bCc35dac"   # Reactor — invoked by the Executor at fill time
+      reactor:  "0xAE1c0995Daa1C0e56Df6c31207c69FBB5278A5B7"   # Reactor — invoked by the Executor at fill time
 
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
@@ -69,4 +69,4 @@ solvers:
       # these scope quoting/filling and are required; the Executor must additionally be an authorized
       # filler on each adapter (its marketMaker or owner, or a delegated isFiller).
       adapters:
-        - "0x..."   # TODO: concrete per-token LiquidLane adapter instance(s) for this network
+        - "0x..."   # TODO: concrete adapter instance(s) emitted by factory 0x9b5dbB434269e39e41b1E331C2AcE09e05A899B5
