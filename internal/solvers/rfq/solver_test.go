@@ -106,6 +106,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("quote (configured + rogue): got nil, want a quote through the configured adapter")
+		return
 	}
 	if resp.AmountOut != "1000000" {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", resp.AmountOut)
