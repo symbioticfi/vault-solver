@@ -21,7 +21,7 @@ var _ MappedNullable = &CreateOfferDto{}
 
 // CreateOfferDto struct for CreateOfferDto
 type CreateOfferDto struct {
-	// Chain ID for signature verification
+	// Chain ID for resolving the request EIP-712 domain
 	ChainId *float32 `json:"chainId,omitempty"`
 	// ID of the auction to submit an offer for
 	AuctionId float32 `json:"auctionId"`
@@ -37,8 +37,8 @@ type CreateOfferDto struct {
 	Expiration string `json:"expiration"`
 	// Whether to use callback when executing the offer
 	UseCallback bool `json:"useCallback"`
-	// EIP-712 signature (required if chainId is provided)
-	Signature *string `json:"signature,omitempty" validate:"regexp=^0x[a-fA-F0-9]{130}$"`
+	// EIP-712/EIP-1271 signature bytes. Use `0x` while deferred EIP-1271 approval is pending. Required if chainId is provided.
+	Signature *string `json:"signature,omitempty"`
 }
 
 type _CreateOfferDto CreateOfferDto

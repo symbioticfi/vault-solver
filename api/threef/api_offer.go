@@ -208,7 +208,7 @@ func (r ApiOfferControllerCreateV1Request) Execute() (*CreateOfferResponseDto, *
 /*
 OfferControllerCreateV1 Create or update an offer
 
-Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, it is verified as an EIP-712 signature and the `maker` must be a registered facilitator. Contract wallets are supported via EIP-1271. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.
+Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, the `maker` must be a registered facilitator address or that facilitator's configured offer address; signature executability is checked by the relayer before on-chain `consume`, so ERC-1271 approvals may become valid asynchronously. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.
 
 `expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.
 
@@ -271,7 +271,7 @@ const signature = await walletClient.signTypedData(
 )
 ```
 
-Submit the resulting signature in the request body `signature` field. All `uint256` request fields stay decimal strings in the HTTP payload.
+Submit the signature bytes in the request body `signature` field. For deferred ERC-1271 approval, submit `0x` while the contract approval transaction is pending. All `uint256` request fields stay decimal strings in the HTTP payload.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiOfferControllerCreateV1Request

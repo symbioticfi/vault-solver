@@ -30,7 +30,7 @@ type CancelOfferDto struct {
 	// Signature deadline timestamp (uint256)
 	Deadline *string `json:"deadline,omitempty"`
 	// EIP-712 signature (required if chainId is provided)
-	Signature *string `json:"signature,omitempty" validate:"regexp=^0x[a-fA-F0-9]{130}$"`
+	Signature *string `json:"signature,omitempty"`
 }
 
 type _CancelOfferDto CancelOfferDto
