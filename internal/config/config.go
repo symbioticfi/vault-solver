@@ -47,8 +47,6 @@ type ChainConfig struct {
 	// with ${WRITE_RPC_URL}.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
-	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
-	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
 	// canonical cross-chain Multicall3 deployment when unset.
 	MulticallAddress string `yaml:"multicallAddress,omitempty"`

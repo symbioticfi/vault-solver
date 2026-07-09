@@ -9,12 +9,11 @@
 
 chain:
   rpcUrl: ${ETH_RPC_URL_SEPOLIA}   # primary EVM RPC endpoint (expanded from env, or a literal URL)
-  chainId: 11155111                # must match the RPC's chain id (asserted at startup)
+  chainId: 11155111                # every configured RPC endpoint is preflighted against this chain id
   # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
   # writeRpcUrl: ${WRITE_RPC_URL}  # optional; broadcasts transactions here while every read stays on
   #                                # rpcUrl. Point at a private/MEV-protected relay to submit privately.
-  # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
 signer:

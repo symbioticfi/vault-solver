@@ -173,6 +173,23 @@ solvers:
 	}
 }
 
+func TestLoad_RejectsGenericWSURL(t *testing.T) {
+	body := `
+chain:
+  rpcUrl: https://read.example
+  wsUrl: wss://unused.example
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: x
+    config: {}
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected generic chain.wsUrl to be rejected")
+	}
+}
+
 func TestLoad_ExpandsEnvInSolverConfigBlock(t *testing.T) {
 	// Expansion runs on the raw bytes before decode, so it reaches the opaque solver.config block
 	// (the deferred two-stage decode) too — not just the framework-level fields.

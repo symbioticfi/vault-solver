@@ -231,8 +231,11 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
-  operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
-  chain. A single `rpcUrl` keeps the plain dial (any scheme).
+  operator-configured (no hardcoded public-RPC lists) and duplicates are de-duped. At startup, every
+  read endpoint (primary and fallback) plus any distinct write endpoint is preflighted against
+  `chain.chainId`; unreachable or wrong-chain endpoints fail startup. Diagnostics identify endpoints
+  only by safe origin labels (`scheme://host`), never by userinfo, path, query, or fragment. A single
+  `rpcUrl` keeps the plain dial (any supported scheme).
 - **Pricing is a faithful port for now** — the `default` strategy is a faithful port of the TS greedy
   discount + leg selection; a richer quoting strategy is a later follow-up (mirrors the 3F pricing
   TODO), or an operator can plug their own via the `webhook` strategy (see the strategy layer below).
