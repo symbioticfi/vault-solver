@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -65,6 +66,12 @@ type SignerConfig struct {
 type TxManagerConfig struct {
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
+	// PendingIntervalMs is one pending-attempt window before a same-nonce replacement.
+	PendingIntervalMs int `yaml:"pendingIntervalMs"`
+	// FeeBumpBps raises the tip and max fee for each same-nonce replacement.
+	FeeBumpBps uint64 `yaml:"feeBumpBps"`
+	// MaxReplacements bounds the same-nonce replacements after the original attempt.
+	MaxReplacements uint64 `yaml:"maxReplacements"`
 	// MaxFeeGwei is a hard cap on the EIP-1559 max fee per gas; 0 means "derive from base fee".
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
 	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion". The selected tip
@@ -79,8 +86,19 @@ type SolverConfig struct {
 	Config yaml.Node `yaml:"config"`
 }
 
-// DefaultConfirmations is used when TxManager.Confirmations is unset.
-const DefaultConfirmations = 2
+const (
+	// DefaultConfirmations is used when TxManager.Confirmations is unset.
+	DefaultConfirmations = 2
+	// DefaultPendingIntervalMs is used when TxManager.PendingIntervalMs is unset.
+	DefaultPendingIntervalMs = 120_000
+	// DefaultFeeBumpBps is used when TxManager.FeeBumpBps is unset.
+	DefaultFeeBumpBps = 1_250
+	// DefaultMaxReplacements is used when TxManager.MaxReplacements is unset.
+	DefaultMaxReplacements = 3
+
+	maxPendingIntervalMs      = 86_400_000
+	maxConfiguredReplacements = 10
+)
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
 const DefaultObservabilityAddr = ":9090"
@@ -120,6 +138,15 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
+	}
+	if c.TxManager.PendingIntervalMs == 0 {
+		c.TxManager.PendingIntervalMs = DefaultPendingIntervalMs
+	}
+	if c.TxManager.FeeBumpBps == 0 {
+		c.TxManager.FeeBumpBps = DefaultFeeBumpBps
+	}
+	if c.TxManager.MaxReplacements == 0 {
+		c.TxManager.MaxReplacements = DefaultMaxReplacements
 	}
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
@@ -165,6 +192,25 @@ func (c *Config) Validate() error {
 }
 
 func (t TxManagerConfig) validate() error {
+	if t.PendingIntervalMs <= 0 || t.PendingIntervalMs > maxPendingIntervalMs {
+		return errors.Errorf("txManager.pendingIntervalMs must be between 1 and %d, got %d",
+			maxPendingIntervalMs, t.PendingIntervalMs)
+	}
+	if t.FeeBumpBps < 1_000 || t.FeeBumpBps > 10_000 {
+		return errors.Errorf("txManager.feeBumpBps must be between 1000 and 10000, got %d", t.FeeBumpBps)
+	}
+	if t.MaxReplacements == 0 || t.MaxReplacements > maxConfiguredReplacements {
+		return errors.Errorf("txManager.maxReplacements must be between 1 and %d, got %d",
+			maxConfiguredReplacements, t.MaxReplacements)
+	}
+
+	interval := time.Duration(t.PendingIntervalMs) * time.Millisecond
+	windows := time.Duration(t.MaxReplacements) + 1
+	const maxDuration = time.Duration(1<<63 - 1)
+	if interval <= 0 || interval > maxDuration/windows {
+		return errors.New("txManager replacement tracking duration overflows time.Duration")
+	}
+
 	if math.IsNaN(t.MaxFeeGwei) || math.IsInf(t.MaxFeeGwei, 0) || t.MaxFeeGwei < 0 {
 		return errors.New("txManager.maxFeeGwei must be finite and non-negative")
 	}

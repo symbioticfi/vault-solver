@@ -26,9 +26,12 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
+  pendingIntervalMs: 120000         # replace a still-pending nonce after 2m (default); each window is 1ms..24h
+  feeBumpBps: 1250                  # raise tip + max fee by 12.5% per same-nonce replacement
+  maxReplacements: 3                # allowed 1..10; original + replacements = 4 pending windows total
   # Fee values must be finite and non-negative. Zero/omitted maxFeeGwei derives from the base fee;
-  # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei is a hard cap: startup fails
-  # for a larger explicit tip, and sending fails if the node suggests a tip above it.
+  # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei remains a hard ceiling for
+  # replacements: startup fails for a larger explicit tip, and sending fails if a tip would exceed it.
   # maxFeeGwei: 50                 # hard cap on max fee per gas
   # tipGwei: 1                     # priority fee; must be at or below an explicit maxFeeGwei
 

@@ -44,6 +44,105 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_TxManagerReplacementDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "omitted", body: validConfig},
+		{
+			name: "explicit zero",
+			body: strings.Replace(validConfig, "signer:", `txManager:
+  pendingIntervalMs: 0
+  feeBumpBps: 0
+  maxReplacements: 0
+signer:`, 1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTemp(t, tt.body))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TxManager.PendingIntervalMs != DefaultPendingIntervalMs {
+				t.Fatalf("pendingIntervalMs = %d, want %d", cfg.TxManager.PendingIntervalMs, DefaultPendingIntervalMs)
+			}
+			if cfg.TxManager.FeeBumpBps != DefaultFeeBumpBps {
+				t.Fatalf("feeBumpBps = %d, want %d", cfg.TxManager.FeeBumpBps, DefaultFeeBumpBps)
+			}
+			if cfg.TxManager.MaxReplacements != DefaultMaxReplacements {
+				t.Fatalf("maxReplacements = %d, want %d", cfg.TxManager.MaxReplacements, DefaultMaxReplacements)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsInvalidTxManagerReplacementPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{name: "negative pending interval", policy: "pendingIntervalMs: -1"},
+		{name: "pending interval above 24 hours", policy: "pendingIntervalMs: 86400001"},
+		{name: "pending interval duration overflow", policy: "pendingIntervalMs: 9223372036854775807"},
+		{name: "fee bump below client replacement floor", policy: "feeBumpBps: 999"},
+		{name: "fee bump above one hundred percent", policy: "feeBumpBps: 10001"},
+		{name: "too many replacements", policy: "maxReplacements: 11"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(validConfig, "signer:", "txManager:\n  "+tt.policy+"\nsigner:", 1)
+			if _, err := Load(writeTemp(t, body)); err == nil {
+				t.Fatalf("expected %s to be rejected", tt.policy)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsTxManagerReplacementPolicyBounds(t *testing.T) {
+	tests := []struct {
+		name              string
+		policy            string
+		pendingIntervalMs int
+		feeBumpBps        uint64
+		maxReplacements   uint64
+	}{
+		{
+			name:              "lower bounds",
+			policy:            "pendingIntervalMs: 1\n  feeBumpBps: 1000\n  maxReplacements: 1",
+			pendingIntervalMs: 1,
+			feeBumpBps:        1_000,
+			maxReplacements:   1,
+		},
+		{
+			name:              "upper bounds",
+			policy:            "pendingIntervalMs: 86400000\n  feeBumpBps: 10000\n  maxReplacements: 10",
+			pendingIntervalMs: 86_400_000,
+			feeBumpBps:        10_000,
+			maxReplacements:   10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(validConfig, "signer:", "txManager:\n  "+tt.policy+"\nsigner:", 1)
+			cfg, err := Load(writeTemp(t, body))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TxManager.PendingIntervalMs != tt.pendingIntervalMs ||
+				cfg.TxManager.FeeBumpBps != tt.feeBumpBps ||
+				cfg.TxManager.MaxReplacements != tt.maxReplacements {
+				t.Fatalf("replacement policy = %+v, want interval=%d bump=%d replacements=%d",
+					cfg.TxManager, tt.pendingIntervalMs, tt.feeBumpBps, tt.maxReplacements)
+			}
+		})
+	}
+}
+
 const multiSolverConfig = `
 chain:
   rpcUrl: https://sepolia.example.org
