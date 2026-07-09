@@ -203,11 +203,58 @@ graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients
 .PHONY: generate
 generate: bindings openapi-client graphql-client ## Regenerate all committed codegen
 
+GENERATED_PATHS := api/bindings api/threef api/rfqbackend api/lifiorder api/morphographql api/graphql/morpho/operations.json
+
 .PHONY: check-generated
-check-generated: generate ## Regenerate committed code and fail on drift
-	@git diff --exit-code -- api/bindings api/threef api/rfqbackend api/lifiorder api/morphographql api/graphql/morpho/operations.json
-	@untracked="$$(git ls-files --others --exclude-standard -- api/bindings api/threef api/rfqbackend api/lifiorder api/morphographql api/graphql/morpho/operations.json)"; \
-		test -z "$$untracked" || { echo "untracked generated files:"; echo "$$untracked"; exit 1; }
+check-generated: ## Regenerate committed code and fail on drift without changing the generated tree
+	@set -euo pipefail; \
+		generated_paths=( $(GENERATED_PATHS) ); \
+		preflight_status=0; \
+		git diff --exit-code HEAD -- "$${generated_paths[@]}" || preflight_status=$$?; \
+		if (( preflight_status != 0 )); then \
+			printf '%s\n' "tracked generated files differ before regeneration" >&2; \
+		fi; \
+		untracked="$$(git ls-files --others --exclude-standard -- "$${generated_paths[@]}")"; \
+		if [[ -n "$$untracked" ]]; then \
+			printf '%s\n%s\n' "untracked generated files before regeneration:" "$$untracked" >&2; \
+			preflight_status=1; \
+		fi; \
+		if (( preflight_status != 0 )); then \
+			exit "$$preflight_status"; \
+		fi; \
+		tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/vault-solver-generated.XXXXXX")"; \
+		snapshot="$$tmp/generated.tar"; \
+		tar -cf "$$snapshot" "$${generated_paths[@]}" || { status=$$?; rm -rf "$$tmp"; exit "$$status"; }; \
+		restore_generated() { \
+			local status=$$?; \
+			local restore_status=0; \
+			local cleanup_status=0; \
+			trap - EXIT HUP INT TERM; \
+			set +e; \
+			rm -rf "$${generated_paths[@]}" || restore_status=$$?; \
+			if (( restore_status == 0 )); then \
+				tar -xf "$$snapshot" || restore_status=$$?; \
+			fi; \
+			rm -rf "$$tmp" || cleanup_status=$$?; \
+			if (( restore_status != 0 || cleanup_status != 0 )); then \
+				printf '%s\n' "failed to restore the pre-generation generated tree" >&2; \
+				exit 1; \
+			fi; \
+			exit "$$status"; \
+		}; \
+		trap restore_generated EXIT; \
+		trap 'exit 129' HUP; \
+		trap 'exit 130' INT; \
+		trap 'exit 143' TERM; \
+		$(MAKE) generate; \
+		post_status=0; \
+		git diff --exit-code -- "$${generated_paths[@]}" || post_status=$$?; \
+		untracked="$$(git ls-files --others --exclude-standard -- "$${generated_paths[@]}")"; \
+		if [[ -n "$$untracked" ]]; then \
+			printf '%s\n%s\n' "untracked generated files after regeneration:" "$$untracked" >&2; \
+			if (( post_status == 0 )); then post_status=1; fi; \
+		fi; \
+		exit "$$post_status"
 
 .PHONY: build
 build: ## Build the binary
