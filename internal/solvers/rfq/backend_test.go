@@ -6,7 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/httptransport"
 )
 
 // The generated rfqbackend client carries the spec's `/api/v1` prefix, so the backend client rooted at
@@ -47,6 +53,25 @@ func TestBackendClient_ListOpenOrders(t *testing.T) {
 	// txHash was an explicit null; it must round-trip as a nil pointer, not a garbage string.
 	if orders[0].TxHash != nil {
 		t.Fatalf("txHash = %v, want nil", *orders[0].TxHash)
+	}
+}
+
+func TestBackendClient_ListOpenOrders_OversizedResponse(t *testing.T) {
+	const responsePrefix = `{"requestId":"00000000-0000-0000-0000-000000000000","orders":[],"cursor":null}`
+	const paddingBytes = maxGeneratedResponseBytes + 1
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(responsePrefix)+paddingBytes))
+		_, _ = w.Write([]byte(responsePrefix))
+		_, _ = w.Write([]byte(strings.Repeat(" ", paddingBytes)))
+	}))
+	defer srv.Close()
+
+	_, err := newBackendClient(srv.URL).
+		listOpenOrders(context.Background(), "0x0000000000000000000000000000000000000f11", 20)
+	if !errors.Is(err, httptransport.ErrResponseTooLarge) {
+		t.Fatalf("error = %v, want ErrResponseTooLarge", err)
 	}
 }
 

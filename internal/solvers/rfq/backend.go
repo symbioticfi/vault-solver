@@ -9,7 +9,10 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/httptransport"
 )
+
+const maxGeneratedResponseBytes = 8 << 20
 
 // backendOrder is one order row from the RFQ backend (GET /orders), projected from the generated
 // rfqbackend.OrdersResponseOrdersInner. The optional fields (encodedOrder/protocolSignature/deadline/
@@ -58,8 +61,9 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg := rfqbackend.NewConfiguration()
 	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
 	cfg.HTTPClient = &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: internalDiscountTransport{base: http.DefaultTransport},
+		Timeout: 10 * time.Second,
+		Transport: httptransport.LimitResponses(
+			internalDiscountTransport{base: http.DefaultTransport}, maxGeneratedResponseBytes),
 	}
 	return &backendClient{api: rfqbackend.NewAPIClient(cfg)}
 }
