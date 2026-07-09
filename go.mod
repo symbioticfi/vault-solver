@@ -2,7 +2,7 @@ module github.com/symbioticfi/vault-solver
 
 go 1.26
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require (
 	github.com/Khan/genqlient v0.8.1
