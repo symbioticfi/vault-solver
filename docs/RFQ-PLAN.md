@@ -234,8 +234,9 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   operator-configured (no hardcoded public-RPC lists) and duplicates are de-duped. At startup, every
   read endpoint (primary and fallback) plus any distinct write endpoint is preflighted against
   `chain.chainId`; unreachable or wrong-chain endpoints fail startup. Diagnostics identify endpoints
-  only by safe origin labels (`scheme://host`), never by userinfo, path, query, or fragment. A single
-  `rpcUrl` keeps the plain dial (any supported scheme).
+  only by safe origin labels (`scheme://host`), never by userinfo, path, query, or fragment. HTTP(S)
+  endpoints, even a lone `rpcUrl`, use the bounded fallback transport; one supported non-HTTP
+  endpoint preserves the plain `ethclient` dial.
 - **Pricing is a faithful port for now** — the `default` strategy is a faithful port of the TS greedy
   discount + leg selection; a richer quoting strategy is a later follow-up (mirrors the 3F pricing
   TODO), or an operator can plug their own via the `webhook` strategy (see the strategy layer below).
