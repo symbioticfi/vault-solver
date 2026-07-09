@@ -133,8 +133,10 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
   `api/<client>/`. `OPENAPI_GENERATOR_VERSION` is pinned and is the **floor**: it must ingest the spec
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
-  `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
-  (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+  `oapi-codegen`/kin-openapi and `ogen` reject). The 7.12.0 JAR is verified before execution with
+  SHA-256 `33e7dfa7a1f04d58405ee12ae19e2c6fc2a91497cf2e56fa68f1875a95cbf220`. The recipe strips the
+  generator's non-package cruft (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins
+  the main module.
 - **GraphQL clients (schema SDL + operations → genqlient).** Vendor the upstream schema SDL under
   `api/graphql/<name>/` (`make refresh-morpho-graphql-schema` pulls Morpho's live schema), keep named
   operation documents under `operations/`, then `make refresh-morpho-graphql-client` runs pinned
@@ -148,6 +150,10 @@ the generated client/binding behind a thin adapter so generated types (nullable 
 wrappers) stay contained at the boundary and don't leak into solver logic. Reach for this pattern
 **whenever a new integration needs to call a contract or a typed HTTP API** — add the `make` target and
 commit the generated output; don't hand-roll request/response structs or `abi.Pack` calls.
+
+Run `make check-generated` after changing a vendored interface or generation recipe. It regenerates all
+committed outputs from vendored inputs and rejects both tracked and untracked drift. CI runs this target
+only; it never runs the live `refresh-*` targets, so verification never refreshes upstream artifacts.
 
 ## Security
 

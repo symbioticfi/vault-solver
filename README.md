@@ -103,6 +103,8 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
 - For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
   the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
+  Its 7.12.0 JAR is verified with SHA-256
+  `33e7dfa7a1f04d58405ee12ae19e2c6fc2a91497cf2e56fa68f1875a95cbf220` before execution.
 - A reachable EVM RPC endpoint and a signing key (see Configuration).
 
 ## Quickstart
@@ -142,7 +144,11 @@ make refresh-abi FORGE_OUT=../rfq/out   # re-vendor contract ABIs from a Foundry
 make refresh-openapi                    # re-pull the live 3F OpenAPI spec
 make refresh-rfq-openapi                # re-pull the RFQ backend OpenAPI spec
 make generate                           # regenerate bindings + API client
+make check-generated                    # regenerate from vendored inputs and reject drift
 ```
+
+CI runs `make check-generated` only against committed interface artifacts. It never runs the live
+`refresh-*` targets, so upstream changes enter the repository only through an explicit refresh.
 
 ## Contributing
 

@@ -15,6 +15,7 @@ GENQLIENT_X_TOOLS_VERSION ?= v0.38.0
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
 OPENAPI_GENERATOR_VERSION ?= 7.12.0
+OPENAPI_GENERATOR_SHA256 ?= 33e7dfa7a1f04d58405ee12ae19e2c6fc2a91497cf2e56fa68f1875a95cbf220
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out
@@ -151,7 +152,7 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 # propertyNames — and has dangling oneOf $refs; the generator handles them fine but its strict validator
 # rejects them). 3f/rfq keep validation on.
 define gen_openapi_client
-	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
+	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) OPENAPI_GENERATOR_SHA256=$(OPENAPI_GENERATOR_SHA256) bash ./hack/openapi-generator-cli.sh \
 		generate --enable-post-process-file $(4) -i ./$(1) -g go -o ./$(2) --package-name $(3)
 	cd $(2) && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
 endef
@@ -178,7 +179,7 @@ refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generato
 	tmp="$$(mktemp -p . --suffix=.lifi-normalized.json)"; \
 		trap 'rm -f "$$tmp"' EXIT; \
 		python3 hack/lifi-openapi-normalize.py < openapi/lifi-order.openapi.json > "$$tmp"; \
-		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
+		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) OPENAPI_GENERATOR_SHA256=$(OPENAPI_GENERATOR_SHA256) bash ./hack/openapi-generator-cli.sh \
 			generate --enable-post-process-file --skip-validate-spec -i "$$tmp" -g go -o ./api/lifiorder --package-name lifiorder
 	cd api/lifiorder && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
 
@@ -201,6 +202,12 @@ graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients
 
 .PHONY: generate
 generate: bindings openapi-client graphql-client ## Regenerate all committed codegen
+
+.PHONY: check-generated
+check-generated: generate ## Regenerate committed code and fail on drift
+	@git diff --exit-code -- api/bindings api/threef api/rfqbackend api/lifiorder api/morphographql api/graphql/morpho/operations.json
+	@untracked="$$(git ls-files --others --exclude-standard -- api/bindings api/threef api/rfqbackend api/lifiorder api/morphographql api/graphql/morpho/operations.json)"; \
+		test -z "$$untracked" || { echo "untracked generated files:"; echo "$$untracked"; exit 1; }
 
 .PHONY: build
 build: ## Build the binary
