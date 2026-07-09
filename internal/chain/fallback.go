@@ -26,8 +26,9 @@ var (
 
 // fallbackTransport is a barebones, viem-style RPC fallback. It POSTs each JSON-RPC request to the
 // configured endpoints in order, advancing to the next only on a transport failure or an unavailable
-// response (HTTP 5xx / 429). A normal HTTP 200 — including a JSON-RPC error body such as a revert —
-// is returned as-is and never triggers fallover, so application errors are surfaced unchanged.
+// response (HTTP 5xx / 429). Any other non-2xx response is closed and reduced to a safe status error
+// at this boundary. A normal HTTP 200 — including a JSON-RPC error body such as a revert — is returned
+// as-is and never triggers fallover, so application errors are surfaced unchanged.
 //
 // It plugs in below go-ethereum's rpc/ethclient as the HTTP RoundTripper, so every existing read/send
 // path gains fallback without any other change.
@@ -66,10 +67,27 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 
 		resp, err := t.base.RoundTrip(attempt)
-		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			// Success: keep the attempt context alive until the rpc layer finishes reading the body.
-			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-			return resp, nil
+		if err == nil {
+			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+				// Success: keep the attempt context alive until the rpc layer finishes reading the body.
+				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+				return resp, nil
+			}
+			retryableStatus := resp.StatusCode == http.StatusTooManyRequests ||
+				(resp.StatusCode >= http.StatusInternalServerError && resp.StatusCode < 600)
+			if !retryableStatus {
+				cancel()
+				statusCode := resp.StatusCode
+				if resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				return nil, errors.Errorf(
+					"rpc fallback: endpoint %d (%s): HTTP %d",
+					i+1,
+					endpointLabel(ep),
+					statusCode,
+				)
+			}
 		}
 		cancel()
 		lastIndex = i

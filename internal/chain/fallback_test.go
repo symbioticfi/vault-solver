@@ -91,36 +91,62 @@ func roundTripWithLogger(
 	return rt.RoundTrip(req)
 }
 
-func TestFallbackTransport_FallsOverOn5xx(t *testing.T) {
-	var primaryHits, fallbackHits int
-	var gotBody string
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		primaryHits++
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fallbackHits++
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, `ok`)
-	}))
-	defer fallback.Close()
+type roundTripperFunc func(*http.Request) (*http.Response, error)
 
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{"jsonrpc":"2.0"}`)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fell over to fallback)", resp.StatusCode)
-	}
-	if primaryHits != 1 || fallbackHits != 1 {
-		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
-	}
-	if gotBody != `{"jsonrpc":"2.0"}` {
-		t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
+type observedResponseBody struct {
+	reader    *strings.Reader
+	readCalls int
+	closed    bool
+}
+
+func (b *observedResponseBody) Read(p []byte) (int, error) {
+	b.readCalls++
+	return b.reader.Read(p)
+}
+
+func (b *observedResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestFallbackTransport_FallsOverOnRetryableStatus(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var primaryHits, fallbackHits int
+			var gotBody string
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				primaryHits++
+				w.WriteHeader(status)
+			}))
+			defer primary.Close()
+			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fallbackHits++
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				_, _ = io.WriteString(w, `ok`)
+			}))
+			defer fallback.Close()
+
+			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{"jsonrpc":"2.0"}`)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (fell over to fallback)", resp.StatusCode)
+			}
+			if primaryHits != 1 || fallbackHits != 1 {
+				t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
+			}
+			if gotBody != `{"jsonrpc":"2.0"}` {
+				t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
+			}
+		})
 	}
 }
 
@@ -159,6 +185,136 @@ func TestFallbackTransport_AllFail(t *testing.T) {
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("expected an error when all endpoints fail")
+	}
+}
+
+func TestFallbackTransport_NonRetryableHTTPStatusSanitized(t *testing.T) {
+	const (
+		requestSecret  = "request-body-secret"
+		responseSecret = "response-body-secret"
+		locationSecret = "location-secret"
+	)
+	tests := []struct {
+		name       string
+		status     int
+		wantStatus string
+		location   string
+	}{
+		{
+			name:       "unauthorized response body",
+			status:     http.StatusUnauthorized,
+			wantStatus: "HTTP 401",
+		},
+		{
+			name:       "redirect location",
+			status:     http.StatusFound,
+			wantStatus: "HTTP 302",
+			location:   "https://location-user:location-pass@redirect.example/route-" + locationSecret + "?token=" + locationSecret + "#fragment-" + locationSecret,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			endpoint := mustEndpoints(t,
+				"https://rpc-user-status:pw-status@rpc.example/route-status?credential=query-status#fragment-status",
+			)[0]
+			body := &observedResponseBody{
+				reader: strings.NewReader(responseSecret + ": " + requestSecret),
+			}
+			attempts := 0
+			base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts > 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":"0x1"}`)),
+						Request:    req,
+					}, nil
+				}
+				header := make(http.Header)
+				if tt.location != "" {
+					header.Set("Location", tt.location)
+				}
+				return &http.Response{
+					StatusCode:    tt.status,
+					Header:        header,
+					Body:          body,
+					ContentLength: int64(body.reader.Len()),
+					Request:       req,
+				}, nil
+			})
+			var logs strings.Builder
+			client := &http.Client{Transport: &fallbackTransport{
+				endpoints: []*url.URL{endpoint},
+				base:      base,
+				log:       captureLogger(&logs),
+			}}
+			req, err := http.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				endpointLabel(endpoint),
+				strings.NewReader(requestSecret),
+			)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+
+			resp, err := client.Do(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if err == nil {
+				t.Fatalf("Do returned status response, want sanitized transport error")
+			}
+			if resp != nil {
+				t.Fatalf("response = %#v, want nil so body and headers cannot escape", resp)
+			}
+			if attempts != 1 {
+				t.Fatalf("transport attempts = %d, want 1 (non-retry status must not fall over or redirect)", attempts)
+			}
+			if !body.closed {
+				t.Fatal("response body was not closed")
+			}
+			if body.readCalls != 0 {
+				t.Fatalf("response body reads = %d, want 0", body.readCalls)
+			}
+			if !strings.Contains(err.Error(), "endpoint 1 (https://rpc.example)") ||
+				!strings.Contains(err.Error(), tt.wantStatus) {
+				t.Fatalf("error = %q, want safe endpoint ordinal/origin and HTTP status", err)
+			}
+			assertEndpointSecretsRedacted(t, err, logs.String(),
+				"rpc-user-status", "pw-status", "route-status", "query-status", "fragment-status",
+				requestSecret, responseSecret,
+				"location-user", "location-pass", locationSecret,
+			)
+		})
+	}
+}
+
+func TestFallbackTransport_HTTP200JSONRPCErrorPassesThrough(t *testing.T) {
+	const rpcError = `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}`
+	var fallbackHits int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, rpcError)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		fallbackHits++
+	}))
+	defer fallback.Close()
+
+	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || string(got) != rpcError || fallbackHits != 0 {
+		t.Fatalf("status=%d body=%q fallbackHits=%d, want unchanged HTTP 200 JSON-RPC error and no fallback", resp.StatusCode, got, fallbackHits)
 	}
 }
 
