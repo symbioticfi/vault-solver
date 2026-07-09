@@ -1,10 +1,12 @@
-// Package txmanager owns the on-chain sending account and serializes all transactions through a
-// single worker goroutine, so multiple solvers can never race on the account nonce. Solvers build
-// calldata and hand it over via Send; they never sign or broadcast directly.
+// Package txmanager owns the on-chain sending account. A single dispatcher serializes nonce
+// allocation and initial broadcasts; manager-owned trackers supervise admitted transactions without
+// blocking later nonces. Solvers build calldata and hand it over via Send; they never sign or
+// broadcast directly.
 package txmanager
 
 import (
 	"context"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -34,10 +36,13 @@ type Backend interface {
 
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
-	Confirmations uint64        // blocks to wait past inclusion before returning
-	MaxFeeGwei    float64       // cap on max fee per gas; 0 => derive from base fee
-	TipGwei       float64       // priority fee; 0 => use the node's suggestion
-	PollInterval  time.Duration // receipt/confirmation poll cadence; 0 => 2s
+	Confirmations   uint64        // blocks to wait past inclusion before returning
+	MaxFeeGwei      float64       // cap on max fee per gas; 0 => derive from base fee
+	TipGwei         float64       // priority fee; 0 => use the node's suggestion
+	PollInterval    time.Duration // receipt/confirmation poll cadence; 0 => 2s
+	PendingInterval time.Duration // one pending-attempt window; 0 => 2m
+	FeeBumpBps      uint64        // replacement fee increase in basis points; 0 => 1250
+	MaxReplacements uint64        // replacements after the original attempt; 0 => 3
 }
 
 // Request is a transaction to send. Value nil means 0; GasLimit 0 means "estimate".
@@ -49,14 +54,41 @@ type Request struct {
 	Label    string // for logs/metrics, e.g. "redeem"
 }
 
-// Result carries the outcome of a Send.
+// State is the explicit lifecycle outcome of a transaction request.
+type State string
+
+const (
+	StateNotBroadcast     State = "not_broadcast"
+	StateRejected         State = "rejected"
+	StateBroadcastUnknown State = "broadcast_unknown"
+	StatePending          State = "pending"
+	StateConfirmed        State = "confirmed"
+	StateReverted         State = "reverted"
+	StateUnresolved       State = "unresolved"
+)
+
+var (
+	ErrManagerStopped = errors.New("txmanager stopped")
+	ErrUnresolved     = errors.New("transaction outcome unresolved")
+)
+
+// Result carries the final outcome of a Send.
 type Result struct {
+	State   State
+	Nonce   uint64
 	Hash    common.Hash
+	Hashes  []common.Hash
 	Receipt *types.Receipt
 	Err     error
 }
 
-// Manager is the single-writer transaction sender.
+// SafeToRetry reports whether the logical request definitely was not admitted to the transaction
+// pool and may safely be submitted again.
+func (r Result) SafeToRetry() bool {
+	return r.State == StateNotBroadcast || r.State == StateRejected
+}
+
+// Manager is the single-writer transaction dispatcher.
 type Manager struct {
 	backend Backend
 	signer  signer.Signer
@@ -65,10 +97,14 @@ type Manager struct {
 	log     logr.Logger
 
 	queue chan job
+	done  chan struct{}
 
-	mu        sync.Mutex // guards the local nonce
-	nonce     uint64
-	nonceInit bool
+	mu             sync.Mutex // guards the local nonce state
+	nonce          uint64
+	nonceInit      bool
+	nonceFloor     uint64
+	nonceFloorSet  bool
+	nonceExhausted bool
 }
 
 type job struct {
@@ -77,8 +113,10 @@ type job struct {
 }
 
 const (
-	defaultPollInterval = 2 * time.Second
-	maxNonceResyncs     = 1
+	defaultPollInterval    = 2 * time.Second
+	defaultPendingInterval = 2 * time.Minute
+	defaultFeeBumpBps      = 1_250
+	defaultMaxReplacements = 3
 )
 
 // New constructs a Manager. Call Start to launch its worker.
@@ -86,32 +124,59 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
+	if cfg.PendingInterval <= 0 {
+		cfg.PendingInterval = defaultPendingInterval
+	}
+	if cfg.FeeBumpBps == 0 {
+		cfg.FeeBumpBps = defaultFeeBumpBps
+	}
+	if cfg.MaxReplacements == 0 {
+		cfg.MaxReplacements = defaultMaxReplacements
+	}
 	return &Manager{
 		backend: backend,
 		signer:  s,
-		chainID: chainID,
+		chainID: new(big.Int).Set(chainID),
 		cfg:     cfg,
 		log:     log.WithName("txmanager"),
 		queue:   make(chan job),
+		done:    make(chan struct{}),
 	}
 }
 
-// Start runs the worker until ctx is cancelled. Run it in its own goroutine.
-func (m *Manager) Start(ctx context.Context) {
+// Start runs the dispatcher until ctx is cancelled, then joins every transaction tracker before
+// returning. Run it in its own goroutine.
+func (m *Manager) Start(ctx context.Context) error {
 	m.log.Info("started", "from", m.signer.Address().Hex())
+	var trackers sync.WaitGroup
+	defer func() {
+		trackers.Wait()
+		close(m.done)
+		m.log.Info("stopped")
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
-			m.log.Info("stopped", "reason", ctx.Err().Error())
-			return
+			return nil
 		case j := <-m.queue:
-			j.res <- m.execute(ctx, j.req)
+			tracked, immediate := m.dispatch(ctx, j.req)
+			if immediate != nil {
+				j.res <- *immediate
+				continue
+			}
+			trackers.Add(1)
+			go func(tracked *trackedTx, result chan<- Result) {
+				defer trackers.Done()
+				result <- m.track(ctx, tracked)
+			}(tracked, j.res)
 		}
 	}
 }
 
-// Send enqueues a transaction and blocks until it is confirmed or fails. Safe for concurrent
-// callers; all requests are serialized through the single worker.
+// Send enqueues a transaction and blocks until it reaches a final state. Safe for concurrent
+// callers; preparation and initial broadcast are serialized through the dispatcher while receipt
+// tracking runs concurrently.
 //
 // ctx governs the enqueue only. Before the request is enqueued, a cancelled ctx aborts cleanly with
 // no transaction sent. Once enqueued, the worker broadcasts the tx on the manager's own long-lived
@@ -120,28 +185,35 @@ func (m *Manager) Start(ctx context.Context) {
 // typically an errgroup child that cancels the instant any sibling solver errors, well before
 // shutdown). The worker always delivers exactly one Result, so this wait cannot hang.
 func (m *Manager) Send(ctx context.Context, req Request) Result {
+	if err := ctx.Err(); err != nil {
+		return Result{State: StateNotBroadcast, Err: err}
+	}
 	res := make(chan Result, 1)
 	select {
 	case m.queue <- job{req: req, res: res}:
 	case <-ctx.Done():
-		return Result{Err: ctx.Err()}
+		return Result{State: StateNotBroadcast, Err: ctx.Err()}
+	case <-m.done:
+		return Result{State: StateNotBroadcast, Err: ErrManagerStopped}
 	}
 	return <-res
 }
 
-// execute runs on the worker goroutine only, so nonce access is single-threaded here; the mutex
-// guards against concurrent reads from a future status API.
-func (m *Manager) execute(ctx context.Context, req Request) Result {
+// dispatch runs only on the dispatcher goroutine. It prepares, signs, and initially broadcasts one
+// logical transaction before handing admitted or ambiguous outcomes to a tracker.
+func (m *Manager) dispatch(ctx context.Context, req Request) (*trackedTx, *Result) {
 	tip, maxFee, err := m.fees(ctx)
 	if err != nil {
-		return Result{Err: err}
+		result := rejectedResult(0, nil, err)
+		return nil, &result
 	}
 
 	gas := req.GasLimit
 	if gas == 0 {
 		gas, err = m.estimateGas(ctx, req)
 		if err != nil {
-			return Result{Err: err}
+			result := rejectedResult(0, nil, err)
+			return nil, &result
 		}
 	}
 
@@ -150,46 +222,54 @@ func (m *Manager) execute(ctx context.Context, req Request) Result {
 		value = new(big.Int)
 	}
 
-	var lastErr error
-	for attempt := 0; attempt <= maxNonceResyncs; attempt++ {
-		nonce, nErr := m.nextNonce(ctx, attempt > 0)
-		if nErr != nil {
-			return Result{Err: nErr}
-		}
-
-		tx := types.NewTx(&types.DynamicFeeTx{
-			ChainID:   m.chainID,
-			Nonce:     nonce,
-			GasTipCap: tip,
-			GasFeeCap: maxFee,
-			Gas:       gas,
-			To:        &req.To,
-			Value:     value,
-			Data:      req.Data,
-		})
-
-		signed, sErr := m.signer.SignTx(tx, m.chainID)
-		if sErr != nil {
-			return Result{Err: sErr}
-		}
-
-		if sendErr := m.backend.SendTransaction(ctx, signed); sendErr != nil {
-			lastErr = sendErr
-			if isNonceTooLow(sendErr) {
-				m.log.Info("nonce too low; resyncing", "label", req.Label, "nonce", nonce)
-				continue // retry with a freshly-synced nonce
-			}
-			return Result{Err: errors.Errorf("send %q: %w", req.Label, sendErr)}
-		}
-
-		m.commitNonce(nonce)
-		hash := signed.Hash()
-		m.log.Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
-
-		receipt, wErr := m.waitForReceipt(ctx, hash)
-		return Result{Hash: hash, Receipt: receipt, Err: wErr}
+	nonce, err := m.seedNonce(ctx)
+	if err != nil {
+		result := rejectedResult(0, nil, err)
+		return nil, &result
 	}
-	return Result{Err: errors.Errorf("send %q: exhausted nonce resyncs: %w", req.Label, lastErr)}
+
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   m.chainID,
+		Nonce:     nonce,
+		GasTipCap: tip,
+		GasFeeCap: maxFee,
+		Gas:       gas,
+		To:        &req.To,
+		Value:     value,
+		Data:      req.Data,
+	})
+
+	signed, err := m.signer.SignTx(tx, m.chainID)
+	if err != nil {
+		result := rejectedResult(nonce, nil, errors.Errorf("sign tx %q: %w", req.Label, err))
+		return nil, &result
+	}
+
+	sendErr := m.backend.SendTransaction(ctx, signed)
+	class := classifyBroadcastError(sendErr)
+	if class == broadcastRejected {
+		result := rejectedResult(nonce, signed, errors.Errorf("send %q: %w", req.Label, sendErr))
+		return nil, &result
+	}
+
+	m.commitNonce(nonce)
+	tracked := &trackedTx{
+		req:      req,
+		nonce:    nonce,
+		state:    StatePending,
+		attempts: []*types.Transaction{signed},
+	}
+	if class == broadcastAmbiguous {
+		tracked.state = StateBroadcastUnknown
+		tracked.admissionErr = errors.Errorf("send %q: %w", req.Label, sendErr)
+		if isNonceTooLow(sendErr) {
+			m.invalidateNonceSeed()
+		}
+		m.log.Info("broadcast outcome unknown", "label", req.Label, "hash", signed.Hash().Hex(), "nonce", nonce)
+	} else {
+		m.log.Info("sent", "label", req.Label, "hash", signed.Hash().Hex(), "nonce", nonce)
+	}
+	return tracked, nil
 }
 
 // fees computes the EIP-1559 tip and max-fee-per-gas.
@@ -238,62 +318,96 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 	return gas + gas/5, nil
 }
 
-// nextNonce returns the nonce to use, seeding or resyncing from the pending nonce when needed.
-func (m *Manager) nextNonce(ctx context.Context, resync bool) (uint64, error) {
+// seedNonce returns the current dispatcher-owned nonce candidate, seeding it from the backend when
+// necessary without ever going below the persistent committed floor.
+func (m *Manager) seedNonce(ctx context.Context) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if resync || !m.nonceInit {
-		pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
-		if err != nil {
-			return 0, errors.Errorf("pending nonce: %w", err)
-		}
-		m.nonce = pending
-		m.nonceInit = true
+	if m.nonceExhausted {
+		return 0, errors.New("transaction nonce space exhausted")
 	}
+	if m.nonceInit {
+		return m.nonce, nil
+	}
+
+	pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
+	if err != nil {
+		return 0, errors.Errorf("pending nonce: %w", err)
+	}
+	if m.nonceFloorSet && pending < m.nonceFloor {
+		pending = m.nonceFloor
+	}
+	m.nonce = pending
+	m.nonceInit = true
 	return m.nonce, nil
 }
 
 func (m *Manager) commitNonce(used uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if used >= m.nonce {
-		m.nonce = used + 1
+	if used == math.MaxUint64 {
+		m.nonce = used
+		m.nonceInit = false
+		m.nonceFloor = used
+		m.nonceFloorSet = true
+		m.nonceExhausted = true
+		return
 	}
+
+	next := used + 1
+	if !m.nonceFloorSet || next > m.nonceFloor {
+		m.nonceFloor = next
+		m.nonceFloorSet = true
+	}
+	m.nonce = next
+	m.nonceInit = true
 }
 
-func (m *Manager) waitForReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	ticker := time.NewTicker(m.cfg.PollInterval)
-	defer ticker.Stop()
+func (m *Manager) invalidateNonceSeed() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nonceInit = false
+}
 
-	var receipt *types.Receipt
-	for {
-		if receipt == nil {
-			r, err := m.backend.TransactionReceipt(ctx, hash)
-			if err == nil {
-				receipt = r
-				if receipt.Status == types.ReceiptStatusFailed {
-					return receipt, errors.Errorf("tx %s reverted on-chain", hash.Hex())
-				}
-			} else if !errors.Is(err, ethereum.NotFound) {
-				return nil, errors.Errorf("receipt %s: %w", hash.Hex(), err)
-			}
-		}
-		if receipt != nil {
-			head, err := m.backend.BlockNumber(ctx)
-			if err != nil {
-				return nil, errors.Errorf("block number: %w", err)
-			}
-			confirmed := receipt.BlockNumber.Uint64() + m.cfg.Confirmations
-			if head >= confirmed {
-				return receipt, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
+func rejectedResult(nonce uint64, signed *types.Transaction, err error) Result {
+	result := Result{State: StateRejected, Nonce: nonce, Err: err}
+	if signed != nil {
+		result.Hash = signed.Hash()
+		result.Hashes = []common.Hash{signed.Hash()}
+	}
+	return result
+}
+
+type broadcastClass uint8
+
+const (
+	broadcastAdmitted broadcastClass = iota
+	broadcastRejected
+	broadcastAmbiguous
+)
+
+func classifyBroadcastError(err error) broadcastClass {
+	if err == nil {
+		return broadcastAdmitted
+	}
+
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "already known") {
+		return broadcastAdmitted
+	}
+	for _, rejection := range []string{
+		"insufficient funds",
+		"intrinsic gas too low",
+		"invalid sender",
+		"max fee per gas less than block base fee",
+		"max priority fee per gas higher than max fee per gas",
+		"transaction type not supported",
+	} {
+		if strings.Contains(message, rejection) {
+			return broadcastRejected
 		}
 	}
+	return broadcastAmbiguous
 }
 
 func gweiToWei(gwei float64) *big.Int {
