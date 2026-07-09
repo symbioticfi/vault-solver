@@ -38,8 +38,8 @@ type Client struct {
 // Dial connects to the EVM RPC endpoint(s), validates every distinct endpoint against the expected
 // chain id, and pins the Multicall3 address used for batched reads. rpcURLs[0] is the primary; any
 // extra entries are HTTP(S) fallbacks tried in order when the primary is unavailable (see
-// fallbackTransport). A single URL preserves the plain ethclient dial (any supported scheme), so
-// non-HTTP transports keep working when no fallback is configured.
+// fallbackTransport). HTTP(S), even alone, uses the bounded fallback transport; only one supported
+// non-HTTP endpoint preserves plain ethclient dialing.
 //
 // writeRPCURL, when non-empty, is dialed as a SEPARATE client used only to broadcast transactions
 // (see SendTransaction); every read stays on the primary. Empty reuses the primary for broadcasts,
@@ -191,12 +191,17 @@ type CallResult struct {
 
 // Multicall batches reads through Multicall3.aggregate3 at the latest block.
 func (c *Client) Multicall(ctx context.Context, calls []Call) ([]CallResult, error) {
+	return c.MulticallAt(ctx, calls, nil)
+}
+
+// MulticallAt batches reads through Multicall3.aggregate3 at blockNumber.
+func (c *Client) MulticallAt(ctx context.Context, calls []Call, blockNumber *big.Int) ([]CallResult, error) {
 	in := make([]multicall3.Multicall3Call3, len(calls))
 	for i, call := range calls {
 		in[i] = multicall3.Multicall3Call3{Target: call.Target, AllowFailure: call.AllowFailure, CallData: call.Data}
 	}
 	data := multicallB.PackAggregate3(in)
-	ret, err := c.CallContract(ctx, ethereum.CallMsg{To: &c.multicall, Data: data}, nil)
+	ret, err := c.CallContract(ctx, ethereum.CallMsg{To: &c.multicall, Data: data}, blockNumber)
 	if err != nil {
 		return nil, errors.Errorf("chain: multicall aggregate3: %w", err)
 	}

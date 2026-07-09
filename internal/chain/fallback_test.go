@@ -520,6 +520,68 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	}
 }
 
+func TestMulticallAt_EncodesBlockParameter(t *testing.T) {
+	const emptyAggregate3Result = "0x" +
+		"0000000000000000000000000000000000000000000000000000000000000020" +
+		"0000000000000000000000000000000000000000000000000000000000000000"
+
+	var gotBlocks []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage   `json:"id"`
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("decode JSON-RPC request: %v", err)
+		}
+
+		result := `"0x1"`
+		if req.Method == "eth_call" {
+			if len(req.Params) != 2 {
+				t.Errorf("eth_call params = %d, want 2", len(req.Params))
+			} else {
+				var block string
+				if err := json.Unmarshal(req.Params[1], &block); err != nil {
+					t.Errorf("decode eth_call block parameter: %v", err)
+				}
+				gotBlocks = append(gotBlocks, block)
+			}
+			result = `"` + emptyAggregate3Result + `"`
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+	}))
+	defer srv.Close()
+
+	c, err := Dial(t.Context(), []string{srv.URL}, "", testMulticallAddress, 1, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	result, err := c.MulticallAt(t.Context(), nil, big.NewInt(123))
+	if err != nil {
+		t.Fatalf("MulticallAt: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("MulticallAt result length = %d, want 0", len(result))
+	}
+	result, err = c.Multicall(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Multicall: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("Multicall result length = %d, want 0", len(result))
+	}
+
+	if want := []string{"0x7b", "latest"}; !slices.Equal(gotBlocks, want) {
+		t.Fatalf("eth_call block parameters = %v, want %v", gotBlocks, want)
+	}
+}
+
 // rpcRecorder is a JSON-RPC httptest server that records the methods it is asked and replies with a
 // canned result per method.
 func rpcRecorder(methods *[]string, result func(method string) string) *httptest.Server {
