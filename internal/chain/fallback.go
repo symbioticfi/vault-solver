@@ -17,6 +17,13 @@ import (
 // as the endpoint being unhealthy.
 const rpcAttemptTimeout = 20 * time.Second
 
+var (
+	errInvalidEndpoint   = errors.New("invalid endpoint")
+	errUnsupportedScheme = errors.New("unsupported scheme")
+	errDialTransport     = errors.New("dial/transport failure")
+	errChainIDRequest    = errors.New("chain-id request failed")
+)
+
 // fallbackTransport is a barebones, viem-style RPC fallback. It POSTs each JSON-RPC request to the
 // configured endpoints in order, advancing to the next only on a transport failure or an unavailable
 // response (HTTP 5xx / 429). A normal HTTP 200 — including a JSON-RPC error body such as a revert —
@@ -42,12 +49,17 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		body = b
 	}
 
-	var lastErr error
+	lastFailure := "transport failure"
+	lastIndex := 0
 	for i, ep := range t.endpoints {
 		ctx, cancel := context.WithTimeout(req.Context(), rpcAttemptTimeout)
 		attempt := req.Clone(ctx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
+		if ep.User != nil {
+			password, _ := ep.User.Password()
+			attempt.SetBasicAuth(ep.User.Username(), password)
+		}
 		if body != nil {
 			attempt.Body = io.NopCloser(bytes.NewReader(body))
 			attempt.ContentLength = int64(len(body))
@@ -60,18 +72,34 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			return resp, nil
 		}
 		cancel()
+		lastIndex = i
 		if err != nil {
-			lastErr = err
+			lastFailure = "transport failure"
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 		} else {
-			lastErr = errors.Errorf("status %d", resp.StatusCode)
+			lastFailure = errors.Errorf("HTTP %d", resp.StatusCode).Error()
 			_ = resp.Body.Close()
 		}
 		if i < len(t.endpoints)-1 {
 			t.log.V(1).Info("rpc endpoint failed; trying fallback",
-				"endpoint", ep.Redacted(), "err", lastErr.Error())
+				"endpointOrdinal", i+1,
+				"endpointOrigin", endpointLabel(ep),
+				"failure", lastFailure,
+			)
 		}
 	}
-	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
+	if len(t.endpoints) == 0 {
+		return nil, errors.New("rpc fallback: no endpoints configured")
+	}
+	return nil, errors.Errorf(
+		"rpc fallback: all %d endpoints failed; endpoint %d (%s): %s",
+		len(t.endpoints),
+		lastIndex+1,
+		endpointLabel(t.endpoints[lastIndex]),
+		lastFailure,
+	)
 }
 
 // cancelOnClose cancels the per-attempt context when the response body is closed, so the timeout
@@ -95,22 +123,82 @@ func isHTTPURL(raw string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
 }
 
+// endpointLabel deliberately retains only the parsed origin. url.URL.Redacted still preserves the
+// path, query, and fragment and is therefore not safe for RPC diagnostics.
+func endpointLabel(u *url.URL) string {
+	if u == nil || u.Scheme == "" || u.Host == "" {
+		return "invalid endpoint"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
+func endpointURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	return u
+}
+
+func endpointFailure(role string, ordinal int, u *url.URL, cause error) error {
+	label := endpointLabel(u)
+	if label == "invalid endpoint" {
+		return errors.Errorf("chain: %s endpoint %d: %w", role, ordinal, cause)
+	}
+	return errors.Errorf("chain: %s endpoint %d (%s): %w", role, ordinal, label, cause)
+}
+
+// endpointClass returns only a fixed, non-sensitive class. The original cause is intentionally not
+// wrapped: URL and transport errors frequently render the complete credential-bearing endpoint.
+func endpointClass(err error) error {
+	for _, class := range []error{errInvalidEndpoint, errUnsupportedScheme, errDialTransport} {
+		if errors.Is(err, class) {
+			return class
+		}
+	}
+	return errDialTransport
+}
+
+func validateNonHTTPEndpoint(raw string) (*url.URL, error) {
+	u := endpointURL(raw)
+	if u == nil {
+		return nil, errInvalidEndpoint
+	}
+	switch u.Scheme {
+	case "ws", "wss":
+		if u.Host == "" {
+			return u, errInvalidEndpoint
+		}
+	case "stdio":
+	case "":
+		if raw == "" {
+			return u, errInvalidEndpoint
+		}
+	default:
+		return u, errUnsupportedScheme
+	}
+	return u, nil
+}
+
 // parseHTTPEndpoints validates that every URL is HTTP(S) (the only scheme the fallback transport
 // supports) and returns the parsed endpoints in order, dropping duplicates so the same endpoint is
 // never tried twice in a fallover sweep.
 func parseHTTPEndpoints(urls []string) ([]*url.URL, error) {
 	out := make([]*url.URL, 0, len(urls))
 	seen := make(map[string]bool, len(urls))
-	for _, raw := range urls {
+	for i, raw := range urls {
 		u, err := url.Parse(raw)
 		if err != nil {
-			return nil, errors.Errorf("chain: invalid rpc url %q: %w", raw, err)
+			return nil, endpointFailure("rpc", i+1, nil, errInvalidEndpoint)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return nil, errors.Errorf("chain: rpc fallback supports http(s) only, got %q", raw)
+			return nil, endpointFailure("rpc", i+1, u, errUnsupportedScheme)
 		}
-		if key := u.String(); !seen[key] {
-			seen[key] = true
+		if u.Host == "" {
+			return nil, endpointFailure("rpc", i+1, u, errInvalidEndpoint)
+		}
+		if !seen[raw] {
+			seen[raw] = true
 			out = append(out, u)
 		}
 	}

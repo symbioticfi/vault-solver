@@ -110,7 +110,7 @@ func newMulticallFakeClient(t *testing.T, ethCallReplies ...[]byte) (*chain.Clie
 		}
 	}))
 
-	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", multicallAddr.Hex(), logr.Discard())
+	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", multicallAddr.Hex(), 1, logr.Discard())
 	if err != nil {
 		srv.Close()
 		t.Fatalf("chain.Dial: %v", err)

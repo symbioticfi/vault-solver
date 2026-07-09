@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 
-	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -74,14 +73,18 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
-	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
+	chainClient, err := chain.Dial(
+		ctx,
+		rpcURLs,
+		cfg.Chain.WriteRPCURL,
+		cfg.Chain.MulticallAddress,
+		cfg.Chain.ChainID,
+		log,
+	)
 	if err != nil {
 		return err
 	}
 	defer chainClient.Close()
-	if got := chainClient.ChainID().Uint64(); got != cfg.Chain.ChainID {
-		return errors.Errorf("chain id mismatch: rpc reports %d, config says %d", got, cfg.Chain.ChainID)
-	}
 
 	// Signer.
 	sgnr, err := signer.FromConfig(cfg.Signer)
