@@ -219,7 +219,7 @@ func (m *Manager) fees(ctx context.Context) (tip, maxFee *big.Int, err error) {
 		maxFee = new(big.Int).Add(new(big.Int).Mul(baseFee, big.NewInt(2)), tip)
 	}
 	if maxFee.Cmp(tip) < 0 {
-		maxFee = new(big.Int).Set(tip)
+		return nil, nil, errors.Errorf("selected gas tip %s wei exceeds max fee %s wei", tip, maxFee)
 	}
 	return tip, maxFee, nil
 }

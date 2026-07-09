@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,79 @@ func TestSend_GasEstimateFailurePropagates(t *testing.T) {
 	res := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), Label: "noestimate"})
 	if res.Err == nil {
 		t.Fatal("expected gas-estimate error to propagate")
+	}
+}
+
+func TestFees_RejectsSuggestedTipAboveConfiguredMaxFee(t *testing.T) {
+	b := newMockBackend()
+	b.tip = big.NewInt(3_000_000_000)
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 2}, logr.Discard())
+
+	_, _, err := m.fees(t.Context())
+	if err == nil {
+		t.Fatal("expected suggested tip above configured max fee to be rejected")
+	}
+	if !strings.Contains(err.Error(), "exceeds max fee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFees_RejectsDerivedMaxBelowTip(t *testing.T) {
+	b := newMockBackend()
+	b.tip = big.NewInt(3_000_000_000)
+	b.baseFee = big.NewInt(-1_000_000_000)
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+
+	_, _, err := m.fees(t.Context())
+	if err == nil {
+		t.Fatal("expected derived max fee below the selected tip to be rejected")
+	}
+	if !strings.Contains(err.Error(), "exceeds max fee") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFees_AllowsTipAtOrBelowConfiguredMaxFee(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfg        Config
+		suggested  *big.Int
+		wantTipWei *big.Int
+		wantMaxWei *big.Int
+	}{
+		{
+			name:       "explicit decimal tip below cap",
+			cfg:        Config{MaxFeeGwei: 2.5, TipGwei: 1.25},
+			suggested:  big.NewInt(3_000_000_000),
+			wantTipWei: big.NewInt(1_250_000_000),
+			wantMaxWei: big.NewInt(2_500_000_000),
+		},
+		{
+			name:       "suggested tip equal to cap",
+			cfg:        Config{MaxFeeGwei: 2},
+			suggested:  big.NewInt(2_000_000_000),
+			wantTipWei: big.NewInt(2_000_000_000),
+			wantMaxWei: big.NewInt(2_000_000_000),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newMockBackend()
+			b.tip = tt.suggested
+			m := New(b, mustSigner(t), big.NewInt(11155111), tt.cfg, logr.Discard())
+
+			tip, maxFee, err := m.fees(t.Context())
+			if err != nil {
+				t.Fatalf("fees: %v", err)
+			}
+			if tip.Cmp(tt.wantTipWei) != 0 {
+				t.Fatalf("tip = %s wei, want %s", tip, tt.wantTipWei)
+			}
+			if maxFee.Cmp(tt.wantMaxWei) != 0 {
+				t.Fatalf("max fee = %s wei, want %s", maxFee, tt.wantMaxWei)
+			}
+		})
 	}
 }
 

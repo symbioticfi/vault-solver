@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -260,6 +262,68 @@ bogus: true
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeTemp(t, body)); err == nil {
 				t.Fatalf("expected error for %q", name)
+			}
+		})
+	}
+}
+
+const txManagerFeeConfig = `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager:
+  maxFeeGwei: %s
+  tipGwei: %s
+solvers: [{name: x}]
+`
+
+func TestLoad_RejectsInvalidTxManagerFees(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFeeGwei string
+		tipGwei    string
+		wantField  string
+	}{
+		{name: "negative max fee", maxFeeGwei: "-1", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "NaN max fee", maxFeeGwei: ".nan", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "positive infinite max fee", maxFeeGwei: ".inf", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "negative infinite max fee", maxFeeGwei: "-.inf", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "negative tip", maxFeeGwei: "0", tipGwei: "-1", wantField: "txManager.tipGwei"},
+		{name: "NaN tip", maxFeeGwei: "0", tipGwei: ".nan", wantField: "txManager.tipGwei"},
+		{name: "positive infinite tip", maxFeeGwei: "0", tipGwei: ".inf", wantField: "txManager.tipGwei"},
+		{name: "negative infinite tip", maxFeeGwei: "0", tipGwei: "-.inf", wantField: "txManager.tipGwei"},
+		{name: "tip above explicit max fee", maxFeeGwei: "2", tipGwei: "3", wantField: "txManager.maxFeeGwei"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTemp(t, fmt.Sprintf(txManagerFeeConfig, tt.maxFeeGwei, tt.tipGwei)))
+			if err == nil {
+				t.Fatal("expected fee validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("error %q does not name %s", err, tt.wantField)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsValidTxManagerFees(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFeeGwei string
+		tipGwei    string
+	}{
+		{name: "both derived", maxFeeGwei: "0", tipGwei: "0"},
+		{name: "explicit max and suggested tip", maxFeeGwei: "2", tipGwei: "0"},
+		{name: "derived max and explicit tip", maxFeeGwei: "0", tipGwei: "2"},
+		{name: "equal explicit values", maxFeeGwei: "2", tipGwei: "2"},
+		{name: "explicit tip below max", maxFeeGwei: "2", tipGwei: "1.5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Load(writeTemp(t, fmt.Sprintf(txManagerFeeConfig, tt.maxFeeGwei, tt.tipGwei))); err != nil {
+				t.Fatalf("Load: %v", err)
 			}
 		})
 	}

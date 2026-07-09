@@ -7,6 +7,7 @@ package config
 
 import (
 	"bytes"
+	"math"
 	"os"
 
 	"github.com/go-errors/errors"
@@ -64,9 +65,10 @@ type SignerConfig struct {
 type TxManagerConfig struct {
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
-	// MaxFeeGwei caps the EIP-1559 max fee per gas; 0 means "derive from base fee".
+	// MaxFeeGwei is a hard cap on the EIP-1559 max fee per gas; 0 means "derive from base fee".
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion".
+	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion". The selected tip
+	// must not exceed an explicit MaxFeeGwei cap.
 	TipGwei float64 `yaml:"tipGwei"`
 }
 
@@ -140,6 +142,9 @@ func (c *Config) Validate() error {
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")
 	}
+	if err := c.TxManager.validate(); err != nil {
+		return err
+	}
 	if err := c.Signer.validate(); err != nil {
 		return err
 	}
@@ -155,6 +160,19 @@ func (c *Config) Validate() error {
 			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", s.Name)
 		}
 		seen[s.Name] = true
+	}
+	return nil
+}
+
+func (t TxManagerConfig) validate() error {
+	if math.IsNaN(t.MaxFeeGwei) || math.IsInf(t.MaxFeeGwei, 0) || t.MaxFeeGwei < 0 {
+		return errors.New("txManager.maxFeeGwei must be finite and non-negative")
+	}
+	if math.IsNaN(t.TipGwei) || math.IsInf(t.TipGwei, 0) || t.TipGwei < 0 {
+		return errors.New("txManager.tipGwei must be finite and non-negative")
+	}
+	if t.MaxFeeGwei > 0 && t.TipGwei > t.MaxFeeGwei {
+		return errors.New("txManager.maxFeeGwei must be at least txManager.tipGwei when both are positive")
 	}
 	return nil
 }

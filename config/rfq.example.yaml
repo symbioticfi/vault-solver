@@ -25,8 +25,11 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
-  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
-  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+  # Fee values must be finite and non-negative. Zero/omitted maxFeeGwei derives from the base fee;
+  # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei is a hard cap: startup fails
+  # for a larger explicit tip, and sending fails if the node suggests a tip above it.
+  # maxFeeGwei: 50                 # hard cap on max fee per gas
+  # tipGwei: 1                     # priority fee; must be at or below an explicit maxFeeGwei
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)
