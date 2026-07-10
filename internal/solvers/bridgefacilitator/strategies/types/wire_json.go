@@ -43,9 +43,9 @@ type auctionSnapshotJSON struct {
 	Status       string         `json:"status"`
 	DepositAsset common.Address `json:"depositAsset"`
 
-	AmountRequested string  `json:"amountRequested"`
-	RemainingAmount string  `json:"remainingAmount"`
-	MaxRateBps      float64 `json:"maxRateBps"`
+	AmountRequested string `json:"amountRequested"`
+	RemainingAmount string `json:"remainingAmount"`
+	MaxRateBps      string `json:"maxRateBps"`
 }
 
 type liveOfferJSON struct {
@@ -86,7 +86,7 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 			Request: a.Request, Status: a.Status, DepositAsset: a.DepositAsset,
 			AmountRequested: bigString(a.AmountRequested),
 			RemainingAmount: bigString(a.RemainingAmount),
-			MaxRateBps:      a.MaxRateBps,
+			MaxRateBps:      formatDeciBps(a.MaxRateDeciBps),
 		})
 	}
 	liveOffers := make([]liveOfferJSON, 0, len(in.LiveOffers))
@@ -133,6 +133,18 @@ func bigString(n *big.Int) string {
 		return ""
 	}
 	return n.String()
+}
+
+func formatDeciBps(n *big.Int) string {
+	if n == nil {
+		return ""
+	}
+	q, r := new(big.Int), new(big.Int)
+	q.QuoRem(n, big.NewInt(10), r)
+	if r.Sign() == 0 {
+		return q.String()
+	}
+	return q.String() + "." + r.String()
 }
 
 func parseBigString(s, field string) (*big.Int, error) {

@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -39,15 +40,24 @@ func (a auctionView) requestAddr() common.Address {
 	return common.HexToAddress(a.dto.RequestId)
 }
 
-// maxRateBps returns the auction's current max rate (basis points) and whether the API resolved it.
-// It prices every offer and gates the per-adapter return floor, so an unresolved rate means we can't
-// bid on the auction at all.
-func (a auctionView) maxRateBps() (float64, bool) {
+// maxRateDeciBps returns the auction's current max rate as an exact count of tenth-basis-points.
+// The generated API double is normalized once here; unresolved, negative, non-finite, or more precise
+// values fail closed because they cannot safely price an offer.
+func (a auctionView) maxRateDeciBps() (*big.Int, bool) {
 	r, ok := a.dto.GetMaxRateOk()
 	if !ok || r == nil {
-		return 0, false
+		return nil, false
 	}
-	return *r, true
+	text := strconv.FormatFloat(*r, 'f', -1, 64)
+	rate, ok := new(big.Rat).SetString(text)
+	if !ok || rate.Sign() < 0 {
+		return nil, false
+	}
+	rate.Mul(rate, big.NewRat(10, 1))
+	if rate.Denom().Cmp(big.NewInt(1)) != 0 {
+		return nil, false
+	}
+	return new(big.Int).Set(rate.Num()), true
 }
 
 // amountRequested returns the requested principal, or nil if the API didn't resolve it.

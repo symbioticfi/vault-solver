@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -64,8 +65,48 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 			DepositAsset:    common.HexToAddress("0x0000000000000000000000000000000000000003"),
 			AmountRequested: mustBig(t, "700"),
 			RemainingAmount: mustBig(t, "700"),
-			MaxRateBps:      200,
+			MaxRateDeciBps:  big.NewInt(2_000),
 		}},
+	}
+}
+
+func TestAuctionViewMaxRateDeciBpsExact(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		rate float64
+		want string
+		ok   bool
+	}{
+		{name: "zero boundary", rate: 0, want: "0", ok: true},
+		{name: "one tenth", rate: 50.1, want: "501", ok: true},
+		{name: "five tenths", rate: 50.5, want: "505", ok: true},
+		{name: "too precise", rate: 50.55},
+		{name: "negative", rate: -0.1},
+		{name: "nan", rate: math.NaN()},
+		{name: "positive infinity", rate: math.Inf(1)},
+		{name: "negative infinity", rate: math.Inf(-1)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			auction := threef.AuctionDto{MaxRate: *threef.NewNullableFloat64(&tc.rate)}
+			got, ok := (auctionView{dto: auction}).maxRateDeciBps()
+			if ok != tc.ok {
+				t.Fatalf("ok = %t, want %t (rate %v)", ok, tc.ok, tc.rate)
+			}
+			if !tc.ok {
+				if got != nil {
+					t.Fatalf("rate = %s, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.String() != tc.want {
+				t.Fatalf("rate = %v, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

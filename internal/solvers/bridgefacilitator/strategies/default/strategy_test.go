@@ -35,7 +35,40 @@ func testAuction(id int64, remaining int64) types.AuctionSnapshot {
 		DepositAsset:    common.Address{0xaa},
 		AmountRequested: big.NewInt(remaining),
 		RemainingAmount: big.NewInt(remaining),
-		MaxRateBps:      200,
+		MaxRateDeciBps:  big.NewInt(2_000),
+	}
+}
+
+func TestStrategyYieldFloorDeciBpsBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		rate      int64
+		wantOffer bool
+	}{
+		{name: "one tenth below floor", rate: 499},
+		{name: "exactly at floor", rate: 500, wantOffer: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			adapter := testAdapter(1, 100)
+			adapter.MinYieldBps = big.NewInt(50)
+			auction := testAuction(10, 100)
+			auction.MaxRateDeciBps = big.NewInt(tc.rate)
+
+			got, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{adapter},
+				Auctions: []types.AuctionSnapshot{auction},
+			})
+			if err != nil {
+				t.Fatalf("DecideOffers: %v", err)
+			}
+			if gotOffer := len(got.Offers) == 1; gotOffer != tc.wantOffer {
+				t.Fatalf("offers = %d, want offer %t", len(got.Offers), tc.wantOffer)
+			}
+		})
 	}
 }
 
@@ -155,7 +188,7 @@ func TestStrategyOwnsEligibility(t *testing.T) {
 	a2 := testAdapter(2, 100)
 	a2.Collateral = common.Address{0xbb} // collateral mismatch
 	a3 := testAdapter(3, 100)
-	a3.MinYieldBps = big.NewInt(300) // min-yield above the auction's max rate (200)
+	a3.MinYieldBps = big.NewInt(300) // min-yield above the auction's max rate (200 bps)
 	auction := testAuction(10, 100)
 	input := types.OfferInput{
 		Now:        time.Unix(0, 0),

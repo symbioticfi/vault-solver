@@ -247,6 +247,11 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        MaxConcurrent int      // MAX_REQUESTS
    }
 
+   type AuctionSnapshot struct {
+       // Other auction identity and amount fields omitted here for brevity.
+       MaxRateDeciBps uint256 // exact count of tenth-basis-points
+   }
+
    type LiveOffer struct {
        AdapterID string
        AuctionID int64
@@ -266,14 +271,19 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    }
    ```
 
-   The default local strategy preserves the current behavior: process auctions in API order, filter
-   adapter eligibility (collateral match, no live offer for the pair, rate clears `minYieldPerRequest`),
+   The generated API retains its numeric `maxRate` field, but the solver normalizes that `float64`
+   exactly once into `MaxRateDeciBps`. Missing, negative, non-finite, or finer-than-one-tenth values
+   are rejected before the strategy boundary. The default local strategy preserves the current
+   behavior: process auctions in API order, filter adapter eligibility (collateral match, no live
+   offer for the pair, `MaxRateDeciBps >= MinYieldBps * 10`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
    each offer to the still-uncovered remainder, and track local adapter commitments across the pass.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
-   means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
-   integers are decimal strings and unknown response fields are rejected.
+   means no capacity). Expected return is the exact, round-down calculation
+   `principal * MaxRateDeciBps / 100_000`. A `webhook` strategy posts the same JSON input to an
+   external decider; big integers are decimal strings, `maxRateBps` is an exact decimal string such as
+   `"50.5"`, and unknown response fields are rejected.
 4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
    returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,
    signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
@@ -323,7 +333,9 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
      more single-adapter offers through the configured trusted strategy; uncovered remainder retries
      next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
+   - Tests: strategy registry/default selection, exact deci-bps conversion/arithmetic and yield-floor
+     boundaries, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup,
+     `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 
@@ -347,6 +359,9 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
 - **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
+- **(done) Auction rates are exact after ingress.** The upstream numeric `maxRate` remains generated
+  as `float64`, then is validated and normalized once to integer tenth-basis-points. Eligibility,
+  expected-return arithmetic, and webhook transport use only the exact integer/decimal-string form.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **Dynamic adapter discovery.** The adapter set is a config whitelist; the dynamic "list public 3F adapters" API (§9) replaces it later, filtered to adapters our signer is the EIP-1271 signer for.

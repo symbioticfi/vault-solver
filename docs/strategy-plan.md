@@ -143,6 +143,10 @@ It has no solver names, no strategy registry, and no per-solver DTOs — each so
 owns its own wire types (conventionally lower-camel JSON with decimal strings for big integers,
 provided by that solver's `strategies/types`).
 
+Money-facing fractional facts stay exact across this boundary too: a solver normalizes them to its
+own integer unit before invoking a strategy, and its webhook wire type renders the value as a decimal
+string. A webhook must not reintroduce binary floating-point into pricing or eligibility decisions.
+
 ```yaml
 strategy:
   name: webhook

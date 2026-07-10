@@ -49,7 +49,7 @@ type AuctionSnapshot struct {
 
 	AmountRequested *big.Int
 	RemainingAmount *big.Int
-	MaxRateBps      float64
+	MaxRateDeciBps  *big.Int
 }
 
 // LiveOffer is one offer the solver already holds through an adapter on an auction. The strategy uses
