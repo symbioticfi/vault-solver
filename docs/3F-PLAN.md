@@ -126,12 +126,15 @@ from `Err`.
 
 The 3F redeemer treats `confirmed` as complete. `unresolved` and any unexpected/intermediate state
 conservatively record every request in the submitted batch in a per-`(adapter, request)` pending set;
-those requests are suppressed until a later successful authoritative `readyToRedeem` scan changes the
-set. Every successful scan, including an empty one, reconciles that adapter's pending keys before
-filtering and batching, while a scan error preserves them. `not_broadcast`, `rejected`, and `reverted`
-are definite outcomes and are not suppressed, so a later authoritative scan may make them eligible
-again. The map is owned only by the single `Solver.Run` goroutine and needs no mutex; adapter-qualified
-keys prevent one adapter's scan from clearing another's suppression.
+those requests are suppressed until a later successful authoritative `readyToRedeem` scan proves that
+they are no longer ready or no longer active. A failed or undecodable per-request `canWithdraw`
+sub-call remains unknown and preserves only that request's pending key; known-ready requests from the
+same scan still proceed through filtering and batching. Every successful scan, including an empty one,
+reconciles its known results before filtering, while a whole-scan error preserves every pending key for
+that adapter. `not_broadcast`, `rejected`, and `reverted` are definite outcomes and are not suppressed,
+so a later authoritative scan may make them eligible again. The map is owned only by the single
+`Solver.Run` goroutine and needs no mutex; adapter-qualified keys prevent one adapter's scan from
+clearing another's suppression.
 
 > The **offerSigner** (EIP-712 offer signing, off-chain, gasless) and the **tx-sending
 > EOA** are distinct roles behind the same `Signer` interface, possibly the same key.
@@ -192,8 +195,10 @@ solvers:
 ```
 
 `intervals.offerTTL` defaults to twice `discover` and must be at least `discover`, so the default
-schedule always keeps a signed offer valid through the next discovery pass. One injected solver clock
-drives the signed expiration, DTO expiration, and live-offer cache snapshots.
+schedule never sets a signed expiration earlier than the next discovery pass. Fractional durations
+remain valid; offer construction rounds the expiration upward when converting to Unix seconds, never
+shortening the configured lifetime. One injected solver clock drives the signed expiration, DTO
+expiration, and live-offer cache snapshots.
 
 The vendored 3F schema represents auction, offer, and chain identities as `int64`, preserving exact
 signature inputs beyond JavaScript's 2^53 boundary. Request-contract domains may carry an optional

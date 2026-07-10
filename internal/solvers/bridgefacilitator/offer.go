@@ -53,7 +53,12 @@ func (s *Solver) buildSignedOffer(
 
 	nonce := new(big.Int).SetUint64(s.nextNonce())
 	now := s.now()
-	expiration := big.NewInt(now.Add(s.cfg.Intervals.OfferTTL).Unix())
+	expiresAt := now.Add(s.cfg.Intervals.OfferTTL)
+	expirationUnix := expiresAt.Unix()
+	if expiresAt.Nanosecond() != 0 {
+		expirationUnix++
+	}
+	expiration := big.NewInt(expirationUnix)
 
 	signedOffer := Offer{
 		Maker:          offer.Maker,

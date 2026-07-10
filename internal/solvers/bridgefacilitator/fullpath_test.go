@@ -60,6 +60,16 @@ func newDecodedMulticallClient(
 	respond multicallResponder,
 ) (*chain.Client, *decodedMulticallRPC) {
 	t.Helper()
+	return newDecodedMulticallClientWithResultCountValidation(t, multicallAddr, respond, true)
+}
+
+func newDecodedMulticallClientWithResultCountValidation(
+	t *testing.T,
+	multicallAddr common.Address,
+	respond multicallResponder,
+	validateResultCount bool,
+) (*chain.Client, *decodedMulticallRPC) {
+	t.Helper()
 
 	multicallABI, err := multicallbinding.Multicall3MetaData.ParseABI()
 	if err != nil {
@@ -81,7 +91,9 @@ func newDecodedMulticallClient(
 		case "eth_chainId":
 			writeJSONRPCResult(w, request.ID, "0xaa36a7")
 		case "eth_call":
-			result, callErr := decodeAndAnswerMulticall(request.Params, multicallAddr, multicallABI, respond)
+			result, callErr := decodeAndAnswerMulticall(
+				request.Params, multicallAddr, multicallABI, respond, validateResultCount,
+			)
 			if callErr != nil {
 				rpcServer.fail(w, request.ID, callErr)
 				return
@@ -109,6 +121,7 @@ func decodeAndAnswerMulticall(
 	multicallAddr common.Address,
 	multicallABI *abi.ABI,
 	respond multicallResponder,
+	validateResultCount bool,
 ) ([]byte, error) {
 	if len(params) == 0 {
 		return nil, errors.New("eth_call omitted call object")
@@ -141,7 +154,7 @@ func decodeAndAnswerMulticall(
 	if err != nil {
 		return nil, err
 	}
-	if len(results) != len(calls) {
+	if validateResultCount && len(results) != len(calls) {
 		return nil, errors.Errorf("Multicall responder returned %d results for %d calls", len(results), len(calls))
 	}
 	encoded, err := method.Outputs.Pack(results)
@@ -640,6 +653,192 @@ func (b *ambiguousTransactionBackend) sentTransactions() []*gethtypes.Transactio
 	return append([]*gethtypes.Transaction(nil), b.sent...)
 }
 
+func TestRedeemScan_CanWithdrawFailurePreservesPendingAndKeepsOtherRequestActionable(t *testing.T) {
+	testRedeemScanUnknownPreservesPendingAndReady(
+		t,
+		multicallbinding.Multicall3Result{Success: false},
+	)
+}
+
+func TestRedeemScan_MalformedCanWithdrawPreservesPendingAndKeepsOtherRequestActionable(t *testing.T) {
+	testRedeemScanUnknownPreservesPendingAndReady(
+		t,
+		multicallbinding.Multicall3Result{Success: true, ReturnData: []byte{0x01}},
+	)
+}
+
+func testRedeemScanUnknownPreservesPendingAndReady(
+	t *testing.T,
+	unreadableResult multicallbinding.Multicall3Result,
+) {
+	t.Helper()
+	adapter := common.HexToAddress("0x00000000000000000000000000000000000000A2")
+	multicallAddr := common.HexToAddress("0x00000000000000000000000000000000000000E2")
+	unreadable := common.HexToAddress("0x0000000000000000000000000000000000000011")
+	readyRequest := common.HexToAddress("0x0000000000000000000000000000000000000012")
+	requests := []common.Address{unreadable, readyRequest}
+
+	state := &redemptionState{}
+	state.set(int64(len(requests)), requests, readyRequest)
+	baseRespond, err := newRedemptionResponder(adapter, state)
+	if err != nil {
+		t.Fatalf("build redemption responder: %v", err)
+	}
+	respond := func(calls []multicallbinding.Multicall3Call3) ([]multicallbinding.Multicall3Result, error) {
+		results, respondErr := baseRespond(calls)
+		if respondErr != nil {
+			return nil, respondErr
+		}
+		for i, call := range calls {
+			if call.Target == unreadable {
+				results[i] = unreadableResult
+			}
+		}
+		return results, nil
+	}
+	chainClient, rpcServer := newDecodedMulticallClient(t, multicallAddr, respond)
+
+	scanReady, unknown, scanErr := newReader(chainClient).readyToRedeem(t.Context(), adapter)
+	if scanErr != nil {
+		t.Fatalf("scan ready requests: %v", scanErr)
+	}
+	assertAddresses(t, scanReady, []common.Address{readyRequest})
+
+	s := &Solver{pendingRedemptions: make(map[redeemKey]struct{})}
+	s.recordPendingRedemptions(adapter, []common.Address{unreadable})
+	actionable, err := s.reconcileReadyRedemptions(adapter, scanReady, unknown, nil)
+	if err != nil {
+		t.Fatalf("reconcile ready requests: %v", err)
+	}
+	assertAddresses(t, actionable, []common.Address{readyRequest})
+	if got := s.filterPendingRedemptions(adapter, []common.Address{unreadable}); len(got) != 0 {
+		t.Fatalf("failed canWithdraw cleared unresolved suppression: %v", got)
+	}
+	rpcServer.assertClean(t)
+}
+
+func TestRedeemScan_RejectsMalformedRequestSlotResults(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func([]multicallbinding.Multicall3Result)
+	}{
+		{
+			name: "successful malformed return",
+			mutate: func(results []multicallbinding.Multicall3Result) {
+				results[0] = multicallbinding.Multicall3Result{Success: true, ReturnData: []byte{0x01}}
+			},
+		},
+		{
+			name: "successful slot after reverted slot",
+			mutate: func(results []multicallbinding.Multicall3Result) {
+				results[0] = multicallbinding.Multicall3Result{Success: false}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := common.HexToAddress("0x00000000000000000000000000000000000000A2")
+			multicallAddr := common.HexToAddress("0x00000000000000000000000000000000000000E2")
+			requests := []common.Address{
+				common.HexToAddress("0x0000000000000000000000000000000000000011"),
+				common.HexToAddress("0x0000000000000000000000000000000000000012"),
+			}
+			state := &redemptionState{}
+			state.set(int64(len(requests)), requests, requests...)
+			baseRespond, err := newRedemptionResponder(adapter, state)
+			if err != nil {
+				t.Fatalf("build redemption responder: %v", err)
+			}
+			call := 0
+			respond := func(calls []multicallbinding.Multicall3Call3) ([]multicallbinding.Multicall3Result, error) {
+				results, respondErr := baseRespond(calls)
+				call++
+				if respondErr == nil && call == 2 {
+					tt.mutate(results)
+				}
+				return results, respondErr
+			}
+			chainClient, rpcServer := newDecodedMulticallClient(t, multicallAddr, respond)
+
+			s := &Solver{pendingRedemptions: make(map[redeemKey]struct{})}
+			s.recordPendingRedemptions(adapter, []common.Address{requests[0]})
+			ready, unknown, scanErr := newReader(chainClient).readyToRedeem(t.Context(), adapter)
+			if scanErr == nil {
+				t.Error("malformed requests enumeration was accepted")
+			}
+			if _, reconcileErr := s.reconcileReadyRedemptions(adapter, ready, unknown, scanErr); reconcileErr == nil {
+				t.Error("malformed scan unexpectedly reconciled")
+			}
+			if got := s.filterPendingRedemptions(adapter, []common.Address{requests[0]}); len(got) != 0 {
+				t.Fatalf("malformed scan cleared pending suppression: %v", got)
+			}
+			rpcServer.assertClean(t)
+		})
+	}
+}
+
+func TestRedeemScan_RejectsCanWithdrawResultCountMismatch(t *testing.T) {
+	testRedeemScanRejectsResultCountMismatch(t, 3)
+}
+
+func TestRedeemScan_RejectsRequestSlotResultCountMismatch(t *testing.T) {
+	testRedeemScanRejectsResultCountMismatch(t, 2)
+}
+
+func testRedeemScanRejectsResultCountMismatch(t *testing.T, malformedCall int) {
+	t.Helper()
+	tests := []struct {
+		name   string
+		mutate func([]multicallbinding.Multicall3Result) []multicallbinding.Multicall3Result
+	}{
+		{
+			name: "too few results",
+			mutate: func(results []multicallbinding.Multicall3Result) []multicallbinding.Multicall3Result {
+				return results[:len(results)-1]
+			},
+		},
+		{
+			name: "too many results",
+			mutate: func(results []multicallbinding.Multicall3Result) []multicallbinding.Multicall3Result {
+				return append(results, results[0])
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := common.HexToAddress("0x00000000000000000000000000000000000000A2")
+			multicallAddr := common.HexToAddress("0x00000000000000000000000000000000000000E2")
+			requests := []common.Address{
+				common.HexToAddress("0x0000000000000000000000000000000000000011"),
+				common.HexToAddress("0x0000000000000000000000000000000000000012"),
+			}
+			state := &redemptionState{}
+			state.set(int64(len(requests)), requests, requests...)
+			baseRespond, err := newRedemptionResponder(adapter, state)
+			if err != nil {
+				t.Fatalf("build redemption responder: %v", err)
+			}
+			call := 0
+			respond := func(calls []multicallbinding.Multicall3Call3) ([]multicallbinding.Multicall3Result, error) {
+				results, respondErr := baseRespond(calls)
+				call++
+				if respondErr != nil || call != malformedCall {
+					return results, respondErr
+				}
+				return tt.mutate(results), nil
+			}
+			chainClient, rpcServer := newDecodedMulticallClientWithResultCountValidation(
+				t, multicallAddr, respond, false,
+			)
+
+			if _, _, scanErr := newReader(chainClient).readyToRedeem(t.Context(), adapter); scanErr == nil {
+				t.Fatal("redemption multicall result count mismatch was accepted")
+			}
+			rpcServer.assertClean(t)
+		})
+	}
+}
+
 func TestRedeemFullBoundary(t *testing.T) {
 	adapter := common.HexToAddress("0x00000000000000000000000000000000000000A2")
 	multicallAddr := common.HexToAddress("0x00000000000000000000000000000000000000E2")
@@ -657,9 +856,12 @@ func TestRedeemFullBoundary(t *testing.T) {
 	}
 	chainClient, rpcServer := newDecodedMulticallClient(t, multicallAddr, respond)
 
-	ready, err := newReader(chainClient).readyToRedeem(t.Context(), adapter)
+	ready, unknown, err := newReader(chainClient).readyToRedeem(t.Context(), adapter)
 	if err != nil {
 		t.Fatalf("read ready prefix: %v", err)
+	}
+	if len(unknown) != 0 {
+		t.Fatalf("read ready prefix returned unknown requests: %v", unknown)
 	}
 	assertAddresses(t, ready, requests)
 

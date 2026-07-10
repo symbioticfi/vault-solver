@@ -92,6 +92,13 @@ func TestParseConfigOfferTTL(t *testing.T) {
 	}
 }
 
+func TestParseConfigOfferIntervalsAllowFractionalSeconds(t *testing.T) {
+	cfg := mustParse(t, oneTarget+"intervals:\n  discover: 500ms\n  offerTTL: 750ms\n")
+	if cfg.Intervals.Discover != 500*time.Millisecond || cfg.Intervals.OfferTTL != 750*time.Millisecond {
+		t.Fatalf("intervals = %+v, want discover 500ms and offer TTL 750ms", cfg.Intervals)
+	}
+}
+
 func TestParseConfig_ZeroAdapterRejected(t *testing.T) {
 	body := `
 apiBaseUrl: https://bf.example

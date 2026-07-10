@@ -23,7 +23,7 @@ func TestPendingRedemptions_SuppressUntilAuthoritativeAbsence(t *testing.T) {
 	}
 
 	// An authoritative scan no longer containing r1 clears only r1.
-	s.reconcilePendingRedemptions(adapter, []common.Address{r2})
+	s.reconcilePendingRedemptions(adapter, []common.Address{r2}, nil)
 	got = s.filterPendingRedemptions(adapter, []common.Address{r1, r2})
 	if len(got) != 1 || got[0] != r1 {
 		t.Fatalf("filtered = %v, want only %s retryable after authoritative absence", got, r1)
@@ -39,7 +39,7 @@ func TestPendingRedemptions_EmptyScanClearsOnlyItsAdapter(t *testing.T) {
 	s.recordPendingRedemptions(adapterA, []common.Address{r1})
 	s.recordPendingRedemptions(adapterB, []common.Address{r2})
 
-	ready, err := s.reconcileReadyRedemptions(adapterA, nil, nil)
+	ready, err := s.reconcileReadyRedemptions(adapterA, nil, nil, nil)
 	if err != nil || len(ready) != 0 {
 		t.Fatalf("empty scan result = %v, %v; want empty success", ready, err)
 	}
@@ -58,7 +58,7 @@ func TestPendingRedemptions_ReadErrorPreservesSuppression(t *testing.T) {
 	s.recordPendingRedemptions(adapter, []common.Address{request})
 	wantErr := errors.New("scan failed")
 
-	ready, err := s.reconcileReadyRedemptions(adapter, nil, wantErr)
+	ready, err := s.reconcileReadyRedemptions(adapter, nil, nil, wantErr)
 	if !errors.Is(err, wantErr) || ready != nil {
 		t.Fatalf("read error result = %v, %v; want nil, %v", ready, err, wantErr)
 	}

@@ -12,8 +12,8 @@ import (
 // redeemReady finds the target's redeemable Requests (batched canWithdraw via multicall) and finalizes
 // them in a single bounded adapter.multicall(finalizeRequest...) through the shared txmanager.
 func (s *Solver) redeemReady(ctx context.Context, target Target) {
-	ready, scanErr := s.reader.readyToRedeem(ctx, target.Adapter)
-	ready, err := s.reconcileReadyRedemptions(target.Adapter, ready, scanErr)
+	ready, unknown, scanErr := s.reader.readyToRedeem(ctx, target.Adapter)
+	ready, err := s.reconcileReadyRedemptions(target.Adapter, ready, unknown, scanErr)
 	if err != nil {
 		s.log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
 		return
@@ -51,9 +51,12 @@ func (s *Solver) recordPendingRedemptions(adapter common.Address, requests []com
 	}
 }
 
-func (s *Solver) reconcilePendingRedemptions(adapter common.Address, ready []common.Address) {
-	present := make(map[common.Address]struct{}, len(ready))
+func (s *Solver) reconcilePendingRedemptions(adapter common.Address, ready, unknown []common.Address) {
+	present := make(map[common.Address]struct{}, len(ready)+len(unknown))
 	for _, request := range ready {
+		present[request] = struct{}{}
+	}
+	for _, request := range unknown {
 		present[request] = struct{}{}
 	}
 	for key := range s.pendingRedemptions {
@@ -75,17 +78,18 @@ func (s *Solver) filterPendingRedemptions(adapter common.Address, ready []common
 	return out
 }
 
-// reconcileReadyRedemptions applies an authoritative ready-set only after its scan succeeds. An
-// error leaves unresolved suppression untouched; a successful empty scan clears this adapter's set.
+// reconcileReadyRedemptions applies a successful scan's authoritative readiness results while
+// preserving unresolved suppression for requests whose individual canWithdraw read was unknown. A
+// whole-scan error leaves suppression untouched; a successful empty scan clears this adapter's set.
 func (s *Solver) reconcileReadyRedemptions(
 	adapter common.Address,
-	ready []common.Address,
+	ready, unknown []common.Address,
 	scanErr error,
 ) ([]common.Address, error) {
 	if scanErr != nil {
 		return nil, scanErr
 	}
-	s.reconcilePendingRedemptions(adapter, ready)
+	s.reconcilePendingRedemptions(adapter, ready, unknown)
 	return s.filterPendingRedemptions(adapter, ready), nil
 }
 

@@ -56,7 +56,9 @@ It holds no API key: each adapter is registered with 3F by its vault creator, wh
 signer as the adapter's EIP-1271 signer, so offers are authorized by signature alone. Design, config,
 and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md) · example
 [`config/3f.example.yaml`](config/3f.example.yaml). Signed offers default to a lifetime of twice the
-discovery interval and cannot be configured to expire before the next discovery pass.
+discovery interval and cannot be configured to expire before the next discovery pass. Signed
+expirations are rounded upward to the next Unix second when needed, so fractional clocks or configured
+durations never shorten the requested offer lifetime.
 
 ### RFQ Filler — `rfq-filler`
 

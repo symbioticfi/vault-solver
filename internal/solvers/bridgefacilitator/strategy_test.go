@@ -217,6 +217,56 @@ func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
 	}
 }
 
+func TestBuildSignedOfferRoundsExpirationUpToUnixSecond(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := int64(11_155_111)
+	auction := testAuctionDto(
+		10,
+		common.HexToAddress("0x0000000000000000000000000000000000000003"),
+		"700",
+	)
+	auction.SetEip712Domain(*threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&domainName),
+		*threef.NewNullableString(&domainVersion),
+		*threef.NewNullableInt64(&chainID),
+	))
+	offer := types.OfferExecution{
+		AuctionID:      10,
+		Request:        common.HexToAddress(auction.RequestId),
+		Maker:          common.HexToAddress("0x0000000000000000000000000000000000000001"),
+		Principal:      big.NewInt(700),
+		ExpectedReturn: big.NewInt(14),
+	}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		ttl  time.Duration
+		want string
+	}{
+		{name: "exact second stays exact", now: time.Unix(100, 0), ttl: time.Second, want: "101"},
+		{name: "fractional clock rounds up", now: time.Unix(100, 999*time.Millisecond.Nanoseconds()), ttl: time.Second, want: "102"},
+		{name: "fractional TTL rounds up", now: time.Unix(100, 0), ttl: 1500 * time.Millisecond, want: "102"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Solver{
+				cfg:  &Config{Intervals: Intervals{OfferTTL: tt.ttl}},
+				deps: solver.Deps{Signer: &digestCapturingSigner{}},
+				now:  func() time.Time { return tt.now },
+			}
+			dto, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+			if err != nil {
+				t.Fatalf("buildSignedOffer: %v", err)
+			}
+			if dto.Expiration != tt.want {
+				t.Fatalf("expiration = %s, want %s", dto.Expiration, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildSignedOfferSaltValidation(t *testing.T) {
 	domainName := "request-10"
 	domainVersion := "1"
