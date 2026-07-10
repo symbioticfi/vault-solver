@@ -405,15 +405,6 @@ func irmMarket(state morpho.MarketState) irmbinding.Struct1 {
 	}
 }
 
-func sortedMarketIDs(params map[common.Hash]MarketParams) []common.Hash {
-	ids := make([]common.Hash, 0, len(params))
-	for id := range params {
-		ids = append(ids, id)
-	}
-	slices.SortFunc(ids, common.Hash.Cmp)
-	return ids
-}
-
 func sortedMarketIDsFromInfo(markets map[common.Hash]MarketInfo) []common.Hash {
 	ids := make([]common.Hash, 0, len(markets))
 	for id := range markets {
