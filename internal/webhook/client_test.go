@@ -23,8 +23,7 @@ func testYAMLNode(t *testing.T, raw string) yaml.Node {
 	return *node.Content[0]
 }
 
-func TestParseConfigAndResolveHeaders(t *testing.T) {
-	t.Setenv("STRATEGY_AUTH_HEADER", "Bearer test")
+func TestParseConfigKeepsHeaderEnvIndirect(t *testing.T) {
 	cfg, err := ParseConfig(testYAMLNode(t, `
 url: https://strategy.example
 timeout: 250ms
@@ -45,7 +44,7 @@ headers:
 	if cfg.MaxRequestBytes != 2048 || cfg.MaxResponseBytes != 4096 {
 		t.Fatalf("unexpected limits: request=%d response=%d", cfg.MaxRequestBytes, cfg.MaxResponseBytes)
 	}
-	if cfg.Headers["x-client"] != "vault-solver" || cfg.Headers["authorization"] != "Bearer test" {
+	if cfg.Headers["x-client"].Value != "vault-solver" || cfg.Headers["authorization"].Env != "STRATEGY_AUTH_HEADER" {
 		t.Fatalf("unexpected headers: %+v", cfg.Headers)
 	}
 }
@@ -80,16 +79,9 @@ headers:
     value: vault-solver
     env: STRATEGY_AUTH_HEADER
 `,
-		"empty env": `
-url: https://strategy.example
-headers:
-  authorization:
-    env: STRATEGY_AUTH_HEADER
-`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("STRATEGY_AUTH_HEADER", "")
 			if _, err := ParseConfig(testYAMLNode(t, raw)); err == nil {
 				t.Fatal("expected ParseConfig to reject header config")
 			}
@@ -112,6 +104,7 @@ func TestParseConfigRejectsInvalidByteLimits(t *testing.T) {
 }
 
 func TestNewClientConfig(t *testing.T) {
+	t.Setenv("STRATEGY_AUTH_HEADER", "Bearer test")
 	_, err := NewClient(Config{URL: "http://strategy.example"})
 	if err == nil {
 		t.Fatal("expected non-loopback http url to be rejected")
@@ -122,9 +115,9 @@ func TestNewClientConfig(t *testing.T) {
 		Timeout:          250 * time.Millisecond,
 		MaxRequestBytes:  2048,
 		MaxResponseBytes: 4096,
-		Headers: map[string]string{
-			"x-client":      "vault-solver",
-			"authorization": "Bearer test",
+		Headers: map[string]HeaderValue{
+			"x-client":      {Value: "vault-solver"},
+			"authorization": {Env: "STRATEGY_AUTH_HEADER"},
 		},
 	})
 	if err != nil {
@@ -136,6 +129,19 @@ func TestNewClientConfig(t *testing.T) {
 	}
 	if client.headers["x-client"] != "vault-solver" || client.headers["authorization"] != "Bearer test" {
 		t.Fatalf("unexpected headers: %+v", client.headers)
+	}
+}
+
+func TestNewClientRejectsEmptyHeaderEnv(t *testing.T) {
+	t.Setenv("STRATEGY_AUTH_HEADER", "")
+	_, err := NewClient(Config{
+		URL: "https://strategy.example",
+		Headers: map[string]HeaderValue{
+			"authorization": {Env: "STRATEGY_AUTH_HEADER"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "env \"STRATEGY_AUTH_HEADER\" is empty") {
+		t.Fatalf("NewClient error = %v, want empty env", err)
 	}
 }
 
@@ -194,8 +200,8 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 	client, err := NewClient(Config{
 		URL:     srv.URL + "/strategy",
 		Timeout: time.Second,
-		Headers: map[string]string{
-			"x-client": "vault-solver",
+		Headers: map[string]HeaderValue{
+			"x-client": {Value: "vault-solver"},
 		},
 	})
 	if err != nil {

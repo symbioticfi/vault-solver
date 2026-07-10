@@ -9,22 +9,47 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 type decisionStateReader struct {
 	Reader
 
-	rate       *big.Int
-	balance    *big.Int
-	balanceErr error
+	rate             *big.Int
+	balance          *big.Int
+	balanceErr       error
+	readLoanDecimals *int
 }
 
-func (r decisionStateReader) ReadLoanEthRate(context.Context, common.Address, *loanEthFeed, time.Time) *big.Int {
+func (r decisionStateReader) ReadLoanEthRate(_ context.Context, loanDecimals int, _ *loanEthFeed, _ time.Time) *big.Int {
+	if r.readLoanDecimals != nil {
+		*r.readLoanDecimals = loanDecimals
+	}
 	return cloneBig(r.rate)
 }
 
 func (r decisionStateReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
 	return cloneBig(r.balance), r.balanceErr
+}
+
+func TestRefreshStateUsesSolverAdapterSnapshot(t *testing.T) {
+	gotDecimals := -1
+	s := &Strategy{
+		loadAdapter: func() (types.AdapterSnapshot, bool) {
+			return types.AdapterSnapshot{LoanDecimals: 6}, true
+		},
+		reader: decisionStateReader{
+			rate:             big.NewInt(10),
+			balance:          big.NewInt(20),
+			readLoanDecimals: &gotDecimals,
+		},
+		log: logr.Discard(),
+	}
+	s.refreshState(t.Context())
+	if gotDecimals != 6 {
+		t.Fatalf("loan decimals = %d, want solver adapter snapshot value 6", gotDecimals)
+	}
 }
 
 func TestRefreshStatePreservesLastGoodValuesWithoutExtendingFreshness(t *testing.T) {

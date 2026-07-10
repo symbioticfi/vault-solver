@@ -40,6 +40,8 @@ type Solver struct {
 	log          logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
+	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.
+	stateRefreshCh chan struct{}
 
 	// resMu guards sent-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
 	// below the on-chain nonce (submitted -> settled or reverted; the fresh read reflects it) or it aged past

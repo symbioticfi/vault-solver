@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
@@ -81,7 +82,6 @@ const (
 	defaultOpsPoll             = 10 * time.Second
 	defaultExecutorStateMaxAge = 30 * time.Second
 	defaultStrategyName        = "default"
-	webhookStrategyName        = "webhook"
 )
 
 // parseConfig decodes and validates the opaque redstone-oev solver config block.
@@ -154,8 +154,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
 	}
-	if cfg.Strategy.Name == webhookStrategyName && cfg.MaxBidWei == nil {
-		return nil, errors.New("maxBidWei is required for webhook strategy")
+	if strategies.RequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
+		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil
 }

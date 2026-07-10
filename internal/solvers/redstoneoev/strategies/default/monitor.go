@@ -27,13 +27,12 @@ type snapshot struct {
 	updatedAt time.Time // wall clock of the last successful refresh store; zero until one succeeds
 }
 
-// apiMonitor owns the API-backed Morpho snapshot. The run loop is the only snapshot writer.
+// apiMonitor owns the API-backed Morpho snapshot. Its run loop is the only writer.
 type apiMonitor struct {
-	reader Reader
-	log    logr.Logger
+	log logr.Logger
 
 	maxPositions int
-	adapter      common.Address
+	loadAdapter  func() (types.AdapterSnapshot, bool)
 
 	maxHF   float64
 	chainID int64
@@ -44,16 +43,20 @@ type apiMonitor struct {
 	snap atomic.Pointer[snapshot]
 }
 
-func newAPIMonitor(r Reader, log logr.Logger, cfg Config, chainID int64) *apiMonitor {
+func newAPIMonitor(
+	log logr.Logger,
+	cfg Config,
+	chainID int64,
+	loadAdapter func() (types.AdapterSnapshot, bool),
+) *apiMonitor {
 	m := &apiMonitor{
-		reader:       r,
 		log:          log.WithName("monitor"),
 		maxPositions: cfg.MaxTrackedPositions,
-		adapter:      cfg.Adapter,
+		loadAdapter:  loadAdapter,
 		maxHF:        cfg.DiscoveryMaxHealthFactor,
 		chainID:      chainID,
-		monitorPoll:  cfg.MonitorPoll,
 		api:          newMorphoClient(cfg.MorphoAPIURL),
+		monitorPoll:  cfg.MonitorPoll,
 	}
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
@@ -73,7 +76,6 @@ func (m *apiMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, ada
 	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
 }
 
-// run drives API snapshot refreshes until ctx is cancelled.
 func (m *apiMonitor) run(ctx context.Context) {
 	tick := time.NewTicker(m.monitorPoll)
 	defer tick.Stop()
@@ -88,18 +90,23 @@ func (m *apiMonitor) run(ctx context.Context) {
 }
 
 func (m *apiMonitor) refresh(ctx context.Context) {
-	adapter, err := m.reader.ReadAdapterSnapshot(ctx, m.adapter)
-	if err != nil {
-		m.log.Error(err, "API refresh skipped: adapter state unreadable")
+	adapter, ok := m.loadAdapter()
+	if !ok {
+		m.log.V(1).Info("API refresh skipped: adapter snapshot unavailable")
+		return
+	}
+	loan, redeemable, ok := adapterMarketScope(adapter)
+	if !ok {
+		m.log.V(1).Info("API refresh skipped: adapter snapshot incomplete")
 		return
 	}
 
-	apiMarkets, err := m.api.DiscoverMarketData(ctx, m.chainID, []common.Address{adapter.Loan}, adapter.Redeemable)
+	apiMarkets, err := m.api.DiscoverMarketData(ctx, m.chainID, []common.Address{loan}, redeemable)
 	if err != nil {
 		m.log.Error(err, "morpho API market refresh failed; keeping cache")
 		return
 	}
-	apiSnap := m.apiMarketSnapshot(apiMarkets, adapter.Loan, adapter.Redeemable)
+	apiSnap := m.apiMarketSnapshot(apiMarkets, loan, redeemable)
 	if len(apiSnap.markets) == 0 {
 		m.log.V(1).Info("morpho API market refresh returned no usable adapter markets")
 		return
@@ -120,6 +127,22 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 		markets: apiSnap.markets, prices: apiSnap.prices, positions: positions,
 		block: apiSnap.block, blockTime: apiSnap.blockTime, updatedAt: time.Now(),
 	})
+}
+
+func adapterMarketScope(adapter types.AdapterSnapshot) (common.Address, []common.Address, bool) {
+	if adapter.Loan == (common.Address{}) || len(adapter.Redeemable) == 0 {
+		return common.Address{}, nil, false
+	}
+	redeemable := make([]common.Address, 0, len(adapter.Redeemable))
+	for _, asset := range adapter.Redeemable {
+		if asset.Asset != (common.Address{}) {
+			redeemable = append(redeemable, asset.Asset)
+		}
+	}
+	if len(redeemable) == 0 {
+		return common.Address{}, nil, false
+	}
+	return adapter.Loan, redeemable, true
 }
 
 type apiMarketSnapshot struct {

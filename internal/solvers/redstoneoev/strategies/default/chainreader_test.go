@@ -1,7 +1,6 @@
 package defaultstrategy
 
 import (
-	"context"
 	"math/big"
 	"strings"
 	"testing"
@@ -9,9 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/aggregator"
-	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 func mustParseABI(j string) abi.ABI {
@@ -23,7 +20,6 @@ func mustParseABI(j string) abi.ABI {
 }
 
 var (
-	adapterABI  = mustParseABI(adapter.LiquidLaneAdapterMetaData.ABI)
 	feedTestABI = mustParseABI(aggregator.AggregatorV3MetaData.ABI)
 )
 
@@ -99,68 +95,6 @@ func TestAggregatorFeedDecoders(t *testing.T) {
 	}
 	if _, err := decodeFeedDecimals([]byte{0x01, 0x02}); err == nil {
 		t.Fatal("garbled decimals must fail")
-	}
-}
-
-func TestDecodeRedeemTokens(t *testing.T) {
-	tA := common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78")
-	tB := common.HexToAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
-	okRes := func(addr common.Address) chain.CallResult {
-		return chain.CallResult{Success: true, ReturnData: packOut(t, adapterABI, "tokensToRedeem", addr)}
-	}
-
-	t.Run("all decode", func(t *testing.T) {
-		toks, ok := decodeRedeemTokens([]chain.CallResult{okRes(tA), okRes(tB)}, 2)
-		if !ok || len(toks) != 2 || toks[0] != tA || toks[1] != tB {
-			t.Fatalf("ok=%v toks=%+v", ok, toks)
-		}
-	})
-	t.Run("a reverted entry fails closed", func(t *testing.T) {
-		if _, ok := decodeRedeemTokens([]chain.CallResult{okRes(tA), {Success: false}}, 2); ok {
-			t.Fatal("a reverted sub-call must fail the whole read")
-		}
-	})
-	t.Run("a zero address fails closed", func(t *testing.T) {
-		if _, ok := decodeRedeemTokens([]chain.CallResult{okRes(common.Address{})}, 1); ok {
-			t.Fatal("a zero-address token must fail the read")
-		}
-	})
-	t.Run("length mismatch fails closed", func(t *testing.T) {
-		if _, ok := decodeRedeemTokens([]chain.CallResult{okRes(tA)}, 2); ok {
-			t.Fatal("a short result vector must fail the read")
-		}
-	})
-}
-
-func TestReadRedeemableCollateralsCachedReturnsCopy(t *testing.T) {
-	adapter := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	coll := common.HexToAddress("0x00000000000000000000000000000000000000bb")
-	changed := common.HexToAddress("0x00000000000000000000000000000000000000cc")
-	r := &chainReader{redeemColl: map[common.Address][]common.Address{adapter: {coll}}}
-
-	got, err := r.readRedeemableCollaterals(context.Background(), adapter)
-	if err != nil || len(got) != 1 || got[0] != coll {
-		t.Fatalf("cached redeemable collaterals = (%v, %v), want [%s]", got, err, coll.Hex())
-	}
-	got[0] = changed
-	again, err := r.readRedeemableCollaterals(context.Background(), adapter)
-	if err != nil || len(again) != 1 || again[0] != coll {
-		t.Fatalf("cached collateral slice was mutated: got (%v, %v), want [%s]", again, err, coll.Hex())
-	}
-}
-
-func TestDecodeRedeemCount(t *testing.T) {
-	lenRes := func(n int64) chain.CallResult {
-		return chain.CallResult{Success: true, ReturnData: packOut(t, adapterABI, "getTokensToRedeemLength", big.NewInt(n))}
-	}
-	if got, ok := decodeRedeemCount([]chain.CallResult{lenRes(3)}); !ok || got != 3 {
-		t.Fatalf("valid length: got=%d ok=%v", got, ok)
-	}
-	if _, ok := decodeRedeemCount([]chain.CallResult{{Success: false}}); ok {
-		t.Fatal("a reverted length read must fail closed")
-	}
-	if _, ok := decodeRedeemCount(nil); ok {
-		t.Fatal("an empty result vector must fail closed")
 	}
 }
 

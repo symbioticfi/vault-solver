@@ -10,6 +10,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 type liquidLaneState = liquidlanegas.State
@@ -67,7 +68,6 @@ type Config struct {
 	MinBundleProfitBidBps    int
 	TotalBundleProfitBps     int
 	Sizing                   SizingParams
-	Adapter                  common.Address
 	LoanEthFeed              *loanEthFeed
 	CallbackAuthTTL          time.Duration
 	MonitorPoll              time.Duration
@@ -75,12 +75,14 @@ type Config struct {
 }
 
 type Deps struct {
-	Reader      Reader
-	Signer      signer
-	Log         logr.Logger
-	ChainID     int64
-	Callback    common.Address
-	TestMonitor bool
+	Reader              Reader
+	Signer              signer
+	Log                 logr.Logger
+	ChainID             int64
+	Adapter             common.Address
+	Callback            common.Address
+	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
+	TestMonitor         bool
 }
 
 type signer interface {
@@ -88,14 +90,8 @@ type signer interface {
 	SignHash(common.Hash) ([]byte, error)
 }
 
-type adapterSnapshot struct {
-	Loan       common.Address
-	Redeemable []common.Address
-}
-
 type Reader interface {
-	ReadAdapterSnapshot(ctx context.Context, adapter common.Address) (adapterSnapshot, error)
-	ReadLoanEthRate(ctx context.Context, adapter common.Address, feed *loanEthFeed, now time.Time) *big.Int
+	ReadLoanEthRate(ctx context.Context, loanDecimals int, feed *loanEthFeed, now time.Time) *big.Int
 	ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error)
 	ResolveParams(ctx context.Context, morphoAddr common.Address, ids []common.Hash) (map[common.Hash]MarketParams, error)
 	ReadHead(ctx context.Context) (number uint64, timestamp uint64, err error)

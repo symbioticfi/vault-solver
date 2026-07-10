@@ -35,6 +35,15 @@ maxResponseBytes: 4096
 	}
 }
 
+func TestStrategyBidCapPolicyComesFromRegistry(t *testing.T) {
+	if strategies.RequiresBidCap("default") {
+		t.Fatal("default strategy must keep maxBidWei optional")
+	}
+	if !strategies.RequiresBidCap("webhook") {
+		t.Fatal("webhook strategy must require maxBidWei")
+	}
+}
+
 func TestCheckExecutionEnvelopeRejectsSkipWithBidData(t *testing.T) {
 	err := checkExecutionEnvelope(types.BidOutput{
 		Decision:  types.DecisionSkip,

@@ -105,11 +105,10 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 	}
 	strategyCfg := defaultstrategy.ConfigForTest(defaultstrategy.Config{
 		BidWei:      seedBidWei,
-		Adapter:     seedAdapter,
 		MaxStateAge: defaultExecutorStateMaxAge,
 		Sizing:      defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
 	})
-	s.strategy = defaultstrategy.NewWithSnapshotForTest(strategyCfg, seedCallback, seed, logr.Discard(), sgnr)
+	s.strategy = defaultstrategy.NewWithSnapshotForTest(strategyCfg, seedAdapter, seedCallback, seed, logr.Discard(), sgnr)
 	seedDefaultDecisionState(t, s, mustBig("2500000000"))
 	// Healthy accounting: deposit clears MIN_DEPOSIT.
 	s.state.store(cachedState{
@@ -623,6 +622,21 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	}`))
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-other" {
 		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", inFlight.pending)
+	}
+}
+
+func TestLiquidationResultRequestsStateRefresh(t *testing.T) {
+	s, _ := seededSolver(t)
+	s.stateRefreshCh = make(chan struct{}, 1)
+	s.handleMessage(t.Context(), []byte(`{
+		"op":"liquidation-result",
+		"id":"auction-ours",
+		"data":{"success":true,"txHash":"","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`","error":""}
+	}`))
+	select {
+	case <-s.stateRefreshCh:
+	default:
+		t.Fatal("liquidation result did not request solver state refresh")
 	}
 }
 

@@ -220,7 +220,6 @@ func ConfigForTest(overrides Config) Config {
 	if overrides.Sizing != (SizingParams{}) {
 		cfg.Sizing = overrides.Sizing
 	}
-	cfg.Adapter = overrides.Adapter
 	if overrides.CallbackAuthTTL != 0 {
 		cfg.CallbackAuthTTL = overrides.CallbackAuthTTL
 	}

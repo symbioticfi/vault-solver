@@ -32,18 +32,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	log := deps.Log.WithName(Name)
-	strategy, err := newStrategy(cfg, strategies.Deps{
-		Chain:    deps.Chain,
-		Signer:   deps.Signer,
-		Log:      log,
-		ChainID:  chainID.Int64(),
-		Adapter:  cfg.Adapter,
-		Callback: cfg.Callback,
-	})
-	if err != nil {
-		return nil, errors.Errorf("%s: %w", Name, err)
-	}
-
 	var mx *metrics
 	if deps.Metrics != nil {
 		if mx, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name); err != nil {
@@ -52,19 +40,32 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	s := &Solver{
-		cfg:          cfg,
-		deps:         deps,
-		chainID:      chainID,
-		dryRun:       dryRun,
-		strategyName: cfg.Strategy.Name,
-		reader:       newReader(deps.Chain, log),
-		strategy:     strategy,
-		nonces:       &nonceStore{},
-		breaker:      newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
-		metrics:      mx,
-		seen:         newSeenAuctions(maxSeenAuctions),
-		log:          log,
+		cfg:            cfg,
+		deps:           deps,
+		chainID:        chainID,
+		dryRun:         dryRun,
+		strategyName:   cfg.Strategy.Name,
+		reader:         newReader(deps.Chain, log),
+		nonces:         &nonceStore{},
+		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
+		metrics:        mx,
+		seen:           newSeenAuctions(maxSeenAuctions),
+		stateRefreshCh: make(chan struct{}, 1),
+		log:            log,
 	}
+	strategy, err := newStrategy(cfg, strategies.Deps{
+		Chain:               deps.Chain,
+		Signer:              deps.Signer,
+		Log:                 log,
+		ChainID:             chainID.Int64(),
+		Adapter:             cfg.Adapter,
+		Callback:            cfg.Callback,
+		LoadAdapterSnapshot: s.adapterSnapshot,
+	})
+	if err != nil {
+		return nil, errors.Errorf("%s: %w", Name, err)
+	}
+	s.strategy = strategy
 	s.ws = newWSClient(wsConfig{URL: cfg.WSURL, APIKey: apiKey, Topics: wsTopics(cfg.Callback)}, log, s.handleMessage)
 	return s, nil
 }

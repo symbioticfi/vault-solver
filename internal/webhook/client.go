@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,13 +23,13 @@ const (
 	defaultWebhookMaxBodyBytes = 1 << 20
 )
 
-// Config is runtime HTTP transport config for JSON webhook clients.
+// Config describes HTTP transport for JSON webhook clients without resolving env-backed secrets.
 type Config struct {
 	URL              string
 	Timeout          time.Duration
 	MaxRequestBytes  int64
 	MaxResponseBytes int64
-	Headers          map[string]string
+	Headers          map[string]HeaderValue
 }
 
 type rawConfig struct {
@@ -38,10 +37,11 @@ type rawConfig struct {
 	Timeout          string                 `yaml:"timeout"`
 	MaxRequestBytes  int64                  `yaml:"maxRequestBytes"`
 	MaxResponseBytes int64                  `yaml:"maxResponseBytes"`
-	Headers          map[string]headerValue `yaml:"headers"`
+	Headers          map[string]HeaderValue `yaml:"headers"`
 }
 
-type headerValue struct {
+// HeaderValue is either a non-secret literal or an environment variable name resolved by NewClient.
+type HeaderValue struct {
 	Value string `yaml:"value"`
 	Env   string `yaml:"env"`
 }
@@ -56,16 +56,12 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	headers, err := parseHeaders(raw.Headers)
-	if err != nil {
-		return Config{}, err
-	}
 	return normalizeConfig(Config{
 		URL:              raw.URL,
 		Timeout:          timeout,
 		MaxRequestBytes:  raw.MaxRequestBytes,
 		MaxResponseBytes: raw.MaxResponseBytes,
-		Headers:          headers,
+		Headers:          raw.Headers,
 	})
 }
 
@@ -104,17 +100,23 @@ func parseSize(n int64, field string) (int64, error) {
 	return n, nil
 }
 
-func parseHeaders(raw map[string]headerValue) (map[string]string, error) {
-	out := make(map[string]string, len(raw))
+func validateHeaders(raw map[string]HeaderValue) error {
 	for name, h := range raw {
 		switch {
 		case name == "":
-			return nil, errors.New("headers: empty header name")
+			return errors.New("headers: empty header name")
 		case h.Value != "" && h.Env != "":
-			return nil, errors.Errorf("headers.%s: set value or env, not both", name)
+			return errors.Errorf("headers.%s: set value or env, not both", name)
 		case h.Value == "" && h.Env == "":
-			return nil, errors.Errorf("headers.%s: value or env is required", name)
+			return errors.Errorf("headers.%s: value or env is required", name)
 		}
+	}
+	return nil
+}
+
+func resolveHeaders(raw map[string]HeaderValue) (map[string]string, error) {
+	out := make(map[string]string, len(raw))
+	for name, h := range raw {
 		value := h.Value
 		if h.Env != "" {
 			value = os.Getenv(h.Env)
@@ -140,6 +142,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	if err := validateURL(cfg.URL); err != nil {
 		return Config{}, err
 	}
+	if err := validateHeaders(cfg.Headers); err != nil {
+		return Config{}, err
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultWebhookTimeout
 	}
@@ -158,7 +163,7 @@ func normalizeConfig(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
-// NewClient validates config, copies headers, and builds a client.
+// NewClient validates config, resolves env-backed headers, and builds a client.
 func NewClient(cfg Config) (*Client, error) {
 	cfg, err := normalizeConfig(cfg)
 	if err != nil {
@@ -168,8 +173,10 @@ func NewClient(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, errors.Errorf("url: %w", err)
 	}
-	headers := make(map[string]string, len(cfg.Headers))
-	maps.Copy(headers, cfg.Headers)
+	headers, err := resolveHeaders(cfg.Headers)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		baseURL: baseURL,
 		client: &http.Client{

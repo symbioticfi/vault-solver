@@ -4,15 +4,12 @@ import (
 	"context"
 	"math/big"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/aggregator"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
 	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
@@ -22,31 +19,21 @@ import (
 )
 
 var (
-	callbackABI   = callback.NewSymbioticOevSolver()
-	feedABI       = aggregator.NewAggregatorV3()
-	erc4626ABI    = erc4626.NewIERC4626()
-	liquidLaneABI = adapter.NewLiquidLaneAdapter()
-	morphoABI     = morphobinding.NewMorpho()
-	oracleABI     = oracle.NewMorphoOracle()
+	callbackABI = callback.NewSymbioticOevSolver()
+	feedABI     = aggregator.NewAggregatorV3()
+	morphoABI   = morphobinding.NewMorpho()
+	oracleABI   = oracle.NewMorphoOracle()
 )
 
 type chainReader struct {
-	chain    *chain.Client
-	log      logr.Logger
-	decimals *chain.Decimals
-
-	mu          sync.Mutex
-	adapterLoan map[common.Address]common.Address
-	redeemColl  map[common.Address][]common.Address
+	chain *chain.Client
+	log   logr.Logger
 }
 
-func NewChainReader(c *chain.Client, log logr.Logger) Reader {
+func newChainReader(c *chain.Client, log logr.Logger) *chainReader {
 	return &chainReader{
-		chain:       c,
-		log:         log,
-		decimals:    chain.NewDecimals(c),
-		adapterLoan: map[common.Address]common.Address{},
-		redeemColl:  map[common.Address][]common.Address{},
+		chain: c,
+		log:   log,
 	}
 }
 
@@ -80,30 +67,8 @@ func decodeFeedDecimals(data []byte) (uint8, error) {
 	return d, nil
 }
 
-func (r *chainReader) ReadAdapterSnapshot(ctx context.Context, adapter common.Address) (adapterSnapshot, error) {
-	loan, ok, err := r.adapterLoanToken(ctx, adapter)
-	if err != nil {
-		return adapterSnapshot{}, errors.Errorf("adapter loan token: %w", err)
-	}
-	if !ok || loan == (common.Address{}) {
-		return adapterSnapshot{}, errors.New("adapter loan token unresolved")
-	}
-	redeemable, err := r.readRedeemableCollaterals(ctx, adapter)
-	if err != nil {
-		return adapterSnapshot{}, errors.Errorf("adapter redeemable collateral: %w", err)
-	}
-	if len(redeemable) == 0 {
-		return adapterSnapshot{}, errors.New("adapter redeemable collateral unresolved")
-	}
-	return adapterSnapshot{Loan: loan, Redeemable: redeemable}, nil
-}
-
-func (r *chainReader) ReadLoanEthRate(ctx context.Context, adapter common.Address, feed *loanEthFeed, now time.Time) *big.Int {
+func (r *chainReader) ReadLoanEthRate(ctx context.Context, loanDecimals int, feed *loanEthFeed, now time.Time) *big.Int {
 	if feed == nil {
-		return nil
-	}
-	token, ok, err := r.adapterLoanToken(ctx, adapter)
-	if err != nil || !ok {
 		return nil
 	}
 	res, err := r.chain.Multicall(ctx, []chain.Call{
@@ -135,11 +100,7 @@ func (r *chainReader) ReadLoanEthRate(ctx context.Context, adapter common.Addres
 			"maxAgeSec", maxAge)
 		return nil
 	}
-	loanDec, e := r.decimals.Get(ctx, token)
-	if e != nil {
-		return nil
-	}
-	return composeLoanPerEth(ethAns, loanAns, int(ethDecFeed), int(loanDecFeed), loanDec)
+	return composeLoanPerEth(ethAns, loanAns, int(ethDecFeed), int(loanDecFeed), loanDecimals)
 }
 
 func (r *chainReader) ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error) {
@@ -191,7 +152,20 @@ func (r *chainReader) ReadHead(ctx context.Context) (number uint64, timestamp ui
 }
 
 func (r *chainReader) ReadCallbackMorpho(ctx context.Context, callback common.Address) (common.Address, error) {
-	return r.callAddress(ctx, callback, callbackABI.PackMORPHO(), callbackABI.UnpackMORPHO)
+	res, err := r.chain.Multicall(ctx, []chain.Call{
+		{Target: callback, AllowFailure: true, Data: callbackABI.PackMORPHO()},
+	})
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(res) != 1 || !res[0].Success {
+		return common.Address{}, nil
+	}
+	morphoAddr, err := callbackABI.UnpackMORPHO(res[0].ReturnData)
+	if err != nil {
+		return common.Address{}, errors.Errorf("decode callback MORPHO: %w", err)
+	}
+	return morphoAddr, nil
 }
 
 func (r *chainReader) ReadTestMarketStates(ctx context.Context, morphoAddr common.Address, params map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
@@ -274,91 +248,6 @@ func (r *chainReader) ReadTestPositions(ctx context.Context, morphoAddr common.A
 	return out, nil
 }
 
-func (r *chainReader) adapterLoanToken(ctx context.Context, adapter common.Address) (common.Address, bool, error) {
-	r.mu.Lock()
-	lt, ok := r.adapterLoan[adapter]
-	r.mu.Unlock()
-	if ok {
-		return lt, true, nil
-	}
-	vault, err := r.callAddress(ctx, adapter, liquidLaneABI.PackVault(), liquidLaneABI.UnpackVault)
-	if err != nil {
-		return common.Address{}, false, err
-	}
-	if vault == (common.Address{}) {
-		return common.Address{}, false, nil
-	}
-	asset, err := r.callAddress(ctx, vault, erc4626ABI.PackAsset(), erc4626ABI.UnpackAsset)
-	if err != nil {
-		return common.Address{}, false, err
-	}
-	if asset == (common.Address{}) {
-		return common.Address{}, false, nil
-	}
-	r.mu.Lock()
-	r.adapterLoan[adapter] = asset
-	r.mu.Unlock()
-	return asset, true, nil
-}
-
-func (r *chainReader) callAddress(ctx context.Context, target common.Address, data []byte, unpack func([]byte) (common.Address, error)) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{
-		{Target: target, AllowFailure: true, Data: data},
-	})
-	if err != nil {
-		return common.Address{}, err
-	}
-	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, nil
-	}
-	out, derr := unpack(res[0].ReturnData)
-	if derr != nil {
-		out = common.Address{}
-	}
-	return out, nil
-}
-
-func (r *chainReader) readRedeemableCollaterals(ctx context.Context, adapter common.Address) ([]common.Address, error) {
-	r.mu.Lock()
-	c, ok := r.redeemColl[adapter]
-	r.mu.Unlock()
-	if ok {
-		return slices.Clone(c), nil
-	}
-	lenRes, err := r.chain.Multicall(ctx, []chain.Call{
-		{Target: adapter, AllowFailure: true, Data: liquidLaneABI.PackGetTokensToRedeemLength()},
-	})
-	if err != nil {
-		return nil, err
-	}
-	count, ok := decodeRedeemCount(lenRes)
-	if !ok {
-		return nil, nil
-	}
-	if count == 0 {
-		r.mu.Lock()
-		r.redeemColl[adapter] = nil
-		r.mu.Unlock()
-		return nil, nil
-	}
-	calls := make([]chain.Call, count)
-	for i := range count {
-		calls[i] = chain.Call{Target: adapter, AllowFailure: true, Data: liquidLaneABI.PackTokensToRedeem(big.NewInt(int64(i)))}
-	}
-	res, err := r.chain.Multicall(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
-	toks, ok := decodeRedeemTokens(res, count)
-	if !ok {
-		return nil, nil
-	}
-	r.mu.Lock()
-	r.redeemColl[adapter] = slices.Clone(toks)
-	r.mu.Unlock()
-	return toks, nil
-}
-
 func decodeMarketParams(data []byte) (MarketParams, error) {
 	out, err := morphoABI.UnpackIdToMarketParams(data)
 	if err != nil {
@@ -371,35 +260,6 @@ func decodeMarketParams(data []byte) (MarketParams, error) {
 		LoanToken: out.LoanToken, CollateralToken: out.CollateralToken,
 		Oracle: out.Oracle, Irm: out.Irm, Lltv: out.Lltv,
 	}, nil
-}
-
-func decodeRedeemCount(res []chain.CallResult) (int, bool) {
-	if len(res) != 1 || !res[0].Success {
-		return 0, false
-	}
-	n, err := liquidLaneABI.UnpackGetTokensToRedeemLength(res[0].ReturnData)
-	if err != nil || n == nil || n.Sign() < 0 || !n.IsInt64() {
-		return 0, false
-	}
-	return int(n.Int64()), true
-}
-
-func decodeRedeemTokens(res []chain.CallResult, count int) ([]common.Address, bool) {
-	if len(res) != count {
-		return nil, false
-	}
-	out := make([]common.Address, 0, count)
-	for i := range res {
-		if !res[i].Success {
-			return nil, false
-		}
-		tok, err := liquidLaneABI.UnpackTokensToRedeem(res[i].ReturnData)
-		if err != nil || tok == (common.Address{}) {
-			return nil, false
-		}
-		out = append(out, tok)
-	}
-	return out, true
 }
 
 func decodeTestMarketState(data []byte, params MarketParams) (morpho.MarketState, bool) {

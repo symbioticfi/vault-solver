@@ -74,7 +74,6 @@ func parseDefaultStrategyConfigForTest(t *testing.T, c *Config) defaultstrategy.
 	if err != nil {
 		t.Fatalf("parse default strategy config: %v", err)
 	}
-	cfg.Adapter = c.Adapter
 	return cfg
 }
 
@@ -137,8 +136,8 @@ func TestConfigProfiles(t *testing.T) {
 			check: func(t *testing.T, c *Config) {
 				t.Helper()
 				strategyCfg := parseDefaultStrategyConfigForTest(t, c)
-				if strategyCfg.Adapter != adapterAddr || strategyCfg.LoanEthFeed == nil {
-					t.Fatalf("single-adapter profile wrong: adapter=%s feed=%v", strategyCfg.Adapter, strategyCfg.LoanEthFeed)
+				if c.Adapter != adapterAddr || strategyCfg.LoanEthFeed == nil {
+					t.Fatalf("single-adapter profile wrong: adapter=%s feed=%v", c.Adapter, strategyCfg.LoanEthFeed)
 				}
 			},
 		},

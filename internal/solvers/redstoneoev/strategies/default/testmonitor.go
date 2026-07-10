@@ -27,7 +27,7 @@ type testMonitor struct {
 	reader      Reader
 	log         logr.Logger
 	callback    common.Address
-	adapter     common.Address
+	loadAdapter func() (types.AdapterSnapshot, bool)
 	markets     []common.Hash
 	positions   []common.Address
 	monitorPoll time.Duration
@@ -35,7 +35,13 @@ type testMonitor struct {
 	snap atomic.Pointer[snapshot]
 }
 
-func newTestMonitor(r Reader, log logr.Logger, cfg Config, callback common.Address) (*testMonitor, error) {
+func newTestMonitor(
+	r Reader,
+	log logr.Logger,
+	cfg Config,
+	callback common.Address,
+	loadAdapter func() (types.AdapterSnapshot, bool),
+) (*testMonitor, error) {
 	markets, err := parseHashListEnv(envTestMarkets)
 	if err != nil {
 		return nil, err
@@ -54,7 +60,7 @@ func newTestMonitor(r Reader, log logr.Logger, cfg Config, callback common.Addre
 		reader:      r,
 		log:         log.WithName("testMonitor"),
 		callback:    callback,
-		adapter:     cfg.Adapter,
+		loadAdapter: loadAdapter,
 		markets:     markets,
 		positions:   positions,
 		monitorPoll: cfg.MonitorPoll,
@@ -82,6 +88,16 @@ func (m *testMonitor) run(ctx context.Context) {
 }
 
 func (m *testMonitor) refresh(ctx context.Context) {
+	adapter, ok := m.loadAdapter()
+	if !ok {
+		m.log.V(1).Info("test monitor adapter snapshot unavailable; keeping cache")
+		return
+	}
+	loan, redeemable, ok := adapterMarketScope(adapter)
+	if !ok {
+		m.log.V(1).Info("test monitor adapter snapshot incomplete; keeping cache")
+		return
+	}
 	startBlock, startTime, err := m.reader.ReadHead(ctx)
 	if err != nil {
 		m.log.Error(err, "test monitor header read failed; keeping cache")
@@ -92,17 +108,12 @@ func (m *testMonitor) refresh(ctx context.Context) {
 		m.log.Error(err, "test monitor MORPHO read failed; keeping cache")
 		return
 	}
-	adapter, err := m.reader.ReadAdapterSnapshot(ctx, m.adapter)
-	if err != nil {
-		m.log.Error(err, "test monitor adapter state unreadable; keeping cache")
-		return
-	}
 	params, err := m.reader.ResolveParams(ctx, morphoAddr, m.markets)
 	if err != nil {
 		m.log.Error(err, "test monitor market params read failed; keeping cache")
 		return
 	}
-	served := verifyAdapterPair(params, adapter.Loan, adapter.Redeemable)
+	served := verifyAdapterPair(params, loan, redeemable)
 	want := make(map[common.Hash]MarketParams, len(served))
 	for _, id := range served {
 		want[id] = params[id]

@@ -48,6 +48,21 @@ func TestCandidatePriceSource(t *testing.T) {
 	}
 }
 
+func TestAdapterMarketScopeUsesSolverSnapshot(t *testing.T) {
+	loan := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	collateral := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	gotLoan, gotRedeemable, ok := adapterMarketScope(types.AdapterSnapshot{
+		Loan: loan,
+		Redeemable: []types.RedeemableSnapshot{
+			{Asset: common.Address{}},
+			{Asset: collateral},
+		},
+	})
+	if !ok || gotLoan != loan || len(gotRedeemable) != 1 || gotRedeemable[0] != collateral {
+		t.Fatalf("adapter scope = (%s, %v, %v)", gotLoan, gotRedeemable, ok)
+	}
+}
+
 func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 	id := common.HexToHash("0x01")
 	oracle := common.HexToAddress("0x00000000000000000000000000000000000000aa")

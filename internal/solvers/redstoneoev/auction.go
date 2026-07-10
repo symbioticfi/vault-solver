@@ -91,6 +91,7 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 	if !ours {
 		return
 	}
+	s.requestStateRefresh()
 	s.releaseReservationByAuction(r.ID)
 	if !r.Data.Success {
 		s.breaker.recordFailure(time.Now())

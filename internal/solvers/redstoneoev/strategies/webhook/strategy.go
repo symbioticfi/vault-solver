@@ -21,7 +21,7 @@ const decideBidRoute = "/decide-bid"
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, NewFromConfig)
+	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, RequiresBidCap: true})
 }
 
 func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {

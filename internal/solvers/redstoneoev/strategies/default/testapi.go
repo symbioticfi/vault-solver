@@ -20,11 +20,19 @@ type SnapshotSeed struct {
 	UpdatedAt time.Time
 }
 
-func NewWithSnapshotForTest(cfg Config, callback common.Address, seed SnapshotSeed, log logr.Logger, signer signer) *Strategy {
+func NewWithSnapshotForTest(
+	cfg Config,
+	adapter common.Address,
+	callback common.Address,
+	seed SnapshotSeed,
+	log logr.Logger,
+	signer signer,
+) *Strategy {
 	mon := &apiMonitor{log: log}
 	mon.snap.Store(snapshotFromSeed(seed))
 	return &Strategy{
 		cfg:      cfg,
+		adapter:  adapter,
 		callback: callback,
 		signer:   signer,
 		mon:      mon,

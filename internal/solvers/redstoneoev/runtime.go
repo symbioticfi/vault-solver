@@ -25,8 +25,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
+	s.refreshState(runCtx) // seed executor + adapter state before strategy startup
 	wg.Go(func() { s.strategy.Run(runCtx) })
-	s.refreshState(runCtx) // seed nonce + deposit before any bid
 	wg.Go(func() { s.opsLoop(runCtx) })
 
 	err := s.ws.Run(runCtx)
@@ -35,7 +35,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	return err
 }
 
-// opsLoop periodically refreshes the Executor accounting used for pre-bid checks and nonce reconciliation.
+// opsLoop refreshes solver-owned state on its interval and after our liquidation results.
 func (s *Solver) opsLoop(ctx context.Context) {
 	t := time.NewTicker(s.cfg.OpsPoll)
 	defer t.Stop()
@@ -45,7 +45,16 @@ func (s *Solver) opsLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			s.refreshState(ctx)
+		case <-s.stateRefreshCh:
+			s.refreshState(ctx)
 		}
+	}
+}
+
+func (s *Solver) requestStateRefresh() {
+	select {
+	case s.stateRefreshCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -130,6 +139,11 @@ type cachedState struct {
 
 type stateCache struct {
 	p atomic.Pointer[cachedState]
+}
+
+func (s *Solver) adapterSnapshot() (types.AdapterSnapshot, bool) {
+	state, ok := s.state.load()
+	return state.Adapter, ok
 }
 
 func (s *stateCache) store(v cachedState) {

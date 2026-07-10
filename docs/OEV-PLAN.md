@@ -40,7 +40,8 @@ Per auction tick, end to end:
    The Executor **catches** a callback revert (`LiquidationFailed(solver, nonce)`): the nonce is still
    consumed and the gas liability still debited from the deposit — the liquidation just doesn't settle
    (§6.2). A price-update revert, by contrast, reverts the whole tx.
-4. **Bookkeeping** (background ops loop): an Executor-state poll refreshes nonce/deposit/locked state.
+4. **Bookkeeping** (background ops loop): a periodic poll refreshes Executor and adapter state; our
+   `liquidation-result` also requests the same refresh asynchronously without blocking the WS reader.
    The circuit breaker is fed by the WS `liquidation-result` push (a `success:false` frame for our callback →
    `recordFailure`); we are a state-reading bot and do **not** run chain log scans. Realized profit is the
    callback's loan-token balance, not event accounting.
@@ -89,8 +90,9 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   tripping the breaker after N in the window. We gate on `liquidator == callback` (same won-detection as
   `auction-result`) because the frame arrives on both the broadcast `oev/liquidations` and the
   callback-scoped `oev/notify/<callback>` subscription, so a result may belong to another solver. We are a
-  state-reading bot, **not** a log-indexer: there is no `FilterLogs` scan. If a settlement receipt is
-  available from RedStone's `txHash`, the bot decodes callback `LegResult`/`PayBidResult` logs from that
+  state-reading bot, **not** a log-indexer: there is no `FilterLogs` scan. A result for our callback wakes
+  the solver-owned Executor/adapter refresh loop; it is not forwarded into the strategy interface. If a
+  settlement receipt is available from RedStone's `txHash`, the bot decodes callback `LegResult`/`PayBidResult` logs from that
   receipt for diagnostics. Realized profit is read off the callback's loan-token balance / balance sheet,
   not event accounting.
 - **`Run(ctx)`** owns the resilient WS client (connect with `x-api-key`, subscribe `oev/liquidations` +
@@ -151,14 +153,14 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 |---|---|
 | `solver.go` | `Register`, factory, `Run` (loops + join), `handleAuction` → `buildBid`, ops loop, the head-stable Executor cache (`cachedState`/`stateCache`), Executor deposit floor, and outer EXECUTOR_V6 signing |
 | `strategy.go` | OEV strategy factory/construction, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
-| `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register and custom strategies can register by name |
+| `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register with policy metadata (for example, whether a solver bid cap is required), and custom strategies can register by name |
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
 | `strategies/webhook/` | OEV webhook strategy adapter over the shared `internal/webhook` JSON client |
 | `strategies/default/candidates.go` | auction frame → `[]evalItem` (production and Sepolia test monitor both use the auctioned frame price) + default strategy candidate sizing (`candidates` → `sizeLeg`); the candidate set is our own tracked positions (`workerCandidates`) — the frame's pushed positions are not consumed |
 | `strategies/default/bundle.go` | single-token leg selection (`selectNetBundle`/`selectBundle`, `scoredLeg`/`chosenBundle`): live bidding chooses the bundle by bounded after-cost net search; dry-run/no-rate fallback ranks by gross loan profit; bid is `max(bidEth, grossProfitNative * totalBundleProfitBps / 10000)` |
 | `strategies/default/sizing.go` | adapter pricing primitives (`swapOutFor`/`collForBudget`) and `sizeLeg`, the per-candidate single-swap leg sizing/decision over the shared Morpho math |
-| `strategies/default/chainreader.go` | default-strategy on-chain reads: Morpho params/test state, adapter pair discovery for monitor scoping, loan↔ETH feeds, and callback balance |
+| `strategies/default/chainreader.go` | default-strategy on-chain reads: Morpho params/test state, loan↔ETH feeds, and callback balance; it does not re-read adapter state |
 | `strategies/default/operationdata.go` | ABI-encode Morpho callback `operationData`: auction auth, capped max-seize legs, loan-denominated profit floors, and callback-auth signature |
 | `internal/morpho/math.go` | shared Morpho Blue math: health, LIF, share/asset conversions, Taylor accrual (exact big.Int rounding) |
 | `internal/liquidlane/gas` | shared LiquidLane route prediction (`acquire`/`allocate`/`deallocate`/`unknown`) and adapter swap gas units only |
@@ -242,9 +244,11 @@ uses the latest RPC header block. The default strategy hot path fails closed wit
 has no block tag/timestamp or when its block timestamp is more than a small Ethereum/Sepolia block-time
 window behind the auction timestamp. This allows ordinary one-block monitor/API lag without letting a
 stuck API cache bid indefinitely. The solver ops loop is separate: it refreshes Executor state, latest
-header gas limit, and the configured adapter snapshot on `opsPollMs`. The LiquidLane adapter is
-solver-owned config; its exchange price/capacity/liquidity snapshot is strategy input. The default strategy
-owns its own callback balance and loan↔ETH feed refreshes.
+header gas limit, and the configured adapter snapshot on `opsPollMs` and after our `liquidation-result`.
+The LiquidLane adapter is solver-owned config; its exchange price/capacity/liquidity snapshot is strategy
+input. The default strategy uses that same cached adapter snapshot to scope its Morpho monitor and loan
+decimals instead of maintaining a second adapter reader. It owns its own callback balance and loan↔ETH
+feed refreshes.
 
 **Stale-state gates.** Every background-refreshed cache the hot path reads stamps a wall-clock `updatedAt`
 **only on a successful store**. The solver owns only the ops-loop `cachedState` (Executor accounting,
@@ -259,10 +263,10 @@ arbitrarily old state. Startup config validation enforces each owner separately:
 
 ### 3.4 Market scope
 
-The tracked Morpho markets are **discovered from the adapter**, not configured. The (loan, collateral)
-pair is fully on-chain-derivable from the pinned adapter: loan = `adapter.vault().asset()` (cached
-immutable), collateral = the adapter's redeemable token set (`getTokensToRedeemLength()` +
-`tokensToRedeem(i)`, cached). The API query uses that pair and validates returned ids locally. The auction
+The tracked Morpho markets are **discovered from the solver-owned adapter snapshot**, not configured or
+read again by the default strategy. The pair is fully on-chain-derivable from the pinned adapter: loan =
+`adapter.vault().asset()`, collateral = the adapter's redeemable token set (`getTokensToRedeemLength()` +
+`tokensToRedeem(i)`). The API query uses that pair and validates returned ids locally. The auction
 frame's pushed positions are never a discovery source.
 
 ---
@@ -612,7 +616,7 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `adapter` | solver-owned single LiquidLane adapter |
 | `callback` | solver-owned callback passed to RedStone Executor and into strategy input |
 | `strategy.name` | `default` for the built-in strategy backed by Morpho state, or `webhook` for an external decider |
-| `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; OEV route is `POST /decide-bid` |
+| `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve only while constructing the HTTP client; OEV route is `POST /decide-bid` |
 | `strategy.config.morphoApiUrl` / `discoveryMaxHealthFactor` | default-strategy production Morpho snapshot endpoint and API health-factor band |
 | `strategy.config.maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
 | `strategy.config.loanEthFeed.{ethUsd,loanUsd,maxAgeMs}` | default-strategy required dual-feed loan↔ETH rate source |

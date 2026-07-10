@@ -26,7 +26,9 @@ type monitorSource interface {
 
 type Strategy struct {
 	cfg          Config
+	adapter      common.Address
 	callback     common.Address
+	loadAdapter  func() (types.AdapterSnapshot, bool)
 	reader       Reader
 	signer       signer
 	chainID      *big.Int
@@ -68,7 +70,7 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, NewFromConfig)
+	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig})
 }
 
 func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
@@ -80,20 +82,15 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 	if err != nil {
 		return nil, err
 	}
-	if deps.Adapter == (common.Address{}) {
-		return nil, errors.New("adapter is required")
-	}
-	if deps.Callback == (common.Address{}) {
-		return nil, errors.New("callback is required")
-	}
-	cfg.Adapter = deps.Adapter
 	return New(cfg, Deps{
-		Reader:      NewChainReader(deps.Chain, deps.Log),
-		Signer:      deps.Signer,
-		Log:         deps.Log,
-		ChainID:     deps.ChainID,
-		Callback:    deps.Callback,
-		TestMonitor: testMonitor,
+		Reader:              newChainReader(deps.Chain, deps.Log),
+		Signer:              deps.Signer,
+		Log:                 deps.Log,
+		ChainID:             deps.ChainID,
+		Adapter:             deps.Adapter,
+		Callback:            deps.Callback,
+		LoadAdapterSnapshot: deps.LoadAdapterSnapshot,
+		TestMonitor:         testMonitor,
 	})
 }
 
@@ -101,12 +98,18 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 	if deps.Callback == (common.Address{}) {
 		return nil, errors.New("callback is required")
 	}
+	if deps.Adapter == (common.Address{}) {
+		return nil, errors.New("adapter is required")
+	}
+	if deps.LoadAdapterSnapshot == nil {
+		return nil, errors.New("adapter snapshot source is required")
+	}
 	var (
 		mon monitorSource
 		err error
 	)
 	if deps.TestMonitor {
-		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback)
+		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -114,18 +117,20 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		if cfg.MorphoAPIURL == "" {
 			return nil, errors.New("morphoApiUrl is required unless test monitor is enabled")
 		}
-		mon = newAPIMonitor(deps.Reader, deps.Log, cfg, deps.ChainID)
+		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
 	}
 	return &Strategy{
-		cfg:      cfg,
-		callback: deps.Callback,
-		reader:   deps.Reader,
-		signer:   deps.Signer,
-		chainID:  big.NewInt(deps.ChainID),
-		mon:      mon,
-		engine:   newBundleEngine(cfg, deps.Log),
-		maxAge:   cfg.MaxStateAge,
-		log:      deps.Log,
+		cfg:         cfg,
+		adapter:     deps.Adapter,
+		callback:    deps.Callback,
+		loadAdapter: deps.LoadAdapterSnapshot,
+		reader:      deps.Reader,
+		signer:      deps.Signer,
+		chainID:     big.NewInt(deps.ChainID),
+		mon:         mon,
+		engine:      newBundleEngine(cfg, deps.Log),
+		maxAge:      cfg.MaxStateAge,
+		log:         deps.Log,
 	}, nil
 }
 
@@ -161,14 +166,19 @@ func (s *Strategy) refreshState(ctx context.Context) {
 	}
 	now := time.Now()
 	prev, _ := s.state.load()
-	rate := s.reader.ReadLoanEthRate(ctx, s.cfg.Adapter, s.cfg.LoanEthFeed, now)
-	rateUpdatedAt := now
+	var rate *big.Int
+	if s.loadAdapter != nil {
+		if adapter, ok := s.loadAdapter(); ok {
+			rate = s.reader.ReadLoanEthRate(ctx, adapter.LoanDecimals, s.cfg.LoanEthFeed, now)
+		}
+	}
+	rateUpdatedAt := time.Now()
 	if rate == nil {
 		rate = prev.Rate
 		rateUpdatedAt = prev.RateUpdatedAt
 	}
 	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
-	callbackUpdatedAt := now
+	callbackUpdatedAt := time.Now()
 	if err != nil {
 		s.log.Error(err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
 		callbackNative = prev.CallbackNative
@@ -183,7 +193,7 @@ func (s *Strategy) refreshState(ctx context.Context) {
 }
 
 func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
-	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.cfg.Adapter {
+	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
 		return skipBid(skipNoLegs), nil
 	}
 	if input.Context.Callback != s.callback {
