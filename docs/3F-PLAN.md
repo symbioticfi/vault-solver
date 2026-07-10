@@ -330,4 +330,4 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Testing:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
-- **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
+- **Solver metrics.** The shared `solver.Deps.Metrics` seam is live: RFQ and OEV already register collectors, and `bridgefacilitator` now exports discovery / offer-cache / offer-submit / redeem-flow counters plus a live-offers gauge. Richer economics metrics (offers won, locked vs realized, exposure by adapter) remain a follow-up.
