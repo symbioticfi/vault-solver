@@ -27,6 +27,95 @@ type blockingReceiptBackend struct {
 	deadlines   []time.Time
 }
 
+type laterCanonicalBackend struct {
+	*mockBackend
+
+	mu              sync.Mutex
+	original        common.Hash
+	replacement     *types.Transaction
+	originalBlocked chan struct{}
+	blockedOnce     sync.Once
+}
+
+func newLaterCanonicalBackend() *laterCanonicalBackend {
+	return &laterCanonicalBackend{
+		mockBackend:     newMockBackend(),
+		originalBlocked: make(chan struct{}),
+	}
+}
+
+func (b *laterCanonicalBackend) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	if err := b.mockBackend.SendTransaction(ctx, tx); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.original == (common.Hash{}) {
+		b.original = tx.Hash()
+	} else {
+		b.replacement = tx
+	}
+	return nil
+}
+
+func (b *laterCanonicalBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	b.mu.Lock()
+	original := b.original
+	replacement := b.replacement
+	b.mu.Unlock()
+	if replacement == nil {
+		return nil, ethereum.NotFound
+	}
+	if hash == original {
+		b.blockedOnce.Do(func() { close(b.originalBlocked) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if hash == replacement.Hash() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return b.canonicalReceipt(replacement, types.ReceiptStatusSuccessful, 100), nil
+	}
+	return nil, ethereum.NotFound
+}
+
+type gatedRejectedReplacementBackend struct {
+	*mockBackend
+
+	replacementEntered chan *types.Transaction
+	releaseReplacement chan struct{}
+}
+
+func newGatedRejectedReplacementBackend() *gatedRejectedReplacementBackend {
+	return &gatedRejectedReplacementBackend{
+		mockBackend:        newMockBackend(),
+		replacementEntered: make(chan *types.Transaction, 1),
+		releaseReplacement: make(chan struct{}),
+	}
+}
+
+func (b *gatedRejectedReplacementBackend) SendTransaction(
+	ctx context.Context,
+	tx *types.Transaction,
+) error {
+	b.mu.Lock()
+	if b.sendCalls == 0 {
+		b.mu.Unlock()
+		return b.mockBackend.SendTransaction(ctx, tx)
+	}
+	b.sendCalls++
+	b.sendCallCh <- tx
+	b.mu.Unlock()
+	b.replacementEntered <- tx
+	select {
+	case <-b.releaseReplacement:
+		return errors.New("insufficient funds")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func newBlockingReceiptBackend() *blockingReceiptBackend {
 	return &blockingReceiptBackend{
 		mockBackend: newMockBackend(),
@@ -200,6 +289,31 @@ func TestTrack_BlockingReceiptCompletesByAbsoluteOverallDeadline(t *testing.T) {
 	}
 }
 
+func TestTrack_LaterCanonicalAttemptWinsBeforeFinalWindowDeadline(t *testing.T) {
+	b := newLaterCanonicalBackend()
+	b.heldNonces[7] = true
+	m, cancel, done := newTestManager(t, b, Config{
+		PollInterval: time.Millisecond, PendingInterval: 20 * time.Millisecond,
+		FeeBumpBps: 1_250, MaxReplacements: 1,
+	})
+	defer func() { cancel(); <-done }()
+
+	resultCh := sendAsync(m, Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	original := awaitTx(t, b.sentCh)
+	replacement := awaitTx(t, b.sentCh)
+	select {
+	case <-b.originalBlocked:
+	case <-time.After(trackerTestGuard):
+		t.Fatal("original attempt did not block in final window")
+	}
+
+	result := awaitResult(t, resultCh)
+	if result.State != StateConfirmed || result.Hash != replacement.Hash() || len(result.Hashes) != 2 ||
+		result.Hashes[0] != original.Hash() || result.Hashes[1] != replacement.Hash() {
+		t.Fatalf("result = %+v, want later canonical replacement before final deadline", result)
+	}
+}
+
 func TestTrack_TransientReceiptErrorRetries(t *testing.T) {
 	temporary := errors.New("temporary receipt failure")
 	b := newMockBackend()
@@ -224,7 +338,7 @@ func TestTrack_TransientReceiptErrorRetries(t *testing.T) {
 	}
 }
 
-func TestTrack_CanonicalAttemptStopsPollingLaterHashes(t *testing.T) {
+func TestTrack_CanonicalAttemptPollsDistinctHashesConcurrently(t *testing.T) {
 	b := newMockBackend()
 	first := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(1), Nonce: 7, Gas: 21_000})
 	second := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(1), Nonce: 7, Gas: 21_000, Data: []byte{1}})
@@ -239,8 +353,8 @@ func TestTrack_CanonicalAttemptStopsPollingLaterHashes(t *testing.T) {
 	if err != nil || result == nil || result.State != StateConfirmed {
 		t.Fatalf("poll result/error = %+v/%v, want confirmed first attempt", result, err)
 	}
-	if got := b.receiptCallCount(second.Hash()); got != 0 {
-		t.Fatalf("later attempt receipt calls = %d, want 0 after canonical result", got)
+	if got := b.receiptCallCount(second.Hash()); got != 1 {
+		t.Fatalf("later attempt receipt calls = %d, want 1 fresh concurrent poll", got)
 	}
 }
 
@@ -475,11 +589,10 @@ func TestTrack_ReplacementPreservesPayloadAndBumpsFees(t *testing.T) {
 }
 
 func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
-	b := newMockBackend()
+	b := newGatedRejectedReplacementBackend()
 	b.heldNonces[7] = true
-	b.sendErrs = []error{nil, errors.New("insufficient funds")}
 	m, cancel, done := newTestManager(t, b, Config{
-		PollInterval: time.Millisecond, PendingInterval: 5 * time.Millisecond,
+		PollInterval: time.Millisecond, PendingInterval: 20 * time.Millisecond,
 		FeeBumpBps: 1_250, MaxReplacements: 1,
 	})
 	defer func() { cancel(); <-done }()
@@ -489,12 +602,13 @@ func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
 	if attempted := awaitTx(t, b.sendCallCh); attempted.Hash() != original.Hash() {
 		t.Fatalf("initial send-call hash = %s, want %s", attempted.Hash(), original.Hash())
 	}
-	rejectedReplacement := awaitTx(t, b.sendCallCh)
+	rejectedReplacement := awaitTx(t, b.replacementEntered)
 	if rejectedReplacement.Hash() == original.Hash() {
 		t.Fatal("fee-bumped replacement reused the original hash")
 	}
 
 	b.setReceipt(original.Hash(), b.canonicalReceipt(original, types.ReceiptStatusSuccessful, 100))
+	close(b.releaseReplacement)
 	result := awaitResult(t, resultCh)
 	if result.State != StateConfirmed || result.Hash != original.Hash() || len(result.Hashes) != 2 ||
 		result.Hashes[0] != original.Hash() || result.Hashes[1] != rejectedReplacement.Hash() {

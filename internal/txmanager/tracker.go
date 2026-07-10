@@ -98,39 +98,89 @@ func (m *Manager) track(ctx context.Context, tracked *trackedTx) Result {
 }
 
 func (m *Manager) pollAttempts(ctx context.Context, tracked *trackedTx) (*Result, error) {
-	var latestErr error
-	for _, attempt := range tracked.attempts {
-		receipt, err := m.backend.TransactionReceipt(ctx, attempt.Hash())
-		if err != nil {
-			latestErr = errors.Errorf("receipt %s: %w", attempt.Hash().Hex(), err)
-			continue
-		}
-		canonical, err := m.receiptIsCanonical(ctx, attempt, receipt)
-		if err != nil {
-			latestErr = err
-			continue
-		}
-		if !canonical {
-			continue
-		}
+	attempts := distinctAttempts(tracked.attempts)
+	pollCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	outcomes := make(chan attemptOutcome, len(attempts))
+	for i, attempt := range attempts {
+		go func() {
+			result, err := m.pollAttempt(pollCtx, tracked, attempt)
+			if result != nil {
+				cancel()
+			}
+			outcomes <- attemptOutcome{index: i, result: result, err: err}
+		}()
+	}
 
-		switch receipt.Status {
-		case types.ReceiptStatusSuccessful:
-			result := finalResult(tracked, StateConfirmed, receipt, nil)
-			return &result, nil
-		case types.ReceiptStatusFailed:
-			result := finalResult(
-				tracked,
-				StateReverted,
-				receipt,
-				errors.Errorf("tx %s reverted on-chain", receipt.TxHash.Hex()),
-			)
-			return &result, nil
-		default:
-			latestErr = errors.Errorf("receipt %s has invalid status %d", attempt.Hash().Hex(), receipt.Status)
+	ordered := make([]attemptOutcome, len(attempts))
+	for range attempts {
+		outcome := <-outcomes
+		ordered[outcome.index] = outcome
+	}
+	var latestErr error
+	for _, outcome := range ordered {
+		if outcome.result != nil {
+			return outcome.result, nil
+		}
+		if outcome.err != nil {
+			latestErr = outcome.err
 		}
 	}
 	return nil, latestErr
+}
+
+type attemptOutcome struct {
+	index  int
+	result *Result
+	err    error
+}
+
+func distinctAttempts(attempts []*types.Transaction) []*types.Transaction {
+	seen := make(map[common.Hash]struct{}, len(attempts))
+	distinct := make([]*types.Transaction, 0, len(attempts))
+	for _, attempt := range attempts {
+		hash := attempt.Hash()
+		if _, ok := seen[hash]; ok {
+			continue
+		}
+		seen[hash] = struct{}{}
+		distinct = append(distinct, attempt)
+	}
+	return distinct
+}
+
+func (m *Manager) pollAttempt(
+	ctx context.Context,
+	tracked *trackedTx,
+	attempt *types.Transaction,
+) (*Result, error) {
+	receipt, err := m.backend.TransactionReceipt(ctx, attempt.Hash())
+	if err != nil {
+		return nil, errors.Errorf("receipt %s: %w", attempt.Hash().Hex(), err)
+	}
+	canonical, err := m.receiptIsCanonical(ctx, attempt, receipt)
+	if err != nil {
+		return nil, err
+	}
+	if !canonical {
+		return nil, nil
+	}
+
+	switch receipt.Status {
+	case types.ReceiptStatusSuccessful:
+		result := finalResult(tracked, StateConfirmed, receipt, nil)
+		return &result, nil
+	case types.ReceiptStatusFailed:
+		result := finalResult(
+			tracked,
+			StateReverted,
+			receipt,
+			errors.Errorf("tx %s reverted on-chain", receipt.TxHash.Hex()),
+		)
+		return &result, nil
+	default:
+		return nil, errors.Errorf("receipt %s has invalid status %d", attempt.Hash().Hex(), receipt.Status)
+	}
 }
 
 func (m *Manager) receiptIsCanonical(
