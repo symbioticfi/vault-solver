@@ -30,6 +30,11 @@ var offerStatusIgnored = map[string]bool{
 // Name is the registry key that selects this solver from config.
 const Name = "3f-bridge-facilitator"
 
+type redeemKey struct {
+	adapter common.Address
+	request common.Address
+}
+
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
 	solver.Register(Name, factory)
@@ -46,6 +51,10 @@ type Solver struct {
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
 	nonceSeq   atomic.Uint64
 	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	// pendingRedemptions is owned exclusively by the single Run goroutine: discover, redeem, and
+	// reconcile ticks never execute concurrently, and TxManager.Send returns to that goroutine.
+	// No mutex is needed. Keys include the adapter so one adapter's scan cannot clear another's state.
+	pendingRedemptions map[redeemKey]struct{}
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -61,14 +70,15 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	s := &Solver{
-		cfg:        cfg,
-		deps:       deps,
-		api:        api,
-		reader:     newReader(deps.Chain),
-		strategy:   offerStrategy,
-		log:        deps.Log.WithName(Name),
-		signerAddr: deps.Signer.Address(),
-		offers:     newOfferTracker(),
+		cfg:                cfg,
+		deps:               deps,
+		api:                api,
+		reader:             newReader(deps.Chain),
+		strategy:           offerStrategy,
+		log:                deps.Log.WithName(Name),
+		signerAddr:         deps.Signer.Address(),
+		offers:             newOfferTracker(),
+		pendingRedemptions: make(map[redeemKey]struct{}),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))

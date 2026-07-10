@@ -16,8 +16,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// txSender sends a transaction and blocks until its receipt (the shared txmanager). A revert is
-// reported as Result.Err, so callers only check Err.
+// txSender sends a transaction through the shared txmanager and returns its explicit lifecycle
+// outcome. Callers branch on Result.State; Err alone does not establish retry safety.
 type txSender interface {
 	Send(ctx context.Context, req txmanager.Request) txmanager.Result
 }
@@ -202,14 +202,28 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	res := e.txm.Send(ctx, txmanager.Request{To: e.executor, Data: calldata, Label: "rfq-fill"})
 	attempt := e.store.recordAttempt(orderID)
-	if res.Err != nil {
-		e.log.Error(res.Err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+	switch res.State {
+	case txmanager.StateConfirmed:
+		e.log.Info("fill transaction confirmed", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
+		e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
+		e.reconcileTerminalStatus(ctx, orderID)
+	case txmanager.StateUnresolved:
+		e.log.Error(res.Err, "fill transaction unresolved; reconciling without retry",
+			"orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex(), "nonce", res.Nonce)
+		e.store.markStatus(orderID, statusSubmitted, res.Hash, res.Err.Error())
+		e.reconcileTerminalStatus(ctx, orderID)
+	case txmanager.StateNotBroadcast, txmanager.StateRejected, txmanager.StateReverted:
+		e.log.Error(res.Err, "fill transaction failed definitively",
+			"orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex(), "state", res.State)
 		e.fail(orderID, res.Err.Error())
-		return
+	case txmanager.StateBroadcastUnknown, txmanager.StatePending:
+		fallthrough
+	default:
+		err := errors.Errorf("unexpected txmanager state %q", res.State)
+		e.log.Error(err, "fill transaction state invalid; reconciling without retry", "orderId", orderID)
+		e.store.markStatus(orderID, statusSubmitted, res.Hash, err.Error())
+		e.reconcileTerminalStatus(ctx, orderID)
 	}
-	e.log.Info("filled order", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
-	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
-	e.reconcileTerminalStatus(ctx, orderID)
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.

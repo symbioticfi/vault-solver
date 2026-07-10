@@ -74,7 +74,7 @@ vault-solver/
 │   ├── chain/                     # GENERIC eth client primitives (Dial, ChainID). Solver-specific
 │   │   │                          # reads (e.g. vault/adapter liquidity) live in the owning solver.
 │   ├── signer/                    # Signer interface + local (env/file key) impl  ← pluggable
-│   ├── txmanager/                 # SHARED nonce-serialized tx sender  ← shared infra
+│   ├── txmanager/                 # SHARED nonce dispatcher + concurrent receipt trackers
 │   ├── solver/                    # generic Solver interface + registry + engine (solver-agnostic)
 │   ├── solvers/bridgefacilitator/ # ALL 3F-specific logic, encapsulated
 │   │   ├── solver.go  config.go  apiclient.go  auctionview.go  offercache.go
@@ -103,16 +103,34 @@ vault-solver/
 
 ## 5. Shared infrastructure
 
-### 5.1 `txmanager` — nonce-serialized sender
+### 5.1 `txmanager` — serialized dispatcher, concurrent trackers
 
-A single service owns the on-chain sending EOA. One worker goroutine drains a queue
-of `TxRequest{To, Data, Value, GasLimit?, Label}`; for each it tracks the nonce
-locally (seeded from the pending nonce, monotonic), sets EIP-1559 fees, signs via the
-`Signer`, sends, waits for the receipt, and handles `nonce too low` / stuck-tx bump +
-resync. Solvers **never** send directly — they build calldata (packed via the abigen
-ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
-a `TxResult{Hash, Receipt, Err}`. Serializing through one worker eliminates
-parallel-nonce races across solvers.
+A single service owns the on-chain sending EOA. Its dispatcher serializes nonce seeding/allocation,
+transaction construction, signing, and initial broadcast for
+`Request{To, Data, Value, GasLimit?, Label}`. Once an initial broadcast is admitted or ambiguous, an
+independent tracker owns that logical transaction, so an earlier pending nonce does not block the
+dispatcher from signing and broadcasting later nonces. The committed nonce floor prevents an
+admitted/ambiguous nonce from being reused even when an RPC pending-nonce response is stale. Solvers
+**never** send directly; they build calldata with generated ABI helpers and hand it to txmanager.
+
+Each tracker re-reads receipts for every same-nonce attempt and accepts one only when its block hash
+matches the canonical header and the configured confirmation depth has elapsed. Pending transactions
+receive bounded same-nonce, same-payload EIP-1559 fee replacements: `pendingIntervalMs` bounds each
+attempt window, `feeBumpBps` controls each increase, `maxReplacements` bounds the attempt count, and
+`maxFeeGwei` is a hard cap. The result state is exactly one of `not_broadcast`, `rejected`,
+`broadcast_unknown`, `pending`, `confirmed`, `reverted`, or `unresolved`, accompanied as applicable by
+`Nonce`, the newest `Hash`, all `Hashes`, a canonical `Receipt`, and `Err`. `SafeToRetry()` is true only
+for `not_broadcast` and `rejected`; consumers branch on `State`, never infer ambiguity or retry safety
+from `Err`.
+
+The 3F redeemer treats `confirmed` as complete. `unresolved` and any unexpected/intermediate state
+conservatively record every request in the submitted batch in a per-`(adapter, request)` pending set;
+those requests are suppressed until a later successful authoritative `readyToRedeem` scan changes the
+set. Every successful scan, including an empty one, reconciles that adapter's pending keys before
+filtering and batching, while a scan error preserves them. `not_broadcast`, `rejected`, and `reverted`
+are definite outcomes and are not suppressed, so a later authoritative scan may make them eligible
+again. The map is owned only by the single `Solver.Run` goroutine and needs no mutex; adapter-qualified
+keys prevent one adapter's scan from clearing another's suppression.
 
 > The **offerSigner** (EIP-712 offer signing, off-chain, gasless) and the **tx-sending
 > EOA** are distinct roles behind the same `Signer` interface, possibly the same key.
@@ -152,7 +170,7 @@ the chosen solver decodes it into its own typed struct.
 ```yaml
 chain: { rpcUrl, chainId, rpcFallbackUrls?, writeRpcUrl? } # all distinct endpoints are chain-ID preflighted
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei }
+txManager: { confirmations: 2, maxFeeGwei, tipGwei, pendingIntervalMs: 120000, feeBumpBps: 1250, maxReplacements: 3 }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
@@ -331,5 +349,8 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
 **Testing:**
-- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
+- **Integration coverage.** Pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config,
+  and redemption outcome/suppression rules) is covered. The full HTTP/on-chain paths (apiclient,
+  chainreader, redemption submission, Run loop) still need an httptest-backed API mock plus a
+  simulated or forked chain backend.
 - **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.

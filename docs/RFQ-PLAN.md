@@ -66,7 +66,18 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
+  builds the `Executor.fill` calldata. Txmanager's dispatcher serializes nonce allocation, signing,
+  and initial broadcast, then independent trackers supervise admitted/ambiguous transactions so one
+  pending receipt does not block later nonces. Trackers require a canonical block-hash match plus the
+  configured confirmation depth and use bounded same-nonce/same-payload fee replacements. Results use
+  the exact states `not_broadcast`, `rejected`, `broadcast_unknown`, `pending`, `confirmed`, `reverted`,
+  and `unresolved`; `SafeToRetry()` is true only for `not_broadcast` and `rejected`, and consumers never
+  infer ambiguity from `Err`.
+- **Fill outcomes reconcile explicitly.** `confirmed` enters local `submitted` and reconciles with the
+  backend. `unresolved` also enters `submitted`, retains the newest signed hash/error, reconciles, and
+  is never locally re-armed merely because `Err` is non-nil. `not_broadcast`, `rejected`, and `reverted`
+  enter `failed`. An unexpected/intermediate state follows the conservative submitted/reconciliation
+  path, never a local retry.
 - **On-chain reads use `chain.Multicall`** (the adapter exposes many per-vault views per quote).
 - **Addresses + backend URL come from `solver.config`** (config-is-king); secrets
   (`backendSharedSecret`, the caller key) via `*Env` indirection (`os.Getenv` at point of use).
@@ -191,10 +202,11 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    golden numbers, config, httptest server).
 2. **(done) Execution** — backend client (`/orders`), **poll-only** loop + order state machine
    (`queued→submitting→submitted→{filled|expired|failed}`), reactor-order decode + `Executor.fill`
-   (mixed overload, golden selector test) via the shared txmanager (revert→failed), attempt tracking,
+   (mixed overload, golden selector test) via the shared txmanager (explicit confirmed/unresolved/
+   definite-failure reconciliation), attempt tracking,
    and on-chain **strategy recovery via a single multicall** over the configured per-vault adapters
    (adapter views + `marketMaker`/`owner`/`isFiller` authorization filter). Direct legs only.
-   Unit-tested (state machine with fakes, backend httptest).
+   Unit-tested (state machine and transaction-outcome matrix with fakes, backend httptest).
 3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and

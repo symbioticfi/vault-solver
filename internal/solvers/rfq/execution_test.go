@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"strings"
@@ -24,6 +25,7 @@ type fakeBackend struct {
 	discounts    *discountsResponse
 	resolveCalls int
 	listCalls    int
+	getCalls     int
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
@@ -32,7 +34,10 @@ func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrd
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
 }
-func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
+func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) {
+	f.getCalls++
+	return f.order, nil
+}
 
 func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++
@@ -67,9 +72,11 @@ func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryV
 type fakeTxm struct {
 	lastData []byte
 	result   txmanager.Result
+	calls    int
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
+	f.calls++
 	f.lastData = req.Data
 	return f.result
 }
@@ -154,7 +161,7 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 
 func TestExecution_DirectFillHappyPath(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: txmanager.Result{State: txmanager.StateConfirmed, Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -170,7 +177,9 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
+	txm := &fakeTxm{result: txmanager.Result{
+		State: txmanager.StateReverted, Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain"),
+	}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -192,7 +201,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: txmanager.Result{State: txmanager.StateConfirmed, Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
@@ -233,7 +242,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: txmanager.Result{State: txmanager.StateConfirmed, Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
@@ -268,7 +277,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: txmanager.Result{State: txmanager.StateConfirmed, Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
@@ -340,5 +349,82 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	}
 	if txm.lastData != nil {
 		t.Fatalf("should not have sent a tx without a fill plan")
+	}
+}
+
+func TestExecution_UnresolvedSubmissionIsNeverRearmed(t *testing.T) {
+	st, be := fillFixtures(t)
+	hash := common.HexToHash("0xdead")
+	txm := &fakeTxm{result: txmanager.Result{
+		State: txmanager.StateUnresolved, Hash: hash, Hashes: []common.Hash{hash},
+		Err: txmanager.ErrUnresolved,
+	}}
+	be.order.OrderStatus = "open"
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+	rec := st.order("o1")
+	if rec == nil || rec.Status != statusSubmitted || rec.TxHash != hash {
+		t.Fatalf("record = %+v, want submitted unresolved transaction", rec)
+	}
+	if be.getCalls != 1 {
+		t.Fatalf("getOrder calls = %d, want 1 reconciliation", be.getCalls)
+	}
+
+	firstData := append([]byte(nil), txm.lastData...)
+	e.syncOnce(context.Background())
+	if txm.calls != 1 {
+		t.Fatalf("Send calls = %d, want 1", txm.calls)
+	}
+	if !bytes.Equal(txm.lastData, firstData) {
+		t.Fatal("unresolved order was submitted a second time")
+	}
+}
+
+func TestExecution_DefiniteTransactionOutcomesFail(t *testing.T) {
+	for _, state := range []txmanager.State{
+		txmanager.StateNotBroadcast, txmanager.StateRejected, txmanager.StateReverted,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			st, be := fillFixtures(t)
+			txm := &fakeTxm{result: txmanager.Result{State: state, Err: errors.New("definite failure")}}
+			e := newExec(t, st, be, txm)
+
+			e.syncOnce(context.Background())
+
+			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+				t.Fatalf("record = %+v, want failed", rec)
+			}
+		})
+	}
+}
+
+func TestExecution_IntermediateTransactionOutcomesReconcileWithoutRetry(t *testing.T) {
+	for _, state := range []txmanager.State{
+		txmanager.StateBroadcastUnknown,
+		txmanager.StatePending,
+		txmanager.State("future_state"),
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			st, be := fillFixtures(t)
+			be.order.OrderStatus = "open"
+			hash := common.HexToHash("0xdead")
+			txm := &fakeTxm{result: txmanager.Result{State: state, Hash: hash, Err: errors.New("intermediate state")}}
+			e := newExec(t, st, be, txm)
+
+			e.syncOnce(context.Background())
+
+			rec := st.order("o1")
+			if rec == nil || rec.Status != statusSubmitted || rec.TxHash != hash {
+				t.Fatalf("record = %+v, want submitted intermediate transaction", rec)
+			}
+			if be.getCalls != 1 {
+				t.Fatalf("getOrder calls = %d, want 1 reconciliation", be.getCalls)
+			}
+			e.syncOnce(context.Background())
+			if txm.calls != 1 {
+				t.Fatalf("Send calls = %d, want 1", txm.calls)
+			}
+		})
 	}
 }
