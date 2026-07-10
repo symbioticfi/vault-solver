@@ -238,6 +238,38 @@ func setSnapshotBlockTime(t *testing.T, s *Solver, tsMs int64) {
 // the auction timestamp (deterministic accrual) instead of falling back to wall-clock.
 func auctionClock() func() time.Time { return func() time.Time { return time.Unix(1781243340, 0) } }
 
+func TestAuctionWorkerIsJoined(t *testing.T) {
+	s, _ := seededSolver(t)
+	blocking := &blockingBidStrategy{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	s.strategy = blocking
+	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
+	a.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, a.Timestamp)
+	s.launchAuction(t.Context(), a, time.Now())
+	<-blocking.started
+
+	joined := make(chan struct{})
+	go func() {
+		s.auctionWG.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+		t.Fatal("Wait returned while the auction decision was still running")
+	default:
+	}
+	close(blocking.release)
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("auction decision worker was not joined")
+	}
+}
+
 // decodeAuction parses the captured live auction frame (the fixture every bid test starts from).
 func decodeAuction(t *testing.T) AuctionMessage {
 	t.Helper()

@@ -98,8 +98,10 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
 - **`Run(ctx)`** owns the resilient WS client (connect with `x-api-key`, subscribe `oev/liquidations` +
   `oev/notify/<callback>` for the solver-configured callback, reconnect with backoff + jitter, ~7 h proactive
   rotation, staleness watchdog), the hot-path handler, the strategy's refresh loops, and the Executor-state
-  ops loop. It joins every background loop on shutdown (`sync.WaitGroup`) so no goroutine outlives `Run`.
-  Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
+  ops loop. It joins those loops, the WS read/write pumps, and every in-flight auction-decision worker on
+  shutdown, so no goroutine outlives `Run`. The WS client joins its read pump before `Run` waits for auction
+  workers; therefore no message handler can race a new `WaitGroup.Add` with that wait. Caches are immutable
+  snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
 - **The solver sends no transactions** â€” RedStone's auctioneer submits the settlement tx; Executor deposit
   management is out-of-band. `deps.TxManager` is therefore unused, and the OEV config carries no
   `txManager` section.

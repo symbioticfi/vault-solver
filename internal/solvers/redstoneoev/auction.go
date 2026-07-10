@@ -49,7 +49,7 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 		if !ok {
 			return
 		}
-		go s.handleAuction(ctx, a, start)
+		s.launchAuction(ctx, a, start)
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":
@@ -59,6 +59,12 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 	default:
 		s.log.V(1).Info("ignoring frame", "op", op)
 	}
+}
+
+func (s *Solver) launchAuction(ctx context.Context, auction AuctionMessage, start time.Time) {
+	s.auctionWG.Go(func() {
+		s.handleAuction(ctx, auction, start)
+	})
 }
 
 func (s *Solver) handleAuctionResult(raw []byte) {

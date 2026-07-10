@@ -32,6 +32,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	err := s.ws.Run(runCtx)
 	cancel()
 	wg.Wait()
+	// ws.Run joins its read pump before returning, so no later message handler can Add here.
+	s.auctionWG.Wait()
 	return err
 }
 
