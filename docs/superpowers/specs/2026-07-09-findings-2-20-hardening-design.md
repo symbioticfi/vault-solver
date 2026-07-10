@@ -98,8 +98,10 @@ silently raised to the tip.
 ### Supervised process lifecycle
 
 The root process will run the observability listener, transaction manager, and all solvers in one
-`errgroup`. Unexpected observability bind/serve errors are fatal and cancel siblings. All components
-return only after their children have stopped:
+`errgroup`. Unexpected observability bind/serve errors are fatal and cancel siblings. A generic fatal
+reporter lets a nested component surface its child error before joining work blocked on a root-owned
+sibling. The root clears readiness and cancels its worker context immediately; the sibling still
+returns its authoritative outcome, and all components return only after their children have stopped:
 
 - the transaction dispatcher joins confirmation/replacement trackers;
 - RFQ joins its HTTP server and poller and performs bounded graceful shutdown;

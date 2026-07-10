@@ -21,13 +21,15 @@ import (
 )
 
 // Deps are the shared services every solver receives. The txmanager is shared so solvers never
-// race on the sending account's nonce.
+// race on the sending account's nonce. Fatal lets a solver surface a child failure before joining
+// work whose lifetime belongs to another root-owned service.
 type Deps struct {
 	Chain     *chain.Client
 	TxManager *txmanager.Manager
 	Signer    signer.Signer
 	Log       logr.Logger
 	Metrics   *observability.Metrics
+	Fatal     FatalReporter
 }
 
 // Solver is a long-running strategy. Run must honor ctx cancellation and return nil (or a

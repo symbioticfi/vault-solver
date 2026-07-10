@@ -81,8 +81,10 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   attempt; manager-owned trackers may poll receipts and construct, sign, and broadcast same-nonce
   replacements concurrently. Solvers build calldata and submit requests, never send directly, and
   branch on `Result.State` / `SafeToRetry()` rather than `Err` alone. Every new goroutine must be owned
-  and joined by its component's `Run` or `Start`. Document the goroutine/locking model of any new
-  shared state (see the `apiClient` "single Run goroutine" note).
+  and joined by its component's `Run` or `Start`. A component whose fatal child must join work owned
+  by a root sibling reports that error through the generic fatal reporter before joining, so root
+  cancellation can release the sibling without weakening its outcome contract. Document the
+  goroutine/locking model of any new shared state (see the `apiClient` "single Run goroutine" note).
 - Keep functions at one altitude, prefer small pure helpers (they're the easily-tested seams),
   table-driven tests, and accept interfaces / return concrete types. Run `golangci-lint` (below) and
   fix findings rather than suppressing them; a `//nolint` must be specific and carry an explanation

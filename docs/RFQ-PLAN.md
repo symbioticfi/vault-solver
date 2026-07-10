@@ -39,14 +39,17 @@ backend `/discounts` flow). Both are implemented; discount legs are sequenced la
 
 ## 2. How it maps onto the framework
 
-A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no framework edits
-(CLAUDE.md modularity rule). The generic layer is reused as-is:
+A self-contained `internal/solvers/rfq/` implements `solver.Solver`. The generic framework has no
+RFQ-specific behavior; RFQ reuses its integration-neutral services and fatal reporter:
 
 - **`Run(ctx)`** owns the RFQ **HTTP listener** (`/quote` + `/health` + OpenAPI) and order poller in
-  one `errgroup`. A listener failure cancels and joins the poller; parent cancellation drains and joins
-  both before `Run` returns. The HTTP server is an RFQ-specific concern and lives in the RFQ package;
-  the framework's separately supervised observability server (`:9090`, metrics/health/ready) stays
-  separate, and failure of either listener is process-fatal.
+  one `errgroup`. A listener failure is reported to the root before RFQ joins the poller. The root
+  immediately clears readiness and cancels its worker context, allowing an already-enqueued
+  `txmanager.Send` to return the manager-owned unresolved/confirmed outcome before RFQ finishes the
+  join. Parent cancellation drains and joins both before `Run` returns. The HTTP server is an
+  RFQ-specific concern and lives in the RFQ package; the framework's separately supervised
+  observability server (`:9090`, metrics/health/ready) stays separate, and failure of either listener
+  is process-fatal.
 - **OpenAPI is code-first via Huma**: the request/response structs in `apitypes.go` carry validation
   tags (`enum`/`pattern`/`minimum`/`maximum`/`format:"uuid"`, …) that drive *both* inbound validation
   *and* the generated OpenAPI 3.1 spec served at `/openapi.json` + `/docs`. A schema violation returns

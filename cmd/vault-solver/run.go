@@ -106,7 +106,15 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	// Build every configured solver. They share the chain client, signer, and the single
 	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
 	// shared txManager exists for, so they never race on nonces.
-	deps := solver.Deps{Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics}
+	fatal := solver.NewFatalSignal()
+	deps := solver.Deps{
+		Chain:     chainClient,
+		TxManager: txm,
+		Signer:    sgnr,
+		Log:       log,
+		Metrics:   metrics,
+		Fatal:     fatal,
+	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
 	for _, sc := range cfg.Solvers {
 		slv, err := solver.New(sc.Name, sc.Config, deps)
@@ -116,16 +124,40 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		solvers = append(solvers, slv)
 	}
 
-	// The root group owns every long-lived runtime worker. The first fatal error cancels and joins
-	// all siblings; solver.Run maps context cancellation to a clean solver shutdown.
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return observability.ServeUntil(gctx, httpSrv) })
-	g.Go(func() error { return txm.Start(gctx) })
+	workers := []func(context.Context) error{
+		func(ctx context.Context) error { return observability.ServeUntil(ctx, httpSrv) },
+		txm.Start,
+	}
 	for _, slv := range solvers {
-		g.Go(func() error { return solver.Run(gctx, slv, log) })
+		workers = append(workers, func(ctx context.Context) error { return solver.Run(ctx, slv, log) })
 	}
 	log.Info("observability server starting", "addr", cfg.Observability.Addr)
+	return superviseRuntime(ctx, health, fatal, workers...)
+}
+
+// superviseRuntime owns every long-lived root worker. A nested fatal report clears readiness and
+// cancels the shared worker context before the reporting component joins, while g.Wait still joins
+// every worker before returning the first error.
+func superviseRuntime(
+	ctx context.Context,
+	health *observability.Health,
+	fatal *solver.FatalSignal,
+	workers ...func(context.Context) error,
+) error {
+	g, gctx := errgroup.WithContext(ctx)
+	// Readiness is set before the observability worker starts, so it cannot be observed until that
+	// listener is live. A nested fatal report clears it before triggering root cancellation.
 	health.SetReady(true)
 	defer health.SetReady(false)
+	g.Go(func() error {
+		err := fatal.Wait(gctx)
+		if err != nil {
+			health.SetReady(false)
+		}
+		return err
+	})
+	for _, worker := range workers {
+		g.Go(func() error { return worker(gctx) })
+	}
 	return g.Wait()
 }

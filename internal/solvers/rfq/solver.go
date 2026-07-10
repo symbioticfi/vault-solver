@@ -31,10 +31,12 @@ func init() {
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
-	cfg    *Config
-	server *server
-	exec   *executionService
-	log    logr.Logger
+	cfg       *Config
+	server    *server
+	exec      *executionService
+	log       logr.Logger
+	fatal     solver.FatalReporter
+	runServer func(context.Context, *http.Server) error
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -65,8 +67,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 
 	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
 	return &Solver{
-		cfg:  cfg,
-		exec: exec,
+		cfg:   cfg,
+		exec:  exec,
+		fatal: deps.Fatal,
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
@@ -123,6 +126,10 @@ func buildServices(
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
+func serveQuoteServer(ctx context.Context, srv *http.Server) error {
+	return httpserver.ServeUntil(ctx, srv, 5*time.Second)
+}
+
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
@@ -157,8 +164,16 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("quote server starting", "addr", s.cfg.ListenAddr)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		if err := httpserver.ServeUntil(gctx, httpSrv, 5*time.Second); err != nil {
-			return errors.Errorf("rfq: quote server: %w", err)
+		runServer := s.runServer
+		if runServer == nil {
+			runServer = serveQuoteServer
+		}
+		if err := runServer(gctx, httpSrv); err != nil {
+			fatalErr := errors.Errorf("rfq: quote server: %w", err)
+			if s.fatal != nil {
+				s.fatal.Report(fatalErr)
+			}
+			return fatalErr
 		}
 		return nil
 	})

@@ -4,12 +4,17 @@ import (
 	"context"
 	"math/big"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type joiningPollerBackend struct {
@@ -40,6 +45,132 @@ func (*joiningPollerBackend) resolveDiscount(context.Context, string) (*resolveD
 
 func (*joiningPollerBackend) listDiscounts(context.Context) (*discountsResponse, error) {
 	return nil, nil
+}
+
+// enqueuedFillTxm models the txmanager boundary exactly where this regression matters: caller
+// cancellation no longer controls a send after enqueue, while cancellation of the manager-owned
+// context resolves the admitted transaction with its real, non-retryable outcome.
+type enqueuedFillTxm struct {
+	managerCtx context.Context
+	enqueued   chan struct{}
+	returned   chan txmanager.Result
+	calls      int
+}
+
+func (m *enqueuedFillTxm) Send(ctx context.Context, _ txmanager.Request) txmanager.Result {
+	if err := ctx.Err(); err != nil {
+		result := txmanager.Result{State: txmanager.StateNotBroadcast, Err: err}
+		m.returned <- result
+		return result
+	}
+	m.calls++
+	if m.calls != 1 {
+		result := txmanager.Result{State: txmanager.StateRejected, Err: errors.New("duplicate test send")}
+		m.returned <- result
+		return result
+	}
+	close(m.enqueued)
+	<-m.managerCtx.Done()
+	result := txmanager.Result{
+		State: txmanager.StateUnresolved,
+		Hash:  common.HexToHash("0x1234"),
+		Err:   errors.Join(txmanager.ErrUnresolved, m.managerCtx.Err()),
+	}
+	m.returned <- result
+	return result
+}
+
+func TestRun_ListenerFailureCancelsRootWithEnqueuedFill(t *testing.T) {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+
+	fatal := solver.NewFatalSignal()
+	ready := true
+	fatalDone := make(chan error, 1)
+	go func() {
+		err := fatal.Wait(rootCtx)
+		if err != nil {
+			ready = false
+			cancelRoot()
+		}
+		fatalDone <- err
+	}()
+
+	st, backend := fillFixtures(t)
+	backend.order = &backendOrder{OrderID: "o1", OrderStatus: backendStatusOpen, QuoteID: "q1"}
+	txm := &enqueuedFillTxm{
+		managerCtx: rootCtx,
+		enqueued:   make(chan struct{}),
+		returned:   make(chan txmanager.Result, 1),
+	}
+	exec := newExec(t, st, backend, txm)
+	listenerErr := errors.New("forced quote listener failure")
+	s := &Solver{
+		cfg: &Config{ListenAddr: "127.0.0.1:0", PollInterval: time.Hour},
+		server: &server{
+			sharedSecret: "test",
+			quotes:       &quoteService{},
+			log:          logr.Discard(),
+		},
+		exec:  exec,
+		log:   logr.Discard(),
+		fatal: fatal,
+		runServer: func(ctx context.Context, _ *http.Server) error {
+			select {
+			case <-txm.enqueued:
+			case <-ctx.Done():
+				return errors.Errorf("wait for enqueued fill: %w", ctx.Err())
+			}
+			return listenerErr
+		},
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(rootCtx) }()
+
+	select {
+	case err := <-fatalDone:
+		if !errors.Is(err, listenerErr) || !strings.Contains(err.Error(), "quote server") {
+			t.Fatalf("fatal error = %v, want wrapped quote listener failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("quote listener failure was trapped behind the enqueued fill")
+	}
+	if ready {
+		t.Fatal("readiness remained true after the fatal quote listener failure")
+	}
+	select {
+	case <-rootCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("fatal quote listener failure did not cancel the root context")
+	}
+
+	var result txmanager.Result
+	select {
+	case result = <-txm.returned:
+	case <-time.After(time.Second):
+		t.Fatal("enqueued fill did not return its manager-owned outcome")
+	}
+	if result.State != txmanager.StateUnresolved || result.Hash == (common.Hash{}) || result.SafeToRetry() ||
+		!errors.Is(result.Err, context.Canceled) {
+		t.Fatalf("fill result = %+v, want real non-retryable unresolved outcome", result)
+	}
+
+	select {
+	case err := <-runDone:
+		if !errors.Is(err, listenerErr) || !strings.Contains(err.Error(), "quote server") {
+			t.Fatalf("Run error = %v, want wrapped quote listener failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not join after the manager returned the fill outcome")
+	}
+	if txm.calls != 1 {
+		t.Fatalf("fill sends = %d, want 1", txm.calls)
+	}
+	record := st.order("o1")
+	if record == nil || record.Status != statusSubmitted || record.TxHash != result.Hash {
+		t.Fatalf("order record = %+v, want submitted unresolved fill %s", record, result.Hash.Hex())
+	}
 }
 
 func TestRun_ListenerFailureCancelsAndJoinsPoller(t *testing.T) {
