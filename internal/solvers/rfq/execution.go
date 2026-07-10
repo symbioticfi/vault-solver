@@ -36,9 +36,7 @@ type executable struct {
 	quoteID      string
 	encodedOrder []byte
 	signature    []byte
-	deadline     int64
-	filler       common.Address
-	outputs      []backendOut
+	projected    backendOrder
 }
 
 // executionService polls the backend for open orders and fills them via the Executor. It runs in its
@@ -145,29 +143,18 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
-	if exec.filler != e.executor {
-		e.fail(orderID, "backend assigned a different filler")
-		return
-	}
-
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
 		e.fail(orderID, "decode order: "+err.Error())
 		return
 	}
-	if dl := order.Request.Deadline; dl == nil || dl.Int64() <= e.now().Unix() {
-		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
-		e.fail(orderID, "order deadline has passed")
-		return
-	}
-	outputToken, ok := singleOutputToken(exec.outputs)
-	if !ok {
-		e.fail(orderID, "only single output-token orders are supported")
-		return
-	}
-	required, err := sumOutputs(exec.outputs)
+	outputToken, required, err := validateSignedOrder(order, e.executor, e.now())
 	if err != nil {
-		e.fail(orderID, "sum outputs: "+err.Error())
+		e.fail(orderID, err.Error())
+		return
+	}
+	if err := validateBackendProjection(exec.projected, order); err != nil {
+		e.fail(orderID, err.Error())
 		return
 	}
 
@@ -234,6 +221,13 @@ func (e *executionService) resolveExecutable(ctx context.Context, local *orderRe
 	}
 	if bo == nil {
 		return nil, nil
+	}
+	if bo.OrderID != local.OrderID {
+		return nil, errors.Errorf("backend returned order %q for requested order %q", bo.OrderID, local.OrderID)
+	}
+	if bo.QuoteID != local.QuoteID {
+		return nil, errors.Errorf(
+			"backend returned quote %q for local quote %q", bo.QuoteID, local.QuoteID)
 	}
 	return executableFromBackend(bo)
 }
@@ -458,12 +452,77 @@ func (e *executionService) release(orderID string) {
 
 /* ───────── executable helpers ───────── */
 
-func executableFromBackend(bo *backendOrder) (*executable, error) {
-	if bo.EncodedOrder == nil || bo.ProtocolSignature == nil || bo.Deadline == nil || bo.Filler == nil {
-		return nil, errors.New("executable order payload incomplete")
+func validateSignedOrder(
+	order executor.IReactorOrder,
+	configuredExecutor common.Address,
+	now time.Time,
+) (common.Address, *big.Int, error) {
+	if order.Filler != configuredExecutor {
+		return common.Address{}, nil, errors.Errorf(
+			"decoded order filler %s does not match configured executor %s",
+			order.Filler.Hex(), configuredExecutor.Hex())
 	}
-	if !common.IsHexAddress(*bo.Filler) {
-		return nil, errors.Errorf("invalid filler %q", *bo.Filler)
+	if order.Request.TokenIn == (common.Address{}) {
+		return common.Address{}, nil, errors.New("decoded order has zero input token")
+	}
+	if order.Request.AmountIn == nil || order.Request.AmountIn.Sign() <= 0 {
+		return common.Address{}, nil, errors.New("decoded order has invalid input amount")
+	}
+	if order.Request.Deadline == nil || order.Request.Deadline.Cmp(big.NewInt(now.Unix())) <= 0 {
+		return common.Address{}, nil, errors.New("order deadline has passed")
+	}
+	if len(order.Outputs) == 0 {
+		return common.Address{}, nil, errors.New("decoded order has no outputs")
+	}
+
+	token := order.Outputs[0].Token
+	if token == (common.Address{}) {
+		return common.Address{}, nil, errors.New("decoded order has zero output token")
+	}
+	required := new(big.Int)
+	for i := range order.Outputs {
+		out := order.Outputs[i]
+		if out.Token != token {
+			return common.Address{}, nil, errors.New("decoded order has multiple output tokens")
+		}
+		if out.Amount == nil || out.Amount.Sign() <= 0 {
+			return common.Address{}, nil, errors.Errorf("decoded order output %d has invalid amount", i)
+		}
+		required.Add(required, out.Amount)
+	}
+	return token, required, nil
+}
+
+func validateBackendProjection(projected backendOrder, order executor.IReactorOrder) error {
+	if projected.Filler != nil {
+		if !common.IsHexAddress(*projected.Filler) ||
+			common.HexToAddress(*projected.Filler) != order.Filler {
+			return errors.New("backend filler does not match decoded order")
+		}
+	}
+	if projected.Outputs == nil {
+		return nil
+	}
+	if len(projected.Outputs) != len(order.Outputs) {
+		return errors.New("backend outputs do not match decoded order")
+	}
+	for i := range projected.Outputs {
+		got := projected.Outputs[i]
+		want := order.Outputs[i]
+		amount, ok := new(big.Int).SetString(got.Amount, 10)
+		if !ok || amount.Sign() < 0 ||
+			!common.IsHexAddress(got.Token) || common.HexToAddress(got.Token) != want.Token ||
+			!common.IsHexAddress(got.Recipient) || common.HexToAddress(got.Recipient) != want.Recipient ||
+			want.Amount == nil || amount.Cmp(want.Amount) != 0 {
+			return errors.Errorf("backend output %d does not match decoded order", i)
+		}
+	}
+	return nil
+}
+
+func executableFromBackend(bo *backendOrder) (*executable, error) {
+	if bo.EncodedOrder == nil || bo.ProtocolSignature == nil {
+		return nil, errors.New("executable order payload incomplete")
 	}
 	encoded, err := hexutil.Decode(*bo.EncodedOrder)
 	if err != nil {
@@ -477,9 +536,7 @@ func executableFromBackend(bo *backendOrder) (*executable, error) {
 		quoteID:      bo.QuoteID,
 		encodedOrder: encoded,
 		signature:    sig,
-		deadline:     *bo.Deadline,
-		filler:       common.HexToAddress(*bo.Filler),
-		outputs:      bo.Outputs,
+		projected:    *bo,
 	}, nil
 }
 
@@ -487,32 +544,4 @@ func executableFromBackend(bo *backendOrder) (*executable, error) {
 func isHash32(s string) bool {
 	b, err := hexutil.Decode(s)
 	return err == nil && len(b) == 32
-}
-
-func singleOutputToken(outputs []backendOut) (common.Address, bool) {
-	if len(outputs) == 0 {
-		return common.Address{}, false
-	}
-	token := outputs[0].Token
-	for _, o := range outputs {
-		if o.Token != token {
-			return common.Address{}, false
-		}
-	}
-	if !common.IsHexAddress(token) {
-		return common.Address{}, false
-	}
-	return common.HexToAddress(token), true
-}
-
-func sumOutputs(outputs []backendOut) (*big.Int, error) {
-	total := new(big.Int)
-	for _, o := range outputs {
-		amt, ok := new(big.Int).SetString(o.Amount, 10)
-		if !ok {
-			return nil, errors.Errorf("invalid output amount %q", o.Amount)
-		}
-		total.Add(total, amt)
-	}
-	return total, nil
 }
