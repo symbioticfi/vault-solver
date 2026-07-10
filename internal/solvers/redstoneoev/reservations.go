@@ -1,6 +1,6 @@
 package redstoneoev
 
-// reservations.go holds the in-flight auction lifecycle state and auction-id dedup ring.
+// reservations.go holds the in-flight auction lifecycle state and bounded message de-dup sets.
 
 import (
 	"slices"
@@ -98,32 +98,31 @@ func (r reservedBid) resolved(onChainNonce uint64, now time.Time) bool {
 	return r.nonce <= onChainNonce || now.Sub(r.at) > reservationTTL
 }
 
-// maxSeenAuctions bounds the de-dup set (insertion-ordered eviction); ample for the auction cadence.
-const maxSeenAuctions = 1024
+// maxSeenMessages bounds each de-dup set (insertion-ordered eviction); ample for the message cadence.
+const maxSeenMessages = 1024
 
-// seenAuctions is a bounded, insertion-ordered de-dup set for auction ids: a re-subscribe on reconnect can
-// replay a frame, and bidding twice for one auction burns a second nonce for the same opportunity.
-// Touched only while parsing auction frames before bid work is dispatched, so it needs no lock.
-type seenAuctions struct {
+// seenKeys is a bounded, insertion-ordered de-dup set. Each instance is touched only by the single WS
+// read goroutine (handleMessage), so it needs no lock.
+type seenKeys struct {
 	set   map[string]struct{}
 	order []string
 	cap   int
 }
 
-func newSeenAuctions(capacity int) *seenAuctions {
-	return &seenAuctions{set: make(map[string]struct{}, capacity), cap: capacity}
+func newSeenKeys(capacity int) *seenKeys {
+	return &seenKeys{set: make(map[string]struct{}, capacity), cap: capacity}
 }
 
-// seen reports whether id was already processed; if not, it records it (evicting the oldest past cap).
-func (s *seenAuctions) seen(id string) bool {
-	if _, ok := s.set[id]; ok {
+// seen reports whether key was already processed; if not, it records it (evicting the oldest past cap).
+func (s *seenKeys) seen(key string) bool {
+	if _, ok := s.set[key]; ok {
 		return true
 	}
 	if len(s.order) >= s.cap {
 		delete(s.set, s.order[0])
 		s.order = s.order[1:]
 	}
-	s.set[id] = struct{}{}
-	s.order = append(s.order, id)
+	s.set[key] = struct{}{}
+	s.order = append(s.order, key)
 	return false
 }

@@ -36,7 +36,8 @@ type Solver struct {
 	breaker      *breaker
 	metrics      *metrics
 	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
+	seenAuctions *seenKeys // separate bounded de-dup sets, both WS-read-goroutine-only
+	seenResults  *seenKeys
 	log          logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop

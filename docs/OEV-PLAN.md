@@ -90,11 +90,12 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   tripping the breaker after N in the window. We gate on `liquidator == callback` (same won-detection as
   `auction-result`) because the frame arrives on both the broadcast `oev/liquidations` and the
   callback-scoped `oev/notify/<callback>` subscription, so a result may belong to another solver. We are a
-  state-reading bot, **not** a log-indexer: there is no `FilterLogs` scan. A result for our callback wakes
-  the solver-owned Executor/adapter refresh loop; it is not forwarded into the strategy interface. If a
-  settlement receipt is available from RedStone's `txHash`, the bot decodes callback `LegResult`/`PayBidResult` logs from that
-  receipt for diagnostics. Realized profit is read off the callback's loan-token balance / balance sheet,
-  not event accounting.
+  state-reading bot, **not** a log-indexer: there is no `FilterLogs` scan. Duplicate deliveries across
+  those two topics are suppressed before reservation release, state refresh, breaker mutation, or
+  metrics. Result identity prefers the RedStone result id, then a valid lowercase transaction hash, then
+  the exact frame's keccak hash. A result for our callback wakes the solver-owned Executor/adapter refresh
+  loop; it is not forwarded into the strategy interface. The generic solver does not fetch or decode
+  callback-specific receipt logs; realized profit is strategy-owned balance-sheet state.
 - **`Run(ctx)`** owns the resilient WS client (connect with `x-api-key`, subscribe `oev/liquidations` +
   `oev/notify/<callback>` for the solver-configured callback, reconnect with backoff + jitter, ~7 h proactive
   rotation, staleness watchdog), the hot-path handler, the strategy's refresh loops, and the Executor-state
@@ -170,9 +171,9 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 | `strategies/default/morphoapi.go` | OEV-local adapter over generated Morpho GraphQL operations: `markets` returns adapter-scoped market state (§3.4), `marketPositions` returns at-risk position state capped at `maxTrackedPositions` (§3.2) |
 | `api/morphographql` | generated Morpho GraphQL binding from vendored schema + explicit operation documents |
 | `chainreader.go` | solver-owned on-chain reads: Executor accounting and adapter snapshot |
-| `reservations.go` | in-flight auction reservation + pending-auction snapshot + auction-id de-dup (`seenAuctions`) |
+| `reservations.go` | in-flight auction reservation + pending-auction snapshot + separate bounded auction/result de-dup sets (`seenKeys`) |
 | `wsclient.go` | resilient WS client: reconnect/backoff/jitter, ~7 h rotation, heartbeat, subscribe replay |
-| `wsmessages.go` | wire types pinned to RedStone's zod + a captured auction frame, including auction identity/key hashing |
+| `wsmessages.go` | wire types pinned to RedStone's zod + deterministic liquidation-result identity + a captured auction frame |
 | `eip191.go` | EXECUTOR_V6 digest + EIP-191 `SignBid` via `Signer.SignHash` (golden + parity tests) |
 | `noncestore.go` | strictly-ascending nonce high-water mark, reconciled with the on-chain getter |
 | `breaker.go` | failed-liquidation rolling-window breaker + `blacklisted`-frame halt |
@@ -451,8 +452,9 @@ convert a profitable settlement into a `BidUnderpaid` strike (see §10).
 
 Settlement events emitted on-chain (`LegResult` and `PayBidResult`; the Executor's
 `LiquidationFailed(solver indexed, nonce)`) document settlement and post-mortem reasons. The generic solver
-does not decode callback-specific receipt logs; it only attributes actual gas from the receipt. The breaker
-is still fed by the WS `liquidation-result` push (§2).
+does not fetch or decode callback-specific receipt logs. Separate 1,024-entry insertion-ordered sets bound
+auction and liquidation-result replay memory; a duplicate result is dropped before every settlement side
+effect. The breaker is fed by the first WS `liquidation-result` delivery (§2).
 
 ---
 
@@ -485,7 +487,9 @@ operator-maintained outside this repo.
   "operationData","liquidationSig","maxTxGasPrice","borrowers"?}}` — `bid` is a decimal **ether** string;
   bids are sorted descending, highest wins, late replies discarded.
 - **Notify frames**: `auction-result {bid, liquidator}` (we won iff `liquidator == callback.toLower()`),
-  `liquidation-result {success, txHash, …}`, `blacklisted {liquidator, msg}`.
+  `liquidation-result {success, txHash, …}`, `blacklisted {liquidator, msg}`. Auction and liquidation-result
+  replay caches are separate and bounded at 1,024 entries each; result keys prefer `id`, then valid
+  lowercase `txHash`, then the keccak of the exact frame, and duplicates are discarded before side effects.
 - Frame schemas are vendored verbatim from RedStone's zod at
   [`../openapi/redstone-oev-ws.zod.ts`](../openapi/redstone-oev-ws.zod.ts); Go structs are pinned to it
   by tests. The on-chain half follows vendor-and-generate (the Executor ABI from the verified source).

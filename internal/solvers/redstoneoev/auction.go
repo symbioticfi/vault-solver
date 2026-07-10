@@ -90,6 +90,11 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 		s.log.V(1).Error(err, "drop malformed frame", "op", "liquidation-result")
 		return
 	}
+	key := r.dedupKey(raw)
+	if s.seenResults.seen(key) {
+		s.log.V(1).Info("duplicate liquidation result; already processed", "result", key)
+		return
+	}
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	ours := liquidator == s.cfg.Callback
 	s.log.Info("liquidation-result", "id", r.ID, "success", r.Data.Success,
@@ -134,7 +139,7 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 		s.log.Info("auction with empty id received; dropping", "timestamp", a.Timestamp, "timeoutMs", a.TimeoutMs)
 		return AuctionMessage{}, time.Time{}, false
 	}
-	if s.seen.seen(key) {
+	if s.seenAuctions.seen(key) {
 		s.metrics.skip("duplicate")
 		s.log.V(1).Info("duplicate auction; already processed", "auction", a.ID)
 		return AuctionMessage{}, time.Time{}, false

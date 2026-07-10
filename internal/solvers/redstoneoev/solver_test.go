@@ -99,13 +99,14 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 	}
 
 	s := &Solver{
-		cfg:     cfg,
-		chainID: big.NewInt(11155111),
-		nonces:  &nonceStore{},
-		breaker: newBreaker(3, time.Hour),
-		seen:    newSeenAuctions(maxSeenAuctions),
-		log:     logr.Discard(),
-		deps:    solver.Deps{Signer: sgnr},
+		cfg:          cfg,
+		chainID:      big.NewInt(11155111),
+		nonces:       &nonceStore{},
+		breaker:      newBreaker(3, time.Hour),
+		seenAuctions: newSeenKeys(maxSeenMessages),
+		seenResults:  newSeenKeys(maxSeenMessages),
+		log:          logr.Discard(),
+		deps:         solver.Deps{Signer: sgnr},
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}),
 	}
@@ -1053,10 +1054,28 @@ func TestBuildBidStaleEpoch(t *testing.T) {
 	}
 }
 
-// TestSeenAuctions pins the bounded de-dup: first sight is new, repeats are seen, and the oldest id is
+func TestLiquidationResultDedupKey(t *testing.T) {
+	withID := LiquidationResult{ID: "auction-1", Data: LiquidationResultData{TxHash: common.Hash{1}.Hex()}}
+	if got := withID.dedupKey([]byte(`{"different":"body"}`)); got != "id:auction-1" {
+		t.Fatalf("id key = %q", got)
+	}
+	withHash := LiquidationResult{Data: LiquidationResultData{
+		TxHash: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}}
+	if got := withHash.dedupKey([]byte(`{"body":1}`)); got != "tx:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("tx key = %q", got)
+	}
+	raw := []byte(`{"op":"liquidation-result","data":{"success":false}}`)
+	want := "frame:" + crypto.Keccak256Hash(raw).Hex()
+	if got := (LiquidationResult{}).dedupKey(raw); got != want {
+		t.Fatalf("frame key = %q, want %q", got, want)
+	}
+}
+
+// TestSeenKeys pins the bounded de-dup: first sight is new, repeats are seen, and the oldest id is
 // evicted past cap (so a long-evicted id reads as new again).
-func TestSeenAuctions(t *testing.T) {
-	s := newSeenAuctions(2)
+func TestSeenKeys(t *testing.T) {
+	s := newSeenKeys(2)
 	if s.seen("a") {
 		t.Fatal("first sight of a should be new")
 	}
@@ -1072,14 +1091,51 @@ func TestSeenAuctions(t *testing.T) {
 	}
 }
 
+func TestLiquidationResultDuplicateHasOneSideEffect(t *testing.T) {
+	s, _ := seededSolver(t)
+	s.breaker = newBreaker(2, time.Hour)
+	var err error
+	s.metrics, err = newMetrics(prometheus.NewRegistry(), defaultStrategyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.reserve(8, time.Now(), seedCallback, "same")
+	frame := func(id string) []byte {
+		return marshal(LiquidationResult{
+			Op: "liquidation-result",
+			ID: id,
+			Data: LiquidationResultData{
+				Success:    false,
+				Liquidator: s.cfg.Callback.Hex(),
+				TxHash:     common.HexToHash("0x1234").Hex(),
+			},
+		})
+	}
+	s.handleMessage(t.Context(), frame("same"))
+	s.handleMessage(t.Context(), frame("same"))
+	if got := testutil.ToFloat64(s.metrics.failedLiq); got != 1 {
+		t.Fatalf("duplicate result failure metric = %v, want 1", got)
+	}
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("first result did not release reservation: pending=%v", inFlight.pending)
+	}
+	if tripped, _ := s.breaker.tripped(time.Now()); tripped {
+		t.Fatal("duplicate result counted twice")
+	}
+	s.handleMessage(t.Context(), frame("distinct"))
+	if tripped, _ := s.breaker.tripped(time.Now()); !tripped {
+		t.Fatal("two distinct failures must trip the breaker")
+	}
+}
+
 // TestLiquidationResultFeedsBreaker pins the WS-driven failure breaker: a liquidation-result frame for OUR
 // callback with success:false records exactly one breaker failure (and trips at maxFailures); a success:true
 // frame, and a failure for ANOTHER liquidator, record none. This is the sole breaker-failure feed now that
 // the on-chain event scan is gone.
 func TestLiquidationResultFeedsBreaker(t *testing.T) {
-	frame := func(liquidator string, success bool) []byte {
+	frame := func(id, liquidator string, success bool) []byte {
 		return marshal(LiquidationResult{
-			Op: "liquidation-result", ID: "a",
+			Op: "liquidation-result", ID: id,
 			Data: LiquidationResultData{Success: success, Liquidator: liquidator, TxHash: "0x1"},
 		})
 	}
@@ -1087,8 +1143,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 
 	t.Run("success:false for our callback records a failure and trips at maxFailures", func(t *testing.T) {
 		s, _ := seededSolver(t) // breaker maxFailures = 3
-		for i := 0; i < 3; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), false))
+		for _, id := range []string{"failure-0", "failure-1", "failure-2"} {
+			s.handleMessage(t.Context(), frame(id, seedCallback.Hex(), false))
 		}
 		if tripped, _ := s.breaker.tripped(now); !tripped {
 			t.Fatal("3 failed liquidation-result frames for our callback must trip the breaker")
@@ -1097,8 +1153,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 
 	t.Run("success:true records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), true))
+		for _, id := range []string{"success-0", "success-1", "success-2", "success-3", "success-4"} {
+			s.handleMessage(t.Context(), frame(id, seedCallback.Hex(), true))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("successful liquidation-result frames must not trip the breaker")
@@ -1108,8 +1164,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 	t.Run("a failure for another liquidator records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		other := common.HexToAddress("0x2222222222222222222222222222222222222222").Hex()
-		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(other, false))
+		for _, id := range []string{"other-0", "other-1", "other-2", "other-3", "other-4"} {
+			s.handleMessage(t.Context(), frame(id, other, false))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("another solver's failed liquidations must not trip our breaker")
