@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
@@ -29,7 +31,9 @@ type snapshot struct {
 
 // apiMonitor owns the API-backed Morpho snapshot. Its run loop is the only writer.
 type apiMonitor struct {
-	log logr.Logger
+	log      logr.Logger
+	reader   Reader
+	callback common.Address
 
 	maxPositions int
 	loadAdapter  func() (types.AdapterSnapshot, bool)
@@ -44,13 +48,17 @@ type apiMonitor struct {
 }
 
 func newAPIMonitor(
+	reader Reader,
 	log logr.Logger,
 	cfg Config,
 	chainID int64,
+	callback common.Address,
 	loadAdapter func() (types.AdapterSnapshot, bool),
 ) *apiMonitor {
 	m := &apiMonitor{
 		log:          log.WithName("monitor"),
+		reader:       reader,
+		callback:     callback,
 		maxPositions: cfg.MaxTrackedPositions,
 		loadAdapter:  loadAdapter,
 		maxHF:        cfg.DiscoveryMaxHealthFactor,
@@ -111,6 +119,33 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 		m.log.V(1).Info("morpho API market refresh returned no usable adapter markets")
 		return
 	}
+	blockNumber := new(big.Int).SetUint64(apiSnap.block)
+	header, err := m.reader.ReadHeaderAt(ctx, blockNumber)
+	if err != nil {
+		m.log.Error(err, "pinned Morpho block header unreadable; keeping cache", "block", apiSnap.block)
+		return
+	}
+	blockTime, err := pinnedHeaderTime(header, blockNumber)
+	if err != nil {
+		m.log.Error(err, "pinned Morpho block header unreadable; keeping cache", "block", apiSnap.block)
+		return
+	}
+	morphoAddr, err := m.reader.ReadCallbackMorpho(ctx, m.callback)
+	if err != nil || morphoAddr == (common.Address{}) {
+		m.log.Error(err, "callback MORPHO read failed; keeping cache")
+		return
+	}
+	states, err := m.reader.ReadMarketStatesAt(ctx, morphoAddr, apiSnap.params(), blockNumber)
+	if err != nil {
+		m.log.Error(err, "pinned Morpho state refresh failed; keeping cache", "block", apiSnap.block)
+		return
+	}
+	apiSnap.applyPinnedStates(states)
+	if len(apiSnap.markets) == 0 {
+		m.log.V(1).Info("pinned Morpho refresh returned no usable markets", "block", apiSnap.block)
+		return
+	}
+	apiSnap.blockTime = blockTime
 
 	ids := make([]common.Hash, 0, len(apiSnap.markets))
 	for id := range apiSnap.markets {
@@ -127,6 +162,14 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 		markets: apiSnap.markets, prices: apiSnap.prices, positions: positions,
 		block: apiSnap.block, blockTime: apiSnap.blockTime, updatedAt: time.Now(),
 	})
+}
+
+func pinnedHeaderTime(header *gethtypes.Header, blockNumber *big.Int) (uint64, error) {
+	if header == nil || header.Number == nil || blockNumber == nil ||
+		header.Number.Cmp(blockNumber) != 0 || header.Time == 0 {
+		return 0, errors.New("pinned block header mismatch")
+	}
+	return header.Time, nil
 }
 
 func adapterMarketScope(adapter types.AdapterSnapshot) (common.Address, []common.Address, bool) {
@@ -152,6 +195,27 @@ type apiMarketSnapshot struct {
 	blockTime uint64
 }
 
+func (s *apiMarketSnapshot) params() map[common.Hash]MarketParams {
+	params := make(map[common.Hash]MarketParams, len(s.markets))
+	for id, info := range s.markets {
+		params[id] = info.Params
+	}
+	return params
+}
+
+func (s *apiMarketSnapshot) applyPinnedStates(states map[common.Hash]morpho.MarketState) {
+	for id, info := range s.markets {
+		state, ok := states[id]
+		if !ok {
+			delete(s.markets, id)
+			delete(s.prices, id)
+			continue
+		}
+		info.State = state
+		s.markets[id] = info
+	}
+}
+
 func (m *apiMonitor) apiMarketSnapshot(apiMarkets []morphoMarket, loan common.Address, redeemable []common.Address) apiMarketSnapshot {
 	redeem := make(map[common.Address]bool, len(redeemable))
 	for _, a := range redeemable {
@@ -175,7 +239,6 @@ func (m *apiMonitor) apiMarketSnapshot(apiMarkets []morphoMarket, loan common.Ad
 		views = append(views, view)
 		if view.block > out.block {
 			out.block = view.block
-			out.blockTime = view.blockTime
 		}
 	}
 	for _, view := range views {
@@ -193,11 +256,10 @@ func (m *apiMonitor) apiMarketSnapshot(apiMarkets []morphoMarket, loan common.Ad
 }
 
 type apiMarketView struct {
-	id        common.Hash
-	info      MarketInfo
-	price     *big.Int
-	block     uint64
-	blockTime uint64
+	id    common.Hash
+	info  MarketInfo
+	price *big.Int
+	block uint64
 }
 
 func marketInfoFromAPI(m morphoMarket) (apiMarketView, bool) {
@@ -249,7 +311,7 @@ func marketInfoFromAPI(m morphoMarket) (apiMarketView, bool) {
 		params.Oracle == (common.Address{}) {
 		return apiMarketView{}, false
 	}
-	return apiMarketView{id: m.MarketID, price: price, block: block, blockTime: lastUpdate, info: MarketInfo{
+	return apiMarketView{id: m.MarketID, price: price, block: block, info: MarketInfo{
 		Params: params,
 		State: morpho.MarketState{
 			TotalSupplyAssets: supplyAssets,

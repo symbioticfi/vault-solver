@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -94,8 +95,10 @@ type Reader interface {
 	ReadLoanEthRate(ctx context.Context, loanDecimals int, feed *loanEthFeed, now time.Time) *big.Int
 	ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error)
 	ResolveParams(ctx context.Context, morphoAddr common.Address, ids []common.Hash) (map[common.Hash]MarketParams, error)
+	ReadMarketStatesAt(ctx context.Context, morphoAddr common.Address, params map[common.Hash]MarketParams, blockNumber *big.Int) (map[common.Hash]morpho.MarketState, error)
 	ReadHead(ctx context.Context) (number uint64, timestamp uint64, err error)
+	ReadHeaderAt(ctx context.Context, blockNumber *big.Int) (*gethtypes.Header, error)
 	ReadCallbackMorpho(ctx context.Context, callback common.Address) (common.Address, error)
-	ReadTestMarketStates(ctx context.Context, morphoAddr common.Address, params map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error)
+	ReadTestMarketStates(ctx context.Context, morphoAddr common.Address, params map[common.Hash]MarketParams, blockNumber *big.Int) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error)
 	ReadTestPositions(ctx context.Context, morphoAddr common.Address, markets map[common.Hash]MarketInfo, borrowers []common.Address) (map[common.Hash]map[common.Address]morpho.PositionState, error)
 }

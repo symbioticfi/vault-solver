@@ -117,7 +117,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		if cfg.MorphoAPIURL == "" {
 			return nil, errors.New("morphoApiUrl is required unless test monitor is enabled")
 		}
-		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
+		mon = newAPIMonitor(deps.Reader, deps.Log, cfg, deps.ChainID, deps.Callback, deps.LoadAdapterSnapshot)
 	}
 	return &Strategy{
 		cfg:         cfg,

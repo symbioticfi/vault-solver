@@ -122,7 +122,9 @@ func (m *testMonitor) refresh(ctx context.Context) {
 		m.log.V(1).Info("test monitor found no adapter-served markets")
 		return
 	}
-	markets, prices, err := m.reader.ReadTestMarketStates(ctx, morphoAddr, want)
+	markets, prices, err := m.reader.ReadTestMarketStates(
+		ctx, morphoAddr, want, new(big.Int).SetUint64(startBlock),
+	)
 	if err != nil {
 		m.log.Error(err, "test monitor market state read failed; keeping cache")
 		return

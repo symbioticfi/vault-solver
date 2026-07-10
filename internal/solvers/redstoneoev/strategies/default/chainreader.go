@@ -2,16 +2,19 @@ package defaultstrategy
 
 import (
 	"context"
+	"maps"
 	"math/big"
 	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/aggregator"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
+	irmbinding "github.com/symbioticfi/vault-solver/api/bindings/oev/irm"
 	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/oracle"
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -21,18 +24,26 @@ import (
 var (
 	callbackABI = callback.NewSymbioticOevSolver()
 	feedABI     = aggregator.NewAggregatorV3()
+	irmABI      = irmbinding.NewAdaptiveCurveIrm()
 	morphoABI   = morphobinding.NewMorpho()
 	oracleABI   = oracle.NewMorphoOracle()
 )
 
+type multicaller interface {
+	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
+	MulticallAt(ctx context.Context, calls []chain.Call, blockNumber *big.Int) ([]chain.CallResult, error)
+}
+
 type chainReader struct {
 	chain *chain.Client
+	calls multicaller
 	log   logr.Logger
 }
 
 func newChainReader(c *chain.Client, log logr.Logger) *chainReader {
 	return &chainReader{
 		chain: c,
+		calls: c,
 		log:   log,
 	}
 }
@@ -71,7 +82,7 @@ func (r *chainReader) ReadLoanEthRate(ctx context.Context, loanDecimals int, fee
 	if feed == nil {
 		return nil
 	}
-	res, err := r.chain.Multicall(ctx, []chain.Call{
+	res, err := r.calls.Multicall(ctx, []chain.Call{
 		{Target: feed.LoanUsdFeed, AllowFailure: true, Data: feedABI.PackLatestRoundData()},
 		{Target: feed.LoanUsdFeed, AllowFailure: true, Data: feedABI.PackDecimals()},
 		{Target: feed.EthUsdFeed, AllowFailure: true, Data: feedABI.PackLatestRoundData()},
@@ -115,7 +126,7 @@ func (r *chainReader) ResolveParams(ctx context.Context, morphoAddr common.Addre
 	for i, id := range ids {
 		calls[i] = chain.Call{Target: morphoAddr, AllowFailure: true, Data: morphoABI.PackIdToMarketParams(id)}
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.calls.Multicall(ctx, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +151,90 @@ func (r *chainReader) ResolveParams(ctx context.Context, morphoAddr common.Addre
 	return out, nil
 }
 
+// ReadMarketStatesAt reads Morpho's exact accounting tuple and corresponding IRM rate at one pinned
+// block. A failed or undecodable non-zero IRM excludes that market instead of under-accruing at zero.
+func (r *chainReader) ReadMarketStatesAt(
+	ctx context.Context,
+	morphoAddr common.Address,
+	params map[common.Hash]MarketParams,
+	blockNumber *big.Int,
+) (map[common.Hash]morpho.MarketState, error) {
+	if morphoAddr == (common.Address{}) {
+		return nil, errors.New("read market states: zero Morpho address")
+	}
+	if blockNumber == nil || blockNumber.Sign() < 0 {
+		return nil, errors.New("read market states: block number must be non-negative")
+	}
+	if len(params) == 0 {
+		return map[common.Hash]morpho.MarketState{}, nil
+	}
+	block := new(big.Int).Set(blockNumber)
+	ids := slices.SortedFunc(maps.Keys(params), common.Hash.Cmp)
+	marketCalls := make([]chain.Call, len(ids))
+	for i, id := range ids {
+		marketCalls[i] = chain.Call{Target: morphoAddr, AllowFailure: true, Data: morphoABI.PackMarket(id)}
+	}
+	marketResults, err := r.calls.MulticallAt(ctx, marketCalls, block)
+	if err != nil {
+		return nil, errors.Errorf("read Morpho markets at block %s: %w", block, err)
+	}
+	if len(marketResults) != len(marketCalls) {
+		return nil, errors.Errorf("read Morpho markets at block %s: got %d results, want %d",
+			block, len(marketResults), len(marketCalls))
+	}
+
+	type rateSlot struct{ id common.Hash }
+	states := make(map[common.Hash]morpho.MarketState, len(ids))
+	var rateCalls []chain.Call
+	var rateSlots []rateSlot
+	for i, id := range ids {
+		if !marketResults[i].Success {
+			continue
+		}
+		state, ok := decodeMarketState(marketResults[i].ReturnData, params[id])
+		if !ok {
+			continue
+		}
+		if params[id].Irm == (common.Address{}) {
+			state.BorrowRatePerSec = new(big.Int)
+			states[id] = state
+			continue
+		}
+		rateSlots = append(rateSlots, rateSlot{id: id})
+		rateCalls = append(rateCalls, chain.Call{
+			Target: params[id].Irm, AllowFailure: true,
+			Data: irmABI.PackBorrowRateView(irmParams(params[id]), irmMarket(state)),
+		})
+		states[id] = state
+	}
+	if len(rateCalls) == 0 {
+		return states, nil
+	}
+	rateResults, err := r.calls.MulticallAt(ctx, rateCalls, block)
+	if err != nil {
+		return nil, errors.Errorf("read Morpho IRM rates at block %s: %w", block, err)
+	}
+	if len(rateResults) != len(rateCalls) {
+		return nil, errors.Errorf("read Morpho IRM rates at block %s: got %d results, want %d",
+			block, len(rateResults), len(rateCalls))
+	}
+	for i, slot := range rateSlots {
+		if !rateResults[i].Success {
+			delete(states, slot.id)
+			continue
+		}
+		rate, unpackErr := irmABI.UnpackBorrowRateView(rateResults[i].ReturnData)
+		if unpackErr != nil || rate == nil {
+			delete(states, slot.id)
+			continue
+		}
+		state := states[slot.id]
+		state.BorrowRatePerSec = rate
+		states[slot.id] = state
+	}
+	return states, nil
+}
+
 func (r *chainReader) ReadHead(ctx context.Context) (number uint64, timestamp uint64, err error) {
 	header, err := r.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
@@ -151,57 +246,69 @@ func (r *chainReader) ReadHead(ctx context.Context) (number uint64, timestamp ui
 	return header.Number.Uint64(), header.Time, nil
 }
 
+func (r *chainReader) ReadHeaderAt(ctx context.Context, blockNumber *big.Int) (*gethtypes.Header, error) {
+	if blockNumber == nil || blockNumber.Sign() < 0 {
+		return nil, errors.New("block number must be non-negative")
+	}
+	return r.chain.HeaderByNumber(ctx, new(big.Int).Set(blockNumber))
+}
+
 func (r *chainReader) ReadCallbackMorpho(ctx context.Context, callback common.Address) (common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{
+	res, err := r.calls.Multicall(ctx, []chain.Call{
 		{Target: callback, AllowFailure: true, Data: callbackABI.PackMORPHO()},
 	})
 	if err != nil {
 		return common.Address{}, err
 	}
 	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, nil
+		return common.Address{}, errors.New("callback MORPHO read failed")
 	}
 	morphoAddr, err := callbackABI.UnpackMORPHO(res[0].ReturnData)
 	if err != nil {
 		return common.Address{}, errors.Errorf("decode callback MORPHO: %w", err)
 	}
+	if morphoAddr == (common.Address{}) {
+		return common.Address{}, errors.New("callback MORPHO unresolved")
+	}
 	return morphoAddr, nil
 }
 
-func (r *chainReader) ReadTestMarketStates(ctx context.Context, morphoAddr common.Address, params map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
-	ids := sortedMarketIDs(params)
-	calls := make([]chain.Call, 0, len(ids)*2)
-	for _, id := range ids {
-		p := params[id]
-		calls = append(calls,
-			chain.Call{Target: morphoAddr, AllowFailure: true, Data: morphoABI.PackMarket(id)},
-			chain.Call{Target: p.Oracle, AllowFailure: true, Data: oracleABI.PackPrice()},
-		)
+func (r *chainReader) ReadTestMarketStates(
+	ctx context.Context,
+	morphoAddr common.Address,
+	params map[common.Hash]MarketParams,
+	blockNumber *big.Int,
+) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
+	states, err := r.ReadMarketStatesAt(ctx, morphoAddr, params, blockNumber)
+	if err != nil {
+		return nil, nil, err
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	ids := slices.SortedFunc(maps.Keys(states), common.Hash.Cmp)
+	if len(ids) == 0 {
+		return map[common.Hash]MarketInfo{}, map[common.Hash]*big.Int{}, nil
+	}
+	calls := make([]chain.Call, len(ids))
+	for i, id := range ids {
+		calls[i] = chain.Call{Target: params[id].Oracle, AllowFailure: true, Data: oracleABI.PackPrice()}
+	}
+	res, err := r.calls.MulticallAt(ctx, calls, blockNumber)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(res) != len(calls) {
-		return nil, nil, errors.Errorf("testMonitor markets: got %d results, want %d", len(res), len(calls))
+		return nil, nil, errors.Errorf("testMonitor prices: got %d results, want %d", len(res), len(calls))
 	}
 	markets := make(map[common.Hash]MarketInfo, len(ids))
 	prices := make(map[common.Hash]*big.Int, len(ids))
 	for i, id := range ids {
-		marketRes := res[i*2]
-		priceRes := res[i*2+1]
-		if !marketRes.Success || !priceRes.Success {
+		if !res[i].Success {
 			continue
 		}
-		state, ok := decodeTestMarketState(marketRes.ReturnData, params[id])
-		if !ok {
+		price, unpackErr := oracleABI.UnpackPrice(res[i].ReturnData)
+		if unpackErr != nil || price == nil || price.Sign() <= 0 {
 			continue
 		}
-		price, err := oracleABI.UnpackPrice(priceRes.ReturnData)
-		if err != nil || price == nil || price.Sign() <= 0 {
-			continue
-		}
-		markets[id] = MarketInfo{Params: params[id], State: state}
+		markets[id] = MarketInfo{Params: params[id], State: states[id]}
 		prices[id] = price
 	}
 	return markets, prices, nil
@@ -221,7 +328,7 @@ func (r *chainReader) ReadTestPositions(ctx context.Context, morphoAddr common.A
 			calls = append(calls, chain.Call{Target: morphoAddr, AllowFailure: true, Data: morphoABI.PackPosition(id, borrower)})
 		}
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.calls.Multicall(ctx, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +369,11 @@ func decodeMarketParams(data []byte) (MarketParams, error) {
 	}, nil
 }
 
-func decodeTestMarketState(data []byte, params MarketParams) (morpho.MarketState, bool) {
+func decodeMarketState(data []byte, params MarketParams) (morpho.MarketState, bool) {
 	out, err := morphoABI.UnpackMarket(data)
 	if err != nil || out.TotalSupplyAssets == nil || out.TotalSupplyShares == nil ||
 		out.TotalBorrowAssets == nil || out.TotalBorrowShares == nil || out.LastUpdate == nil ||
-		out.Fee == nil || params.Lltv == nil || !out.LastUpdate.IsUint64() {
+		out.Fee == nil || params.Lltv == nil || !out.LastUpdate.IsUint64() || out.LastUpdate.Sign() <= 0 {
 		return morpho.MarketState{}, false
 	}
 	return morpho.MarketState{
@@ -277,8 +384,25 @@ func decodeTestMarketState(data []byte, params MarketParams) (morpho.MarketState
 		LastUpdate:        out.LastUpdate.Uint64(),
 		Fee:               out.Fee,
 		Lltv:              params.Lltv,
-		BorrowRatePerSec:  big.NewInt(0),
 	}, true
+}
+
+func irmParams(params MarketParams) irmbinding.Struct0 {
+	return irmbinding.Struct0{
+		LoanToken: params.LoanToken, CollateralToken: params.CollateralToken,
+		Oracle: params.Oracle, Irm: params.Irm, Lltv: params.Lltv,
+	}
+}
+
+func irmMarket(state morpho.MarketState) irmbinding.Struct1 {
+	return irmbinding.Struct1{
+		TotalSupplyAssets: state.TotalSupplyAssets,
+		TotalSupplyShares: state.TotalSupplyShares,
+		TotalBorrowAssets: state.TotalBorrowAssets,
+		TotalBorrowShares: state.TotalBorrowShares,
+		LastUpdate:        new(big.Int).SetUint64(state.LastUpdate),
+		Fee:               state.Fee,
+	}
 }
 
 func sortedMarketIDs(params map[common.Hash]MarketParams) []common.Hash {
