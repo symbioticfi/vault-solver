@@ -56,6 +56,50 @@ func TestBackendClient_ListOpenOrders(t *testing.T) {
 	}
 }
 
+func TestBackendClient_GetExecutableOrder_AcceptsOptionalOutputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		outputsField string
+	}{
+		{name: "omitted"},
+		{name: "null", outputsField: `,"outputs":null`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const orderID = "00000000-0000-0000-0000-0000000000a1"
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+					`"orders":[{"type":"Priority","orderId":"` + orderID + `","orderStatus":"open",` +
+					`"quoteId":"00000000-0000-0000-0000-0000000000b1",` +
+					`"swapper":"0x0000000000000000000000000000000000000099","txHash":null,"nonce":"0x1",` +
+					`"input":{"token":"0x0000000000000000000000000000000000000001","amount":"1000"}` +
+					tc.outputsField + `,"settledAmounts":[],"encodedOrder":"0x01",` +
+					`"protocolSignature":"0xaa","filler":"0x0000000000000000000000000000000000000010"}],` +
+					`"cursor":null}`))
+			}))
+			defer srv.Close()
+
+			order, err := newBackendClient(srv.URL).getExecutableOrder(
+				t.Context(), orderID, "0x0000000000000000000000000000000000000010",
+			)
+			if err != nil {
+				t.Fatalf("getExecutableOrder: %v", err)
+			}
+			if order == nil {
+				t.Fatal("getExecutableOrder returned nil")
+			}
+			if order.Outputs != nil {
+				t.Fatalf("outputs = %+v, want nil optional projection", order.Outputs)
+			}
+			if _, err := executableFromBackend(order); err != nil {
+				t.Fatalf("executableFromBackend: %v", err)
+			}
+		})
+	}
+}
+
 func TestBackendClient_ListOpenOrders_OversizedResponse(t *testing.T) {
 	const responsePrefix = `{"requestId":"00000000-0000-0000-0000-000000000000","orders":[],"cursor":null}`
 	const paddingBytes = maxGeneratedResponseBytes + 1

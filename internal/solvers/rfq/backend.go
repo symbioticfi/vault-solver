@@ -179,14 +179,15 @@ func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
 	if v, ok := o.GetTxHashOk(); ok {
 		bo.TxHash = v
 	}
-	outs := o.GetOutputs()
-	bo.Outputs = make([]backendOut, 0, len(outs))
-	for i := range outs {
-		bo.Outputs = append(bo.Outputs, backendOut{
-			Token:     outs[i].GetToken(),
-			Amount:    outs[i].GetAmount(),
-			Recipient: outs[i].GetRecipient(),
-		})
+	if outs, ok := o.GetOutputsOk(); ok {
+		bo.Outputs = make([]backendOut, 0, len(outs))
+		for i := range outs {
+			bo.Outputs = append(bo.Outputs, backendOut{
+				Token:     outs[i].GetToken(),
+				Amount:    outs[i].GetAmount(),
+				Recipient: outs[i].GetRecipient(),
+			})
+		}
 	}
 	// Executable-only optional fields: copy only when present so a non-executable row keeps them nil
 	// and executableFromBackend rejects it as incomplete.
