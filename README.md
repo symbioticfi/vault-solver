@@ -65,8 +65,9 @@ An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)*
 that fills the orders it is awarded, settling on-chain through the adapter.
 
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
-own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
-must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+own adapters, with no discounts API access) or `internal` mode (Symbiotic-internal; may use the
+backend's internal-only discounts API). The caller EOA must be an authorized caller of the RFQ
+`Executor` (its `setCallers` allowlist, granted by the owner).
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

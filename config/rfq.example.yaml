@@ -59,8 +59,8 @@ solvers:
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
       #              scopes both quoting and filling (an empty list is a startup error).
-      #   internal — Symbiotic-internal: uses the public discounts flow and accepts every advertised
-      #              adapter; `adapters` is optional (extra permissioned recovery inventory).
+      #   internal — Symbiotic-internal: may use the backend's internal-only discounts API; configured
+      #              adapters scope quoting when non-empty but do not restrict discount-driven filling.
       solverMode: external
 
       # tokensToQuote scopes which input tokens the filler will quote, evaluated against

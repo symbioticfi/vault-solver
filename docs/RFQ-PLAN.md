@@ -13,24 +13,27 @@ The RFQ filler is the externally-owned **solver/executor** for Symbiotic RFQ. Un
 push path; orders are found exclusively by polling the backend.
 
 - **HTTP server** — `POST /quote` (backend fans out a swap request carrying the candidate per-adapter
-  inventory snapshot in `adapters[]`; the filler prices it, applies a discount, selects the best
-  adapter legs, persists the strategy by `quoteId`, and returns an `amountOut`), `GET /health`, and
-  the code-first OpenAPI surface (`/openapi.json`, `/openapi.yaml`, `/docs`). `/quote` is gated by an
-  `x-rfq-shared-secret` header (the backend peer). There is **no `/notify` endpoint**.
+  inventory snapshot in `adapters[]`; the selected strategy prices it, selects direct and eligible
+  signature-gated discount legs, caches the default strategy's fill plan by `quoteId`, and returns an
+  `amountOut`), `GET /health`, and the code-first OpenAPI surface (`/openapi.json`, `/openapi.yaml`,
+  `/docs`). `/quote` is gated by an `x-rfq-shared-secret` header (the backend peer). There is **no
+  `/notify` endpoint**.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
-- **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
-  sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
-  adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
-  leg's **adapter** address.
-- **State** — in-memory only: `strategies` (by `quoteId`), `orders` (state machine), `attempts`.
+- **Execution** — selects exactly one backend row matching the requested `orderId`, decodes its signed
+  `encodedOrder`, and treats that tuple as authoritative for filler, input, amount, deadline, and
+  outputs. Optional backend filler/output projections must agree. It then builds
+  `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)`; each direct `SwapInput`
+  carries the selected LiquidLane `adapter` explicitly.
+- **State** — in-memory only: the default strategy's fill plans (by `quoteId`), order records (state
+  machine), and attempt counts. Expired fill plans are lazily removed on lookup and swept at a bounded
+  cadence; terminal orders retain their existing three-hour eviction.
 
 The `/quote` request inventory (`adapters[]`) and the strategy use **adapter/asset** terminology
 (`adapter`, `asset`, `assetDecimals`, `maxAssets`, `maxRate`, `discountId`) — a 1:1 match for the TS
 `solverQuoteRequestSchema`. Pricing leg types: **direct** (`discountId == null`, public adapter rate)
 and **discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the
-backend `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4),
-after the direct path is solid; they are sequenced last, not dropped.
+backend `/discounts` flow). Both are implemented; discount legs are sequenced last, not dropped.
 
 ---
 
@@ -103,7 +106,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
 | `domain.ts` | `store.go` types + `strategies/types` (strategy input/output, fill plan, legs, candidates) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
-| `db`/repositories | `store.go` (in-memory strategies/orders/attempts) |
+| `db`/repositories | `store.go` (in-memory orders/attempts); the default strategy owns its fill-plan cache |
 | `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
 
 ### Pluggable strategy layer
@@ -116,7 +119,8 @@ candidates); the strategy owns the decision. Two ship in-tree:
 
 - **`default`** — the in-process faithful port (greedy discount + leg selection). It caches its
   quote-time plan by `quoteId` and, on a cold cache, rebuilds from live on-chain state, re-binding the
-  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`).
+  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`). Expired plans
+  are removed on lookup and by a bounded periodic sweep.
 - **`webhook`** — a transport-only adapter that delegates to an external decider over JSON. It keeps
   **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
   `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.
@@ -162,10 +166,10 @@ config still carrying either is rejected at startup so operators migrate):
   leg is failed closed). It uses **only its own adapters**, which scope quoting/filling and are
   **required** (no discounts fallback → an empty list is rejected at startup). The quote path is not
   discount-filtered — the backend is trusted to send each solver the right adapters.
-- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`) and accepts **every adapter the backend
-  advertises** (no quote-time scoping). Its `adapters` are **optional extra permissioned inventory** used in
-  recovery alongside the discounts — **deduped** (`discountInventories` drops a discount whose adapter is
-  already in the configured/permissioned set).
+- **`internal`**: may call the backend's **internal-only discounts API** (`GET`/`POST /discounts`).
+  Configured `adapters` scope quoting when non-empty, but execution is not adapter-restricted so
+  discount-driven recovery can use any backend-advertised adapter. Configured adapters remain optional
+  extra permissioned recovery inventory.
 
 Both behaviours are **derived from `solverMode` on demand** — no redundant config fields. `Config` exposes
 `usesDiscounts()` (`mode == internal`) and `restrictsToAdapters()` (`mode == external && len(adapters) > 0`),
@@ -261,14 +265,11 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): full functional parity.** The
-pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
-endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
-and the recovery RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed
-hardenings the TS filler lacks** — an order-deadline check before fill, a strategy↔order
-`tokenIn`/`tokenOut`/`amountIn` binding, txHash validation on reconcile, a single-entry guard on the
-batch discount-resolve shape, and TTL eviction of stale strategy/order cache entries (TS maps grow
-unbounded). A few **intentional, non-fund-moving divergences** remain, by design:
+**Status:** the pricing, ABI encoding, backend endpoints, and recovery read set track the current TS
+filler, while the Go service deliberately fails closed at additional trust boundaries. It requires an
+exact `orderId` match, binds fill terms to the ABI-decoded signed order, rejects unknown pause state,
+validates strategy/order terms, and bounds in-memory cache retention. A few **intentional,
+non-fund-moving divergences** remain, by design:
 
 - **Quote-time oracle revert** — a reverting `getAmountOut` makes the Go quote *skip that asset and
   price the rest* (multicall `allowFailure`), whereas the TS filler throws and fails the whole quote.
