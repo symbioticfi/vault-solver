@@ -124,7 +124,11 @@ func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler 
 	if err != nil {
 		return nil, errors.Errorf("backend: get executable order: %w", err)
 	}
-	return first(ordersFromResponse(resp)), nil
+	order, err := selectOrder(ordersFromResponse(resp), orderID)
+	if err != nil {
+		return nil, errors.Errorf("backend: get executable order: %w", err)
+	}
+	return order, nil
 }
 
 // getOrder reads the backend view of one order regardless of status, or nil if absent.
@@ -134,7 +138,11 @@ func (c *backendClient) getOrder(ctx context.Context, orderID string) (*backendO
 	if err != nil {
 		return nil, errors.Errorf("backend: get order: %w", err)
 	}
-	return first(ordersFromResponse(resp)), nil
+	order, err := selectOrder(ordersFromResponse(resp), orderID)
+	if err != nil {
+		return nil, errors.Errorf("backend: get order: %w", err)
+	}
+	return order, nil
 }
 
 // ordersFromResponse projects the generated orders response into the internal order rows. A nil
@@ -197,11 +205,22 @@ func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
 	return bo
 }
 
-func first(orders []backendOrder) *backendOrder {
-	if len(orders) == 0 {
-		return nil
+func selectOrder(orders []backendOrder, orderID string) (*backendOrder, error) {
+	var match *backendOrder
+	for i := range orders {
+		if orders[i].OrderID != orderID {
+			continue
+		}
+		if match != nil {
+			return nil, errors.Errorf("response contained duplicate order %q", orderID)
+		}
+		match = &orders[i]
 	}
-	return &orders[0]
+	if match != nil || len(orders) == 0 {
+		return match, nil
+	}
+	return nil, errors.Errorf(
+		"response for order %q contained %d non-matching row(s)", orderID, len(orders))
 }
 
 /* ───────── discounts (P3) ───────── */

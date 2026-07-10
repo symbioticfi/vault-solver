@@ -192,5 +192,71 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	}
 }
 
+func TestSelectOrder(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		orders  []backendOrder
+		orderID string
+		wantID  string
+		wantErr string
+	}{
+		{name: "empty response", orderID: "wanted"},
+		{
+			name: "selects exact id regardless of order",
+			orders: []backendOrder{
+				{OrderID: "other", QuoteID: "q-other"},
+				{OrderID: "wanted", QuoteID: "q-wanted"},
+			},
+			orderID: "wanted",
+			wantID:  "wanted",
+		},
+		{
+			name:    "nonempty response without requested id",
+			orders:  []backendOrder{{OrderID: "other"}},
+			orderID: "wanted",
+			wantErr: `response for order "wanted" contained 1 non-matching row`,
+		},
+		{
+			name: "duplicate requested id",
+			orders: []backendOrder{
+				{OrderID: "wanted", QuoteID: "q1"},
+				{OrderID: "wanted", QuoteID: "q2"},
+			},
+			orderID: "wanted",
+			wantErr: `response contained duplicate order "wanted"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := selectOrder(tc.orders, tc.orderID)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
+				}
+				if got != nil {
+					t.Fatalf("order = %+v, want nil on ambiguity", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selectOrder: %v", err)
+			}
+			if tc.wantID == "" {
+				if got != nil {
+					t.Fatalf("order = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.OrderID != tc.wantID {
+				t.Fatalf("order = %+v, want id %q", got, tc.wantID)
+			}
+		})
+	}
+}
+
 // hash64 is the 64-hex-char body of a 0x-prefixed discountId used across the backend client tests.
 const hash64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
