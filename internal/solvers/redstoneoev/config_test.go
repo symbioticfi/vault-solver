@@ -212,6 +212,43 @@ func TestParseConfigValid(t *testing.T) {
 	}
 }
 
+func TestParseConfigWebSocketURLSecurity(t *testing.T) {
+	marker := strings.Join([]string{"sensitive", "value"}, "-")
+	tests := []struct {
+		name      string
+		url       string
+		wantErr   bool
+		forbidden string
+	}{
+		{name: "production wss", url: "wss://oev.example/ws"},
+		{name: "localhost ws", url: "ws://localhost:8080/ws"},
+		{name: "ipv4 loopback ws", url: "ws://127.0.0.1:8080/ws"},
+		{name: "ipv6 loopback ws", url: "ws://[::1]:8080/ws"},
+		{name: "remote plaintext", url: "ws://oev.example/ws", wantErr: true},
+		{name: "credentials", url: "wss://user:" + marker + "@oev.example/ws", wantErr: true, forbidden: marker},
+		{name: "missing host", url: "wss:///ws", wantErr: true},
+		{name: "http scheme", url: "https://oev.example/ws", wantErr: true},
+		{name: "relative", url: "/ws", wantErr: true},
+		{name: "malformed credentials", url: "wss://user:" + marker + "@%zz/ws", wantErr: true, forbidden: marker},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			y := strings.Replace(validCfg, "wss://dev-rwa-sepolia.oev.a.redstone.finance", tc.url, 1)
+			cfg, err := decodeCfg(t, y)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseConfig error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && cfg.WSURL != tc.url {
+				t.Fatalf("ws.url = %q, want %q", cfg.WSURL, tc.url)
+			}
+			if err != nil && ((tc.url != "/ws" && strings.Contains(err.Error(), tc.url)) ||
+				(tc.forbidden != "" && strings.Contains(err.Error(), tc.forbidden))) {
+				t.Fatalf("parseConfig error leaked URL credentials: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseConfigDefaults(t *testing.T) {
 	cfg, err := decodeCfg(t, `
 ws: {url: "wss://x", apiKeyEnv: K}
@@ -329,7 +366,7 @@ func TestParseConfigSwapHaircutZeroRespected(t *testing.T) {
 func TestParseConfigErrors(t *testing.T) {
 	cases := map[string]string{
 		"missing ws url":                 `ws: {apiKeyEnv: K}` + "\n" + addrs + api + feedLine,
-		"missing apiKeyEnv":              `ws: {url: x}` + "\n" + addrs + api + feedLine,
+		"missing apiKeyEnv":              `ws: {url: wss://x}` + "\n" + addrs + api + feedLine,
 		"missing adapter":                wsline + `executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"` + "\n" + api + feedLine,
 		"removed positionSource":         wsline + addrs + api + feedLine + "positionSource: redstone\n",      // unknown key: knob removed
 		"removed markets key":            wsline + addrs + api + feedLine + `markets: ["` + mkt + `"]` + "\n", // markets no longer a config field → unknown key
@@ -388,7 +425,7 @@ func TestParseConfigErrors(t *testing.T) {
 
 const (
 	mkt    = "0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5"
-	wsline = "ws: {url: x, apiKeyEnv: K}\n"
+	wsline = "ws: {url: wss://x, apiKeyEnv: K}\n"
 	addrs  = "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\nadapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\ncallback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\n"
 	// api is the production market source (the Morpho API) appended to a valid config; markets/positions are
 	// discovered at runtime, so a parseable config needs no market list.

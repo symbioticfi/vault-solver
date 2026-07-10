@@ -12,6 +12,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const maxWSMessageBytes int64 = 1 << 20
+
 // wsConfig tunes the resilient WS client. Timings default to the RedStone example client's values
 // (docs/OEV-PLAN.md §6.1): server pings ~120s, connections forced-closed ~8h (rotate at ~7h).
 type wsConfig struct {
@@ -113,9 +115,10 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 		_ = resp.Body.Close() // handshake response body; not used
 	}
 	if err != nil {
-		return errors.Errorf("dial %s: %w", w.cfg.URL, err)
+		return errors.Errorf("dial websocket: %w", err)
 	}
-	w.log.Info("connected", "url", w.cfg.URL)
+	conn.SetReadLimit(maxWSMessageBytes)
+	w.log.Info("connected")
 
 	// Drop any solves buffered during the downtime: a solve targets one auction (~400ms life), so
 	// anything still queued after a reconnect is stale. Start each connection with a clean send queue.

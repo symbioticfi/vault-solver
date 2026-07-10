@@ -26,6 +26,7 @@ solvers:
   - name: redstone-oev
     config:
       ws:
+        # Production requires wss://. Plain ws:// is accepted only for localhost/loopback testing.
         url: wss://dev-rwa-sepolia.oev.a.redstone.finance   # RedStone Atom OEV WebSocket (liquidations feed)
         apiKeyEnv: OEV_REDSTONE_API_KEY                      # env var NAME of the RedStone WS API key
 

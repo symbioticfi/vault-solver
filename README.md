@@ -77,6 +77,8 @@ An off-chain bidder for **[RedStone Atom OEV](https://docs.redstone.finance/docs
 price update makes a **[Morpho Blue](https://morpho.org)** position liquidatable, RedStone runs a
 sub-second WebSocket auction for the right to be the liquidator; this solver bids, and on winning, its
 signed payload is bundled atomically with the price update and the liquidation.
+Its authenticated auction stream requires a `wss://` endpoint in production; plaintext `ws://` is
+accepted only for local loopback testing.
 
 On settlement it liquidates the position and exits the seized collateral through a single Symbiotic
 `LiquidLaneAdapter`, realizing the spread and paying its bid. It signs and bids but never submits the

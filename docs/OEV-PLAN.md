@@ -460,8 +460,12 @@ operator-maintained outside this repo.
 
 ### 6.1 Wire protocol
 
-- Connect: WSS + `x-api-key` header. ≤30 connections/key; server pings after 120 s idle; connections
-  force-closed ~8 h (rotate proactively at ~7 h).
+- Connect: production requires WSS + `x-api-key` header. Plain `ws://` is accepted only for local
+  testing on `localhost` or a loopback IP; credential-bearing, relative, and other-scheme URLs fail
+  config validation. ≤30 connections/key; server pings after 120 s idle; connections force-closed
+  ~8 h (rotate proactively at ~7 h).
+- Inbound WebSocket messages are capped at 1 MiB immediately after dialing and before subscriptions;
+  an oversized message closes that connection and enters the normal reconnect path without dispatch.
 - Subscribe: `{"op":"subscribe","topic":"oev/liquidations"}`, `oev/feeds`
   (flat feed auctions are observed but not used as liquidation triggers), and
   `oev/notify/<callback-lowercase>`;
