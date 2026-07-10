@@ -4,11 +4,11 @@ package observability
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,6 +16,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/symbioticfi/vault-solver/internal/httpserver"
 )
 
 // NewLogger builds the production (JSON) zap logger behind the logr interface and returns a flush
@@ -79,7 +81,7 @@ type Health struct {
 // SetReady marks the service ready (readyz returns 200) or not ready (503).
 func (h *Health) SetReady(ready bool) { h.ready.Store(ready) }
 
-// NewHTTPServer builds the observability HTTP server. Caller runs ListenAndServe and Shutdown.
+// NewHTTPServer builds the observability HTTP server. Caller runs ServeUntil.
 func NewHTTPServer(addr string, m *Metrics, h *Health) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
@@ -105,23 +107,12 @@ func writeText(w http.ResponseWriter, code int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
-// ServeUntil runs srv until ctx is cancelled, then shuts it down gracefully. Returns nil on a
-// clean shutdown; logs (does not crash on) an unexpected serve error.
-func ServeUntil(ctx context.Context, srv *http.Server, log logr.Logger) {
-	errCh := make(chan error, 1)
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-	select {
-	case <-ctx.Done():
-	case err := <-errCh:
-		log.Error(err, "observability server failed")
+const shutdownTimeout = 5 * time.Second
+
+// ServeUntil runs srv until ctx is cancelled and returns listener or shutdown failures.
+func ServeUntil(ctx context.Context, srv *http.Server) error {
+	if err := httpserver.ServeUntil(ctx, srv, shutdownTimeout); err != nil {
+		return errors.Errorf("observability server: %w", err)
 	}
-	// Fresh context on purpose: the parent ctx is already cancelled here, so deriving from it
-	// would abort the graceful drain immediately.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(shutdownCtx) //nolint:contextcheck // fresh deadline for post-cancellation drain
+	return nil
 }

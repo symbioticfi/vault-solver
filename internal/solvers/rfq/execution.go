@@ -73,14 +73,14 @@ type recoveryReader interface {
 	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
 }
 
-func (e *executionService) run(ctx context.Context, interval time.Duration) {
+func (e *executionService) run(ctx context.Context, interval time.Duration) error {
 	e.syncOnce(ctx)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-t.C:
 			e.syncOnce(ctx)
 		}

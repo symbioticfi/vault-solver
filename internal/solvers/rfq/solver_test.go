@@ -1,13 +1,121 @@
 package rfq
 
 import (
+	"context"
 	"math/big"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
 )
+
+type joiningPollerBackend struct {
+	entered  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+}
+
+func (b *joiningPollerBackend) listOpenOrders(ctx context.Context, _ string, _ int) ([]backendOrder, error) {
+	close(b.entered)
+	<-ctx.Done()
+	close(b.canceled)
+	<-b.release
+	return nil, ctx.Err()
+}
+
+func (*joiningPollerBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
+	return nil, nil
+}
+
+func (*joiningPollerBackend) getOrder(context.Context, string) (*backendOrder, error) {
+	return nil, nil
+}
+
+func (*joiningPollerBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
+	return nil, nil
+}
+
+func (*joiningPollerBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+	return nil, nil
+}
+
+func TestRun_ListenerFailureCancelsAndJoinsPoller(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := &joiningPollerBackend{
+		entered:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(backend.release)
+		}
+	}()
+	st := newStore(time.Now)
+	exec := &executionService{
+		orderLimit: 1,
+		backend:    backend,
+		store:      st,
+		inflight:   make(map[string]bool),
+		log:        logr.Discard(),
+	}
+	s := &Solver{
+		cfg: &Config{ListenAddr: ln.Addr().String(), PollInterval: time.Hour},
+		server: &server{
+			sharedSecret: "test",
+			quotes:       &quoteService{},
+			log:          logr.Discard(),
+		},
+		exec: exec,
+		log:  logr.Discard(),
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- s.Run(ctx)
+	}()
+	select {
+	case <-backend.entered:
+	case err := <-runDone:
+		t.Fatalf("Run returned before poller started: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("poller did not start")
+	}
+	select {
+	case <-backend.canceled:
+	case err := <-runDone:
+		t.Fatalf("Run returned before canceling the poller: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("listener failure did not cancel the poller")
+	}
+	select {
+	case err := <-runDone:
+		t.Fatalf("Run returned before the canceled poller joined: %v", err)
+	default:
+	}
+
+	close(backend.release)
+	released = true
+	select {
+	case err := <-runDone:
+		if err == nil || !strings.Contains(err.Error(), "quote server") {
+			t.Fatalf("Run error = %v, want fatal quote listener error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after the poller joined")
+	}
+}
 
 // TestBuildServices_WhitelistWiring pins that solver mode actually reaches both services with the correct
 // per-path scoping: reverting the factory wiring (leaving a whitelist nil) would silently let a filler

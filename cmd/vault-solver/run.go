@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -62,13 +63,12 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		"debug", debug,
 	)
 
-	// Observability first, so probes/metrics are live during the rest of startup.
+	// Prepare observability during dependency construction; the root worker group starts the probes
+	// immediately before readiness is enabled.
 	metrics := observability.NewMetrics()
 	metrics.SetBuildInfo(version.Version, version.Commit)
 	health := &observability.Health{}
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
-	go observability.ServeUntil(ctx, httpSrv, log)
-	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
@@ -95,11 +95,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Shared, nonce-serialized transaction sender.
 	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations: cfg.TxManager.Confirmations,
-		MaxFeeGwei:    cfg.TxManager.MaxFeeGwei,
-		TipGwei:       cfg.TxManager.TipGwei,
+		Confirmations:   cfg.TxManager.Confirmations,
+		PendingInterval: time.Duration(cfg.TxManager.PendingIntervalMs) * time.Millisecond,
+		FeeBumpBps:      cfg.TxManager.FeeBumpBps,
+		MaxReplacements: cfg.TxManager.MaxReplacements,
+		MaxFeeGwei:      cfg.TxManager.MaxFeeGwei,
+		TipGwei:         cfg.TxManager.TipGwei,
 	}, log)
-	go txm.Start(ctx)
 
 	// Build every configured solver. They share the chain client, signer, and the single
 	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
@@ -114,13 +116,16 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		solvers = append(solvers, slv)
 	}
 
-	health.SetReady(true)
-
-	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
-	// clean shutdown (solver.Run maps context.Canceled to nil).
+	// The root group owns every long-lived runtime worker. The first fatal error cancels and joins
+	// all siblings; solver.Run maps context cancellation to a clean solver shutdown.
 	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return observability.ServeUntil(gctx, httpSrv) })
+	g.Go(func() error { return txm.Start(gctx) })
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}
+	log.Info("observability server starting", "addr", cfg.Observability.Addr)
+	health.SetReady(true)
+	defer health.SetReady(false)
 	return g.Wait()
 }
