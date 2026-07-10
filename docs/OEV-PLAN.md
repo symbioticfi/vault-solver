@@ -381,10 +381,13 @@ first-leg and marginal gas. The current no-preview fork calibration is: acquire 
 marginal, allocate `530k` first / `350k` marginal, deallocate `650k` first / `450k` marginal, unknown
 `850k` first / `650k` marginal. Beam search is bounded by candidate
 count `N`, gas-fit depth `L`, and fixed width `W = 64`. It first sorts candidates in `O(N log N)`, then each
-depth evaluates at most `W*N` extensions and sorts at most `W*N` trial states, so the practical bound is
-`O(N log N + L*W*N*log(W*N))` time with `O(W*N)` transient states per depth. With
-`maxTrackedPositions=10000`, `W=64`, and the observed 2M RedStone settlement cap, `L` is about 2 worst-route
-legs or 10 acquire-only legs before other filters.
+depth scans at most `W*N` lightweight probes without pre-truncating the candidate set. Each parent reuses one
+candidate-leg buffer and gross value across that scan. A trial receives owned score/gross copies only when
+its descriptor enters the `W`-wide heap; accepted comparisons cost `O(log W)`, at most 64 descriptors are
+sorted, and at most `W` states are deep-materialized for the next depth. The practical time bound is
+`O(N log N + L*W*N*log W)`, while retained frontier descriptors and deeply copied states stay `O(W)` per
+depth instead of `O(W*N)`. With `maxTrackedPositions=10000`, `W=64`, and the observed 2M RedStone settlement
+cap, `L` is about 2 worst-route legs or 10 acquire-only legs before other filters.
 
 A per-collateral cumulative `getMaxAssets` cap skips a leg that would over-commit a collateral's shared
 adapter liquidity (several same-collateral legs would otherwise revert `InsufficientAllocate` on settlement).
