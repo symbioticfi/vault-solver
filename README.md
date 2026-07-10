@@ -55,7 +55,8 @@ to the vault with yield.
 It holds no API key: each adapter is registered with 3F by its vault creator, who sets this solver's
 signer as the adapter's EIP-1271 signer, so offers are authorized by signature alone. Design, config,
 and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md) · example
-[`config/3f.example.yaml`](config/3f.example.yaml).
+[`config/3f.example.yaml`](config/3f.example.yaml). Signed offers default to a lifetime of twice the
+discovery interval and cannot be configured to expire before the next discovery pass.
 
 ### RFQ Filler — `rfq-filler`
 

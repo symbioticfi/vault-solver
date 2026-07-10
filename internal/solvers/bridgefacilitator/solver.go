@@ -49,6 +49,7 @@ type Solver struct {
 	strategy   types.Strategy
 	log        logr.Logger
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
+	now        func() time.Time
 	nonceSeq   atomic.Uint64
 	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
 	// pendingRedemptions is owned exclusively by the single Run goroutine: discover, redeem, and
@@ -77,11 +78,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy:           offerStrategy,
 		log:                deps.Log.WithName(Name),
 		signerAddr:         deps.Signer.Address(),
+		now:                time.Now,
 		offers:             newOfferTracker(),
 		pendingRedemptions: make(map[redeemKey]struct{}),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
-	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
+	s.nonceSeq.Store(uint64(s.now().UnixNano()))
 	return s, nil
 }
 
@@ -138,7 +140,7 @@ func (s *Solver) Run(ctx context.Context) error {
 // already cover. Best-effort: a per-adapter list failure is logged and skipped so one bad adapter
 // can't blank the others' caches.
 func (s *Solver) rebuildOfferCache(ctx context.Context) {
-	now := time.Now()
+	now := s.now()
 	live := 0
 	for _, t := range s.cfg.Targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
@@ -200,7 +202,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		return // every adapter's liquidity read failed this pass
 	}
 
-	now := time.Now()
+	now := s.now()
 	s.offers.pruneExpired(now) // keep the dedup map bounded
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {

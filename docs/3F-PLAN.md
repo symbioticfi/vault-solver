@@ -188,8 +188,12 @@ solvers:
         - "0x…adapterB"
       redeemBatchSize: 10                     # optional (default 10)
       httpTimeout: 30s                        # optional
-      intervals: { discover: 1h, redeemPoll: 5m, reconcile: 15m }
+      intervals: { discover: 1h, offerTTL: 2h, redeemPoll: 5m, reconcile: 15m }
 ```
+
+`intervals.offerTTL` defaults to twice `discover` and must be at least `discover`, so the default
+schedule always keeps a signed offer valid through the next discovery pass. One injected solver clock
+drives the signed expiration, DTO expiration, and live-offer cache snapshots.
 
 At startup, the generic chain layer preflights every configured read endpoint (primary and fallback)
 plus any distinct write endpoint against `chainId`. Diagnostics identify endpoints only by safe
@@ -350,7 +354,8 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local
   custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
   return; the solver only signs and submits the returned offer.
-- **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. Note `offerTTL` (30m) < `discover` (1h) leaves a no-offer gap each cycle; consider `offerTTL` ≥ the discover interval (dedup prevents redundant re-offers).
+- **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. The
+  configured offer lifetime already covers discovery, and dedup prevents redundant live re-offers.
 **Testing:**
 - **Integration coverage.** Pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config,
   and redemption outcome/suppression rules) is covered. The full HTTP/on-chain paths (apiclient,

@@ -61,5 +61,6 @@ solvers:
 
       intervals:
         discover: 1h                   # how often to poll for open auctions and (re)offer coverage
+        offerTTL: 2h                   # signed-offer lifetime; default 2x discover, must be >= discover
         redeemPoll: 5m                 # how often to check for matured loans to redeem
         reconcile: 15m                 # how often to log each adapter's live open-position set (health tick)

@@ -2,7 +2,6 @@ package bridgefacilitator
 
 import (
 	"math/big"
-	"time"
 
 	"github.com/go-errors/errors"
 
@@ -11,9 +10,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
-
-// offerTTL is how long a signed offer stays valid.
-const offerTTL = 30 * time.Minute
 
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
@@ -46,7 +42,8 @@ func (s *Solver) buildSignedOffer(
 	}
 
 	nonce := new(big.Int).SetUint64(s.nextNonce())
-	expiration := big.NewInt(time.Now().Add(offerTTL).Unix())
+	now := s.now()
+	expiration := big.NewInt(now.Add(s.cfg.Intervals.OfferTTL).Unix())
 
 	signedOffer := Offer{
 		Maker:          offer.Maker,

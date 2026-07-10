@@ -1,6 +1,7 @@
 package bridgefacilitator
 
 import (
+	"math"
 	"strconv"
 	"time"
 
@@ -30,6 +31,7 @@ type rawStrategyConfig struct {
 
 type rawIntervals struct {
 	Discover   string `yaml:"discover"`
+	OfferTTL   string `yaml:"offerTTL"`
 	RedeemPoll string `yaml:"redeemPoll"`
 	Reconcile  string `yaml:"reconcile"`
 }
@@ -66,6 +68,7 @@ type Target struct {
 // Intervals controls the solver's loop cadences.
 type Intervals struct {
 	Discover   time.Duration
+	OfferTTL   time.Duration
 	RedeemPoll time.Duration
 	Reconcile  time.Duration
 }
@@ -109,6 +112,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if discover > time.Duration(math.MaxInt64/2) {
+		return nil, errors.New("intervals.discover is too large to derive offerTTL")
+	}
+	offerTTL, err := cfgparse.Duration(raw.Intervals.OfferTTL, 2*discover, "intervals.offerTTL")
+	if err != nil {
+		return nil, err
+	}
+	if offerTTL < discover {
+		return nil, errors.New("intervals.offerTTL must be >= intervals.discover")
+	}
 	redeemPoll, err := cfgparse.Duration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
 	if err != nil {
 		return nil, err
@@ -133,8 +146,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		RedeemBatchSize: redeemBatch,
 		HTTPTimeout:     httpTimeout,
 		Targets:         targets,
-		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:        strategy,
+		Intervals: Intervals{
+			Discover:   discover,
+			OfferTTL:   offerTTL,
+			RedeemPoll: redeemPoll,
+			Reconcile:  reconcile,
+		},
+		Strategy: strategy,
 	}, nil
 }
 

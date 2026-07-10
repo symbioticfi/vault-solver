@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
@@ -69,6 +70,25 @@ func TestParseConfig_InvalidDurationRejected(t *testing.T) {
 	}
 	if _, err := parseConfig(*doc.Content[0]); err == nil {
 		t.Fatal("expected an invalid duration to be rejected")
+	}
+}
+
+func TestParseConfigOfferTTL(t *testing.T) {
+	cfg := mustParse(t, oneTarget+"intervals:\n  discover: 20m\n")
+	if cfg.Intervals.OfferTTL != 40*time.Minute {
+		t.Fatalf("offer TTL = %s, want 40m", cfg.Intervals.OfferTTL)
+	}
+
+	cfg = mustParse(t, oneTarget+"intervals:\n  discover: 20m\n  offerTTL: 45m\n")
+	if cfg.Intervals.OfferTTL != 45*time.Minute {
+		t.Fatalf("offer TTL = %s, want 45m", cfg.Intervals.OfferTTL)
+	}
+
+	if _, err := parse(t, oneTarget+"intervals:\n  discover: 20m\n  offerTTL: 19m\n"); err == nil {
+		t.Fatal("expected offerTTL shorter than discover to fail")
+	}
+	if _, err := parse(t, oneTarget+"intervals:\n  discover: 2562047h47m16.854775807s\n"); err == nil {
+		t.Fatal("expected discover too large to derive offerTTL to fail")
 	}
 }
 

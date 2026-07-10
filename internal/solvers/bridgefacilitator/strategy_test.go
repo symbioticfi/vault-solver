@@ -12,11 +12,23 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
+
+type digestCapturingSigner struct {
+	fakeSigner
+
+	digest common.Hash
+}
+
+func (s *digestCapturingSigner) SignHash(digest common.Hash) ([]byte, error) {
+	s.digest = digest
+	return make([]byte, 65), nil
+}
 
 func mustBig(t *testing.T, s string) *big.Int {
 	t.Helper()
@@ -106,6 +118,56 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	if len(input.LiveOffers) != 1 ||
 		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
 		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
+	}
+}
+
+func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := float32(11_155_111)
+	auction := testAuctionDto(
+		10,
+		common.HexToAddress("0x0000000000000000000000000000000000000003"),
+		"700",
+	)
+	auction.SetEip712Domain(*threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&domainName),
+		*threef.NewNullableString(&domainVersion),
+		*threef.NewNullableFloat32(&chainID),
+	))
+
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000001")
+	request := common.HexToAddress(auction.RequestId)
+	signer := &digestCapturingSigner{}
+	s := &Solver{
+		cfg:  &Config{Intervals: Intervals{OfferTTL: 45 * time.Minute}},
+		deps: solver.Deps{Signer: signer},
+		now:  func() time.Time { return time.Unix(1_000, 0) },
+	}
+	offer := types.OfferExecution{
+		AuctionID:      10,
+		Request:        request,
+		Maker:          maker,
+		Principal:      big.NewInt(700),
+		ExpectedReturn: big.NewInt(14),
+	}
+	dto, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+	if err != nil {
+		t.Fatalf("buildSignedOffer: %v", err)
+	}
+	if dto.Expiration != "3700" {
+		t.Fatalf("expiration = %s, want 3700", dto.Expiration)
+	}
+	wantDigest := OfferDigest(Offer{
+		Maker:          maker,
+		Amount:         offer.Principal,
+		ExpectedReturn: offer.ExpectedReturn,
+		Nonce:          big.NewInt(1),
+		Expiration:     big.NewInt(3_700),
+		UseCallback:    true,
+	}, domainName, domainVersion, big.NewInt(int64(chainID)), request)
+	if signer.digest != wantDigest {
+		t.Fatalf("signed digest = %s, want %s", signer.digest, wantDigest)
 	}
 }
 
