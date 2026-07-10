@@ -29,10 +29,7 @@ func (t *trackedTx) hashes() []common.Hash {
 }
 
 func (m *Manager) track(ctx context.Context, tracked *trackedTx) Result {
-	poll := time.NewTicker(m.cfg.PollInterval)
-	defer poll.Stop()
-	pending := time.NewTimer(m.cfg.PendingInterval)
-	defer pending.Stop()
+	nextBoundary := time.Now().Add(m.cfg.PendingInterval)
 	var feeCap *big.Int
 	if m.cfg.MaxFeeGwei > 0 {
 		feeCap = gweiToWei(m.cfg.MaxFeeGwei)
@@ -42,50 +39,66 @@ func (m *Manager) track(ctx context.Context, tracked *trackedTx) Result {
 	replacements := uint64(0)
 	rebroadcast := false
 	for {
-		if result, err := m.pollAttempts(ctx, tracked); result != nil {
-			return *result
-		} else if err != nil {
-			lastErr = err
+		if err := ctx.Err(); err != nil {
+			return unresolvedResult(tracked, errors.Join(ErrUnresolved, err, lastErr))
 		}
-
-		select {
-		case <-ctx.Done():
-			return unresolvedResult(tracked, errors.Join(ErrUnresolved, ctx.Err(), lastErr))
-		case <-poll.C:
-			continue
-		case <-pending.C:
-			if err := ctx.Err(); err != nil {
-				return unresolvedResult(tracked, errors.Join(ErrUnresolved, err, lastErr))
-			}
+		if !time.Now().Before(nextBoundary) {
 			if replacements >= m.cfg.MaxReplacements {
 				return unresolvedResult(tracked, errors.Join(ErrUnresolved, lastErr))
 			}
 
+			nextBoundary = nextBoundary.Add(m.cfg.PendingInterval)
+			replacements++
+			windowCtx, cancel := context.WithDeadline(ctx, nextBoundary)
 			if tracked.state == StateBroadcastUnknown && !rebroadcast {
 				rebroadcast = true
-				if err := m.rebroadcast(ctx, tracked.attempts[0]); err != nil {
-					if errors.Is(err, ErrUnresolved) {
-						return unresolvedResult(tracked, errors.Join(err, lastErr))
-					}
+				if err := m.rebroadcast(windowCtx, tracked.attempts[0]); err != nil {
 					lastErr = err
 				}
 			}
-
-			replacements++
-			if err := m.replace(ctx, tracked, feeCap); err != nil {
+			if err := m.replace(windowCtx, tracked, feeCap); err != nil {
 				if errors.Is(err, ErrUnresolved) {
+					cancel()
 					return unresolvedResult(tracked, errors.Join(err, lastErr))
 				}
 				lastErr = err
 			}
-			pending.Reset(m.cfg.PendingInterval)
+			cancel()
+			continue
+		}
+
+		pollCtx, cancel := context.WithDeadline(ctx, nextBoundary)
+		if !time.Now().Before(nextBoundary) {
+			cancel()
+			continue
+		}
+		result, err := m.pollAttempts(pollCtx, tracked)
+		cancel()
+		if result != nil {
+			return *result
+		}
+		if err != nil {
+			lastErr = err
+		}
+		if err := ctx.Err(); err != nil {
+			return unresolvedResult(tracked, errors.Join(ErrUnresolved, err, lastErr))
+		}
+		wait := min(m.cfg.PollInterval, time.Until(nextBoundary))
+		if wait <= 0 {
+			continue
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return unresolvedResult(tracked, errors.Join(ErrUnresolved, ctx.Err(), lastErr))
+		case <-timer.C:
 		}
 	}
 }
 
 func (m *Manager) pollAttempts(ctx context.Context, tracked *trackedTx) (*Result, error) {
 	var latestErr error
-	var final *Result
 	for _, attempt := range tracked.attempts {
 		receipt, err := m.backend.TransactionReceipt(ctx, attempt.Hash())
 		if err != nil {
@@ -104,7 +117,7 @@ func (m *Manager) pollAttempts(ctx context.Context, tracked *trackedTx) (*Result
 		switch receipt.Status {
 		case types.ReceiptStatusSuccessful:
 			result := finalResult(tracked, StateConfirmed, receipt, nil)
-			final = &result
+			return &result, nil
 		case types.ReceiptStatusFailed:
 			result := finalResult(
 				tracked,
@@ -112,12 +125,12 @@ func (m *Manager) pollAttempts(ctx context.Context, tracked *trackedTx) (*Result
 				receipt,
 				errors.Errorf("tx %s reverted on-chain", receipt.TxHash.Hex()),
 			)
-			final = &result
+			return &result, nil
 		default:
 			latestErr = errors.Errorf("receipt %s has invalid status %d", attempt.Hash().Hex(), receipt.Status)
 		}
 	}
-	return final, latestErr
+	return nil, latestErr
 }
 
 func (m *Manager) receiptIsCanonical(
@@ -146,6 +159,9 @@ func (m *Manager) receiptIsCanonical(
 	if header == nil {
 		return false, errors.Errorf("header for receipt %s is nil", attempt.Hash().Hex())
 	}
+	if header.Number == nil || header.Number.Sign() < 0 || header.Number.Cmp(receipt.BlockNumber) != 0 {
+		return false, errors.Errorf("header for receipt %s has mismatched block number", attempt.Hash().Hex())
+	}
 	if header.Hash() != receipt.BlockHash {
 		return false, errors.Errorf("receipt %s block hash is not canonical", attempt.Hash().Hex())
 	}
@@ -163,7 +179,7 @@ func (m *Manager) receiptIsCanonical(
 
 func (m *Manager) rebroadcast(ctx context.Context, tx *types.Transaction) error {
 	if err := ctx.Err(); err != nil {
-		return errors.Join(ErrUnresolved, err)
+		return errors.Errorf("re-broadcast %s: %w", tx.Hash().Hex(), err)
 	}
 	if err := m.backend.SendTransaction(ctx, tx); err != nil {
 		return errors.Errorf("re-broadcast %s: %w", tx.Hash().Hex(), err)
@@ -173,7 +189,7 @@ func (m *Manager) rebroadcast(ctx context.Context, tx *types.Transaction) error 
 
 func (m *Manager) replace(ctx context.Context, tracked *trackedTx, feeCap *big.Int) error {
 	if err := ctx.Err(); err != nil {
-		return errors.Join(ErrUnresolved, err)
+		return errors.Errorf("replacement window: %w", err)
 	}
 	previous := tracked.attempts[len(tracked.attempts)-1]
 	tip, fee, err := m.replacementFees(previous, feeCap)
@@ -187,7 +203,7 @@ func (m *Manager) replace(ctx context.Context, tracked *trackedTx, feeCap *big.I
 	}
 	tracked.attempts = append(tracked.attempts, signed)
 	if err := ctx.Err(); err != nil {
-		return errors.Join(ErrUnresolved, err)
+		return errors.Errorf("send replacement %s: %w", signed.Hash().Hex(), err)
 	}
 	if err := m.backend.SendTransaction(ctx, signed); err != nil {
 		return errors.Errorf("send replacement %s: %w", signed.Hash().Hex(), err)

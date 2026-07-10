@@ -39,20 +39,21 @@ type mockBackend struct {
 	gasEstimate   uint64
 	head          uint64
 
-	sendErrs    []error // returned, in order, by successive SendTransaction calls
-	sendCalls   int
-	sent        []*types.Transaction
-	sentCh      chan *types.Transaction
-	sendCallCh  chan *types.Transaction
-	heldNonces  map[uint64]bool
-	receipts    map[common.Hash]*types.Receipt
-	receiptErrs []error
-	receiptCh   chan receiptObservation
-	headers     map[uint64]*types.Header
-	nilHeaders  int
-	headerErrs  []error
-	blockErrs   []error
-	blockCh     chan uint64
+	sendErrs     []error // returned, in order, by successive SendTransaction calls
+	sendCalls    int
+	sent         []*types.Transaction
+	sentCh       chan *types.Transaction
+	sendCallCh   chan *types.Transaction
+	heldNonces   map[uint64]bool
+	receipts     map[common.Hash]*types.Receipt
+	receiptCalls map[common.Hash]int
+	receiptErrs  []error
+	receiptCh    chan receiptObservation
+	headers      map[uint64]*types.Header
+	nilHeaders   int
+	headerErrs   []error
+	blockErrs    []error
+	blockCh      chan uint64
 }
 
 func newMockBackend() *mockBackend {
@@ -66,6 +67,7 @@ func newMockBackend() *mockBackend {
 		sendCallCh:   make(chan *types.Transaction, 64),
 		heldNonces:   map[uint64]bool{},
 		receipts:     map[common.Hash]*types.Receipt{},
+		receiptCalls: map[common.Hash]int{},
 		receiptCh:    make(chan receiptObservation, 256),
 		headers:      map[uint64]*types.Header{},
 		blockCh:      make(chan uint64, 64),
@@ -141,6 +143,7 @@ func (b *mockBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 func (b *mockBackend) TransactionReceipt(_ context.Context, h common.Hash) (*types.Receipt, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.receiptCalls[h]++
 	if len(b.receiptErrs) > 0 {
 		err := b.receiptErrs[0]
 		b.receiptErrs = b.receiptErrs[1:]
@@ -196,6 +199,18 @@ func (b *mockBackend) sendCount() int {
 	return b.sendCalls
 }
 
+func (b *mockBackend) sentCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.sent)
+}
+
+func (b *mockBackend) receiptCallCount(hash common.Hash) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.receiptCalls[hash]
+}
+
 func (b *mockBackend) pendingSeedCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -218,12 +233,6 @@ func (b *mockBackend) setHead(head uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.head = head
-}
-
-func (b *mockBackend) setSendErrs(errs []error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.sendErrs = errs
 }
 
 func (b *mockBackend) canonicalReceipt(tx *types.Transaction, status uint64, block uint64) *types.Receipt {
@@ -500,6 +509,61 @@ func TestSend_MaxUint64NonceExhaustionDoesNotWrap(t *testing.T) {
 	}
 	if got := b.sendCount(); got != 1 {
 		t.Fatalf("SendTransaction calls = %d, want 1", got)
+	}
+}
+
+func TestStart_SecondCallRejectedWithoutStoppingFirst(t *testing.T) {
+	b := newMockBackend()
+	m := New(b, mustSigner(t), big.NewInt(1), Config{PollInterval: time.Millisecond}, logr.Discard())
+	ctx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- m.Start(ctx) }()
+
+	guard := time.NewTimer(trackerTestGuard)
+	defer guard.Stop()
+	for !m.started.Load() {
+		select {
+		case <-guard.C:
+			t.Fatal("first Start did not acquire manager ownership")
+		default:
+			runtime.Gosched()
+		}
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- m.Start(context.Background()) }()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, ErrManagerAlreadyStarted) {
+			t.Fatalf("second Start error = %v, want ErrManagerAlreadyStarted", err)
+		}
+	case <-time.After(trackerTestGuard):
+		t.Fatal("second Start did not return immediately")
+	}
+	select {
+	case <-m.done:
+		t.Fatal("rejected second Start closed manager done")
+	default:
+	}
+
+	result := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	if result.State != StateConfirmed {
+		t.Fatalf("first dispatcher result = %+v, want confirmed", result)
+	}
+
+	cancel()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first Start returned %v", err)
+		}
+	case <-time.After(trackerTestGuard):
+		t.Fatal("first Start did not stop cleanly")
+	}
+	select {
+	case <-m.done:
+	default:
+		t.Fatal("first Start returned without closing done")
 	}
 }
 

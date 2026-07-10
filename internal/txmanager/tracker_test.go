@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,50 @@ import (
 )
 
 const trackerTestGuard = time.Second
+
+type blockingReceiptBackend struct {
+	*mockBackend
+
+	pollStarted chan time.Time
+	pollDone    chan struct{}
+	mu          sync.Mutex
+	deadlines   []time.Time
+}
+
+func newBlockingReceiptBackend() *blockingReceiptBackend {
+	return &blockingReceiptBackend{
+		mockBackend: newMockBackend(),
+		pollStarted: make(chan time.Time, 64),
+		pollDone:    make(chan struct{}, 64),
+	}
+}
+
+func (b *blockingReceiptBackend) TransactionReceipt(ctx context.Context, _ common.Hash) (*types.Receipt, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Time{}
+	}
+	b.mu.Lock()
+	b.deadlines = append(b.deadlines, deadline)
+	b.mu.Unlock()
+	b.pollStarted <- deadline
+	<-ctx.Done()
+	b.pollDone <- struct{}{}
+	return nil, ctx.Err()
+}
+
+func (b *blockingReceiptBackend) uniqueDeadlines() []time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	unique := make([]time.Time, 0, len(b.deadlines))
+	for _, deadline := range b.deadlines {
+		if deadline.IsZero() || len(unique) > 0 && deadline.Equal(unique[len(unique)-1]) {
+			continue
+		}
+		unique = append(unique, deadline)
+	}
+	return unique
+}
 
 func awaitTx(t *testing.T, ch <-chan *types.Transaction) *types.Transaction {
 	t.Helper()
@@ -85,6 +130,76 @@ func sendAsync(m *Manager, req Request) <-chan Result {
 	return result
 }
 
+func TestTrack_BlockingReceiptDoesNotDelayReplacementBoundary(t *testing.T) {
+	const interval = 15 * time.Millisecond
+	b := newBlockingReceiptBackend()
+	b.heldNonces[7] = true
+	m, cancel, done := newTestManager(t, b, Config{
+		PollInterval: time.Millisecond, PendingInterval: interval,
+		FeeBumpBps: 1_250, MaxReplacements: 1,
+	})
+	defer func() { cancel(); <-done }()
+
+	resultCh := sendAsync(m, Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	original := awaitTx(t, b.sentCh)
+	select {
+	case deadline := <-b.pollStarted:
+		if deadline.IsZero() {
+			t.Fatal("receipt poll has no replacement-boundary deadline")
+		}
+	case <-time.After(trackerTestGuard):
+		t.Fatal("receipt poll did not start")
+	}
+	select {
+	case <-b.pollDone:
+	case <-time.After(trackerTestGuard):
+		t.Fatal("receipt poll was not cancelled at replacement boundary")
+	}
+	replacement := awaitTx(t, b.sentCh)
+	if replacement.Nonce() != original.Nonce() || replacement.Hash() == original.Hash() {
+		t.Fatalf("replacement = %s nonce %d, want distinct same-nonce attempt", replacement.Hash(), replacement.Nonce())
+	}
+
+	result := awaitResult(t, resultCh)
+	if result.State != StateUnresolved || !errors.Is(result.Err, ErrUnresolved) {
+		t.Fatalf("result = %+v, want unresolved at overall boundary", result)
+	}
+}
+
+func TestTrack_BlockingReceiptCompletesByAbsoluteOverallDeadline(t *testing.T) {
+	const interval = 15 * time.Millisecond
+	b := newBlockingReceiptBackend()
+	b.heldNonces[7] = true
+	m, cancel, done := newTestManager(t, b, Config{
+		PollInterval: time.Millisecond, PendingInterval: interval,
+		FeeBumpBps: 1_250, MaxReplacements: 2,
+	})
+	defer func() { cancel(); <-done }()
+
+	resultCh := sendAsync(m, Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	_ = awaitTx(t, b.sentCh)
+	_ = awaitTx(t, b.sentCh)
+	_ = awaitTx(t, b.sentCh)
+	result := awaitResult(t, resultCh)
+	completedAt := time.Now()
+	if result.State != StateUnresolved || !errors.Is(result.Err, ErrUnresolved) {
+		t.Fatalf("result = %+v, want unresolved at absolute overall deadline", result)
+	}
+
+	deadlines := b.uniqueDeadlines()
+	if len(deadlines) != 3 {
+		t.Fatalf("unique poll deadlines = %v, want three absolute window boundaries", deadlines)
+	}
+	for i := 1; i < len(deadlines); i++ {
+		if got := deadlines[i].Sub(deadlines[i-1]); got != interval {
+			t.Fatalf("deadline %d delta = %s, want %s", i, got, interval)
+		}
+	}
+	if lag := completedAt.Sub(deadlines[len(deadlines)-1]); lag < 0 || lag > 100*time.Millisecond {
+		t.Fatalf("unresolved completion lag after overall deadline = %s", lag)
+	}
+}
+
 func TestTrack_TransientReceiptErrorRetries(t *testing.T) {
 	temporary := errors.New("temporary receipt failure")
 	b := newMockBackend()
@@ -106,6 +221,26 @@ func TestTrack_TransientReceiptErrorRetries(t *testing.T) {
 	result := awaitResult(t, resultCh)
 	if result.State != StateConfirmed || result.Err != nil || result.Hash != original.Hash() {
 		t.Fatalf("result = %+v, want confirmed original after transient receipt error", result)
+	}
+}
+
+func TestTrack_CanonicalAttemptStopsPollingLaterHashes(t *testing.T) {
+	b := newMockBackend()
+	first := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(1), Nonce: 7, Gas: 21_000})
+	second := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(1), Nonce: 7, Gas: 21_000, Data: []byte{1}})
+	b.setReceipt(first.Hash(), b.canonicalReceipt(first, types.ReceiptStatusSuccessful, 100))
+	m := New(b, mustSigner(t), big.NewInt(1), Config{}, logr.Discard())
+
+	result, err := m.pollAttempts(t.Context(), &trackedTx{
+		nonce:    7,
+		state:    StatePending,
+		attempts: []*types.Transaction{first, second},
+	})
+	if err != nil || result == nil || result.State != StateConfirmed {
+		t.Fatalf("poll result/error = %+v/%v, want confirmed first attempt", result, err)
+	}
+	if got := b.receiptCallCount(second.Hash()); got != 0 {
+		t.Fatalf("later attempt receipt calls = %d, want 0 after canonical result", got)
 	}
 }
 
@@ -180,6 +315,55 @@ func TestTrack_BlockHashMismatchIsNotCanonical(t *testing.T) {
 	result := awaitResult(t, resultCh)
 	if result.State != StateConfirmed || result.Hash != original.Hash() {
 		t.Fatalf("result = %+v, want confirmed after canonical block hash appears", result)
+	}
+}
+
+func TestTrack_HeaderNumberMismatchIsNotCanonical(t *testing.T) {
+	b := newMockBackend()
+	b.heldNonces[7] = true
+	m, cancel, done := newTestManager(t, b, Config{
+		PollInterval: time.Millisecond, PendingInterval: time.Second,
+		FeeBumpBps: 1_250, MaxReplacements: 1,
+	})
+	defer func() { cancel(); <-done }()
+
+	resultCh := sendAsync(m, Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	original := awaitTx(t, b.sentCh)
+	b.mu.Lock()
+	mismatchedHeader := b.headerFor(101)
+	b.headers[100] = mismatchedHeader
+	b.receipts[original.Hash()] = &types.Receipt{
+		Status:      types.ReceiptStatusSuccessful,
+		TxHash:      original.Hash(),
+		BlockNumber: big.NewInt(100),
+		BlockHash:   mismatchedHeader.Hash(),
+	}
+	b.mu.Unlock()
+	awaitReceiptObservation(t, b, original.Hash(), func(observation receiptObservation) bool {
+		return observation.found
+	})
+
+	guard := time.NewTimer(trackerTestGuard)
+	defer guard.Stop()
+	observedAgain := false
+	for !observedAgain {
+		select {
+		case result := <-resultCh:
+			t.Fatalf("header-number-mismatched receipt finalized: %+v", result)
+		case observation := <-b.receiptCh:
+			observedAgain = observation.hash == original.Hash() && observation.found
+		case <-guard.C:
+			t.Fatal("timed out waiting for header-number-mismatched receipt to be polled again")
+		}
+	}
+
+	b.mu.Lock()
+	delete(b.headers, 100)
+	b.mu.Unlock()
+	b.setReceipt(original.Hash(), b.canonicalReceipt(original, types.ReceiptStatusSuccessful, 100))
+	result := awaitResult(t, resultCh)
+	if result.State != StateConfirmed || result.Hash != original.Hash() {
+		t.Fatalf("result = %+v, want confirmed after matching header number appears", result)
 	}
 }
 
@@ -293,6 +477,7 @@ func TestTrack_ReplacementPreservesPayloadAndBumpsFees(t *testing.T) {
 func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
 	b := newMockBackend()
 	b.heldNonces[7] = true
+	b.sendErrs = []error{nil, errors.New("insufficient funds")}
 	m, cancel, done := newTestManager(t, b, Config{
 		PollInterval: time.Millisecond, PendingInterval: 5 * time.Millisecond,
 		FeeBumpBps: 1_250, MaxReplacements: 1,
@@ -304,7 +489,6 @@ func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
 	if attempted := awaitTx(t, b.sendCallCh); attempted.Hash() != original.Hash() {
 		t.Fatalf("initial send-call hash = %s, want %s", attempted.Hash(), original.Hash())
 	}
-	b.setSendErrs([]error{nil, errors.New("insufficient funds")})
 	rejectedReplacement := awaitTx(t, b.sendCallCh)
 	if rejectedReplacement.Hash() == original.Hash() {
 		t.Fatal("fee-bumped replacement reused the original hash")
@@ -315,6 +499,9 @@ func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
 	if result.State != StateConfirmed || result.Hash != original.Hash() || len(result.Hashes) != 2 ||
 		result.Hashes[0] != original.Hash() || result.Hashes[1] != rejectedReplacement.Hash() {
 		t.Fatalf("result = %+v, want older canonical hash retained after rejected replacement", result)
+	}
+	if calls, admitted := b.sendCount(), b.sentCount(); calls != 2 || admitted != 1 {
+		t.Fatalf("send calls/admitted = %d/%d, want 2/1", calls, admitted)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -68,8 +69,9 @@ const (
 )
 
 var (
-	ErrManagerStopped = errors.New("txmanager stopped")
-	ErrUnresolved     = errors.New("transaction outcome unresolved")
+	ErrManagerAlreadyStarted = errors.New("txmanager already started")
+	ErrManagerStopped        = errors.New("txmanager stopped")
+	ErrUnresolved            = errors.New("transaction outcome unresolved")
 )
 
 // Result carries the final outcome of a Send.
@@ -96,8 +98,9 @@ type Manager struct {
 	cfg     Config
 	log     logr.Logger
 
-	queue chan job
-	done  chan struct{}
+	queue   chan job
+	done    chan struct{}
+	started atomic.Bool
 
 	mu             sync.Mutex // guards the local nonce state
 	nonce          uint64
@@ -147,6 +150,9 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 // Start runs the dispatcher until ctx is cancelled, then joins every transaction tracker before
 // returning. Run it in its own goroutine.
 func (m *Manager) Start(ctx context.Context) error {
+	if !m.started.CompareAndSwap(false, true) {
+		return ErrManagerAlreadyStarted
+	}
 	m.log.Info("started", "from", m.signer.Address().Hex())
 	var trackers sync.WaitGroup
 	defer func() {
