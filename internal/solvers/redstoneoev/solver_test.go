@@ -251,11 +251,11 @@ func TestAuctionWorkerIsJoined(t *testing.T) {
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	s.strategy = blocking
 	a := decodeAuction(t)
 	setAuctionPrice(&a, seedLiquidatablePrice)
 	a.Timestamp = time.Now().UnixMilli()
 	setSnapshotBlockTime(t, s, a.Timestamp)
+	s.strategy = blocking
 	s.launchAuction(t.Context(), a, time.Now())
 	<-blocking.started
 
@@ -1123,6 +1123,9 @@ func TestLiquidationResultDuplicateHasOneSideEffect(t *testing.T) {
 		t.Fatal("duplicate result counted twice")
 	}
 	s.handleMessage(t.Context(), frame("distinct"))
+	if got := testutil.ToFloat64(s.metrics.failedLiq); got != 2 {
+		t.Fatalf("failure metric after distinct result = %v, want 2", got)
+	}
 	if tripped, _ := s.breaker.tripped(time.Now()); !tripped {
 		t.Fatal("two distinct failures must trip the breaker")
 	}

@@ -312,6 +312,63 @@ func TestReadMarketStatesAtDropsUndecodableNonzeroIRM(t *testing.T) {
 	}
 }
 
+func TestReadMarketStatesAtFailureMatrix(t *testing.T) {
+	marketID := common.HexToHash("0x01")
+	morphoAddr := common.HexToAddress("0x00000000000000000000000000000000000000ff")
+	params := map[common.Hash]abiMarketParams{
+		marketID: {
+			Irm:  common.HexToAddress("0x00000000000000000000000000000000000000a1"),
+			Lltv: mustBig("860000000000000000"),
+		},
+	}
+	validMarket := chain.CallResult{Success: true, ReturnData: packOut(
+		t, morphoTestABI, "market",
+		big.NewInt(1000), big.NewInt(900), big.NewInt(500), big.NewInt(450),
+		big.NewInt(100), mustBig("100000000000000000"),
+	)}
+	validRate := chain.CallResult{
+		Success: true, ReturnData: packOut(t, irmTestABI, "borrowRateView", big.NewInt(182418302)),
+	}
+	tests := []struct {
+		name       string
+		results    [][]chain.CallResult
+		wantMarket bool
+	}{
+		{name: "market reverted", results: [][]chain.CallResult{{{Success: false}}}},
+		{name: "market malformed", results: [][]chain.CallResult{{{Success: true, ReturnData: []byte{1}}}}},
+		{name: "rate reverted", results: [][]chain.CallResult{{validMarket}, {{Success: false}}}},
+		{name: "rate malformed", results: [][]chain.CallResult{{validMarket}, {{Success: true, ReturnData: []byte{1}}}}},
+		{name: "all valid", results: [][]chain.CallResult{{validMarket}, {validRate}}, wantMarket: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingMulticaller{results: tc.results}
+			r := &chainReader{calls: fake, log: logr.Discard()}
+			got, err := r.ReadMarketStatesAt(t.Context(), morphoAddr, params, big.NewInt(123))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, retained := got[marketID]
+			if retained != tc.wantMarket {
+				t.Fatalf("retained = %v, want %v", retained, tc.wantMarket)
+			}
+			for _, block := range fake.blocks {
+				if block == nil || block.Cmp(big.NewInt(123)) != 0 {
+					t.Fatalf("multicall block = %v, want 123", block)
+				}
+			}
+		})
+	}
+
+	rpcErr := errors.New("rpc unavailable")
+	fake := &recordingMulticaller{err: rpcErr}
+	r := &chainReader{calls: fake, log: logr.Discard()}
+	got, err := r.ReadMarketStatesAt(t.Context(), morphoAddr, params, big.NewInt(123))
+	if err == nil || got != nil {
+		t.Fatalf("RPC failure = (%v, %v), want nil map and error", got, err)
+	}
+}
+
 func TestTestMonitorReadMarketsPinsOracleToStateBlock(t *testing.T) {
 	block := big.NewInt(123)
 	morphoAddr := common.HexToAddress("0x00000000000000000000000000000000000000ff")

@@ -386,8 +386,9 @@ candidate-leg buffer and gross value across that scan. A trial receives owned sc
 its descriptor enters the `W`-wide heap; accepted comparisons cost `O(log W)`, at most 64 descriptors are
 sorted, and at most `W` states are deep-materialized for the next depth. The practical time bound is
 `O(N log N + L*W*N*log W)`, while retained frontier descriptors and deeply copied states stay `O(W)` per
-depth instead of `O(W*N)`. With `maxTrackedPositions=10000`, `W=64`, and the observed 2M RedStone settlement
-cap, `L` is about 2 worst-route legs or 10 acquire-only legs before other filters.
+depth rather than scaling with the full probe count. With `maxTrackedPositions=10000`, `W=64`, and the
+observed 2M RedStone settlement cap, `L` is about 2 worst-route legs or 10 acquire-only legs before other
+filters.
 
 A per-collateral cumulative `getMaxAssets` cap skips a leg that would over-commit a collateral's shared
 adapter liquidity (several same-collateral legs would otherwise revert `InsufficientAllocate` on settlement).
