@@ -37,9 +37,11 @@ solvers:
       strategy:
         name: default
         config:
-          # Morpho GraphQL endpoint polled for market state + at-risk positions (required by the prod monitor).
-          # Public api.morpho.org does not index this custom Sepolia Morpho, so the Sepolia harness leaves it
-          # empty and uses OEV_TEST_MONITOR=true + OEV_TEST_MARKETS/OEV_TEST_POSITIONS instead.
+          # Morpho GraphQL endpoint polled for market discovery, the coherent source block, and at-risk
+          # positions (required by the prod monitor). Exact market accounting and non-zero IRM rates are read
+          # on-chain at that selected block. Public api.morpho.org does not index this custom Sepolia Morpho,
+          # so the Sepolia harness leaves it empty and uses OEV_TEST_MONITOR=true +
+          # OEV_TEST_MARKETS/OEV_TEST_POSITIONS instead.
           morphoApiUrl: ""
           # discoveryMaxHealthFactor: 1.30  # only snapshot positions with health factor <= this (default 1.30);
           #                                 # local Morpho math then decides real liquidatability at the auction price

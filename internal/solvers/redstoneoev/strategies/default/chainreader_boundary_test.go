@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/big"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +32,7 @@ type recordingMulticaller struct {
 	results       [][]chain.CallResult
 	latestBatches [][]chain.Call
 	latestResults [][]chain.CallResult
+	atErrs        []error
 	err           error
 }
 
@@ -61,6 +63,13 @@ func (r *recordingMulticaller) MulticallAt(
 		copiedBlock = new(big.Int).Set(block)
 	}
 	r.blocks = append(r.blocks, copiedBlock)
+	if len(r.atErrs) > 0 {
+		callErr := r.atErrs[0]
+		r.atErrs = r.atErrs[1:]
+		if callErr != nil {
+			return nil, callErr
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -361,11 +370,46 @@ func TestReadMarketStatesAtFailureMatrix(t *testing.T) {
 	}
 
 	rpcErr := errors.New("rpc unavailable")
-	fake := &recordingMulticaller{err: rpcErr}
-	r := &chainReader{calls: fake, log: logr.Discard()}
-	got, err := r.ReadMarketStatesAt(t.Context(), morphoAddr, params, big.NewInt(123))
-	if err == nil || got != nil {
-		t.Fatalf("RPC failure = (%v, %v), want nil map and error", got, err)
+	rpcTests := []struct {
+		name        string
+		results     [][]chain.CallResult
+		atErrs      []error
+		wantContext string
+		wantCalls   int
+	}{
+		{
+			name: "market batch RPC failure", atErrs: []error{rpcErr},
+			wantContext: "read Morpho markets at block 123", wantCalls: 1,
+		},
+		{
+			name: "IRM batch RPC failure", results: [][]chain.CallResult{{validMarket}},
+			atErrs:      []error{nil, rpcErr},
+			wantContext: "read Morpho IRM rates at block 123", wantCalls: 2,
+		},
+	}
+	for _, tc := range rpcTests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingMulticaller{results: tc.results, atErrs: tc.atErrs}
+			r := &chainReader{calls: fake, log: logr.Discard()}
+			got, err := r.ReadMarketStatesAt(t.Context(), morphoAddr, params, big.NewInt(123))
+			if got != nil {
+				t.Fatalf("RPC failure returned partial state: %+v", got)
+			}
+			if !errors.Is(err, rpcErr) {
+				t.Fatalf("RPC failure = %v, want wrapped %v", err, rpcErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantContext) {
+				t.Fatalf("RPC failure = %q, want context %q", err, tc.wantContext)
+			}
+			if len(fake.blocks) != tc.wantCalls {
+				t.Fatalf("multicall blocks = %v, want %d calls", fake.blocks, tc.wantCalls)
+			}
+			for i, block := range fake.blocks {
+				if block == nil || block.Cmp(big.NewInt(123)) != 0 {
+					t.Fatalf("multicall block %d = %v, want 123", i, block)
+				}
+			}
+		})
 	}
 }
 
