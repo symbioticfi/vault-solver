@@ -1,6 +1,6 @@
 # vault-solver — 3F Bridge Facilitator (`3f-bridge-facilitator`), annotated example.
 #
-# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic BridgeFacilitatorAdapters,
+# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic ThreeFAdapters,
 # funds the loans it wins, and permissionlessly redeems repaid loans back to the vault. Addresses below
 # are the 3F Sepolia dev deployment (the only 3F environment today).
 #
@@ -57,7 +57,7 @@ solvers:
       # caps (min yield / min & max assets per request), funding headroom (getMaxAssets), and
       # concurrency (MAX_REQUESTS) live on the adapter and are read on-chain — never configured here.
       adapters:
-        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed BridgeFacilitatorAdapter
+        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed ThreeFAdapter
 
       intervals:
         discover: 1h                   # how often to poll for open auctions and (re)offer coverage

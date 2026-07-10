@@ -48,7 +48,7 @@ The `3f-bridge-facilitator`, `rfq-filler`, and `redstone-oev` solvers expose a p
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
 Acts as a Bridge Facilitator in **[3F (Grunt)](https://3f.xyz)**'s bridge-loan auctions, on top of one
-or more Symbiotic `BridgeFacilitatorAdapter`s. 3F auctions the right to front a bridge loan; this solver bids on behalf
+or more Symbiotic `ThreeFAdapter`s. 3F auctions the right to front a bridge loan; this solver bids on behalf
 of its adapters, funds the loans it wins just-in-time, and permissionlessly redeems repaid loans back
 to the vault with yield.
 
@@ -100,12 +100,15 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the plan it returns, so your service owns the logic.
 
+In 3F webhook inputs, `maxRateBps` is an exact decimal string (for example, `"50.5"`), not a JSON
+number. Webhook consumers must decode that field as a string.
+
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
 ## Requirements
 
-- Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
+- Go 1.26.5 (toolchain pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
 - For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
   the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
   Its 7.12.0 JAR is verified with SHA-256
@@ -137,8 +140,13 @@ implementation and hands the opaque `solver.config` block to that solver to type
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
 including the shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order when the primary is unavailable. **Never commit a real key or live config** — keys are
+in order when the primary is unavailable. Startup preflights every distinct read and write endpoint
+against the configured chain ID; endpoint errors expose only a safe origin label, never credentials,
+paths, queries, or fragments. **Never commit a real key or live config** — keys are
 supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
+
+Generated 3F and RFQ upstream clients reject HTTP response bodies larger than 8 MiB. An oversized
+upstream response fails that request instead of being decoded or retained in memory.
 
 The `txManager` dispatcher serializes nonce allocation plus construction, signing, and initial
 broadcast of each original attempt. Independent trackers construct, sign, and broadcast any
@@ -170,6 +178,6 @@ CI runs `make check-generated` only against committed interface artifacts. It ne
 ## Contributing
 
 Engineering conventions — the modular framework/integration boundary, config-driven configuration,
-modern Go 1.26 style, the required test/lint/format gate, and secure-coding rules — are in
+modern Go 1.26.5 style, the required test/lint/format gate, and secure-coding rules — are in
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
