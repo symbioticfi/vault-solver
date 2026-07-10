@@ -1,5 +1,9 @@
 # Generic Runtime and Tooling Hardening Implementation Plan
 
+> **Public-port status:** This is the source-branch implementation record. The generic runtime and
+> tooling changes were ported, but the private `scripts/oev/*` helpers referenced below are absent
+> from the public tree; those script-specific steps are historical, not an executable checklist.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Upgrade to Go 1.26.5, make code generation reproducible, validate every RPC endpoint, bound generated-client responses, add pinned-block multicalls, reject unsafe fees, and remove the unused generic WebSocket setting.
