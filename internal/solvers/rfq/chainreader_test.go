@@ -258,6 +258,29 @@ func TestReadPermissionedVaultInventories_AuthorizationBoundary(t *testing.T) {
 			if len(got) != tc.want {
 				t.Fatalf("inventories = %d, want %d", len(got), tc.want)
 			}
+			if len(mc.calls) != len(responses) {
+				t.Fatalf("multicall batches = %d, want %d", len(mc.calls), len(responses))
+			}
+			if len(mc.calls[1]) != 2 {
+				t.Fatalf("authorization calls = %+v, want marketMaker and owner", mc.calls[1])
+			}
+			wantAuthData := [][]byte{llAdapter.PackMarketMaker(), llAdapter.PackOwner()}
+			for i, call := range mc.calls[1] {
+				if call.Target != vlt || !call.AllowFailure || string(call.Data) != string(wantAuthData[i]) {
+					t.Fatalf("authorization call %d = %+v, want target %s and selector %x",
+						i, call, vlt, wantAuthData[i])
+				}
+			}
+			if tc.delegated != nil {
+				if len(mc.calls[2]) != 1 {
+					t.Fatalf("delegation calls = %+v, want one isFiller call", mc.calls[2])
+				}
+				call := mc.calls[2][0]
+				wantData := llAdapter.PackIsFiller(tc.marketMaker, executorAddr)
+				if call.Target != vlt || !call.AllowFailure || string(call.Data) != string(wantData) {
+					t.Fatalf("delegation call = %+v, want target %s and calldata %x", call, vlt, wantData)
+				}
+			}
 		})
 	}
 }

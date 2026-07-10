@@ -89,6 +89,7 @@ func TestBackendClient_GetExecutableOrder_AcceptsOptionalOutputs(t *testing.T) {
 			}
 			if order == nil {
 				t.Fatal("getExecutableOrder returned nil")
+				return
 			}
 			if order.Outputs != nil {
 				t.Fatalf("outputs = %+v, want nil optional projection", order.Outputs)
