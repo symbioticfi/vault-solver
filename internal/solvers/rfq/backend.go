@@ -71,6 +71,7 @@ func newBackendClient(baseURL string) *backendClient {
 const (
 	publicAPIPrefix   = "/api/v1"          // the spec's prefix, baked into the generated client
 	internalAPIPrefix = "/api-internal/v1" // where the backend serves the internal-only discounts API
+	backendStatusOpen = "open"
 )
 
 // internalDiscountTransport routes discount requests to the backend's internal API prefix. The discounts
@@ -103,7 +104,7 @@ func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit
 	// narrowing is safe.
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		Filler(filler).
-		OrderStatus("open").
+		OrderStatus(backendStatusOpen).
 		Limit(int32(limit))
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
@@ -118,7 +119,7 @@ func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler 
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		OrderId(orderID).
 		Filler(filler).
-		OrderStatus("open")
+		OrderStatus(backendStatusOpen)
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
