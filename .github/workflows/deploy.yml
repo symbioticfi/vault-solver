@@ -57,5 +57,5 @@ jobs:
         run: |
           workflow=$([ "$REF_NAME" = "main" ] && echo deploy_prod.yml || echo deploy_stage.yml)
           gh workflow run "$workflow" \
-            --repo symbioticfi/vault-solver-deploy --ref stage \
+            --repo symbioticfi/vault-solver-deploy --ref main \
             -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"
