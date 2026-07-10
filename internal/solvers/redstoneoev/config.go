@@ -81,6 +81,7 @@ const (
 	defaultOpsPoll             = 10 * time.Second
 	defaultExecutorStateMaxAge = 30 * time.Second
 	defaultStrategyName        = "default"
+	webhookStrategyName        = "webhook"
 )
 
 // parseConfig decodes and validates the opaque redstone-oev solver config block.
@@ -152,6 +153,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		if cfg.MaxBidWei.Sign() <= 0 {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
+	}
+	if cfg.Strategy.Name == webhookStrategyName && cfg.MaxBidWei == nil {
+		return nil, errors.New("maxBidWei is required for webhook strategy")
 	}
 	return cfg, nil
 }

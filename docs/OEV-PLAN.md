@@ -77,7 +77,8 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
 - **`Solver` owns the execution envelope; strategy owns callback-specific execution.** The solver keeps
   WS lifecycle, auction/result routing, Executor state, in-flight auction reservations, breaker gates,
   the Executor deposit floor, EXECUTOR_V6 signing, and the final solve payload. The
-  configured strategy gets a compact `BidInput` with the solver-configured callback and returns
+  configured strategy gets a compact `BidInput` with the solver-configured callback, Executor deposit
+  and its protocol minimum, and returns
   `skip` or final `bidAmount + operationData`. `default` is the current Morpho liquidation
   strategy; `webhook` is an external trusted decider over JSON. The solver checks only the generic
   execution envelope before signing: unsafe skip payloads, non-positive bids, empty `operationData`,
@@ -374,8 +375,8 @@ bids without configuring loan↔ETH conversion. `maxTxGasPriceWei` is the hard c
 `max(strategy.config.bid.bidEth, grossProfitNative * strategy.config.bid.totalBundleProfitBps / 10000)`: the floor keeps thin auctions simple,
 while the bps share can scale bids with larger bundles. Since the winner is decided purely by bid amount and
 gas is debited post-settlement regardless, the bot bids only when the selected bundle clears the after-cost
-profitability check, gated by the callback holding the bid native (payBid) and the Executor deposit being
-above the Executor `MIN_DEPOSIT` floor. Every
+profitability check, gated by the callback holding the bid native (payBid) and the Executor deposit covering
+the Executor `MIN_DEPOSIT` floor plus the default strategy's predicted settlement gas. Every
 `auction-result` frame is logged with the winning `bid` and whether we won, so a win-rate controller can
 later consume those results; the bid remains solver-bounded off-chain (spec §8).
 
@@ -386,7 +387,10 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 - **In-flight reservation.** A sent bid records `reservedBid{nonce, at, auctionID, callback}` as lifecycle
   state. The solver passes pending auction IDs to the strategy; strategy-specific duplicate-position,
   callback funding, and gas risk avoidance stay inside the strategy because the solver no longer knows
-  callback operation semantics or Morpho legs.
+  callback operation semantics or Morpho legs. The default strategy keeps its own per-auction bid, predicted
+  gas, and `(market, borrower)` reservations. It can continue bidding independent positions after a missed
+  result frame without overcommitting callback or Executor funds. A resolved reservation remains charged
+  until callback balance has been refreshed after resolution, so a winning bid cannot reuse stale balance.
   Result frames release the reservation immediately when we lose `auction-result` or when our
   `liquidation-result` arrives. Nonce reconciliation and `reservationTTL` are backstops for missed frames.
 - **Adapter authorization (one gate, fail closed).** The default strategy treats the configured adapter as
@@ -615,7 +619,7 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `strategy.config.bid.{bidEth,authTtlMs,totalBundleProfitBps,minBundleProfitBidBps}` | default-strategy minimum bid, callback-auth replay window, optional gross-profit bid share, and optional bundle margin after gas + bid |
 | `strategy.config.{monitorPollMs,maxStateAgeMs}` | default-strategy refresh cadence and cache staleness cutoff |
 | `maxTxGasPriceWei` | signed gas-price cap and the gas price passed to strategy bundle economics |
-| `maxBidWei` | optional solver-owned per-auction cap on the final signed bid; unset means no solver cap |
+| `maxBidWei` | solver-owned per-auction cap on the final signed bid; required for `webhook`, optional for `default` |
 | `strategy.config.sizing.{allowFullLiquidation,swapHaircutBps}` | default-strategy full-collateral policy and swap cushion |
 | `breaker.maxFailures` / `windowMs` | failed-liquidation rolling-window halt plus immediate blacklist halt |
 | `intervals.opsPollMs` | solver Executor-state refresh cadence |
@@ -623,6 +627,10 @@ referenced by env-var name and read at point of use. The full annotated profile 
 
 Hard cutovers already applied:
 
+- OEV strategy fields moved under `strategy.config`: `morphoApiUrl`, discovery/monitor settings,
+  `loanEthFeed`, `bid`, and `sizing`. Solver-owned `maxTxGasPriceWei` is now top-level. The old unified
+  `intervals.maxStateAgeMs` split into `intervals.executorStateMaxAgeMs` for solver state and
+  `strategy.config.maxStateAgeMs` for default-strategy state. Unknown legacy keys fail strict decoding.
 - Static `bid.loanPerEth`, `bid.minBundleProfitLoan`, and `sizing.minLegProfitLoan` are removed. Rate comes
   only from `strategy.config.loanEthFeed`; the default strategy converts predicted gas, bid, and margin into signed
   loan-denominated `minProfit` / `minBundleProfit` floors before bidding.
@@ -648,7 +656,8 @@ the config values for the selected environment plus the runtime secrets referenc
 The Executor deposit is a rolling gas prepayment. Every settlement, including callback reverts, debits
 `(gasUsed + 35k) * tx.gasprice` from the signer deposit. The callback native balance pays only `payBid`.
 Before signing, the solver requires the Executor deposit to be above `MIN_DEPOSIT`; callback native balance
-and gas profitability are strategy-owned.
+and gas profitability are strategy-owned. The default strategy also skips a selected bundle when its
+predicted settlement gas would leave the Executor deposit below the floor.
 
 The default strategy logs route-aware predicted gas in bundle economics. Tune `internal/liquidlane/gas`
 constants just above observed successful settlements, not as a blunt worst-case multiplier. The current model

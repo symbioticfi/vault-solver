@@ -162,11 +162,11 @@ func parseLoanEthFeed(in *rawLoanEthFeed) (*loanEthFeed, error) {
 	if in == nil {
 		return nil, nil
 	}
-	loanFeed, err := parse.Address(in.LoanUsd, "strategy.config.loanEthFeed.loanUsd")
+	loanFeed, err := parse.NonZeroAddress(in.LoanUsd, "strategy.config.loanEthFeed.loanUsd")
 	if err != nil {
 		return nil, err
 	}
-	ethFeed, err := parse.Address(in.EthUsd, "strategy.config.loanEthFeed.ethUsd")
+	ethFeed, err := parse.NonZeroAddress(in.EthUsd, "strategy.config.loanEthFeed.ethUsd")
 	if err != nil {
 		return nil, err
 	}

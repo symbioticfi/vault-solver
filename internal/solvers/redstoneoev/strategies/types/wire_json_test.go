@@ -40,13 +40,14 @@ func TestBidInputMarshalJSON(t *testing.T) {
 			Filler: true,
 		},
 		Context: BidContext{
-			ChainID:         big.NewInt(11155111),
-			Executor:        common.HexToAddress("0x00000000000000000000000000000000000000bb"),
-			Callback:        common.HexToAddress("0x00000000000000000000000000000000000000ab"),
-			Signer:          common.HexToAddress("0x00000000000000000000000000000000000000dd"),
-			ExecutorDeposit: big.NewInt(1000),
-			MaxTxGasPrice:   big.NewInt(30),
-			GasLimit:        2_000_000,
+			ChainID:            big.NewInt(11155111),
+			Executor:           common.HexToAddress("0x00000000000000000000000000000000000000bb"),
+			Callback:           common.HexToAddress("0x00000000000000000000000000000000000000ab"),
+			Signer:             common.HexToAddress("0x00000000000000000000000000000000000000dd"),
+			ExecutorDeposit:    big.NewInt(1000),
+			ExecutorMinDeposit: big.NewInt(100),
+			MaxTxGasPrice:      big.NewInt(30),
+			GasLimit:           2_000_000,
 		},
 		PendingAuctions: []PendingAuction{{
 			ID:        "a0",
@@ -78,6 +79,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		`"chainId":"11155111"`,
 		`"callback":"0x00000000000000000000000000000000000000ab"`,
 		`"executorDeposit":"1000"`,
+		`"executorMinDeposit":"100"`,
 		`"price":"123456789"`,
 		`"pendingAuctions":`,
 		`"won":true`,
@@ -99,6 +101,30 @@ func TestBidOutputUnmarshalJSON(t *testing.T) {
 	}
 	if out.BidAmount.String() != "10" || string(out.OperationData) != "\x12\x34" {
 		t.Fatalf("unexpected output: %+v", out)
+	}
+}
+
+func TestBidOutputJSONRoundTrip(t *testing.T) {
+	want := BidOutput{
+		Decision:      DecisionBid,
+		Reason:        "profitable",
+		BidAmount:     big.NewInt(10),
+		OperationData: []byte{0x12, 0x34},
+	}
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	if got := string(b); got != `{"decision":"bid","reason":"profitable","bidAmount":"10","operationData":"0x1234"}` {
+		t.Fatalf("json = %s", got)
+	}
+	var got BidOutput
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if got.Decision != want.Decision || got.Reason != want.Reason ||
+		got.BidAmount.Cmp(want.BidAmount) != 0 || string(got.OperationData) != string(want.OperationData) {
+		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 }
 

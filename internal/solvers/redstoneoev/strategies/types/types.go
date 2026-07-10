@@ -23,12 +23,13 @@ const (
 	SkipReasonStaleState      = "stale_state"
 	SkipReasonInFlight        = "in_flight"
 	SkipReasonCallbackBalance = "callback_balance"
+	SkipReasonDepositLow      = "deposit_low"
 	SkipReasonStrategy        = "strategy_skip"
 )
 
 func BoundedSkipReason(reason string) string {
 	switch reason {
-	case SkipReasonNoLegs, SkipReasonGasUnprofitable, SkipReasonStaleEpoch, SkipReasonStaleState, SkipReasonInFlight, SkipReasonCallbackBalance:
+	case SkipReasonNoLegs, SkipReasonGasUnprofitable, SkipReasonStaleEpoch, SkipReasonStaleState, SkipReasonInFlight, SkipReasonCallbackBalance, SkipReasonDepositLow:
 		return reason
 	default:
 		return SkipReasonStrategy
@@ -82,13 +83,14 @@ type RedeemableSnapshot struct {
 }
 
 type BidContext struct {
-	ChainID         *big.Int
-	Executor        common.Address
-	Callback        common.Address
-	Signer          common.Address
-	ExecutorDeposit *big.Int
-	MaxTxGasPrice   *big.Int
-	GasLimit        uint64
+	ChainID            *big.Int
+	Executor           common.Address
+	Callback           common.Address
+	Signer             common.Address
+	ExecutorDeposit    *big.Int
+	ExecutorMinDeposit *big.Int
+	MaxTxGasPrice      *big.Int
+	GasLimit           uint64
 }
 
 type PendingAuction struct {

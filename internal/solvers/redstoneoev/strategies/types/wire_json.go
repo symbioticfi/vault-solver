@@ -56,13 +56,14 @@ type redeemableSnapshotJSON struct {
 }
 
 type bidContextJSON struct {
-	ChainID         string         `json:"chainId"`
-	Executor        common.Address `json:"executor"`
-	Callback        common.Address `json:"callback"`
-	Signer          common.Address `json:"signer"`
-	ExecutorDeposit string         `json:"executorDeposit"`
-	MaxTxGasPrice   string         `json:"maxTxGasPrice"`
-	GasLimit        uint64         `json:"gasLimit"`
+	ChainID            string         `json:"chainId"`
+	Executor           common.Address `json:"executor"`
+	Callback           common.Address `json:"callback"`
+	Signer             common.Address `json:"signer"`
+	ExecutorDeposit    string         `json:"executorDeposit"`
+	ExecutorMinDeposit string         `json:"executorMinDeposit"`
+	MaxTxGasPrice      string         `json:"maxTxGasPrice"`
+	GasLimit           uint64         `json:"gasLimit"`
 }
 
 type pendingAuctionSnapshotJSON struct {
@@ -77,6 +78,24 @@ type bidOutputJSON struct {
 	Reason        string   `json:"reason,omitempty"`
 	BidAmount     *string  `json:"bidAmount,omitempty"`
 	OperationData string   `json:"operationData,omitempty"`
+}
+
+func (out BidOutput) MarshalJSON() ([]byte, error) {
+	var bidAmount *string
+	if out.BidAmount != nil {
+		value := out.BidAmount.String()
+		bidAmount = &value
+	}
+	var operationData string
+	if len(out.OperationData) > 0 {
+		operationData = hexutil.Encode(out.OperationData)
+	}
+	return json.Marshal(bidOutputJSON{
+		Decision:      out.Decision,
+		Reason:        out.Reason,
+		BidAmount:     bidAmount,
+		OperationData: operationData,
+	})
 }
 
 func (in BidInput) MarshalJSON() ([]byte, error) {
@@ -119,13 +138,14 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 			Filler:       in.Adapter.Filler,
 		},
 		Context: bidContextJSON{
-			ChainID:         bigStringZero(in.Context.ChainID),
-			Executor:        in.Context.Executor,
-			Callback:        in.Context.Callback,
-			Signer:          in.Context.Signer,
-			ExecutorDeposit: bigStringZero(in.Context.ExecutorDeposit),
-			MaxTxGasPrice:   bigStringZero(in.Context.MaxTxGasPrice),
-			GasLimit:        in.Context.GasLimit,
+			ChainID:            bigStringZero(in.Context.ChainID),
+			Executor:           in.Context.Executor,
+			Callback:           in.Context.Callback,
+			Signer:             in.Context.Signer,
+			ExecutorDeposit:    bigStringZero(in.Context.ExecutorDeposit),
+			ExecutorMinDeposit: bigStringZero(in.Context.ExecutorMinDeposit),
+			MaxTxGasPrice:      bigStringZero(in.Context.MaxTxGasPrice),
+			GasLimit:           in.Context.GasLimit,
 		},
 		PendingAuctions: pending,
 	})

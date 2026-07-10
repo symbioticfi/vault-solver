@@ -2,6 +2,7 @@ package redstoneoev
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,6 +250,21 @@ strategy:
 	}
 }
 
+func TestParseConfigRequiresBidCapForWebhook(t *testing.T) {
+	_, err := decodeCfg(t, `
+ws: {url: "wss://x", apiKeyEnv: K}
+executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"
+adapter: "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"
+callback: "0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"
+strategy:
+  name: webhook
+  config: {url: "https://strategy.example"}
+`)
+	if err == nil || !strings.Contains(err.Error(), "maxBidWei is required") {
+		t.Fatalf("error = %v, want required webhook bid cap", err)
+	}
+}
+
 func TestParseConfigBidAuthTTL(t *testing.T) {
 	cfg, err := decodeCfg(t, wsline+addrs+strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\", authTtlMs: 120000}\n")+feedLine)
 	if err != nil {
@@ -331,6 +347,8 @@ func TestParseConfigErrors(t *testing.T) {
 		"removed gasPerLeg":              wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", gasPerLeg: 800000}",
 		"removed loanPerEth":             wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", loanPerEth: \"2500000000\"}",
 		"bad loan feed age":              wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", loanUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", maxAgeMs: 0}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
+		"zero loan feed":                 wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", loanUsd: \"0x0000000000000000000000000000000000000000\"}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
+		"zero eth feed":                  wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0x0000000000000000000000000000000000000000\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\"}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
 		"removed minBundleProfitLoan":    wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", minBundleProfitLoan: \"1\"}",
 		"negative minBundleProfitBidBps": wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", minBundleProfitBidBps: -1}\n") + feedLine,
 		"bad totalBundleProfitBps":       wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", totalBundleProfitBps: 10001}\n") + feedLine,

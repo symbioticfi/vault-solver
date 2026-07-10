@@ -341,6 +341,9 @@ func TestBuildBidLetsStrategyOwnDecisionState(t *testing.T) {
 	if strategy.input.Context.Callback != seedCallback {
 		t.Fatalf("callback = %s, want %s", strategy.input.Context.Callback.Hex(), seedCallback.Hex())
 	}
+	if strategy.input.Context.ExecutorMinDeposit.Cmp(minDeposit) != 0 {
+		t.Fatalf("executor minimum deposit = %s, want %s", strategy.input.Context.ExecutorMinDeposit, minDeposit)
+	}
 }
 
 func TestDefaultStrategyUsesBidInputAdapterSnapshot(t *testing.T) {
@@ -453,6 +456,20 @@ func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
 	}
 }
 
+func TestBuildBidLetsDefaultStrategyOwnDepositGasHeadroom(t *testing.T) {
+	s, _ := seededSolver(t)
+	st, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing cached state")
+	}
+	st.Exec.Deposit = new(big.Int).Add(minDeposit, big.NewInt(1))
+	s.state.store(st)
+
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "deposit_low" {
+		t.Fatalf("deposit gas headroom is default-strategy-owned; skip = %q, want deposit_low", d.skip)
+	}
+}
+
 func TestBuildBidSkipsSolverEnvelopeBeforeStrategy(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -489,9 +506,9 @@ func TestBuildBidSkipsSolverEnvelopeBeforeStrategy(t *testing.T) {
 	}
 }
 
-// TestBuildBidSkipsWhileAuctionPending pins that the solver passes bounded pending-auction state and lets
-// the strategy decide whether another bid is safe while the first auction is unresolved.
-func TestBuildBidSkipsWhileAuctionPending(t *testing.T) {
+// TestBuildBidReservesPendingPosition pins that the default strategy, rather than the solver, keeps the
+// selected Morpho position unavailable while a bid is unresolved.
+func TestBuildBidReservesPendingPosition(t *testing.T) {
 	s, _ := seededSolver(t)
 	a := decodeAuction(t)
 
@@ -499,17 +516,21 @@ func TestBuildBidSkipsWhileAuctionPending(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, "auction-pending")
+	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, a.ID)
 
-	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != "in_flight" {
-		t.Fatalf("a second auction while the first is pending must skip in_flight, got %q", d2.skip)
+	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
+		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
 	}
 
-	// Once the bid resolves (the on-chain nonce REACHES the bid's nonce — settlement sets it to exactly
-	// the consumed nonce), pending-auction state is released. Uses == d1.nonce, not +1.
+	// Once the bid resolves, the strategy keeps its accounting reservation until callback balance has been
+	// refreshed after resolution. This prevents bidding against a balance spent by a winning settlement.
 	s.pruneReservations(d1.nonce, time.Unix(1781243340, 0))
-	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != "" {
-		t.Fatalf("after the in-flight bid resolved the strategy should be allowed again, got %q", d3.skip)
+	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != types.SkipReasonNoLegs {
+		t.Fatalf("resolved position should remain reserved until balance refresh, got %q", d3.skip)
+	}
+	seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), auctionClock()().Add(time.Second))
+	if d4 := s.buildBid(t.Context(), a, auctionClock()); d4.skip != "" {
+		t.Fatalf("after callback balance refresh the strategy should be allowed again, got %q", d4.skip)
 	}
 }
 

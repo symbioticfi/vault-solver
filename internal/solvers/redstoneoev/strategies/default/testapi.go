@@ -35,7 +35,12 @@ func NewWithSnapshotForTest(cfg Config, callback common.Address, seed SnapshotSe
 }
 
 func (s *Strategy) StoreDecisionStateForTest(rate, callbackNative *big.Int, updatedAt time.Time) {
-	s.state.store(decisionState{Rate: rate, CallbackNative: callbackNative, UpdatedAt: updatedAt})
+	s.state.store(decisionState{
+		Rate:              rate,
+		CallbackNative:    callbackNative,
+		RateUpdatedAt:     updatedAt,
+		CallbackUpdatedAt: updatedAt,
+	})
 }
 
 func (s *Strategy) SnapshotForTest() SnapshotSeed {

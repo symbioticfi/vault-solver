@@ -25,22 +25,24 @@ type monitorSource interface {
 }
 
 type Strategy struct {
-	cfg      Config
-	callback common.Address
-	reader   Reader
-	signer   signer
-	chainID  *big.Int
-	mon      monitorSource
-	engine   bundleEngine
-	state    decisionStateCache
-	maxAge   time.Duration
-	log      logr.Logger
+	cfg          Config
+	callback     common.Address
+	reader       Reader
+	signer       signer
+	chainID      *big.Int
+	mon          monitorSource
+	engine       bundleEngine
+	state        decisionStateCache
+	reservations decisionReservations
+	maxAge       time.Duration
+	log          logr.Logger
 }
 
 type decisionState struct {
-	Rate           *big.Int
-	CallbackNative *big.Int
-	UpdatedAt      time.Time
+	Rate              *big.Int
+	CallbackNative    *big.Int
+	RateUpdatedAt     time.Time
+	CallbackUpdatedAt time.Time
 }
 
 type decisionStateCache struct {
@@ -158,15 +160,26 @@ func (s *Strategy) refreshState(ctx context.Context) {
 		return
 	}
 	now := time.Now()
+	prev, _ := s.state.load()
 	rate := s.reader.ReadLoanEthRate(ctx, s.cfg.Adapter, s.cfg.LoanEthFeed, now)
+	rateUpdatedAt := now
+	if rate == nil {
+		rate = prev.Rate
+		rateUpdatedAt = prev.RateUpdatedAt
+	}
 	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
+	callbackUpdatedAt := now
 	if err != nil {
 		s.log.Error(err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
-		if prev, ok := s.state.load(); ok {
-			callbackNative = prev.CallbackNative
-		}
+		callbackNative = prev.CallbackNative
+		callbackUpdatedAt = prev.CallbackUpdatedAt
 	}
-	s.state.store(decisionState{Rate: rate, CallbackNative: callbackNative, UpdatedAt: now})
+	s.state.store(decisionState{
+		Rate:              rate,
+		CallbackNative:    callbackNative,
+		RateUpdatedAt:     rateUpdatedAt,
+		CallbackUpdatedAt: callbackUpdatedAt,
+	})
 }
 
 func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
@@ -187,16 +200,15 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return skipBid(skipStaleState), nil
 	}
 	st, ok := s.state.load()
-	if !ok || (s.maxAge > 0 && input.Now.Sub(st.UpdatedAt) > s.maxAge) {
+	if !ok || !freshAt(st.RateUpdatedAt, input.Now, s.maxAge) || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
 		return skipBid(skipStaleState), nil
 	}
 	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {
 		return skipBid(skip), nil
 	}
-	if hasPendingAuctions(input.PendingAuctions, input.Now) {
-		return skipBid(types.SkipReasonInFlight), nil
-	}
+	reserved := s.reservations.reconcile(input.PendingAuctions, input.Now, st.CallbackUpdatedAt)
 	scored := s.scoredLegs(input.Auction, input.Now, input.Adapter)
+	scored = filterReservedPositions(scored, reserved.positions)
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
@@ -218,13 +230,33 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
 	priced := s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-	if orZero(st.CallbackNative).Cmp(priced.bidNative) < 0 {
+	reservedAndCurrentGas := new(big.Int).Add(reserved.gasNative, priced.gasNative)
+	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, reservedAndCurrentGas) {
+		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",
+			"auction", input.Auction.ID,
+			"depositWei", input.Context.ExecutorDeposit,
+			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, reservedAndCurrentGas),
+			"reservedGasWei", reserved.gasNative,
+			"minDepositWei", input.Context.ExecutorMinDeposit,
+			"gasUnits", priced.gas.Units,
+			"gasNative", priced.gasNative,
+			"gasPriceWei", gasPrice)
+		return skipBid(types.SkipReasonDepositLow), nil
+	}
+	availableCallback := new(big.Int).Sub(orZero(st.CallbackNative), reserved.bidNative)
+	if availableCallback.Cmp(priced.bidNative) < 0 {
 		s.log.Info("bid skipped: callback balance cannot cover bid",
 			"auction", input.Auction.ID, "callback", s.callback.Hex(),
-			"callbackWei", st.CallbackNative, "requiredWei", priced.bidNative)
+			"callbackWei", st.CallbackNative, "reservedBidWei", reserved.bidNative,
+			"availableWei", availableCallback, "requiredWei", priced.bidNative)
 		return skipBid(types.SkipReasonCallbackBalance), nil
 	}
-	return s.bidOutputFromBundle(input, priced)
+	out, err := s.bidOutputFromBundle(input, priced)
+	if err != nil {
+		return types.BidOutput{}, err
+	}
+	s.reservations.reserve(input.Auction.ID, priced)
+	return out, nil
 }
 
 func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {
@@ -326,16 +358,8 @@ func liquidLaneStateFromAdapter(adapter types.AdapterSnapshot) *liquidLaneState 
 	return st
 }
 
-func hasPendingAuctions(in []types.PendingAuction, now time.Time) bool {
-	for _, a := range in {
-		if a.ID == "" {
-			continue
-		}
-		if a.ExpiresAt.IsZero() || now.Before(a.ExpiresAt) {
-			return true
-		}
-	}
-	return false
+func freshAt(updatedAt, now time.Time, maxAge time.Duration) bool {
+	return !updatedAt.IsZero() && (maxAge <= 0 || now.Sub(updatedAt) <= maxAge)
 }
 
 var _ types.Strategy = (*Strategy)(nil)

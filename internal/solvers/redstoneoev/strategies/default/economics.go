@@ -50,6 +50,14 @@ func nativeToLoan(native, rate *big.Int) *big.Int {
 	return morpho.MulDivUp(native, rate, morpho.Wad)
 }
 
+func executorDepositRequired(minDeposit, gasNative *big.Int) *big.Int {
+	return new(big.Int).Add(orZero(minDeposit), orZero(gasNative))
+}
+
+func depositCoversSettlementGas(deposit, minDeposit, gasNative *big.Int) bool {
+	return orZero(deposit).Cmp(executorDepositRequired(minDeposit, gasNative)) >= 0
+}
+
 func clampTsAt(auctionMs int64, now time.Time) uint64 {
 	nowSec := now.Unix()
 	if auctionMs <= 0 {
@@ -71,7 +79,7 @@ func legsWithProfitFloors(legs []selectedLeg, gas gasPrediction, gasPrice, rate 
 		if i < len(gas.Routes) {
 			route = gas.Routes[i]
 		}
-		units := liquidlanegas.UnitsForRoute(route)
+		units := liquidlanegas.UnitsForRouteAt(route, i == 0)
 		out[i].MinProfit = nativeToLoan(gasCostNative(units, gasPrice), rate)
 	}
 	return out
