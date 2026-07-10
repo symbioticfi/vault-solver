@@ -257,11 +257,16 @@ feed refreshes.
 adapter snapshot, and gas limit) and skips with `executor_state_stale` when it exceeds
 `intervals.executorStateMaxAgeMs`. The
 default strategy owns its monitor snapshot (Morpho markets/positions) and decision
-state (loan↔ETH rate + callback balance), and returns `stale_state` for its own
-stale caches. A loop that keeps failing while serving its prior data stops bidding instead of running on
+state (loan↔ETH rate + callback balance), tracks the rate and balance last-success stamps independently,
+and returns `stale_state` for its own stale caches. A failed component read retains both its prior value
+and its prior stamp. A loop that keeps failing while serving its prior data stops bidding instead of running on
 arbitrarily old state. Startup config validation enforces each owner separately:
 `intervals.opsPollMs < intervals.executorStateMaxAgeMs` in the solver, and
 `strategy.config.monitorPollMs < strategy.config.maxStateAgeMs` in the default strategy.
+
+Executor bookkeeping is independent of publishing the coherent solver snapshot. Every successful
+Executor read immediately prunes resolved reservations, reconciles the nonce high-water mark, and
+evaluates the deposit floor, even when a later adapter read fails or the refresh crosses a block boundary.
 
 ### 3.4 Market scope
 

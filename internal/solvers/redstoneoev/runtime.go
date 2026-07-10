@@ -73,6 +73,9 @@ func (s *Solver) refreshState(ctx context.Context) {
 		s.log.Error(err, "read executor state failed; keeping cache")
 		return
 	}
+	// Executor bookkeeping is independent of publishing the coherent state snapshot. A later adapter
+	// read failure or block-boundary rejection must not strand reservations or the nonce high-water mark.
+	s.applyExecutorState(st, now)
 	adapter, err := s.reader.ReadAdapterSnapshot(ctx, s.cfg.Adapter, s.cfg.Callback)
 	if err != nil {
 		s.log.Error(err, "read adapter snapshot failed; keeping cache", "adapter", s.cfg.Adapter.Hex())
@@ -88,7 +91,6 @@ func (s *Solver) refreshState(ctx context.Context) {
 		return
 	}
 	s.state.store(cachedState{Exec: st, Adapter: adapter, GasLimit: startHead.GasLimit, UpdatedAt: now})
-	s.applyExecutorState(st, now)
 }
 
 type headSnapshot struct {

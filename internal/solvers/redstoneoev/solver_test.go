@@ -9,12 +9,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gopkg.in/yaml.v3"
 
+	multicallbinding "github.com/symbioticfi/vault-solver/api/bindings/multicall3"
+	executorbinding "github.com/symbioticfi/vault-solver/api/bindings/oev/executor"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
@@ -315,6 +321,7 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
 		}
 	})
+
 	t.Run("fresh caches pass the gate", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip == skipExecutorStateStale {
@@ -694,6 +701,80 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	// nonces.reconcile ran: the next nonce is strictly above the on-chain 9.
 	if got := s.nonces.next(0); got != 10 {
 		t.Fatalf("nonces.reconcile must run despite a failed balance read; next nonce = %d, want 10", got)
+	}
+}
+
+type laterReadFailureRPC struct {
+	callResult hexutil.Bytes
+}
+
+func (*laterReadFailureRPC) GetBlockByNumber(
+	context.Context,
+	string,
+	bool,
+) (*gethtypes.Header, error) {
+	return &gethtypes.Header{Number: big.NewInt(100), Difficulty: big.NewInt(0), GasLimit: 2_000_000}, nil
+}
+
+func (r *laterReadFailureRPC) Call(context.Context, map[string]any, string) (hexutil.Bytes, error) {
+	return r.callResult, nil
+}
+
+func TestRefreshStateLaterReadFailureStillAppliesExecutorBookkeeping(t *testing.T) {
+	executorABI, err := executorbinding.RedStoneExecutorMetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	packExecutorResult := func(method string, values ...any) []byte {
+		t.Helper()
+		data, packErr := executorABI.Methods[method].Outputs.Pack(values...)
+		if packErr != nil {
+			t.Fatalf("pack %s: %v", method, packErr)
+		}
+		return data
+	}
+	results := []multicallbinding.Multicall3Result{
+		{Success: true, ReturnData: packExecutorResult("nonces", big.NewInt(9))},
+		{Success: true, ReturnData: packExecutorResult("deposits", mustBig("100000000000000000"))},
+		{Success: true, ReturnData: packExecutorResult("locked", false)},
+	}
+	multicallABI, err := multicallbinding.Multicall3MetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	callResult, err := multicallABI.Methods["aggregate3"].Outputs.Pack(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpcService := &laterReadFailureRPC{callResult: callResult}
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("eth", rpcService); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rpcServer.Stop)
+	rpcClient := rpc.DialInProc(rpcServer)
+	t.Cleanup(rpcClient.Close)
+	chainClient := &chain.Client{Client: ethclient.NewClient(rpcClient)}
+
+	s, _ := seededSolver(t)
+	s.deps.Chain = chainClient
+	s.reader = newReader(chainClient, logr.Discard())
+	old, _ := s.state.load()
+	s.reserve(8, time.Now(), seedCallback, "auction-8")
+	s.nonces.reconcile(5)
+
+	s.refreshState(t.Context())
+
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("later adapter failure stranded reservation: pending=%v", inFlight.pending)
+	}
+	if got := s.nonces.next(0); got != 10 {
+		t.Fatalf("nonce bookkeeping did not apply before epoch rejection: got %d, want 10", got)
+	}
+	got, _ := s.state.load()
+	if got.Exec.Nonce.Cmp(old.Exec.Nonce) != 0 || got.Adapter.Address != old.Adapter.Address ||
+		!got.UpdatedAt.Equal(old.UpdatedAt) {
+		t.Fatalf("failed adapter refresh published a partial snapshot: got %+v, want %+v", got, old)
 	}
 }
 
