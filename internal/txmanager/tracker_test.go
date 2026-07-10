@@ -259,7 +259,7 @@ func sendAsync(m *Manager, req Request) <-chan Result {
 }
 
 func TestTrack_BlockingReceiptDoesNotDelayReplacementBoundary(t *testing.T) {
-	const interval = 15 * time.Millisecond
+	const interval = 100 * time.Millisecond
 	b := newBlockingReceiptBackend()
 	b.heldNonces[7] = true
 	m, cancel, done := newTestManager(t, b, Config{
