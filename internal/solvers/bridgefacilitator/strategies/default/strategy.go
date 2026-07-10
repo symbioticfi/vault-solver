@@ -82,7 +82,7 @@ func (s *Strategy) DecideOffers(
 				Request:        auction.Request,
 				Maker:          st.snapshot.Adapter,
 				Principal:      principal,
-				ExpectedReturn: types.ExpectedReturn(principal, auction.MaxRateBps),
+				ExpectedReturn: types.ExpectedReturn(principal, auction.MaxRateDeciBps),
 			})
 			st.committed.Add(st.committed, principal)
 			st.opened++
@@ -118,9 +118,11 @@ func rankEligibleAdapters(
 		if auction.DepositAsset != st.snapshot.Collateral {
 			continue
 		}
-		if st.snapshot.MinYieldBps != nil && st.snapshot.MinYieldBps.Sign() > 0 &&
-			auction.MaxRateBps < types.BpsToFloat(st.snapshot.MinYieldBps) {
-			continue
+		if st.snapshot.MinYieldBps != nil && st.snapshot.MinYieldBps.Sign() > 0 {
+			floor := new(big.Int).Mul(st.snapshot.MinYieldBps, big.NewInt(10))
+			if auction.MaxRateDeciBps.Cmp(floor) < 0 {
+				continue
+			}
 		}
 		eligible = append(eligible, scored{st, st.capacity()})
 	}

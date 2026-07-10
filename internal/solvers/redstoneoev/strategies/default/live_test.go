@@ -15,13 +15,13 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// TestLiveAPIMonitorSnapshotAndCandidates exercises the same production API path the OEV monitor uses:
-// adapter-derived token pair -> Morpho markets with state -> monitor snapshot validation -> positions ->
-// hot-path candidates. It uses a known mainnet USDC/PAXG pair as the adapter-derived stand-in; no RPC or
-// real adapter is needed because this test targets the API-backed Morpho side.
+// TestLiveAPIDiscoveryAndCandidates exercises the GraphQL half of the production monitor path:
+// adapter-derived token pair -> Morpho market discovery -> positions -> hot-path candidate conversion.
+// Pinned market/IRM enrichment and the source-block header are RPC boundaries covered hermetically; this
+// live API test deliberately has no RPC or real adapter.
 //
-//	go test -tags live -run TestLiveAPIMonitorSnapshotAndCandidates -v ./internal/solvers/redstoneoev/strategies/default/
-func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
+//	go test -tags live -run TestLiveAPIDiscoveryAndCandidates -v ./internal/solvers/redstoneoev/strategies/default/
+func TestLiveAPIDiscoveryAndCandidates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -47,8 +47,9 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	if _, ok := apiSnap.markets[wantMarket]; !ok {
 		t.Fatalf("apiMonitor snapshot missing known market %s (got %d markets)", wantMarket.Hex(), len(apiSnap.markets))
 	}
-	if apiSnap.block == 0 || apiSnap.blockTime == 0 {
-		t.Fatalf("apiMonitor snapshot missing epoch: block=%d blockTime=%d", apiSnap.block, apiSnap.blockTime)
+	if apiSnap.block == 0 || apiSnap.blockTime != 0 {
+		t.Fatalf("API discovery must select a block without inventing header time: block=%d blockTime=%d",
+			apiSnap.block, apiSnap.blockTime)
 	}
 	for id, info := range apiSnap.markets {
 		if info.Params.LoanToken != loan || info.Params.CollateralToken != coll || info.Params.Oracle == (common.Address{}) {
@@ -83,7 +84,6 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 		quotes:    quotes,
 		positions: positions,
 		block:     apiSnap.block,
-		blockTime: apiSnap.blockTime,
 	})
 
 	var targetMarket common.Hash
@@ -100,7 +100,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	oracle := apiSnap.markets[targetMarket].Params.Oracle
 	price := apiSnap.prices[targetMarket]
 	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: price}}}
-	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{})
+	cands := mon.candidates(auction, apiSnap.markets[targetMarket].State.LastUpdate, types.AdapterSnapshot{})
 	if len(cands) == 0 {
 		t.Fatal("apiMonitor.candidates returned no candidates for a snapshot position with matching oracle price")
 	}

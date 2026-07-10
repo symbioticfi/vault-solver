@@ -207,7 +207,7 @@ func ppmToBps(ppm *big.Int) *big.Int {
 
 // requestSlotCalls builds the requests(i) reads for i in [0, n) — n from requestsLength(). AllowFailure:
 // a concurrent finalize can shrink the array between the length read and these, so a tail index may
-// revert; collectRequests stops at that gap.
+// revert; collectRequests accepts only a contiguous failure suffix as that shrink signal.
 func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
 	calls := make([]chain.Call, n)
 	for i := range calls {
@@ -217,49 +217,64 @@ func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
 }
 
 // collectRequests decodes the leading run of successful requests(i) results into request addresses.
-// finalizeRequest keeps the array dense (swap-pop), so the first reverted/undecodable slot ends the set.
-func collectRequests(res []chain.CallResult) []common.Address {
+// finalizeRequest keeps the array dense (swap-pop), so reverted calls may only form a suffix after a
+// concurrent shrink. A successful-but-undecodable slot or a later success after a failure is malformed.
+func collectRequests(res []chain.CallResult) ([]common.Address, error) {
 	out := make([]common.Address, 0, len(res))
-	for _, rr := range res {
+	sawFailure := false
+	for i, rr := range res {
 		if !rr.Success {
-			break
+			sawFailure = true
+			continue
+		}
+		if sawFailure {
+			return nil, errors.Errorf("requests(%d) succeeded after a reverted slot", i)
 		}
 		addr, err := bfAdapter.UnpackRequests(rr.ReturnData)
 		if err != nil {
-			break
+			return nil, errors.Errorf("decode requests(%d): %w", i, err)
 		}
 		out = append(out, addr)
 	}
-	return out
+	return out, nil
 }
 
-// readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads
-// requestsLength(), enumerates exactly that many requests(i), then batches every canWithdraw() into a
-// single multicall.
-func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, error) {
+// readyToRedeem returns the adapter's active Requests that are currently redeemable and those whose
+// readiness could not be read. It reads requestsLength(), enumerates exactly that many requests(i),
+// then batches every canWithdraw() into a single multicall.
+func (r *reader) readyToRedeem(
+	ctx context.Context,
+	adapterAddr common.Address,
+) (ready, unknown []common.Address, err error) {
 	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(lres) != 1 || !lres[0].Success {
-		return nil, errors.New("adapter.requestsLength() reverted")
+		return nil, nil, errors.New("adapter.requestsLength() reverted")
 	}
 	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
 	if err != nil {
-		return nil, errors.Errorf("adapter.requestsLength(): %w", err)
+		return nil, nil, errors.Errorf("adapter.requestsLength(): %w", err)
 	}
 	count := clampCount(n)
 	if count == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	reqs := collectRequests(res)
+	if len(res) != count {
+		return nil, nil, errors.Errorf("requests multicall returned %d results, want %d", len(res), count)
+	}
+	reqs, err := collectRequests(res)
+	if err != nil {
+		return nil, nil, errors.Errorf("adapter requests enumeration: %w", err)
+	}
 	if len(reqs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	calls := make([]chain.Call, len(reqs))
@@ -269,21 +284,27 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 	}
 	res, err = r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if len(res) != len(reqs) {
+		return nil, nil, errors.Errorf("canWithdraw multicall returned %d results, want %d", len(res), len(reqs))
 	}
 
-	ready := make([]common.Address, 0, len(reqs))
+	ready = make([]common.Address, 0, len(reqs))
+	unknown = make([]common.Address, 0, len(reqs))
 	for i, rr := range res {
 		if !rr.Success {
+			unknown = append(unknown, reqs[i])
 			continue
 		}
 		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)
 		if derr != nil {
+			unknown = append(unknown, reqs[i])
 			continue
 		}
 		if ok {
 			ready = append(ready, reqs[i])
 		}
 	}
-	return ready, nil
+	return ready, unknown, nil
 }

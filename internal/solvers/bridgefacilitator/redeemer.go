@@ -3,13 +3,17 @@ package bridgefacilitator
 import (
 	"context"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
+
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // redeemReady finds the target's redeemable Requests (batched canWithdraw via multicall) and finalizes
 // them in a single bounded adapter.multicall(finalizeRequest...) through the shared txmanager.
 func (s *Solver) redeemReady(ctx context.Context, target Target) {
-	ready, err := s.reader.readyToRedeem(ctx, target.Adapter)
+	ready, unknown, scanErr := s.reader.readyToRedeem(ctx, target.Adapter)
+	ready, err := s.reconcileReadyRedemptions(target.Adapter, ready, unknown, scanErr)
 	if err != nil {
 		s.log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
 		return
@@ -38,9 +42,73 @@ func (s *Solver) redeemReady(ctx context.Context, target Target) {
 		Data:  data,
 		Label: "redeem",
 	})
-	if res.Err != nil {
-		s.log.Error(res.Err, "redeem: tx failed", "requests", len(ready))
-		return
+	s.handleRedeemResult(target.Adapter, ready, res)
+}
+
+func (s *Solver) recordPendingRedemptions(adapter common.Address, requests []common.Address) {
+	for _, request := range requests {
+		s.pendingRedemptions[redeemKey{adapter: adapter, request: request}] = struct{}{}
 	}
-	s.log.Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
+}
+
+func (s *Solver) reconcilePendingRedemptions(adapter common.Address, ready, unknown []common.Address) {
+	present := make(map[common.Address]struct{}, len(ready)+len(unknown))
+	for _, request := range ready {
+		present[request] = struct{}{}
+	}
+	for _, request := range unknown {
+		present[request] = struct{}{}
+	}
+	for key := range s.pendingRedemptions {
+		if key.adapter == adapter {
+			if _, ok := present[key.request]; !ok {
+				delete(s.pendingRedemptions, key)
+			}
+		}
+	}
+}
+
+func (s *Solver) filterPendingRedemptions(adapter common.Address, ready []common.Address) []common.Address {
+	out := make([]common.Address, 0, len(ready))
+	for _, request := range ready {
+		if _, pending := s.pendingRedemptions[redeemKey{adapter: adapter, request: request}]; !pending {
+			out = append(out, request)
+		}
+	}
+	return out
+}
+
+// reconcileReadyRedemptions applies a successful scan's authoritative readiness results while
+// preserving unresolved suppression for requests whose individual canWithdraw read was unknown. A
+// whole-scan error leaves suppression untouched; a successful empty scan clears this adapter's set.
+func (s *Solver) reconcileReadyRedemptions(
+	adapter common.Address,
+	ready, unknown []common.Address,
+	scanErr error,
+) ([]common.Address, error) {
+	if scanErr != nil {
+		return nil, scanErr
+	}
+	s.reconcilePendingRedemptions(adapter, ready, unknown)
+	return s.filterPendingRedemptions(adapter, ready), nil
+}
+
+func (s *Solver) handleRedeemResult(adapter common.Address, batch []common.Address, res txmanager.Result) {
+	switch res.State {
+	case txmanager.StateConfirmed:
+		s.log.Info("finalized ready requests", "count", len(batch), "tx", res.Hash.Hex())
+	case txmanager.StateUnresolved:
+		s.recordPendingRedemptions(adapter, batch)
+		s.log.Error(res.Err, "redeem transaction unresolved; suppressing batch until chain resync",
+			"requests", len(batch), "tx", res.Hash.Hex(), "nonce", res.Nonce)
+	case txmanager.StateNotBroadcast, txmanager.StateRejected, txmanager.StateReverted:
+		s.log.Error(res.Err, "redeem transaction failed definitively",
+			"requests", len(batch), "tx", res.Hash.Hex(), "state", res.State)
+	case txmanager.StateBroadcastUnknown, txmanager.StatePending:
+		fallthrough
+	default:
+		s.recordPendingRedemptions(adapter, batch)
+		s.log.Error(errors.Errorf("unexpected txmanager state %q", res.State),
+			"redeem transaction state invalid; suppressing conservatively", "requests", len(batch))
+	}
 }

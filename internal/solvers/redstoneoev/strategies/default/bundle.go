@@ -4,6 +4,7 @@ package defaultstrategy
 
 import (
 	"cmp"
+	"container/heap"
 	"maps"
 	"math/big"
 	"slices"
@@ -118,12 +119,93 @@ type bundleMarketState struct {
 }
 
 type replayedScoredLeg struct {
-	scored   scoredLeg
-	marketID common.Hash
-	market   bundleMarketState
+	scored      scoredLeg
+	marketID    common.Hash
+	marketInfo  MarketInfo
+	marketState morpho.MarketState
+	borrower    common.Address
+	position    morpho.PositionState
 }
 
-func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int, scoreFn func(chosenBundle) *big.Int) (bundleSearchState, bool) {
+type bundleTrial struct {
+	parent    bundleSearchState
+	next      replayedScoredLeg
+	idx       int
+	grossLoan *big.Int
+	score     *big.Int
+	seq       uint64
+}
+
+type bundleTrialHeap []bundleTrial
+
+func (h bundleTrialHeap) Len() int { return len(h) }
+
+func (h bundleTrialHeap) Less(i, j int) bool {
+	if scoreCmp := h[i].score.Cmp(h[j].score); scoreCmp != 0 {
+		return scoreCmp < 0
+	}
+	return h[i].seq > h[j].seq
+}
+
+func (h bundleTrialHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *bundleTrialHeap) Push(v any) { *h = append(*h, v.(bundleTrial)) }
+
+func (h *bundleTrialHeap) Pop() any {
+	old := *h
+	n := len(old)
+	v := old[n-1]
+	*h = old[:n-1]
+	return v
+}
+
+func trialBetter(a, b bundleTrial) bool {
+	if scoreCmp := a.score.Cmp(b.score); scoreCmp != 0 {
+		return scoreCmp > 0
+	}
+	return a.seq < b.seq
+}
+
+func freezeBundleTrial(trial bundleTrial) bundleTrial {
+	trial.grossLoan = new(big.Int).Set(trial.grossLoan)
+	trial.score = new(big.Int).Set(trial.score)
+	return trial
+}
+
+func keepBundleTrial(h *bundleTrialHeap, trial bundleTrial) {
+	if h.Len() < netBundleBeamWidth {
+		heap.Push(h, freezeBundleTrial(trial))
+		return
+	}
+	if trialBetter(trial, (*h)[0]) {
+		heap.Pop(h)
+		heap.Push(h, freezeBundleTrial(trial))
+	}
+}
+
+type bundleSearchStats struct {
+	materialized    int
+	probeLegBuffers int
+}
+
+func (e bundleEngine) searchBundle(
+	scored []scoredLeg,
+	laneState *liquidLaneState,
+	gasLimit uint64,
+	feedCount int,
+	scoreFn func(chosenBundle) *big.Int,
+) (bundleSearchState, bool) {
+	return e.searchBundleWithStats(scored, laneState, gasLimit, feedCount, scoreFn, nil)
+}
+
+func (e bundleEngine) searchBundleWithStats(
+	scored []scoredLeg,
+	laneState *liquidLaneState,
+	gasLimit uint64,
+	feedCount int,
+	scoreFn func(chosenBundle) *big.Int,
+	stats *bundleSearchStats,
+) (bundleSearchState, bool) {
 	maxDepth := bundleSearchDepth(gasLimit, feedCount)
 	if maxDepth == 0 {
 		return bundleSearchState{}, false
@@ -138,32 +220,52 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 	}
 	beam := []bundleSearchState{start}
 	best := start
+	seq := uint64(0)
 	for depth := 0; depth < maxDepth && depth < len(group); depth++ {
-		nextBeam := make([]bundleSearchState, 0, min(len(group), netBundleBeamWidth))
+		frontier := &bundleTrialHeap{}
 		for _, state := range beam {
-			for i, sl := range group {
+			probeLegs := make([]bundleLeg, len(state.bundle.legs)+1)
+			copy(probeLegs, state.bundle.legs)
+			probeGross := new(big.Int)
+			if stats != nil {
+				stats.probeLegBuffers++
+			}
+			for i, scored := range group {
 				if state.used[i] {
 					continue
 				}
-				trial, ok := e.extendBundleState(state, sl, i)
-				if !ok {
+				next, ok := e.replayScoredLeg(scored, state.markets)
+				if !ok || !fitsCollateralBudget(state.consumed, next.scored) {
 					continue
 				}
-				if !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
+				candidate := probeBundle(state.bundle, next.scored, probeLegs, probeGross)
+				if !fitsGasLimit(legHints(candidate.legs), laneState, gasLimit, feedCount) {
 					continue
 				}
-				trial.score = scoreFn(trial.bundle)
-				nextBeam = append(nextBeam, trial)
+				keepBundleTrial(frontier, bundleTrial{
+					parent:    state,
+					next:      next,
+					idx:       i,
+					grossLoan: candidate.grossLoan,
+					score:     scoreFn(candidate),
+					seq:       seq,
+				})
+				seq++
 			}
 		}
-		if len(nextBeam) == 0 {
+		if frontier.Len() == 0 {
 			break
 		}
-		slices.SortStableFunc(nextBeam, func(a, b bundleSearchState) int {
-			return b.score.Cmp(a.score)
+		trials := slices.Clone(*frontier)
+		slices.SortFunc(trials, func(a, b bundleTrial) int {
+			return cmp.Or(b.score.Cmp(a.score), cmp.Compare(a.seq, b.seq))
 		})
-		if len(nextBeam) > netBundleBeamWidth {
-			nextBeam = nextBeam[:netBundleBeamWidth]
+		nextBeam := make([]bundleSearchState, len(trials))
+		for i, trial := range trials {
+			nextBeam[i] = materializeBundleTrial(trial)
+			if stats != nil {
+				stats.materialized++
+			}
 		}
 		if len(best.bundle.legs) == 0 || nextBeam[0].score.Cmp(best.score) > 0 {
 			best = nextBeam[0]
@@ -173,6 +275,49 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 	return best, len(best.bundle.legs) > 0
 }
 
+func probeBundle(parent chosenBundle, next scoredLeg, legs []bundleLeg, gross *big.Int) chosenBundle {
+	legs[len(parent.legs)] = next.bundleLeg
+	gross.Add(parent.grossLoan, next.profit)
+	return chosenBundle{legs: legs, grossLoan: gross}
+}
+
+func materializeBundleTrial(trial bundleTrial) bundleSearchState {
+	bundle := cloneChosenBundle(trial.parent.bundle)
+	appendScoredLeg(&bundle, trial.next.scored)
+	bundle.grossLoan.Set(trial.grossLoan)
+	next := bundleSearchState{
+		bundle:   bundle,
+		consumed: cloneCollateralBudget(trial.parent.consumed),
+		markets:  maps.Clone(trial.parent.markets),
+		used:     cloneUsed(trial.parent.used),
+		score:    new(big.Int).Set(trial.score),
+	}
+	next.used[trial.idx] = true
+	commitCollateralBudget(next.consumed, trial.next.scored)
+	if trial.next.marketID != (common.Hash{}) {
+		previous := trial.parent.markets[trial.next.marketID]
+		positions := maps.Clone(previous.positions)
+		if positions == nil {
+			positions = make(map[common.Address]morpho.PositionState)
+		}
+		positions[trial.next.borrower] = morpho.ClonePositionState(trial.next.position)
+		info := trial.next.marketInfo
+		info.State = morpho.CloneMarketState(trial.next.marketState)
+		next.markets[trial.next.marketID] = bundleMarketState{
+			info:      info,
+			positions: positions,
+		}
+	}
+	return next
+}
+
+func cloneChosenBundle(bundle chosenBundle) chosenBundle {
+	return chosenBundle{
+		legs:      cloneBundleLegs(bundle.legs),
+		grossLoan: new(big.Int).Set(bundle.grossLoan),
+	}
+}
+
 func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 	usable := usableGasLimit(gasLimit)
 	fixed := fixedSettlementGasUnits(feedCount) + liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, true)
@@ -180,25 +325,6 @@ func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 		return 0
 	}
 	return 1 + int((usable-fixed)/liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, false))
-}
-
-func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int) (bundleSearchState, bool) {
-	next, ok := e.replayScoredLeg(sl, state.markets)
-	if !ok || !fitsCollateralBudget(state.consumed, next.scored) {
-		return bundleSearchState{}, false
-	}
-	trial := bundleSearchState{
-		bundle:   cloneBundleWithLeg(state.bundle, next.scored),
-		consumed: cloneCollateralBudget(state.consumed),
-		markets:  cloneBundleMarkets(state.markets),
-		used:     cloneUsed(state.used),
-	}
-	trial.used[idx] = true
-	if next.marketID != (common.Hash{}) {
-		trial.markets[next.marketID] = next.market
-	}
-	commitCollateralBudget(trial.consumed, next.scored)
-	return trial, true
 }
 
 func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState) (replayedScoredLeg, bool) {
@@ -211,11 +337,11 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	}
 	ms, ok := markets[id]
 	if !ok {
-		ms = bundleMarketState{info: cloneMarketInfo(sl.source.cand.Market), positions: make(map[common.Address]morpho.PositionState)}
+		ms = bundleMarketState{info: sl.source.cand.Market}
 	}
 	pos, ok := ms.positions[sl.source.cand.Borrower]
 	if !ok {
-		pos = morpho.ClonePositionState(sl.source.cand.Position)
+		pos = sl.source.cand.Position
 	}
 	cand := sl.source.cand
 	cand.Market = ms.info
@@ -228,16 +354,20 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	if !ok {
 		return replayedScoredLeg{}, false
 	}
-	nextMarket := cloneBundleMarketState(ms)
-	nextMarket.info.State = replay.Market
-	nextMarket.positions[cand.Borrower] = replay.Position
 	nextLeg := sl
 	nextLeg.selectedLeg = sized.leg
 	nextLeg.expectedLoanOut = sized.expectedLoanOut
 	nextLeg.profit = sized.profit
 	nextLeg.collateral = cand.Market.Params.CollateralToken
 	nextLeg.maxAssets = sl.source.quote.MaxAssets
-	return replayedScoredLeg{scored: nextLeg, marketID: id, market: nextMarket}, true
+	return replayedScoredLeg{
+		scored:      nextLeg,
+		marketID:    id,
+		marketInfo:  ms.info,
+		marketState: replay.Market,
+		borrower:    cand.Borrower,
+		position:    replay.Position,
+	}, true
 }
 
 func sortedScoredLegs(scored []scoredLeg) []scoredLeg {
@@ -275,45 +405,15 @@ func cloneCollateralBudget(in map[common.Address]*big.Int) map[common.Address]*b
 	return out
 }
 
-func cloneBundleMarkets(in map[common.Hash]bundleMarketState) map[common.Hash]bundleMarketState {
-	out := make(map[common.Hash]bundleMarketState, len(in))
-	for id, state := range in {
-		out[id] = cloneBundleMarketState(state)
-	}
-	return out
-}
-
-func cloneBundleMarketState(in bundleMarketState) bundleMarketState {
-	out := bundleMarketState{info: cloneMarketInfo(in.info), positions: make(map[common.Address]morpho.PositionState, len(in.positions))}
-	for borrower, position := range in.positions {
-		out.positions[borrower] = morpho.ClonePositionState(position)
-	}
-	return out
-}
-
 func cloneUsed(in map[int]bool) map[int]bool {
 	out := make(map[int]bool, len(in))
 	maps.Copy(out, in)
 	return out
 }
 
-func cloneMarketInfo(in MarketInfo) MarketInfo {
-	in.State = morpho.CloneMarketState(in.State)
-	return in
-}
-
 func appendScoredLeg(b *chosenBundle, sl scoredLeg) {
 	b.legs = append(b.legs, cloneBundleLeg(sl.bundleLeg))
 	b.grossLoan.Add(b.grossLoan, sl.profit)
-}
-
-func cloneBundleWithLeg(b chosenBundle, sl scoredLeg) chosenBundle {
-	out := chosenBundle{
-		legs:      cloneBundleLegs(b.legs),
-		grossLoan: new(big.Int).Set(b.grossLoan),
-	}
-	appendScoredLeg(&out, sl)
-	return out
 }
 
 func cloneBundleLeg(in bundleLeg) bundleLeg {

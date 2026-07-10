@@ -49,7 +49,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
 		metrics:        mx,
-		seen:           newSeenAuctions(maxSeenAuctions),
+		seenAuctions:   newSeenKeys(maxSeenMessages),
+		seenResults:    newSeenKeys(maxSeenMessages),
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
 	}

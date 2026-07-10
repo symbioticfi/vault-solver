@@ -2,6 +2,9 @@ package redstoneoev
 
 import (
 	"math/big"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -93,6 +96,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.WS.URL == "" {
 		return nil, errors.New("ws.url is required")
 	}
+	if err := validateWSURL(raw.WS.URL); err != nil {
+		return nil, err
+	}
 	if raw.WS.APIKeyEnv == "" {
 		return nil, errors.New("ws.apiKeyEnv is required")
 	}
@@ -158,4 +164,28 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil
+}
+
+func validateWSURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Hostname() == "" {
+		return errors.New("ws.url must be an absolute ws/wss URL with a host")
+	}
+	if u.User != nil {
+		return errors.New("ws.url must not contain credentials")
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "wss" {
+		return nil
+	}
+	if scheme != "ws" {
+		return errors.Errorf("ws.url scheme must be wss, got %q", u.Scheme)
+	}
+	host := strings.ToLower(u.Hostname())
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return errors.New("ws.url may use plaintext ws only for localhost or a loopback IP")
+	}
+	return nil
 }

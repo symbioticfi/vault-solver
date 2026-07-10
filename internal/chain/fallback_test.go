@@ -13,7 +13,53 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 )
+
+const testMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
+
+func captureLogger(logs *strings.Builder) logr.Logger {
+	return funcr.NewJSON(func(obj string) {
+		logs.WriteString(obj)
+		logs.WriteByte('\n')
+	}, funcr.Options{Verbosity: 1})
+}
+
+func assertEndpointSecretsRedacted(t *testing.T, err error, logs string, secrets ...string) {
+	t.Helper()
+	combined := logs
+	if err != nil {
+		combined += err.Error()
+	}
+	for _, secret := range secrets {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("endpoint secret %q leaked: err=%v logs=%s", secret, err, logs)
+		}
+	}
+}
+
+func secretEndpoint(t *testing.T, base, marker string) string {
+	t.Helper()
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse test endpoint: %v", err)
+	}
+	u.User = url.UserPassword("rpc-user-"+marker, "pw-"+marker)
+	u.Path = "/route-" + marker
+	u.RawQuery = "credential=query-" + marker
+	u.Fragment = "fragment-" + marker
+	return u.String()
+}
+
+func chainIDMethodCount(methods []string) int {
+	var count int
+	for _, method := range methods {
+		if method == "eth_chainId" {
+			count++
+		}
+	}
+	return count
+}
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
 func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
@@ -27,7 +73,17 @@ func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
 
 func roundTrip(t *testing.T, eps []*url.URL, payload string) (*http.Response, error) {
 	t.Helper()
-	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
+	return roundTripWithLogger(t, eps, payload, logr.Discard())
+}
+
+func roundTripWithLogger(
+	t *testing.T,
+	eps []*url.URL,
+	payload string,
+	log logr.Logger,
+) (*http.Response, error) {
+	t.Helper()
+	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: log}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, eps[0].String(), strings.NewReader(payload))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -35,36 +91,62 @@ func roundTrip(t *testing.T, eps []*url.URL, payload string) (*http.Response, er
 	return rt.RoundTrip(req)
 }
 
-func TestFallbackTransport_FallsOverOn5xx(t *testing.T) {
-	var primaryHits, fallbackHits int
-	var gotBody string
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		primaryHits++
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fallbackHits++
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, `ok`)
-	}))
-	defer fallback.Close()
+type roundTripperFunc func(*http.Request) (*http.Response, error)
 
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{"jsonrpc":"2.0"}`)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fell over to fallback)", resp.StatusCode)
-	}
-	if primaryHits != 1 || fallbackHits != 1 {
-		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
-	}
-	if gotBody != `{"jsonrpc":"2.0"}` {
-		t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
+type observedResponseBody struct {
+	reader    *strings.Reader
+	readCalls int
+	closed    bool
+}
+
+func (b *observedResponseBody) Read(p []byte) (int, error) {
+	b.readCalls++
+	return b.reader.Read(p)
+}
+
+func (b *observedResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestFallbackTransport_FallsOverOnRetryableStatus(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var primaryHits, fallbackHits int
+			var gotBody string
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				primaryHits++
+				w.WriteHeader(status)
+			}))
+			defer primary.Close()
+			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fallbackHits++
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				_, _ = io.WriteString(w, `ok`)
+			}))
+			defer fallback.Close()
+
+			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{"jsonrpc":"2.0"}`)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (fell over to fallback)", resp.StatusCode)
+			}
+			if primaryHits != 1 || fallbackHits != 1 {
+				t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
+			}
+			if gotBody != `{"jsonrpc":"2.0"}` {
+				t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
+			}
+		})
 	}
 }
 
@@ -106,6 +188,231 @@ func TestFallbackTransport_AllFail(t *testing.T) {
 	}
 }
 
+func TestFallbackTransport_NonRetryableHTTPStatusSanitized(t *testing.T) {
+	const (
+		requestSecret  = "request-body-secret"
+		responseSecret = "response-body-secret"
+		locationSecret = "location-secret"
+	)
+	tests := []struct {
+		name       string
+		status     int
+		wantStatus string
+		location   string
+	}{
+		{
+			name:       "unauthorized response body",
+			status:     http.StatusUnauthorized,
+			wantStatus: "HTTP 401",
+		},
+		{
+			name:       "redirect location",
+			status:     http.StatusFound,
+			wantStatus: "HTTP 302",
+			location:   "https://location-user:location-pass@redirect.example/route-" + locationSecret + "?token=" + locationSecret + "#fragment-" + locationSecret,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			endpoint := mustEndpoints(t,
+				"https://rpc-user-status:pw-status@rpc.example/route-status?credential=query-status#fragment-status",
+			)[0]
+			body := &observedResponseBody{
+				reader: strings.NewReader(responseSecret + ": " + requestSecret),
+			}
+			attempts := 0
+			base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts > 1 {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":"0x1"}`)),
+						Request:    req,
+					}, nil
+				}
+				header := make(http.Header)
+				if tt.location != "" {
+					header.Set("Location", tt.location)
+				}
+				return &http.Response{
+					StatusCode:    tt.status,
+					Header:        header,
+					Body:          body,
+					ContentLength: int64(body.reader.Len()),
+					Request:       req,
+				}, nil
+			})
+			var logs strings.Builder
+			client := &http.Client{Transport: &fallbackTransport{
+				endpoints: []*url.URL{endpoint},
+				base:      base,
+				log:       captureLogger(&logs),
+			}}
+			req, err := http.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				endpointLabel(endpoint),
+				strings.NewReader(requestSecret),
+			)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+
+			resp, err := client.Do(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if err == nil {
+				t.Fatalf("Do returned status response, want sanitized transport error")
+			}
+			if resp != nil {
+				t.Fatalf("response = %#v, want nil so body and headers cannot escape", resp)
+			}
+			if attempts != 1 {
+				t.Fatalf("transport attempts = %d, want 1 (non-retry status must not fall over or redirect)", attempts)
+			}
+			if !body.closed {
+				t.Fatal("response body was not closed")
+			}
+			if body.readCalls != 0 {
+				t.Fatalf("response body reads = %d, want 0", body.readCalls)
+			}
+			if !strings.Contains(err.Error(), "endpoint 1 (https://rpc.example)") ||
+				!strings.Contains(err.Error(), tt.wantStatus) {
+				t.Fatalf("error = %q, want safe endpoint ordinal/origin and HTTP status", err)
+			}
+			assertEndpointSecretsRedacted(t, err, logs.String(),
+				"rpc-user-status", "pw-status", "route-status", "query-status", "fragment-status",
+				requestSecret, responseSecret,
+				"location-user", "location-pass", locationSecret,
+			)
+		})
+	}
+}
+
+func TestFallbackTransport_HTTP200JSONRPCErrorPassesThrough(t *testing.T) {
+	const rpcError = `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}`
+	var fallbackHits int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, rpcError)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		fallbackHits++
+	}))
+	defer fallback.Close()
+
+	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || string(got) != rpcError || fallbackHits != 0 {
+		t.Fatalf("status=%d body=%q fallbackHits=%d, want unchanged HTTP 200 JSON-RPC error and no fallback", resp.StatusCode, got, fallbackHits)
+	}
+}
+
+func TestFallbackTransport_EndpointFailureRedacted(t *testing.T) {
+	a := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	b := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	aURL, bURL := a.URL, b.URL
+	a.Close()
+	b.Close()
+
+	rawA := secretEndpoint(t, aURL, "runtime-alpha")
+	rawB := secretEndpoint(t, bURL, "runtime-beta")
+	var logs strings.Builder
+	resp, err := roundTripWithLogger(
+		t,
+		mustEndpoints(t, rawA, rawB),
+		`{"jsonrpc":"2.0"}`,
+		captureLogger(&logs),
+	)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected an error when every endpoint is unreachable")
+	}
+	assertEndpointSecretsRedacted(t, err, logs.String(),
+		"rpc-user-runtime-alpha", "pw-runtime-alpha", "route-runtime-alpha", "query-runtime-alpha", "fragment-runtime-alpha",
+		"rpc-user-runtime-beta", "pw-runtime-beta", "route-runtime-beta", "query-runtime-beta", "fragment-runtime-beta",
+	)
+}
+
+func TestDialClient_RuntimeEndpointFailureRedacted(t *testing.T) {
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID json.RawMessage `json:"id"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":"0x1"}`))
+	}))
+	b := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	rawA := secretEndpoint(t, a.URL, "runtime-client-alpha")
+	rawB := secretEndpoint(t, b.URL, "runtime-client-beta")
+	var logs strings.Builder
+	c, err := dialClient(t.Context(), []string{rawA, rawB}, captureLogger(&logs))
+	if err != nil {
+		a.Close()
+		b.Close()
+		t.Fatalf("dialClient: %v", err)
+	}
+	a.Close()
+	b.Close()
+	defer c.Close()
+
+	_, err = c.ChainID(t.Context())
+	if err == nil {
+		t.Fatal("expected a runtime error when every endpoint is unreachable")
+	}
+	assertEndpointSecretsRedacted(t, err, logs.String(),
+		"rpc-user-runtime-client-alpha", "pw-runtime-client-alpha", "route-runtime-client-alpha", "query-runtime-client-alpha", "fragment-runtime-client-alpha",
+		"rpc-user-runtime-client-beta", "pw-runtime-client-beta", "route-runtime-client-beta", "query-runtime-client-beta", "fragment-runtime-client-beta",
+	)
+}
+
+func TestDial_PreservesEndpointBasicAuth(t *testing.T) {
+	const (
+		username = "rpc-user-auth"
+		password = "pw-auth"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPassword, ok := r.BasicAuth()
+		if !ok || gotUser != username || gotPassword != password {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			ID json.RawMessage `json:"id"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":"0x1"}`))
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse test endpoint: %v", err)
+	}
+	u.User = url.UserPassword(username, password)
+
+	c, err := Dial(t.Context(), []string{u.String()}, "", testMulticallAddress, 1, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial with endpoint basic auth: %v", err)
+	}
+	defer c.Close()
+}
+
 func TestParseHTTPEndpoints_Dedups(t *testing.T) {
 	eps, err := parseHTTPEndpoints([]string{
 		"https://a.example", "https://b.example", "https://a.example", // dup of #1
@@ -127,6 +434,49 @@ func TestParseHTTPEndpoints_RejectsNonHTTP(t *testing.T) {
 	}
 	if _, err := parseHTTPEndpoints([]string{"http://a.example", "https://b.example"}); err != nil {
 		t.Fatalf("valid http(s) endpoints rejected: %v", err)
+	}
+}
+
+func TestParseHTTPEndpoints_EndpointErrorsRedacted(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		wantClass string
+	}{
+		{
+			name:      "malformed",
+			raw:       "http://rpc-user-parse:pw-parse@%zz/route-parse?credential=query-parse#fragment-parse",
+			wantClass: "invalid endpoint",
+		},
+		{
+			name:      "unsupported scheme",
+			raw:       secretEndpoint(t, "ftp://node.example", "parse"),
+			wantClass: "unsupported scheme",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseHTTPEndpoints([]string{"https://healthy.example", tt.raw})
+			if err == nil {
+				t.Fatal("expected endpoint validation error")
+			}
+			if !strings.Contains(err.Error(), "endpoint 2") || !strings.Contains(err.Error(), tt.wantClass) {
+				t.Fatalf("error = %q, want safe ordinal and class %q", err, tt.wantClass)
+			}
+			assertEndpointSecretsRedacted(t, err, "",
+				"rpc-user-parse", "pw-parse", "route-parse", "query-parse", "fragment-parse",
+			)
+		})
+	}
+}
+
+func TestEndpointLabel_RedactsCredentialsAndRoute(t *testing.T) {
+	u, err := url.Parse("https://rpc-user-label:pw-label@node.example:8545/route-label?credential=query-label#fragment-label")
+	if err != nil {
+		t.Fatalf("parse test URL: %v", err)
+	}
+	if got, want := endpointLabel(u), "https://node.example:8545"; got != want {
+		t.Fatalf("endpointLabel = %q, want %q", got, want)
 	}
 }
 
@@ -160,8 +510,7 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{srv.URL}, "", testMulticallAddress, 31337, logr.Discard())
 	if err != nil {
 		t.Fatalf("Dial single http endpoint: %v", err)
 	}
@@ -171,32 +520,65 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	}
 }
 
-// TestDial_FallbackServesChainID exercises the full wiring: a down primary and a JSON-RPC fallback
-// that answers eth_chainId, so Dial succeeds via the fallback endpoint.
-func TestDial_FallbackServesChainID(t *testing.T) {
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestMulticallAt_EncodesBlockParameter(t *testing.T) {
+	const emptyAggregate3Result = "0x" +
+		"0000000000000000000000000000000000000000000000000000000000000020" +
+		"0000000000000000000000000000000000000000000000000000000000000000"
+
+	var gotBlocks []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID json.RawMessage `json:"id"`
+			ID     json.RawMessage   `json:"id"`
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
 		}
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &req)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":"0x7a69"}`)) // 31337
-	}))
-	defer fallback.Close()
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("decode JSON-RPC request: %v", err)
+		}
 
-	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+		result := `"0x1"`
+		if req.Method == "eth_call" {
+			if len(req.Params) != 2 {
+				t.Errorf("eth_call params = %d, want 2", len(req.Params))
+			} else {
+				var block string
+				if err := json.Unmarshal(req.Params[1], &block); err != nil {
+					t.Errorf("decode eth_call block parameter: %v", err)
+				}
+				gotBlocks = append(gotBlocks, block)
+			}
+			result = `"` + emptyAggregate3Result + `"`
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+	}))
+	defer srv.Close()
+
+	c, err := Dial(t.Context(), []string{srv.URL}, "", testMulticallAddress, 1, logr.Discard())
 	if err != nil {
-		t.Fatalf("Dial via fallback: %v", err)
+		t.Fatalf("Dial: %v", err)
 	}
 	defer c.Close()
-	if got := c.ChainID().Uint64(); got != 31337 {
-		t.Fatalf("chainID = %d, want 31337 (served by fallback)", got)
+
+	result, err := c.MulticallAt(t.Context(), nil, big.NewInt(123))
+	if err != nil {
+		t.Fatalf("MulticallAt: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("MulticallAt result length = %d, want 0", len(result))
+	}
+	result, err = c.Multicall(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Multicall: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("Multicall result length = %d, want 0", len(result))
+	}
+
+	if want := []string{"0x7b", "latest"}; !slices.Equal(gotBlocks, want) {
+		t.Fatalf("eth_call block parameters = %v, want %v", gotBlocks, want)
 	}
 }
 
@@ -216,6 +598,153 @@ func rpcRecorder(methods *[]string, result func(method string) string) *httptest
 	}))
 }
 
+func chainIDRecorder(methods *[]string, chainID string) *httptest.Server {
+	return rpcRecorder(methods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"` + chainID + `"`
+		}
+		return `"0x1"`
+	})
+}
+
+func TestDial_PreflightsEveryEndpointChainID(t *testing.T) {
+	t.Run("all distinct endpoints match", func(t *testing.T) {
+		var primaryMethods, fallbackMethods, writeMethods []string
+		primary := chainIDRecorder(&primaryMethods, "0x1")
+		fallback := chainIDRecorder(&fallbackMethods, "0x1")
+		write := chainIDRecorder(&writeMethods, "0x1")
+		defer primary.Close()
+		defer fallback.Close()
+		defer write.Close()
+
+		c, err := Dial(t.Context(), []string{
+			secretEndpoint(t, primary.URL, "healthy-primary"),
+			secretEndpoint(t, fallback.URL, "healthy-fallback"),
+		}, secretEndpoint(t, write.URL, "healthy-write"), testMulticallAddress, 1, logr.Discard())
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		defer c.Close()
+		if chainIDMethodCount(primaryMethods) != 1 ||
+			chainIDMethodCount(fallbackMethods) != 1 ||
+			chainIDMethodCount(writeMethods) != 1 {
+			t.Fatalf("preflight methods: primary=%v fallback=%v write=%v", primaryMethods, fallbackMethods, writeMethods)
+		}
+		if got := c.ChainID().Uint64(); got != 1 {
+			t.Fatalf("cached chain id = %d, want 1", got)
+		}
+	})
+
+	t.Run("wrong fallback rejected", func(t *testing.T) {
+		var primaryMethods, fallbackMethods, writeMethods []string
+		primary := chainIDRecorder(&primaryMethods, "0x1")
+		fallback := chainIDRecorder(&fallbackMethods, "0x2")
+		write := chainIDRecorder(&writeMethods, "0x1")
+		defer primary.Close()
+		defer fallback.Close()
+		defer write.Close()
+
+		var logs strings.Builder
+		_, err := Dial(t.Context(), []string{
+			secretEndpoint(t, primary.URL, "wrong-fallback-primary"),
+			secretEndpoint(t, fallback.URL, "wrong-fallback-secondary"),
+		}, secretEndpoint(t, write.URL, "wrong-fallback-write"), testMulticallAddress, 1, captureLogger(&logs))
+		if err == nil {
+			t.Fatal("expected wrong-chain fallback rejection")
+		}
+		if !strings.Contains(err.Error(), "rpc endpoint 2") || !strings.Contains(err.Error(), "got 2, want 1") {
+			t.Fatalf("error = %q, want safe fallback ordinal and mismatch", err)
+		}
+		assertEndpointSecretsRedacted(t, err, logs.String(),
+			"rpc-user-wrong-fallback-primary", "pw-wrong-fallback-primary", "route-wrong-fallback-primary", "query-wrong-fallback-primary", "fragment-wrong-fallback-primary",
+			"rpc-user-wrong-fallback-secondary", "pw-wrong-fallback-secondary", "route-wrong-fallback-secondary", "query-wrong-fallback-secondary", "fragment-wrong-fallback-secondary",
+			"rpc-user-wrong-fallback-write", "pw-wrong-fallback-write", "route-wrong-fallback-write", "query-wrong-fallback-write", "fragment-wrong-fallback-write",
+		)
+	})
+
+	t.Run("wrong write endpoint rejected", func(t *testing.T) {
+		var primaryMethods, writeMethods []string
+		primary := chainIDRecorder(&primaryMethods, "0x1")
+		write := chainIDRecorder(&writeMethods, "0x2")
+		defer primary.Close()
+		defer write.Close()
+
+		var logs strings.Builder
+		_, err := Dial(t.Context(), []string{
+			secretEndpoint(t, primary.URL, "wrong-write-primary"),
+		}, secretEndpoint(t, write.URL, "wrong-write-relay"), testMulticallAddress, 1, captureLogger(&logs))
+		if err == nil {
+			t.Fatal("expected wrong-chain write endpoint rejection")
+		}
+		if !strings.Contains(err.Error(), "write rpc endpoint 1") || !strings.Contains(err.Error(), "got 2, want 1") {
+			t.Fatalf("error = %q, want safe write endpoint ordinal and mismatch", err)
+		}
+		assertEndpointSecretsRedacted(t, err, logs.String(),
+			"rpc-user-wrong-write-primary", "pw-wrong-write-primary", "route-wrong-write-primary", "query-wrong-write-primary", "fragment-wrong-write-primary",
+			"rpc-user-wrong-write-relay", "pw-wrong-write-relay", "route-wrong-write-relay", "query-wrong-write-relay", "fragment-wrong-write-relay",
+		)
+	})
+
+	t.Run("duplicate raw endpoints preflight once", func(t *testing.T) {
+		var methods []string
+		srv := chainIDRecorder(&methods, "0x1")
+		defer srv.Close()
+		raw := secretEndpoint(t, srv.URL, "duplicate")
+
+		c, err := Dial(t.Context(), []string{raw, raw}, raw, testMulticallAddress, 1, logr.Discard())
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		defer c.Close()
+		if got := chainIDMethodCount(methods); got != 1 {
+			t.Fatalf("eth_chainId requests = %d, want 1 for one distinct raw endpoint; methods=%v", got, methods)
+		}
+	})
+}
+
+func TestDial_EndpointErrorsRedacted(t *testing.T) {
+	unreachable := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	unreachableURL := unreachable.URL
+	unreachable.Close()
+
+	tests := []struct {
+		name      string
+		raw       string
+		wantClass string
+		secrets   []string
+	}{
+		{
+			name:      "unreachable credential-bearing URL",
+			raw:       secretEndpoint(t, unreachableURL, "dial-unreachable"),
+			wantClass: "chain-id request failed",
+			secrets: []string{
+				"rpc-user-dial-unreachable", "pw-dial-unreachable", "route-dial-unreachable", "query-dial-unreachable", "fragment-dial-unreachable",
+			},
+		},
+		{
+			name:      "malformed credential-bearing URL",
+			raw:       "http://rpc-user-dial-malformed:pw-dial-malformed@%zz/route-dial-malformed?credential=query-dial-malformed#fragment-dial-malformed",
+			wantClass: "invalid endpoint",
+			secrets: []string{
+				"rpc-user-dial-malformed", "pw-dial-malformed", "route-dial-malformed", "query-dial-malformed", "fragment-dial-malformed",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs strings.Builder
+			_, err := Dial(t.Context(), []string{tt.raw}, "", testMulticallAddress, 1, captureLogger(&logs))
+			if err == nil {
+				t.Fatal("expected endpoint rejection")
+			}
+			if !strings.Contains(err.Error(), "rpc endpoint 1") || !strings.Contains(err.Error(), tt.wantClass) {
+				t.Fatalf("error = %q, want safe endpoint ordinal and class %q", err, tt.wantClass)
+			}
+			assertEndpointSecretsRedacted(t, err, logs.String(), tt.secrets...)
+		})
+	}
+}
+
 // TestDial_WriteRPCRoutesOnlyBroadcasts confirms a separate writeRpcUrl carries ONLY the transaction
 // broadcast (eth_sendRawTransaction); chain id, block number, and every other read stay on the
 // primary endpoint. This is the mevblocker-style split: submit fills privately, read from a normal RPC.
@@ -228,13 +757,15 @@ func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
 		return `"0x1"`
 	})
 	defer read.Close()
-	write := rpcRecorder(&writeMethods, func(string) string {
+	write := rpcRecorder(&writeMethods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"0x7a69"`
+		}
 		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
 	})
 	defer write.Close()
 
-	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{read.URL}, write.URL, testMulticallAddress, 31337, logr.Discard())
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -259,7 +790,9 @@ func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
 	if !slices.Contains(writeMethods, "eth_sendRawTransaction") {
 		t.Fatalf("write endpoint did not receive the broadcast, saw: %v", writeMethods)
 	}
-	if slices.Contains(writeMethods, "eth_chainId") || slices.Contains(writeMethods, "eth_blockNumber") {
+	// Startup deliberately preflights eth_chainId on the write endpoint. Operational reads must not
+	// be routed there.
+	if slices.Contains(writeMethods, "eth_blockNumber") {
 		t.Fatalf("reads leaked onto the write endpoint: %v", writeMethods)
 	}
 	if slices.Contains(readMethods, "eth_sendRawTransaction") {
@@ -270,8 +803,8 @@ func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
 	}
 }
 
-// TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts fall back to the
-// primary endpoint (unchanged behaviour).
+// TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts use the primary
+// endpoint through the independently dialed, single-endpoint write client.
 func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	var methods []string
 	srv := rpcRecorder(&methods, func(m string) string {
@@ -282,8 +815,7 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	})
 	defer srv.Close()
 
-	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{srv.URL}, "", testMulticallAddress, 31337, logr.Discard())
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

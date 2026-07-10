@@ -29,7 +29,7 @@ type OrdersResponseOrdersInner struct {
 	TxHash            NullableString                                  `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	Nonce             string                                          `json:"nonce"`
 	Input             PublicQuoteResponseQuoteAggregatedOutputsInner  `json:"input"`
-	Outputs           []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs"`
+	Outputs           []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs,omitempty"`
 	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner  `json:"settledAmounts"`
 	EncodedOrder      *string                                         `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	ProtocolSignature *string                                         `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
@@ -43,7 +43,7 @@ type _OrdersResponseOrdersInner OrdersResponseOrdersInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input PublicQuoteResponseQuoteAggregatedOutputsInner, outputs []PublicQuoteResponseQuoteOrderInfoOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
+func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input PublicQuoteResponseQuoteAggregatedOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
 	this := OrdersResponseOrdersInner{}
 	this.Type = type_
 	this.OrderId = orderId
@@ -53,7 +53,6 @@ func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus stri
 	this.TxHash = txHash
 	this.Nonce = nonce
 	this.Input = input
-	this.Outputs = outputs
 	this.SettledAmounts = settledAmounts
 	return &this
 }
@@ -260,26 +259,35 @@ func (o *OrdersResponseOrdersInner) SetInput(v PublicQuoteResponseQuoteAggregate
 	o.Input = v
 }
 
-// GetOutputs returns the Outputs field value
+// GetOutputs returns the Outputs field value if set, zero value otherwise (both if not set or set to explicit null).
 func (o *OrdersResponseOrdersInner) GetOutputs() []PublicQuoteResponseQuoteOrderInfoOutputsInner {
 	if o == nil {
 		var ret []PublicQuoteResponseQuoteOrderInfoOutputsInner
 		return ret
 	}
-
 	return o.Outputs
 }
 
-// GetOutputsOk returns a tuple with the Outputs field value
+// GetOutputsOk returns a tuple with the Outputs field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]PublicQuoteResponseQuoteOrderInfoOutputsInner, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.Outputs) {
 		return nil, false
 	}
 	return o.Outputs, true
 }
 
-// SetOutputs sets field value
+// HasOutputs returns a boolean if a field has been set.
+func (o *OrdersResponseOrdersInner) HasOutputs() bool {
+	if o != nil && !IsNil(o.Outputs) {
+		return true
+	}
+
+	return false
+}
+
+// SetOutputs gets a reference to the given []PublicQuoteResponseQuoteOrderInfoOutputsInner and assigns it to the Outputs field.
 func (o *OrdersResponseOrdersInner) SetOutputs(v []PublicQuoteResponseQuoteOrderInfoOutputsInner) {
 	o.Outputs = v
 }
@@ -454,7 +462,9 @@ func (o OrdersResponseOrdersInner) ToMap() (map[string]interface{}, error) {
 	toSerialize["txHash"] = o.TxHash.Get()
 	toSerialize["nonce"] = o.Nonce
 	toSerialize["input"] = o.Input
-	toSerialize["outputs"] = o.Outputs
+	if o.Outputs != nil {
+		toSerialize["outputs"] = o.Outputs
+	}
 	toSerialize["settledAmounts"] = o.SettledAmounts
 	if !IsNil(o.EncodedOrder) {
 		toSerialize["encodedOrder"] = o.EncodedOrder
@@ -484,7 +494,6 @@ func (o *OrdersResponseOrdersInner) UnmarshalJSON(data []byte) (err error) {
 		"txHash",
 		"nonce",
 		"input",
-		"outputs",
 		"settledAmounts",
 	}
 

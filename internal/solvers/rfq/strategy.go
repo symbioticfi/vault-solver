@@ -23,7 +23,7 @@ func newStrategy(spec StrategyConfig, chainClient *chain.Client, log logr.Logger
 
 // solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
 // (the filler does not re-read maxAssets/maxRate/decimals on-chain in the quote path). "adapter" is
-// the address that fills (placed in the on-chain Swap's vault slot); "asset" is the output token.
+// the address that fills (placed in the on-chain Swap's adapter field); "asset" is the output token.
 type solverInventory struct {
 	ID            string
 	Adapter       common.Address

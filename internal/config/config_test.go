@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +41,105 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	}
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
 		t.Fatalf("expected default addr %q, got %q", DefaultObservabilityAddr, cfg.Observability.Addr)
+	}
+}
+
+func TestLoad_TxManagerReplacementDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "omitted", body: validConfig},
+		{
+			name: "explicit zero",
+			body: strings.Replace(validConfig, "signer:", `txManager:
+  pendingIntervalMs: 0
+  feeBumpBps: 0
+  maxReplacements: 0
+signer:`, 1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTemp(t, tt.body))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TxManager.PendingIntervalMs != DefaultPendingIntervalMs {
+				t.Fatalf("pendingIntervalMs = %d, want %d", cfg.TxManager.PendingIntervalMs, DefaultPendingIntervalMs)
+			}
+			if cfg.TxManager.FeeBumpBps != DefaultFeeBumpBps {
+				t.Fatalf("feeBumpBps = %d, want %d", cfg.TxManager.FeeBumpBps, DefaultFeeBumpBps)
+			}
+			if cfg.TxManager.MaxReplacements != DefaultMaxReplacements {
+				t.Fatalf("maxReplacements = %d, want %d", cfg.TxManager.MaxReplacements, DefaultMaxReplacements)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsInvalidTxManagerReplacementPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{name: "negative pending interval", policy: "pendingIntervalMs: -1"},
+		{name: "pending interval above 24 hours", policy: "pendingIntervalMs: 86400001"},
+		{name: "pending interval duration overflow", policy: "pendingIntervalMs: 9223372036854775807"},
+		{name: "fee bump below client replacement floor", policy: "feeBumpBps: 999"},
+		{name: "fee bump above one hundred percent", policy: "feeBumpBps: 10001"},
+		{name: "too many replacements", policy: "maxReplacements: 11"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(validConfig, "signer:", "txManager:\n  "+tt.policy+"\nsigner:", 1)
+			if _, err := Load(writeTemp(t, body)); err == nil {
+				t.Fatalf("expected %s to be rejected", tt.policy)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsTxManagerReplacementPolicyBounds(t *testing.T) {
+	tests := []struct {
+		name              string
+		policy            string
+		pendingIntervalMs int
+		feeBumpBps        uint64
+		maxReplacements   uint64
+	}{
+		{
+			name:              "lower bounds",
+			policy:            "pendingIntervalMs: 1\n  feeBumpBps: 1000\n  maxReplacements: 1",
+			pendingIntervalMs: 1,
+			feeBumpBps:        1_000,
+			maxReplacements:   1,
+		},
+		{
+			name:              "upper bounds",
+			policy:            "pendingIntervalMs: 86400000\n  feeBumpBps: 10000\n  maxReplacements: 10",
+			pendingIntervalMs: 86_400_000,
+			feeBumpBps:        10_000,
+			maxReplacements:   10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(validConfig, "signer:", "txManager:\n  "+tt.policy+"\nsigner:", 1)
+			cfg, err := Load(writeTemp(t, body))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TxManager.PendingIntervalMs != tt.pendingIntervalMs ||
+				cfg.TxManager.FeeBumpBps != tt.feeBumpBps ||
+				cfg.TxManager.MaxReplacements != tt.maxReplacements {
+				t.Fatalf("replacement policy = %+v, want interval=%d bump=%d replacements=%d",
+					cfg.TxManager, tt.pendingIntervalMs, tt.feeBumpBps, tt.maxReplacements)
+			}
+		})
 	}
 }
 
@@ -173,6 +274,23 @@ solvers:
 	}
 }
 
+func TestLoad_RejectsGenericWSURL(t *testing.T) {
+	body := `
+chain:
+  rpcUrl: https://read.example
+  wsUrl: wss://unused.example
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+solvers:
+  - name: x
+    config: {}
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected generic chain.wsUrl to be rejected")
+	}
+}
+
 func TestLoad_ExpandsEnvInSolverConfigBlock(t *testing.T) {
 	// Expansion runs on the raw bytes before decode, so it reaches the opaque solver.config block
 	// (the deferred two-stage decode) too — not just the framework-level fields.
@@ -243,6 +361,68 @@ bogus: true
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeTemp(t, body)); err == nil {
 				t.Fatalf("expected error for %q", name)
+			}
+		})
+	}
+}
+
+const txManagerFeeConfig = `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager:
+  maxFeeGwei: %s
+  tipGwei: %s
+solvers: [{name: x}]
+`
+
+func TestLoad_RejectsInvalidTxManagerFees(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFeeGwei string
+		tipGwei    string
+		wantField  string
+	}{
+		{name: "negative max fee", maxFeeGwei: "-1", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "NaN max fee", maxFeeGwei: ".nan", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "positive infinite max fee", maxFeeGwei: ".inf", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "negative infinite max fee", maxFeeGwei: "-.inf", tipGwei: "0", wantField: "txManager.maxFeeGwei"},
+		{name: "negative tip", maxFeeGwei: "0", tipGwei: "-1", wantField: "txManager.tipGwei"},
+		{name: "NaN tip", maxFeeGwei: "0", tipGwei: ".nan", wantField: "txManager.tipGwei"},
+		{name: "positive infinite tip", maxFeeGwei: "0", tipGwei: ".inf", wantField: "txManager.tipGwei"},
+		{name: "negative infinite tip", maxFeeGwei: "0", tipGwei: "-.inf", wantField: "txManager.tipGwei"},
+		{name: "tip above explicit max fee", maxFeeGwei: "2", tipGwei: "3", wantField: "txManager.maxFeeGwei"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTemp(t, fmt.Sprintf(txManagerFeeConfig, tt.maxFeeGwei, tt.tipGwei)))
+			if err == nil {
+				t.Fatal("expected fee validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("error %q does not name %s", err, tt.wantField)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsValidTxManagerFees(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFeeGwei string
+		tipGwei    string
+	}{
+		{name: "both derived", maxFeeGwei: "0", tipGwei: "0"},
+		{name: "explicit max and suggested tip", maxFeeGwei: "2", tipGwei: "0"},
+		{name: "derived max and explicit tip", maxFeeGwei: "0", tipGwei: "2"},
+		{name: "equal explicit values", maxFeeGwei: "2", tipGwei: "2"},
+		{name: "explicit tip below max", maxFeeGwei: "2", tipGwei: "1.5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Load(writeTemp(t, fmt.Sprintf(txManagerFeeConfig, tt.maxFeeGwei, tt.tipGwei))); err != nil {
+				t.Fatalf("Load: %v", err)
 			}
 		})
 	}

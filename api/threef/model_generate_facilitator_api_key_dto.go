@@ -22,7 +22,7 @@ var _ MappedNullable = &GenerateFacilitatorApiKeyDto{}
 // GenerateFacilitatorApiKeyDto struct for GenerateFacilitatorApiKeyDto
 type GenerateFacilitatorApiKeyDto struct {
 	// Chain ID for EIP-712 signature verification
-	ChainId float32 `json:"chainId"`
+	ChainId int64 `json:"chainId"`
 	// Ethereum address of the facilitator
 	Facilitator string `json:"facilitator" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Signature deadline timestamp (uint256)
@@ -37,7 +37,7 @@ type _GenerateFacilitatorApiKeyDto GenerateFacilitatorApiKeyDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewGenerateFacilitatorApiKeyDto(chainId float32, facilitator string, deadline string, signature string) *GenerateFacilitatorApiKeyDto {
+func NewGenerateFacilitatorApiKeyDto(chainId int64, facilitator string, deadline string, signature string) *GenerateFacilitatorApiKeyDto {
 	this := GenerateFacilitatorApiKeyDto{}
 	this.ChainId = chainId
 	this.Facilitator = facilitator
@@ -55,9 +55,9 @@ func NewGenerateFacilitatorApiKeyDtoWithDefaults() *GenerateFacilitatorApiKeyDto
 }
 
 // GetChainId returns the ChainId field value
-func (o *GenerateFacilitatorApiKeyDto) GetChainId() float32 {
+func (o *GenerateFacilitatorApiKeyDto) GetChainId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -66,7 +66,7 @@ func (o *GenerateFacilitatorApiKeyDto) GetChainId() float32 {
 
 // GetChainIdOk returns a tuple with the ChainId field value
 // and a boolean to check if the value has been set.
-func (o *GenerateFacilitatorApiKeyDto) GetChainIdOk() (*float32, bool) {
+func (o *GenerateFacilitatorApiKeyDto) GetChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -74,7 +74,7 @@ func (o *GenerateFacilitatorApiKeyDto) GetChainIdOk() (*float32, bool) {
 }
 
 // SetChainId sets field value
-func (o *GenerateFacilitatorApiKeyDto) SetChainId(v float32) {
+func (o *GenerateFacilitatorApiKeyDto) SetChainId(v int64) {
 	o.ChainId = v
 }
 

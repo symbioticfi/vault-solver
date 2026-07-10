@@ -48,6 +48,37 @@ func TestAccrualMatchesOnChain(t *testing.T) {
 	}
 }
 
+func TestAccruedMarketStateWithFeeVector(t *testing.T) {
+	market := MarketState{
+		TotalSupplyAssets: mustBig("1000000000000"),
+		TotalSupplyShares: mustBig("1000000000000"),
+		TotalBorrowAssets: mustBig("500000000000"),
+		TotalBorrowShares: mustBig("500000000000"),
+		LastUpdate:        1_000,
+		Fee:               mustBig("100000000000000000"),
+		Lltv:              mustBig("860000000000000000"),
+		BorrowRatePerSec:  mustBig("1000000000000"),
+	}
+	got := AccruedMarketState(market, 1_100)
+	if got.TotalBorrowAssets.Cmp(mustBig("500050002500")) != 0 {
+		t.Fatalf("borrow assets = %s", got.TotalBorrowAssets)
+	}
+	if got.TotalSupplyAssets.Cmp(mustBig("1000050002500")) != 0 {
+		t.Fatalf("supply assets = %s", got.TotalSupplyAssets)
+	}
+	if got.TotalSupplyShares.Cmp(mustBig("1000005000029")) != 0 {
+		t.Fatalf("supply shares = %s", got.TotalSupplyShares)
+	}
+	debt := BorrowedAssetsAt(
+		PositionState{BorrowShares: mustBig("250000000000")},
+		got.TotalBorrowAssets,
+		got.TotalBorrowShares,
+	)
+	if debt.Cmp(mustBig("250024501202")) != 0 {
+		t.Fatalf("borrower debt = %s", debt)
+	}
+}
+
 func TestBorrowedAssetsUnaccrued(t *testing.T) {
 	// toAssetsUp at lastUpdate equals RedStone's pushed borrow_assets (1685600048) within 1-wei
 	// rounding (§6.7): our ToAssetsUp rounds up -> 1685600049.

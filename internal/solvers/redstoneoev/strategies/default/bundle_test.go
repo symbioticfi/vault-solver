@@ -66,6 +66,52 @@ func TestBundleSearchBounds(t *testing.T) {
 	})
 }
 
+func TestSearchBundleMaterializesOnlyBoundedFrontier(t *testing.T) {
+	engine := testBundleEngine(Config{})
+	legs := make([]scoredLeg, 1000)
+	for i := range legs {
+		legs[i] = scoredFor(byte(i%255+1), big.NewInt(int64(1000-i)))
+		legs[i].Borrower = common.BigToAddress(big.NewInt(int64(i + 1)))
+	}
+	depthGas := fixedSettlementGasUnits(defaultPriceUpdateFeeds) +
+		liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, true) +
+		liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, false)
+	stats := &bundleSearchStats{}
+	_, ok := engine.searchBundleWithStats(
+		legs,
+		&liquidLaneState{
+			FreeAssets:   big.NewInt(0),
+			Withdrawable: big.NewInt(0),
+			Acquire:      map[common.Address]*big.Int{{}: big.NewInt(1_000_000)},
+		},
+		headerGasLimitForUsable(depthGas),
+		defaultPriceUpdateFeeds,
+		func(b chosenBundle) *big.Int { return new(big.Int).Set(b.grossLoan) },
+		stats,
+	)
+	if !ok {
+		t.Fatal("search returned no bundle")
+	}
+	if maxMaterialized := netBundleBeamWidth * 2; stats.materialized > maxMaterialized {
+		t.Fatalf("materialized states = %d, want <= %d", stats.materialized, maxMaterialized)
+	}
+	if maxProbeBuffers := netBundleBeamWidth + 1; stats.probeLegBuffers > maxProbeBuffers {
+		t.Fatalf("probe leg buffers = %d, want <= %d for depth two", stats.probeLegBuffers, maxProbeBuffers)
+	}
+}
+
+func TestBundleTrialHeapKeepsEarlierEqualScore(t *testing.T) {
+	h := &bundleTrialHeap{}
+	for seq := uint64(0); seq < netBundleBeamWidth+10; seq++ {
+		keepBundleTrial(h, bundleTrial{score: big.NewInt(1), grossLoan: big.NewInt(1), seq: seq})
+	}
+	for _, trial := range *h {
+		if trial.seq >= netBundleBeamWidth {
+			t.Fatalf("late equal-score trial retained: seq=%d", trial.seq)
+		}
+	}
+}
+
 func TestSelectBundleSingleToken(t *testing.T) {
 	t.Run("bundles all profitable legs into one bid", func(t *testing.T) {
 		laneState := &liquidLaneState{

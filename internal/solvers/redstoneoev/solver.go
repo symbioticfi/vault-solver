@@ -36,7 +36,8 @@ type Solver struct {
 	breaker      *breaker
 	metrics      *metrics
 	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
+	seenAuctions *seenKeys // separate bounded de-dup sets, both WS-read-goroutine-only
+	seenResults  *seenKeys
 	log          logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
@@ -52,6 +53,10 @@ type Solver struct {
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.
 	bidMu sync.Mutex
+
+	// auctionWG owns bid decisions launched by the WS message handler. Run waits only after ws.Run has
+	// joined its read pump, so no handler can Add concurrently with that Wait.
+	auctionWG sync.WaitGroup
 }
 
 // Name identifies the solver.

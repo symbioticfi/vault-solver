@@ -22,9 +22,9 @@ var _ MappedNullable = &OfferDto{}
 // OfferDto struct for OfferDto
 type OfferDto struct {
 	// Unique offer ID
-	Id float32 `json:"id"`
+	Id int64 `json:"id"`
 	// ID of the auction associated with the offer
-	AuctionId float32 `json:"auctionId"`
+	AuctionId int64 `json:"auctionId"`
 	// Offer status for the offer
 	Status string `json:"status"`
 	// Ethereum address of the offer maker
@@ -53,7 +53,7 @@ type _OfferDto OfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOfferDto(id float32, auctionId float32, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
+func NewOfferDto(id int64, auctionId int64, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
 	this := OfferDto{}
 	this.Id = id
 	this.AuctionId = auctionId
@@ -79,9 +79,9 @@ func NewOfferDtoWithDefaults() *OfferDto {
 }
 
 // GetId returns the Id field value
-func (o *OfferDto) GetId() float32 {
+func (o *OfferDto) GetId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -90,7 +90,7 @@ func (o *OfferDto) GetId() float32 {
 
 // GetIdOk returns a tuple with the Id field value
 // and a boolean to check if the value has been set.
-func (o *OfferDto) GetIdOk() (*float32, bool) {
+func (o *OfferDto) GetIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -98,14 +98,14 @@ func (o *OfferDto) GetIdOk() (*float32, bool) {
 }
 
 // SetId sets field value
-func (o *OfferDto) SetId(v float32) {
+func (o *OfferDto) SetId(v int64) {
 	o.Id = v
 }
 
 // GetAuctionId returns the AuctionId field value
-func (o *OfferDto) GetAuctionId() float32 {
+func (o *OfferDto) GetAuctionId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -114,7 +114,7 @@ func (o *OfferDto) GetAuctionId() float32 {
 
 // GetAuctionIdOk returns a tuple with the AuctionId field value
 // and a boolean to check if the value has been set.
-func (o *OfferDto) GetAuctionIdOk() (*float32, bool) {
+func (o *OfferDto) GetAuctionIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -122,7 +122,7 @@ func (o *OfferDto) GetAuctionIdOk() (*float32, bool) {
 }
 
 // SetAuctionId sets field value
-func (o *OfferDto) SetAuctionId(v float32) {
+func (o *OfferDto) SetAuctionId(v int64) {
 	o.AuctionId = v
 }
 

@@ -12,8 +12,10 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/httpserver"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
@@ -29,10 +31,12 @@ func init() {
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
-	cfg    *Config
-	server *server
-	exec   *executionService
-	log    logr.Logger
+	cfg       *Config
+	server    *server
+	exec      *executionService
+	log       logr.Logger
+	fatal     solver.FatalReporter
+	runServer func(context.Context, *http.Server) error
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -63,8 +67,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 
 	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
 	return &Solver{
-		cfg:  cfg,
-		exec: exec,
+		cfg:   cfg,
+		exec:  exec,
+		fatal: deps.Fatal,
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
@@ -121,6 +126,10 @@ func buildServices(
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
+func serveQuoteServer(ctx context.Context, srv *http.Server) error {
+	return httpserver.ServeUntil(ctx, srv, 5*time.Second)
+}
+
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
@@ -152,26 +161,27 @@ func (s *Solver) Run(ctx context.Context) error {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	errCh := make(chan error, 1)
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+	s.log.Info("quote server starting", "addr", s.cfg.ListenAddr)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		runServer := s.runServer
+		if runServer == nil {
+			runServer = serveQuoteServer
 		}
-	}()
-	s.log.Info("quote server listening", "addr", s.cfg.ListenAddr)
-
-	// Backend order poll + fill loop (P2). Stops when ctx is cancelled.
-	go s.exec.run(ctx, s.cfg.PollInterval)
-
-	select {
-	case <-ctx.Done():
-	case err := <-errCh:
-		return errors.Errorf("rfq: quote server failed: %w", err)
+		if err := runServer(gctx, httpSrv); err != nil {
+			fatalErr := errors.Errorf("rfq: quote server: %w", err)
+			if s.fatal != nil {
+				s.fatal.Report(fatalErr)
+			}
+			return fatalErr
+		}
+		return nil
+	})
+	g.Go(func() error {
+		return s.exec.run(gctx, s.cfg.PollInterval)
+	})
+	if err := g.Wait(); err != nil {
+		return err
 	}
-
-	// Fresh context: the parent is already cancelled, so deriving from it would abort the drain.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx) //nolint:contextcheck // fresh deadline for post-cancellation drain
 	return ctx.Err()
 }

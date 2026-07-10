@@ -54,7 +54,7 @@ type Config struct {
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
 	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
-	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
+	//   - internal: may use the internal-only discounts API; adapters (optional) scope the QUOTE path only, while filling stays
 	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
 	SolverMode string
 	// TokensToQuote scopes which input tokens this filler quotes by class: "all" (default) quotes any,
@@ -81,7 +81,7 @@ type StrategyConfig struct {
 // Solver-mode profiles (see Config.SolverMode).
 const (
 	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
-	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
+	solverModeInternal = "internal" // internal-only discounts API on top of all advertised adapters
 )
 
 // Input-token quote scopes (see Config.TokensToQuote): "all" quotes any input token, "permissioned"
@@ -113,7 +113,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.BackendSharedSecretEnv == "" {
 		return nil, errors.New("backendSharedSecretEnv is required")
 	}
-	executor, err := parse.Address(raw.Executor, "executor")
+	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}

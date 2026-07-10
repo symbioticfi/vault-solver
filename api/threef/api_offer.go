@@ -208,7 +208,7 @@ func (r ApiOfferControllerCreateV1Request) Execute() (*CreateOfferResponseDto, *
 /*
 OfferControllerCreateV1 Create or update an offer
 
-Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, it is verified as an EIP-712 signature and the `maker` must be a registered facilitator. Contract wallets are supported via EIP-1271. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.
+Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If `signature` is provided, the `maker` must be a registered facilitator address or that facilitator's configured offer address; signature executability is checked by the relayer before on-chain `consume`, so ERC-1271 approvals may become valid asynchronously. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.
 
 `expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.
 
@@ -271,7 +271,7 @@ const signature = await walletClient.signTypedData(
 )
 ```
 
-Submit the resulting signature in the request body `signature` field. All `uint256` request fields stay decimal strings in the HTTP payload.
+Submit the signature bytes in the request body `signature` field. For deferred ERC-1271 approval, submit `0x` while the contract approval transaction is pending. All `uint256` request fields stay decimal strings in the HTTP payload.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiOfferControllerCreateV1Request
@@ -370,9 +370,9 @@ func (a *OfferAPIService) OfferControllerCreateV1Execute(r ApiOfferControllerCre
 type ApiOfferControllerGetByIdV1Request struct {
 	ctx           context.Context
 	ApiService    *OfferAPIService
-	id            float32
+	id            int64
 	maker         *string
-	chainId       *float32
+	chainId       *int64
 	deadline      *string
 	authorization *string
 	xApiKey       *string
@@ -385,7 +385,7 @@ func (r ApiOfferControllerGetByIdV1Request) Maker(maker string) ApiOfferControll
 }
 
 // Chain ID for signature verification
-func (r ApiOfferControllerGetByIdV1Request) ChainId(chainId float32) ApiOfferControllerGetByIdV1Request {
+func (r ApiOfferControllerGetByIdV1Request) ChainId(chainId int64) ApiOfferControllerGetByIdV1Request {
 	r.chainId = &chainId
 	return r
 }
@@ -421,7 +421,7 @@ Returns a single offer by ID for the authenticated maker. Uses the same API-key 
 	@param id Offer ID
 	@return ApiOfferControllerGetByIdV1Request
 */
-func (a *OfferAPIService) OfferControllerGetByIdV1(ctx context.Context, id float32) ApiOfferControllerGetByIdV1Request {
+func (a *OfferAPIService) OfferControllerGetByIdV1(ctx context.Context, id int64) ApiOfferControllerGetByIdV1Request {
 	return ApiOfferControllerGetByIdV1Request{
 		ApiService: a,
 		ctx:        ctx,
@@ -529,7 +529,7 @@ type ApiOfferControllerGetV1Request struct {
 	ctx           context.Context
 	ApiService    *OfferAPIService
 	maker         *string
-	chainId       *float32
+	chainId       *int64
 	deadline      *string
 	authorization *string
 	xApiKey       *string
@@ -542,7 +542,7 @@ func (r ApiOfferControllerGetV1Request) Maker(maker string) ApiOfferControllerGe
 }
 
 // Chain ID for signature verification
-func (r ApiOfferControllerGetV1Request) ChainId(chainId float32) ApiOfferControllerGetV1Request {
+func (r ApiOfferControllerGetV1Request) ChainId(chainId int64) ApiOfferControllerGetV1Request {
 	r.chainId = &chainId
 	return r
 }

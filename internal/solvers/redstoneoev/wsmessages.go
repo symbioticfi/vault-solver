@@ -2,7 +2,10 @@ package redstoneoev
 
 import (
 	"encoding/json"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 )
 
@@ -77,6 +80,19 @@ type LiquidationResultData struct {
 	TxHash     string `json:"txHash"`
 	Liquidator string `json:"liquidator"`
 	Error      string `json:"error"`
+}
+
+// dedupKey identifies one settlement result across the broadcast and callback-scoped subscriptions.
+// Prefer RedStone's result id, then a valid transaction hash; malformed legacy frames fall back to the
+// exact frame hash so their side effects are still idempotent on replay.
+func (r LiquidationResult) dedupKey(raw []byte) string {
+	if r.ID != "" {
+		return "id:" + r.ID
+	}
+	if common.IsHexHash(r.Data.TxHash) {
+		return "tx:" + strings.ToLower(r.Data.TxHash)
+	}
+	return "frame:" + crypto.Keccak256Hash(raw).Hex()
 }
 
 type Blacklisted struct {

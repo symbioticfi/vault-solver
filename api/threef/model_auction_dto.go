@@ -22,7 +22,7 @@ var _ MappedNullable = &AuctionDto{}
 // AuctionDto struct for AuctionDto
 type AuctionDto struct {
 	// Auction ID
-	Id float32 `json:"id"`
+	Id int64 `json:"id"`
 	// Request contract address
 	RequestId string `json:"requestId"`
 	// Amount requested (numeric string) or null if unknown
@@ -30,7 +30,7 @@ type AuctionDto struct {
 	// Solve start time (derived from deposit_deadline) or null
 	SolveStartTime NullableString `json:"solve_start_time"`
 	// Current max rate in basis points for active auctions, or the blended succeeded-offer rate for succeeded/repaid auctions, with tenths-of-a-basis-point precision, or null
-	MaxRate NullableFloat32 `json:"maxRate"`
+	MaxRate NullableFloat64 `json:"maxRate"`
 	// Auction status
 	Status string `json:"status"`
 	// Asset metadata resolved for the auction or null
@@ -53,7 +53,7 @@ type _AuctionDto AuctionDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAuctionDto(id float32, requestId string, amountRequested NullableString, solveStartTime NullableString, maxRate NullableFloat32, status string, asset NullableResolvedAssetDto, depositAsset NullableAuctionDepositAssetDto, vault NullableResolvedVaultDto, settlement NullableResolvedSettlementDto, direction NullableString) *AuctionDto {
+func NewAuctionDto(id int64, requestId string, amountRequested NullableString, solveStartTime NullableString, maxRate NullableFloat64, status string, asset NullableResolvedAssetDto, depositAsset NullableAuctionDepositAssetDto, vault NullableResolvedVaultDto, settlement NullableResolvedSettlementDto, direction NullableString) *AuctionDto {
 	this := AuctionDto{}
 	this.Id = id
 	this.RequestId = requestId
@@ -78,9 +78,9 @@ func NewAuctionDtoWithDefaults() *AuctionDto {
 }
 
 // GetId returns the Id field value
-func (o *AuctionDto) GetId() float32 {
+func (o *AuctionDto) GetId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -89,7 +89,7 @@ func (o *AuctionDto) GetId() float32 {
 
 // GetIdOk returns a tuple with the Id field value
 // and a boolean to check if the value has been set.
-func (o *AuctionDto) GetIdOk() (*float32, bool) {
+func (o *AuctionDto) GetIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -97,7 +97,7 @@ func (o *AuctionDto) GetIdOk() (*float32, bool) {
 }
 
 // SetId sets field value
-func (o *AuctionDto) SetId(v float32) {
+func (o *AuctionDto) SetId(v int64) {
 	o.Id = v
 }
 
@@ -178,10 +178,10 @@ func (o *AuctionDto) SetSolveStartTime(v string) {
 }
 
 // GetMaxRate returns the MaxRate field value
-// If the value is explicit nil, the zero value for float32 will be returned
-func (o *AuctionDto) GetMaxRate() float32 {
+// If the value is explicit nil, the zero value for float64 will be returned
+func (o *AuctionDto) GetMaxRate() float64 {
 	if o == nil || o.MaxRate.Get() == nil {
-		var ret float32
+		var ret float64
 		return ret
 	}
 
@@ -191,7 +191,7 @@ func (o *AuctionDto) GetMaxRate() float32 {
 // GetMaxRateOk returns a tuple with the MaxRate field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *AuctionDto) GetMaxRateOk() (*float32, bool) {
+func (o *AuctionDto) GetMaxRateOk() (*float64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -199,7 +199,7 @@ func (o *AuctionDto) GetMaxRateOk() (*float32, bool) {
 }
 
 // SetMaxRate sets field value
-func (o *AuctionDto) SetMaxRate(v float32) {
+func (o *AuctionDto) SetMaxRate(v float64) {
 	o.MaxRate.Set(&v)
 }
 

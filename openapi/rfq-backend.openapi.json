@@ -1267,7 +1267,10 @@
                   ]
                 },
                 "outputs": {
-                  "type": "array",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
                   "items": {
                     "type": "object",
                     "properties": {
@@ -1352,7 +1355,6 @@
                 "txHash",
                 "nonce",
                 "input",
-                "outputs",
                 "settledAmounts"
               ]
             }

@@ -43,7 +43,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 			DepositAsset:    common.HexToAddress("0x0000000000000000000000000000000000000003"),
 			AmountRequested: mustBig(t, "900"),
 			RemainingAmount: mustBig(t, "700"),
-			MaxRateBps:      200,
+			MaxRateDeciBps:  big.NewInt(2_000),
 		}},
 		LiveOffers: []LiveOffer{{AdapterID: "adapter-1", AuctionID: 10}},
 	}
@@ -68,6 +68,40 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	liveOffer := liveOffers[0].(map[string]any)
 	if liveOffer["adapterId"] != "adapter-1" || liveOffer["auctionId"].(float64) != 10 {
 		t.Fatalf("liveOffer wire shape: %#v", liveOffer)
+	}
+}
+
+func TestOfferInputMarshalJSONRateWireExact(t *testing.T) {
+	input := OfferInput{Auctions: []AuctionSnapshot{{MaxRateDeciBps: big.NewInt(505)}}}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"maxRateBps":"50.5"`) {
+		t.Fatalf("maxRateBps is not an exact decimal string: %s", body)
+	}
+	if strings.Contains(string(body), `"maxRateBps":50.5`) {
+		t.Fatalf("maxRateBps must not be a JSON number: %s", body)
+	}
+}
+
+func TestFormatDeciBpsExact(t *testing.T) {
+	tests := []struct {
+		name string
+		rate *big.Int
+		want string
+	}{
+		{name: "nil", want: ""},
+		{name: "whole basis points", rate: big.NewInt(500), want: "50"},
+		{name: "one tenth", rate: big.NewInt(501), want: "50.1"},
+		{name: "five tenths", rate: big.NewInt(505), want: "50.5"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatDeciBps(tc.rate); got != tc.want {
+				t.Fatalf("formatDeciBps(%v) = %q, want %q", tc.rate, got, tc.want)
+			}
+		})
 	}
 }
 

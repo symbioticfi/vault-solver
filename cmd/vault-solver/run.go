@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"time"
 
-	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -63,25 +63,28 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		"debug", debug,
 	)
 
-	// Observability first, so probes/metrics are live during the rest of startup.
+	// Prepare observability during dependency construction; the root worker group starts the probes
+	// immediately before readiness is enabled.
 	metrics := observability.NewMetrics()
 	metrics.SetBuildInfo(version.Version, version.Commit)
 	health := &observability.Health{}
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
-	go observability.ServeUntil(ctx, httpSrv, log)
-	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
-	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
-	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
+	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order for reads only.
+	// Broadcasts use a separate single-endpoint client: writeRpcUrl when set, otherwise rpcUrl.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
-	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
+	chainClient, err := chain.Dial(
+		ctx,
+		rpcURLs,
+		cfg.Chain.WriteRPCURL,
+		cfg.Chain.MulticallAddress,
+		cfg.Chain.ChainID,
+		log,
+	)
 	if err != nil {
 		return err
 	}
 	defer chainClient.Close()
-	if got := chainClient.ChainID().Uint64(); got != cfg.Chain.ChainID {
-		return errors.Errorf("chain id mismatch: rpc reports %d, config says %d", got, cfg.Chain.ChainID)
-	}
 
 	// Signer.
 	sgnr, err := signer.FromConfig(cfg.Signer)
@@ -92,16 +95,26 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Shared, nonce-serialized transaction sender.
 	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations: cfg.TxManager.Confirmations,
-		MaxFeeGwei:    cfg.TxManager.MaxFeeGwei,
-		TipGwei:       cfg.TxManager.TipGwei,
+		Confirmations:   cfg.TxManager.Confirmations,
+		PendingInterval: time.Duration(cfg.TxManager.PendingIntervalMs) * time.Millisecond,
+		FeeBumpBps:      cfg.TxManager.FeeBumpBps,
+		MaxReplacements: cfg.TxManager.MaxReplacements,
+		MaxFeeGwei:      cfg.TxManager.MaxFeeGwei,
+		TipGwei:         cfg.TxManager.TipGwei,
 	}, log)
-	go txm.Start(ctx)
 
 	// Build every configured solver. They share the chain client, signer, and the single
 	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
 	// shared txManager exists for, so they never race on nonces.
-	deps := solver.Deps{Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics}
+	fatal := solver.NewFatalSignal()
+	deps := solver.Deps{
+		Chain:     chainClient,
+		TxManager: txm,
+		Signer:    sgnr,
+		Log:       log,
+		Metrics:   metrics,
+		Fatal:     fatal,
+	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
 	for _, sc := range cfg.Solvers {
 		slv, err := solver.New(sc.Name, sc.Config, deps)
@@ -111,13 +124,40 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		solvers = append(solvers, slv)
 	}
 
-	health.SetReady(true)
-
-	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
-	// clean shutdown (solver.Run maps context.Canceled to nil).
-	g, gctx := errgroup.WithContext(ctx)
+	workers := []func(context.Context) error{
+		func(ctx context.Context) error { return observability.ServeUntil(ctx, httpSrv) },
+		txm.Start,
+	}
 	for _, slv := range solvers {
-		g.Go(func() error { return solver.Run(gctx, slv, log) })
+		workers = append(workers, func(ctx context.Context) error { return solver.Run(ctx, slv, log) })
+	}
+	log.Info("observability server starting", "addr", cfg.Observability.Addr)
+	return superviseRuntime(ctx, health, fatal, workers...)
+}
+
+// superviseRuntime owns every long-lived root worker. A nested fatal report clears readiness and
+// cancels the shared worker context before the reporting component joins, while g.Wait still joins
+// every worker before returning the first error.
+func superviseRuntime(
+	ctx context.Context,
+	health *observability.Health,
+	fatal *solver.FatalSignal,
+	workers ...func(context.Context) error,
+) error {
+	g, gctx := errgroup.WithContext(ctx)
+	// Readiness is set before the observability worker starts, so it cannot be observed until that
+	// listener is live. A nested fatal report clears it before triggering root cancellation.
+	health.SetReady(true)
+	defer health.SetReady(false)
+	g.Go(func() error {
+		err := fatal.Wait(gctx)
+		if err != nil {
+			health.SetReady(false)
+		}
+		return err
+	})
+	for _, worker := range workers {
+		g.Go(func() error { return worker(gctx) })
 	}
 	return g.Wait()
 }

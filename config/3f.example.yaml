@@ -1,6 +1,6 @@
 # vault-solver — 3F Bridge Facilitator (`3f-bridge-facilitator`), annotated example.
 #
-# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic BridgeFacilitatorAdapters,
+# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic ThreeFAdapters,
 # funds the loans it wins, and permissionlessly redeems repaid loans back to the vault. Addresses below
 # are the 3F Sepolia dev deployment (the only 3F environment today).
 #
@@ -9,12 +9,11 @@
 
 chain:
   rpcUrl: ${ETH_RPC_URL_SEPOLIA}   # primary EVM RPC endpoint (expanded from env, or a literal URL)
-  chainId: 11155111                # must match the RPC's chain id (asserted at startup)
+  chainId: 11155111                # every configured RPC endpoint is preflighted against this chain id
   # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
   # writeRpcUrl: ${WRITE_RPC_URL}  # optional; broadcasts transactions here while every read stays on
   #                                # rpcUrl. Point at a private/MEV-protected relay to submit privately.
-  # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
 signer:
@@ -27,8 +26,14 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
-  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
-  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+  pendingIntervalMs: 120000         # replace a still-pending nonce after 2m (default); each window is 1ms..24h
+  feeBumpBps: 1250                  # raise tip + max fee by 12.5%; allowed 1000..10000
+  maxReplacements: 3                # allowed 1..10; original + replacements = 4 pending windows total
+  # Fee values must be finite and non-negative. Zero/omitted maxFeeGwei derives from the base fee;
+  # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei remains a hard ceiling for
+  # replacements: startup fails for a larger explicit tip, and sending fails if a tip would exceed it.
+  # maxFeeGwei: 50                 # hard cap on max fee per gas
+  # tipGwei: 1                     # priority fee; must be at or below an explicit maxFeeGwei
 
 observability:
   addr: ":9090"                    # bind address for /metrics, /healthz, /readyz
@@ -52,9 +57,10 @@ solvers:
       # caps (min yield / min & max assets per request), funding headroom (getMaxAssets), and
       # concurrency (MAX_REQUESTS) live on the adapter and are read on-chain — never configured here.
       adapters:
-        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed BridgeFacilitatorAdapter
+        - "0x0000000000000000000000000000000000000000"   # TODO: a deployed ThreeFAdapter
 
       intervals:
         discover: 1h                   # how often to poll for open auctions and (re)offer coverage
+        offerTTL: 2h                   # default 2x discover, >= discover; expiration rounds up to a Unix second
         redeemPoll: 5m                 # how often to check for matured loans to redeem
         reconcile: 15m                 # how often to log each adapter's live open-position set (health tick)

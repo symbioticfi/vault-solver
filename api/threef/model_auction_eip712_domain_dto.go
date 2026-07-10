@@ -26,7 +26,9 @@ type AuctionEip712DomainDto struct {
 	// Resolved EIP-712 domain version or null if unavailable
 	Version NullableString `json:"version"`
 	// Resolved EIP-712 domain chain ID or null if unavailable
-	ChainId NullableFloat32 `json:"chainId"`
+	ChainId NullableInt64 `json:"chainId"`
+	// Optional EIP-712 domain salt as bytes32
+	Salt NullableString `json:"salt,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
 }
 
 type _AuctionEip712DomainDto AuctionEip712DomainDto
@@ -35,7 +37,7 @@ type _AuctionEip712DomainDto AuctionEip712DomainDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAuctionEip712DomainDto(name NullableString, version NullableString, chainId NullableFloat32) *AuctionEip712DomainDto {
+func NewAuctionEip712DomainDto(name NullableString, version NullableString, chainId NullableInt64) *AuctionEip712DomainDto {
 	this := AuctionEip712DomainDto{}
 	this.Name = name
 	this.Version = version
@@ -104,10 +106,10 @@ func (o *AuctionEip712DomainDto) SetVersion(v string) {
 }
 
 // GetChainId returns the ChainId field value
-// If the value is explicit nil, the zero value for float32 will be returned
-func (o *AuctionEip712DomainDto) GetChainId() float32 {
+// If the value is explicit nil, the zero value for int64 will be returned
+func (o *AuctionEip712DomainDto) GetChainId() int64 {
 	if o == nil || o.ChainId.Get() == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -117,7 +119,7 @@ func (o *AuctionEip712DomainDto) GetChainId() float32 {
 // GetChainIdOk returns a tuple with the ChainId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *AuctionEip712DomainDto) GetChainIdOk() (*float32, bool) {
+func (o *AuctionEip712DomainDto) GetChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -125,8 +127,51 @@ func (o *AuctionEip712DomainDto) GetChainIdOk() (*float32, bool) {
 }
 
 // SetChainId sets field value
-func (o *AuctionEip712DomainDto) SetChainId(v float32) {
+func (o *AuctionEip712DomainDto) SetChainId(v int64) {
 	o.ChainId.Set(&v)
+}
+
+// GetSalt returns the Salt field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *AuctionEip712DomainDto) GetSalt() string {
+	if o == nil || IsNil(o.Salt.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.Salt.Get()
+}
+
+// GetSaltOk returns a tuple with the Salt field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *AuctionEip712DomainDto) GetSaltOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Salt.Get(), o.Salt.IsSet()
+}
+
+// HasSalt returns a boolean if a field has been set.
+func (o *AuctionEip712DomainDto) HasSalt() bool {
+	if o != nil && o.Salt.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetSalt gets a reference to the given NullableString and assigns it to the Salt field.
+func (o *AuctionEip712DomainDto) SetSalt(v string) {
+	o.Salt.Set(&v)
+}
+
+// SetSaltNil sets the value for Salt to be an explicit nil
+func (o *AuctionEip712DomainDto) SetSaltNil() {
+	o.Salt.Set(nil)
+}
+
+// UnsetSalt ensures that no value is present for Salt, not even an explicit nil
+func (o *AuctionEip712DomainDto) UnsetSalt() {
+	o.Salt.Unset()
 }
 
 func (o AuctionEip712DomainDto) MarshalJSON() ([]byte, error) {
@@ -142,6 +187,9 @@ func (o AuctionEip712DomainDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name.Get()
 	toSerialize["version"] = o.Version.Get()
 	toSerialize["chainId"] = o.ChainId.Get()
+	if o.Salt.IsSet() {
+		toSerialize["salt"] = o.Salt.Get()
+	}
 	return toSerialize, nil
 }
 

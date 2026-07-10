@@ -18,8 +18,8 @@ import (
 )
 
 // TestCollectRequests covers the enumeration-prefix logic: the adapter's requests[] is dense (kept so
-// by finalizeRequest's swap-pop), and indices past the end revert, so collectRequests must take the
-// leading run of decodable successes and stop at the first gap.
+// by finalizeRequest's swap-pop), and indices past the end revert, so collectRequests accepts only a
+// leading run of decodable successes followed by an optional failure suffix.
 func TestCollectRequests(t *testing.T) {
 	t.Parallel()
 
@@ -33,21 +33,29 @@ func TestCollectRequests(t *testing.T) {
 	bad := chain.CallResult{Success: true, ReturnData: []byte{0x01}} // undecodable as an address
 
 	tests := []struct {
-		name string
-		res  []chain.CallResult
-		want []common.Address
+		name    string
+		res     []chain.CallResult
+		want    []common.Address
+		wantErr bool
 	}{
-		{"empty", nil, nil},
-		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, []common.Address{a0, a1, a2}},
-		{"prefix then end-of-array gap", []chain.CallResult{ok(a0), ok(a1), fail, ok(a2)}, []common.Address{a0, a1}},
-		{"first slot reverts", []chain.CallResult{fail, ok(a0)}, nil},
-		{"undecodable slot ends the set", []chain.CallResult{ok(a0), bad, ok(a1)}, []common.Address{a0}},
+		{name: "empty"},
+		{name: "all active", res: []chain.CallResult{ok(a0), ok(a1), ok(a2)}, want: []common.Address{a0, a1, a2}},
+		{name: "prefix then failure suffix", res: []chain.CallResult{ok(a0), ok(a1), fail, fail}, want: []common.Address{a0, a1}},
+		{name: "all slots reverted", res: []chain.CallResult{fail, fail}},
+		{name: "success after reverted slot", res: []chain.CallResult{ok(a0), fail, ok(a2)}, wantErr: true},
+		{name: "undecodable successful slot", res: []chain.CallResult{ok(a0), bad, fail}, wantErr: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := collectRequests(tc.res)
+			got, err := collectRequests(tc.res)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("collectRequests error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil {
+				return
+			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("collectRequests = %v (len %d), want %v (len %d)", got, len(got), tc.want, len(tc.want))
 			}
@@ -110,7 +118,7 @@ func newMulticallFakeClient(t *testing.T, ethCallReplies ...[]byte) (*chain.Clie
 		}
 	}))
 
-	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", multicallAddr.Hex(), logr.Discard())
+	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", multicallAddr.Hex(), 1, logr.Discard())
 	if err != nil {
 		srv.Close()
 		t.Fatalf("chain.Dial: %v", err)

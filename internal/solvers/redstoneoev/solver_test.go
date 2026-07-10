@@ -9,12 +9,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gopkg.in/yaml.v3"
 
+	multicallbinding "github.com/symbioticfi/vault-solver/api/bindings/multicall3"
+	executorbinding "github.com/symbioticfi/vault-solver/api/bindings/oev/executor"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
@@ -93,13 +99,14 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 	}
 
 	s := &Solver{
-		cfg:     cfg,
-		chainID: big.NewInt(11155111),
-		nonces:  &nonceStore{},
-		breaker: newBreaker(3, time.Hour),
-		seen:    newSeenAuctions(maxSeenAuctions),
-		log:     logr.Discard(),
-		deps:    solver.Deps{Signer: sgnr},
+		cfg:          cfg,
+		chainID:      big.NewInt(11155111),
+		nonces:       &nonceStore{},
+		breaker:      newBreaker(3, time.Hour),
+		seenAuctions: newSeenKeys(maxSeenMessages),
+		seenResults:  newSeenKeys(maxSeenMessages),
+		log:          logr.Discard(),
+		deps:         solver.Deps{Signer: sgnr},
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}),
 	}
@@ -238,6 +245,38 @@ func setSnapshotBlockTime(t *testing.T, s *Solver, tsMs int64) {
 // the auction timestamp (deterministic accrual) instead of falling back to wall-clock.
 func auctionClock() func() time.Time { return func() time.Time { return time.Unix(1781243340, 0) } }
 
+func TestAuctionWorkerIsJoined(t *testing.T) {
+	s, _ := seededSolver(t)
+	blocking := &blockingBidStrategy{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
+	a.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, a.Timestamp)
+	s.strategy = blocking
+	s.launchAuction(t.Context(), a, time.Now())
+	<-blocking.started
+
+	joined := make(chan struct{})
+	go func() {
+		s.auctionWG.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+		t.Fatal("Wait returned while the auction decision was still running")
+	default:
+	}
+	close(blocking.release)
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("auction decision worker was not joined")
+	}
+}
+
 // decodeAuction parses the captured live auction frame (the fixture every bid test starts from).
 func decodeAuction(t *testing.T) AuctionMessage {
 	t.Helper()
@@ -283,6 +322,7 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
 		}
 	})
+
 	t.Run("fresh caches pass the gate", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip == skipExecutorStateStale {
@@ -665,6 +705,80 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	}
 }
 
+type laterReadFailureRPC struct {
+	callResult hexutil.Bytes
+}
+
+func (*laterReadFailureRPC) GetBlockByNumber(
+	context.Context,
+	string,
+	bool,
+) (*gethtypes.Header, error) {
+	return &gethtypes.Header{Number: big.NewInt(100), Difficulty: big.NewInt(0), GasLimit: 2_000_000}, nil
+}
+
+func (r *laterReadFailureRPC) Call(context.Context, map[string]any, string) (hexutil.Bytes, error) {
+	return r.callResult, nil
+}
+
+func TestRefreshStateLaterReadFailureStillAppliesExecutorBookkeeping(t *testing.T) {
+	executorABI, err := executorbinding.RedStoneExecutorMetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	packExecutorResult := func(method string, values ...any) []byte {
+		t.Helper()
+		data, packErr := executorABI.Methods[method].Outputs.Pack(values...)
+		if packErr != nil {
+			t.Fatalf("pack %s: %v", method, packErr)
+		}
+		return data
+	}
+	results := []multicallbinding.Multicall3Result{
+		{Success: true, ReturnData: packExecutorResult("nonces", big.NewInt(9))},
+		{Success: true, ReturnData: packExecutorResult("deposits", mustBig("100000000000000000"))},
+		{Success: true, ReturnData: packExecutorResult("locked", false)},
+	}
+	multicallABI, err := multicallbinding.Multicall3MetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	callResult, err := multicallABI.Methods["aggregate3"].Outputs.Pack(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpcService := &laterReadFailureRPC{callResult: callResult}
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("eth", rpcService); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rpcServer.Stop)
+	rpcClient := rpc.DialInProc(rpcServer)
+	t.Cleanup(rpcClient.Close)
+	chainClient := &chain.Client{Client: ethclient.NewClient(rpcClient)}
+
+	s, _ := seededSolver(t)
+	s.deps.Chain = chainClient
+	s.reader = newReader(chainClient, logr.Discard())
+	old, _ := s.state.load()
+	s.reserve(8, time.Now(), seedCallback, "auction-8")
+	s.nonces.reconcile(5)
+
+	s.refreshState(t.Context())
+
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("later adapter failure stranded reservation: pending=%v", inFlight.pending)
+	}
+	if got := s.nonces.next(0); got != 10 {
+		t.Fatalf("nonce bookkeeping did not apply before epoch rejection: got %d, want 10", got)
+	}
+	got, _ := s.state.load()
+	if got.Exec.Nonce.Cmp(old.Exec.Nonce) != 0 || got.Adapter.Address != old.Adapter.Address ||
+		!got.UpdatedAt.Equal(old.UpdatedAt) {
+		t.Fatalf("failed adapter refresh published a partial snapshot: got %+v, want %+v", got, old)
+	}
+}
+
 // TestFullAuctionLifecycle drives the whole inbound-frame flow through handleMessage: an auction frame
 // produces a signed solve on the wire, then tripping the breaker via its REAL input (recorded settlement
 // failures, the same path the WS liquidation-result handler feeds) makes buildBid skip "breaker" so a fresh
@@ -940,10 +1054,28 @@ func TestBuildBidStaleEpoch(t *testing.T) {
 	}
 }
 
-// TestSeenAuctions pins the bounded de-dup: first sight is new, repeats are seen, and the oldest id is
+func TestLiquidationResultDedupKey(t *testing.T) {
+	withID := LiquidationResult{ID: "auction-1", Data: LiquidationResultData{TxHash: common.Hash{1}.Hex()}}
+	if got := withID.dedupKey([]byte(`{"different":"body"}`)); got != "id:auction-1" {
+		t.Fatalf("id key = %q", got)
+	}
+	withHash := LiquidationResult{Data: LiquidationResultData{
+		TxHash: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}}
+	if got := withHash.dedupKey([]byte(`{"body":1}`)); got != "tx:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("tx key = %q", got)
+	}
+	raw := []byte(`{"op":"liquidation-result","data":{"success":false}}`)
+	want := "frame:" + crypto.Keccak256Hash(raw).Hex()
+	if got := (LiquidationResult{}).dedupKey(raw); got != want {
+		t.Fatalf("frame key = %q, want %q", got, want)
+	}
+}
+
+// TestSeenKeys pins the bounded de-dup: first sight is new, repeats are seen, and the oldest id is
 // evicted past cap (so a long-evicted id reads as new again).
-func TestSeenAuctions(t *testing.T) {
-	s := newSeenAuctions(2)
+func TestSeenKeys(t *testing.T) {
+	s := newSeenKeys(2)
 	if s.seen("a") {
 		t.Fatal("first sight of a should be new")
 	}
@@ -959,14 +1091,54 @@ func TestSeenAuctions(t *testing.T) {
 	}
 }
 
+func TestLiquidationResultDuplicateHasOneSideEffect(t *testing.T) {
+	s, _ := seededSolver(t)
+	s.breaker = newBreaker(2, time.Hour)
+	var err error
+	s.metrics, err = newMetrics(prometheus.NewRegistry(), defaultStrategyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.reserve(8, time.Now(), seedCallback, "same")
+	frame := func(id string) []byte {
+		return marshal(LiquidationResult{
+			Op: "liquidation-result",
+			ID: id,
+			Data: LiquidationResultData{
+				Success:    false,
+				Liquidator: s.cfg.Callback.Hex(),
+				TxHash:     common.HexToHash("0x1234").Hex(),
+			},
+		})
+	}
+	s.handleMessage(t.Context(), frame("same"))
+	s.handleMessage(t.Context(), frame("same"))
+	if got := testutil.ToFloat64(s.metrics.failedLiq); got != 1 {
+		t.Fatalf("duplicate result failure metric = %v, want 1", got)
+	}
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("first result did not release reservation: pending=%v", inFlight.pending)
+	}
+	if tripped, _ := s.breaker.tripped(time.Now()); tripped {
+		t.Fatal("duplicate result counted twice")
+	}
+	s.handleMessage(t.Context(), frame("distinct"))
+	if got := testutil.ToFloat64(s.metrics.failedLiq); got != 2 {
+		t.Fatalf("failure metric after distinct result = %v, want 2", got)
+	}
+	if tripped, _ := s.breaker.tripped(time.Now()); !tripped {
+		t.Fatal("two distinct failures must trip the breaker")
+	}
+}
+
 // TestLiquidationResultFeedsBreaker pins the WS-driven failure breaker: a liquidation-result frame for OUR
 // callback with success:false records exactly one breaker failure (and trips at maxFailures); a success:true
 // frame, and a failure for ANOTHER liquidator, record none. This is the sole breaker-failure feed now that
 // the on-chain event scan is gone.
 func TestLiquidationResultFeedsBreaker(t *testing.T) {
-	frame := func(liquidator string, success bool) []byte {
+	frame := func(id, liquidator string, success bool) []byte {
 		return marshal(LiquidationResult{
-			Op: "liquidation-result", ID: "a",
+			Op: "liquidation-result", ID: id,
 			Data: LiquidationResultData{Success: success, Liquidator: liquidator, TxHash: "0x1"},
 		})
 	}
@@ -974,8 +1146,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 
 	t.Run("success:false for our callback records a failure and trips at maxFailures", func(t *testing.T) {
 		s, _ := seededSolver(t) // breaker maxFailures = 3
-		for i := 0; i < 3; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), false))
+		for _, id := range []string{"failure-0", "failure-1", "failure-2"} {
+			s.handleMessage(t.Context(), frame(id, seedCallback.Hex(), false))
 		}
 		if tripped, _ := s.breaker.tripped(now); !tripped {
 			t.Fatal("3 failed liquidation-result frames for our callback must trip the breaker")
@@ -984,8 +1156,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 
 	t.Run("success:true records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), true))
+		for _, id := range []string{"success-0", "success-1", "success-2", "success-3", "success-4"} {
+			s.handleMessage(t.Context(), frame(id, seedCallback.Hex(), true))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("successful liquidation-result frames must not trip the breaker")
@@ -995,8 +1167,8 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 	t.Run("a failure for another liquidator records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		other := common.HexToAddress("0x2222222222222222222222222222222222222222").Hex()
-		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(other, false))
+		for _, id := range []string{"other-0", "other-1", "other-2", "other-3", "other-4"} {
+			s.handleMessage(t.Context(), frame(id, other, false))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("another solver's failed liquidations must not trip our breaker")

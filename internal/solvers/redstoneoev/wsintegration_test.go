@@ -73,3 +73,54 @@ func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 		// No solve written on the reconnect — flushSendQueue discarded the stale frame. ✓
 	}
 }
+
+func TestWSIntegrationRejectsOversizedFrame(t *testing.T) {
+	var connections atomic.Int32
+	var delivered atomic.Int32
+	reconnected := make(chan struct{}, 1)
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if connections.Add(1) >= 2 {
+			select {
+			case reconnected <- struct{}{}:
+			default:
+			}
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, make([]byte, maxWSMessageBytes+1))
+	}))
+	defer srv.Close()
+
+	client := newWSClient(wsConfig{
+		URL:            "ws" + strings.TrimPrefix(srv.URL, "http"),
+		APIKey:         "test",
+		Topics:         []string{"oev/liquidations"},
+		BackoffInitial: time.Millisecond,
+		BackoffMax:     5 * time.Millisecond,
+	}, logr.Discard(), func(context.Context, []byte) {
+		delivered.Add(1)
+	})
+	// Reconnect jitter is 1–5 seconds, so the deadline must exceed its configured upper bound.
+	ctx, cancel := context.WithTimeout(t.Context(), 7*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+
+	select {
+	case <-reconnected:
+	case <-ctx.Done():
+		<-done
+		t.Fatal("client did not reconnect after an oversized frame")
+	}
+	if got := delivered.Load(); got != 0 {
+		cancel()
+		<-done
+		t.Fatalf("oversized frames delivered = %d, want 0", got)
+	}
+	cancel()
+	<-done
+}

@@ -21,10 +21,10 @@ var _ MappedNullable = &CreateOfferDto{}
 
 // CreateOfferDto struct for CreateOfferDto
 type CreateOfferDto struct {
-	// Chain ID for signature verification
-	ChainId *float32 `json:"chainId,omitempty"`
+	// Chain ID for resolving the request EIP-712 domain
+	ChainId *int64 `json:"chainId,omitempty"`
 	// ID of the auction to submit an offer for
-	AuctionId float32 `json:"auctionId"`
+	AuctionId int64 `json:"auctionId"`
 	// Ethereum address of the offer maker. For unsigned API-key requests, the configured facilitator offer address is used as the stored maker when present.
 	Maker string `json:"maker" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Offer amount as a numeric string (uint256)
@@ -37,8 +37,8 @@ type CreateOfferDto struct {
 	Expiration string `json:"expiration"`
 	// Whether to use callback when executing the offer
 	UseCallback bool `json:"useCallback"`
-	// EIP-712 signature (required if chainId is provided)
-	Signature *string `json:"signature,omitempty" validate:"regexp=^0x[a-fA-F0-9]{130}$"`
+	// EIP-712/EIP-1271 signature bytes. Use `0x` while deferred EIP-1271 approval is pending. Required if chainId is provided.
+	Signature *string `json:"signature,omitempty"`
 }
 
 type _CreateOfferDto CreateOfferDto
@@ -47,7 +47,7 @@ type _CreateOfferDto CreateOfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCreateOfferDto(auctionId float32, maker string, amount string, expectedReturn string, nonce string, expiration string, useCallback bool) *CreateOfferDto {
+func NewCreateOfferDto(auctionId int64, maker string, amount string, expectedReturn string, nonce string, expiration string, useCallback bool) *CreateOfferDto {
 	this := CreateOfferDto{}
 	this.AuctionId = auctionId
 	this.Maker = maker
@@ -68,9 +68,9 @@ func NewCreateOfferDtoWithDefaults() *CreateOfferDto {
 }
 
 // GetChainId returns the ChainId field value if set, zero value otherwise.
-func (o *CreateOfferDto) GetChainId() float32 {
+func (o *CreateOfferDto) GetChainId() int64 {
 	if o == nil || IsNil(o.ChainId) {
-		var ret float32
+		var ret int64
 		return ret
 	}
 	return *o.ChainId
@@ -78,7 +78,7 @@ func (o *CreateOfferDto) GetChainId() float32 {
 
 // GetChainIdOk returns a tuple with the ChainId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateOfferDto) GetChainIdOk() (*float32, bool) {
+func (o *CreateOfferDto) GetChainIdOk() (*int64, bool) {
 	if o == nil || IsNil(o.ChainId) {
 		return nil, false
 	}
@@ -94,15 +94,15 @@ func (o *CreateOfferDto) HasChainId() bool {
 	return false
 }
 
-// SetChainId gets a reference to the given float32 and assigns it to the ChainId field.
-func (o *CreateOfferDto) SetChainId(v float32) {
+// SetChainId gets a reference to the given int64 and assigns it to the ChainId field.
+func (o *CreateOfferDto) SetChainId(v int64) {
 	o.ChainId = &v
 }
 
 // GetAuctionId returns the AuctionId field value
-func (o *CreateOfferDto) GetAuctionId() float32 {
+func (o *CreateOfferDto) GetAuctionId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -111,7 +111,7 @@ func (o *CreateOfferDto) GetAuctionId() float32 {
 
 // GetAuctionIdOk returns a tuple with the AuctionId field value
 // and a boolean to check if the value has been set.
-func (o *CreateOfferDto) GetAuctionIdOk() (*float32, bool) {
+func (o *CreateOfferDto) GetAuctionIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -119,7 +119,7 @@ func (o *CreateOfferDto) GetAuctionIdOk() (*float32, bool) {
 }
 
 // SetAuctionId sets field value
-func (o *CreateOfferDto) SetAuctionId(v float32) {
+func (o *CreateOfferDto) SetAuctionId(v int64) {
 	o.AuctionId = v
 }
 

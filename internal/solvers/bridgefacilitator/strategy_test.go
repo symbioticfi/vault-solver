@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,25 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
+
+type digestCapturingSigner struct {
+	fakeSigner
+
+	digest common.Hash
+	calls  int
+}
+
+func (s *digestCapturingSigner) SignHash(digest common.Hash) ([]byte, error) {
+	s.digest = digest
+	s.calls++
+	return make([]byte, 65), nil
+}
 
 func mustBig(t *testing.T, s string) *big.Int {
 	t.Helper()
@@ -52,8 +67,48 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 			DepositAsset:    common.HexToAddress("0x0000000000000000000000000000000000000003"),
 			AmountRequested: mustBig(t, "700"),
 			RemainingAmount: mustBig(t, "700"),
-			MaxRateBps:      200,
+			MaxRateDeciBps:  big.NewInt(2_000),
 		}},
+	}
+}
+
+func TestAuctionViewMaxRateDeciBpsExact(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		rate float64
+		want string
+		ok   bool
+	}{
+		{name: "zero boundary", rate: 0, want: "0", ok: true},
+		{name: "one tenth", rate: 50.1, want: "501", ok: true},
+		{name: "five tenths", rate: 50.5, want: "505", ok: true},
+		{name: "too precise", rate: 50.55},
+		{name: "negative", rate: -0.1},
+		{name: "nan", rate: math.NaN()},
+		{name: "positive infinity", rate: math.Inf(1)},
+		{name: "negative infinity", rate: math.Inf(-1)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			auction := threef.AuctionDto{MaxRate: *threef.NewNullableFloat64(&tc.rate)}
+			got, ok := (auctionView{dto: auction}).maxRateDeciBps()
+			if ok != tc.ok {
+				t.Fatalf("ok = %t, want %t (rate %v)", ok, tc.ok, tc.rate)
+			}
+			if !tc.ok {
+				if got != nil {
+					t.Fatalf("rate = %s, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.String() != tc.want {
+				t.Fatalf("rate = %v, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -79,7 +134,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	offers.record(adapter, 10, now.Add(time.Minute), big.NewInt(100))
 
 	input := buildStrategyInput(
-		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
+		[]threef.AuctionDto{testAuctionDto(collateral, "100")},
 		[]*adapterOffering{{
 			target: Target{
 				Adapter:    adapter,
@@ -106,6 +161,180 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	if len(input.LiveOffers) != 1 ||
 		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
 		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
+	}
+}
+
+func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := int64(11_155_111)
+	auction := testAuctionDto(
+		common.HexToAddress("0x0000000000000000000000000000000000000003"),
+		"700",
+	)
+	auction.SetEip712Domain(*threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&domainName),
+		*threef.NewNullableString(&domainVersion),
+		*threef.NewNullableInt64(&chainID),
+	))
+
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000001")
+	request := common.HexToAddress(auction.RequestId)
+	signer := &digestCapturingSigner{}
+	s := &Solver{
+		cfg:  &Config{Intervals: Intervals{OfferTTL: 45 * time.Minute}},
+		deps: solver.Deps{Signer: signer},
+		now:  func() time.Time { return time.Unix(1_000, 0) },
+	}
+	offer := types.OfferExecution{
+		AuctionID:      10,
+		Request:        request,
+		Maker:          maker,
+		Principal:      big.NewInt(700),
+		ExpectedReturn: big.NewInt(14),
+	}
+	dto, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+	if err != nil {
+		t.Fatalf("buildSignedOffer: %v", err)
+	}
+	if dto.Expiration != "3700" {
+		t.Fatalf("expiration = %s, want 3700", dto.Expiration)
+	}
+	wantDigest := OfferDigest(Offer{
+		Maker:          maker,
+		Amount:         offer.Principal,
+		ExpectedReturn: offer.ExpectedReturn,
+		Nonce:          big.NewInt(1),
+		Expiration:     big.NewInt(3_700),
+		UseCallback:    true,
+	}, OfferDomain{
+		Name: domainName, Version: domainVersion, ChainID: big.NewInt(chainID),
+		VerifyingContract: request,
+	})
+	if signer.digest != wantDigest {
+		t.Fatalf("signed digest = %s, want %s", signer.digest, wantDigest)
+	}
+}
+
+func TestBuildSignedOfferRoundsExpirationUpToUnixSecond(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := int64(11_155_111)
+	auction := testAuctionDto(
+		common.HexToAddress("0x0000000000000000000000000000000000000003"),
+		"700",
+	)
+	auction.SetEip712Domain(*threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&domainName),
+		*threef.NewNullableString(&domainVersion),
+		*threef.NewNullableInt64(&chainID),
+	))
+	offer := types.OfferExecution{
+		AuctionID:      10,
+		Request:        common.HexToAddress(auction.RequestId),
+		Maker:          common.HexToAddress("0x0000000000000000000000000000000000000001"),
+		Principal:      big.NewInt(700),
+		ExpectedReturn: big.NewInt(14),
+	}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		ttl  time.Duration
+		want string
+	}{
+		{name: "exact second stays exact", now: time.Unix(100, 0), ttl: time.Second, want: "101"},
+		{name: "fractional clock rounds up", now: time.Unix(100, 999*time.Millisecond.Nanoseconds()), ttl: time.Second, want: "102"},
+		{name: "fractional TTL rounds up", now: time.Unix(100, 0), ttl: 1500 * time.Millisecond, want: "102"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Solver{
+				cfg:  &Config{Intervals: Intervals{OfferTTL: tt.ttl}},
+				deps: solver.Deps{Signer: &digestCapturingSigner{}},
+				now:  func() time.Time { return tt.now },
+			}
+			dto, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+			if err != nil {
+				t.Fatalf("buildSignedOffer: %v", err)
+			}
+			if dto.Expiration != tt.want {
+				t.Fatalf("expiration = %s, want %s", dto.Expiration, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSignedOfferSaltValidation(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := int64(9_007_199_254_740_993)
+	validSalt := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	validSaltHash := common.HexToHash(validSalt)
+	tests := []struct {
+		name     string
+		setSalt  func(*threef.AuctionEip712DomainDto)
+		wantSalt *common.Hash
+		wantErr  bool
+	}{
+		{name: "omitted"},
+		{name: "null", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSaltNil() }},
+		{name: "valid", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSalt(validSalt) },
+			wantSalt: &validSaltHash},
+		{name: "malformed", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSalt("not-hex") }, wantErr: true},
+		{name: "31 bytes", setSalt: func(domain *threef.AuctionEip712DomainDto) {
+			domain.SetSalt("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			auction := testAuctionDto(
+				common.HexToAddress("0x0000000000000000000000000000000000000003"),
+				"700",
+			)
+			domain := threef.NewAuctionEip712DomainDto(
+				*threef.NewNullableString(&domainName),
+				*threef.NewNullableString(&domainVersion),
+				*threef.NewNullableInt64(&chainID),
+			)
+			if tc.setSalt != nil {
+				tc.setSalt(domain)
+			}
+			auction.SetEip712Domain(*domain)
+
+			maker := common.HexToAddress("0x0000000000000000000000000000000000000001")
+			request := common.HexToAddress(auction.RequestId)
+			signer := &digestCapturingSigner{}
+			s := &Solver{
+				cfg:  &Config{Intervals: Intervals{OfferTTL: 45 * time.Minute}},
+				deps: solver.Deps{Signer: signer},
+				now:  func() time.Time { return time.Unix(1_000, 0) },
+			}
+			offer := types.OfferExecution{
+				AuctionID: 10, Request: request, Maker: maker,
+				Principal: big.NewInt(700), ExpectedReturn: big.NewInt(14),
+			}
+			_, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("buildSignedOffer error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if signer.calls != 0 {
+					t.Fatalf("invalid salt invoked signer %d times", signer.calls)
+				}
+				return
+			}
+			wantDigest := OfferDigest(Offer{
+				Maker: maker, Amount: offer.Principal, ExpectedReturn: offer.ExpectedReturn,
+				Nonce: big.NewInt(1), Expiration: big.NewInt(3_700), UseCallback: true,
+			}, OfferDomain{
+				Name: domainName, Version: domainVersion, ChainID: big.NewInt(chainID),
+				VerifyingContract: request, Salt: tc.wantSalt,
+			})
+			if signer.calls != 1 || signer.digest != wantDigest {
+				t.Fatalf("signer calls/digest = %d/%s, want 1/%s", signer.calls, signer.digest, wantDigest)
+			}
+		})
 	}
 }
 
@@ -146,14 +375,14 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}
 }
 
-func testAuctionDto(id int64, depositAsset common.Address, amountRequested string) threef.AuctionDto {
-	maxRate := float32(200)
+func testAuctionDto(depositAsset common.Address, amountRequested string) threef.AuctionDto {
+	maxRate := float64(200)
 	request := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	return threef.AuctionDto{
-		Id:              float32(id),
+		Id:              10,
 		RequestId:       request.Hex(),
 		AmountRequested: *threef.NewNullableString(&amountRequested),
-		MaxRate:         *threef.NewNullableFloat32(&maxRate),
+		MaxRate:         *threef.NewNullableFloat64(&maxRate),
 		Status:          "open",
 		DepositAsset: *threef.NewNullableAuctionDepositAssetDto(
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),

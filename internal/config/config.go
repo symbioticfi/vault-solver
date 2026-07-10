@@ -7,7 +7,9 @@ package config
 
 import (
 	"bytes"
+	"math"
 	"os"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -34,21 +36,20 @@ type ObservabilityConfig struct {
 	Debug bool `yaml:"debug"`
 }
 
-// ChainConfig describes the EVM endpoint the bot reads from and sends to.
+// ChainConfig describes the EVM endpoints used for reads and transaction broadcasts.
 type ChainConfig struct {
 	RPCURL string `yaml:"rpcUrl"`
-	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
-	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
+	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, for read calls when the
+	// primary `rpcUrl` is unavailable. Transaction broadcasts never use them. All must be on the same
+	// chain. Optional; empty means no read fallback.
 	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
 	// WriteRPCURL, when set, is used ONLY to broadcast signed transactions (eth_sendRawTransaction).
-	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl`. Point this at a
-	// private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while reading from a
-	// normal RPC. Optional; empty means broadcasts also use `rpcUrl`. Expand from the environment
-	// with ${WRITE_RPC_URL}.
+	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl` and its read fallbacks.
+	// Point this at a private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while
+	// reading from normal RPCs. Optional; empty means broadcasts use only the primary `rpcUrl`, never a
+	// read fallback. Expand from the environment with ${WRITE_RPC_URL}.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
-	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
-	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
 	// canonical cross-chain Multicall3 deployment when unset.
 	MulticallAddress string `yaml:"multicallAddress,omitempty"`
@@ -66,9 +67,16 @@ type SignerConfig struct {
 type TxManagerConfig struct {
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
-	// MaxFeeGwei caps the EIP-1559 max fee per gas; 0 means "derive from base fee".
+	// PendingIntervalMs is one pending-attempt window before a same-nonce replacement.
+	PendingIntervalMs int `yaml:"pendingIntervalMs"`
+	// FeeBumpBps raises the tip and max fee for each same-nonce replacement.
+	FeeBumpBps uint64 `yaml:"feeBumpBps"`
+	// MaxReplacements bounds the same-nonce replacements after the original attempt.
+	MaxReplacements uint64 `yaml:"maxReplacements"`
+	// MaxFeeGwei is a hard cap on the EIP-1559 max fee per gas; 0 means "derive from base fee".
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion".
+	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion". The selected tip
+	// must not exceed an explicit MaxFeeGwei cap.
 	TipGwei float64 `yaml:"tipGwei"`
 }
 
@@ -79,8 +87,19 @@ type SolverConfig struct {
 	Config yaml.Node `yaml:"config"`
 }
 
-// DefaultConfirmations is used when TxManager.Confirmations is unset.
-const DefaultConfirmations = 2
+const (
+	// DefaultConfirmations is used when TxManager.Confirmations is unset.
+	DefaultConfirmations = 2
+	// DefaultPendingIntervalMs is used when TxManager.PendingIntervalMs is unset.
+	DefaultPendingIntervalMs = 120_000
+	// DefaultFeeBumpBps is used when TxManager.FeeBumpBps is unset.
+	DefaultFeeBumpBps = 1_250
+	// DefaultMaxReplacements is used when TxManager.MaxReplacements is unset.
+	DefaultMaxReplacements = 3
+
+	maxPendingIntervalMs      = 86_400_000
+	maxConfiguredReplacements = 10
+)
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
 const DefaultObservabilityAddr = ":9090"
@@ -121,6 +140,15 @@ func (c *Config) applyDefaults() {
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
 	}
+	if c.TxManager.PendingIntervalMs == 0 {
+		c.TxManager.PendingIntervalMs = DefaultPendingIntervalMs
+	}
+	if c.TxManager.FeeBumpBps == 0 {
+		c.TxManager.FeeBumpBps = DefaultFeeBumpBps
+	}
+	if c.TxManager.MaxReplacements == 0 {
+		c.TxManager.MaxReplacements = DefaultMaxReplacements
+	}
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
 	}
@@ -142,6 +170,9 @@ func (c *Config) Validate() error {
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")
 	}
+	if err := c.TxManager.validate(); err != nil {
+		return err
+	}
 	if err := c.Signer.validate(); err != nil {
 		return err
 	}
@@ -157,6 +188,38 @@ func (c *Config) Validate() error {
 			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", s.Name)
 		}
 		seen[s.Name] = true
+	}
+	return nil
+}
+
+func (t TxManagerConfig) validate() error {
+	if t.PendingIntervalMs <= 0 || t.PendingIntervalMs > maxPendingIntervalMs {
+		return errors.Errorf("txManager.pendingIntervalMs must be between 1 and %d, got %d",
+			maxPendingIntervalMs, t.PendingIntervalMs)
+	}
+	if t.FeeBumpBps < 1_000 || t.FeeBumpBps > 10_000 {
+		return errors.Errorf("txManager.feeBumpBps must be between 1000 and 10000, got %d", t.FeeBumpBps)
+	}
+	if t.MaxReplacements == 0 || t.MaxReplacements > maxConfiguredReplacements {
+		return errors.Errorf("txManager.maxReplacements must be between 1 and %d, got %d",
+			maxConfiguredReplacements, t.MaxReplacements)
+	}
+
+	interval := time.Duration(t.PendingIntervalMs) * time.Millisecond
+	windows := time.Duration(t.MaxReplacements) + 1
+	const maxDuration = time.Duration(1<<63 - 1)
+	if interval <= 0 || interval > maxDuration/windows {
+		return errors.New("txManager replacement tracking duration overflows time.Duration")
+	}
+
+	if math.IsNaN(t.MaxFeeGwei) || math.IsInf(t.MaxFeeGwei, 0) || t.MaxFeeGwei < 0 {
+		return errors.New("txManager.maxFeeGwei must be finite and non-negative")
+	}
+	if math.IsNaN(t.TipGwei) || math.IsInf(t.TipGwei, 0) || t.TipGwei < 0 {
+		return errors.New("txManager.tipGwei must be finite and non-negative")
+	}
+	if t.MaxFeeGwei > 0 && t.TipGwei > t.MaxFeeGwei {
+		return errors.New("txManager.maxFeeGwei must be at least txManager.tipGwei when both are positive")
 	}
 	return nil
 }

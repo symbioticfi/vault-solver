@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
@@ -158,9 +159,8 @@ func TestMarketInfoFromAPI(t *testing.T) {
 	if !ok {
 		t.Fatal("marketInfoFromAPI returned !ok")
 	}
-	if view.id != id || view.block != 123 || view.blockTime != 456 || view.price.String() != "1000000000000000000000000000000000000" {
-		t.Fatalf("bad id/block/blockTime/price: id=%s block=%d blockTime=%d price=%v",
-			view.id, view.block, view.blockTime, view.price)
+	if view.id != id || view.block != 123 || view.price.String() != "1000000000000000000000000000000000000" {
+		t.Fatalf("bad id/block/price: id=%s block=%d price=%v", view.id, view.block, view.price)
 	}
 	info := view.info
 	if info.Params.LoanToken != loan || info.Params.CollateralToken != coll || info.Params.Oracle != oracle || info.Params.Irm != irm {
@@ -199,11 +199,46 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 	latest := mk(common.HexToAddress("0x2222222222222222222222222222222222222222"), "11", "132")
 
 	snap := (&apiMonitor{log: logr.Discard()}).apiMarketSnapshot([]morphoMarket{old, latest}, loan, []common.Address{coll})
-	if snap.block != 11 || snap.blockTime != 132 {
-		t.Fatalf("snapshot epoch = (%d,%d), want (11,132)", snap.block, snap.blockTime)
+	if snap.block != 11 || snap.blockTime != 0 {
+		t.Fatalf("API discovery epoch = (%d,%d), want block 11 and no header time", snap.block, snap.blockTime)
 	}
 	if _, ok := snap.markets[latest.MarketID]; !ok || len(snap.markets) != 1 {
 		t.Fatalf("latest-only markets = %+v, want exactly %s", snap.markets, latest.MarketID.Hex())
+	}
+}
+
+func TestAPIMarketSnapshotAppliesPinnedStates(t *testing.T) {
+	marketA := common.HexToHash("0x01")
+	marketB := common.HexToHash("0x02")
+	snap := apiMarketSnapshot{
+		markets: map[common.Hash]MarketInfo{marketA: {}, marketB: {}},
+		prices:  map[common.Hash]*big.Int{marketA: big.NewInt(1), marketB: big.NewInt(2)},
+	}
+	snap.applyPinnedStates(map[common.Hash]morpho.MarketState{
+		marketA: {Fee: big.NewInt(3), BorrowRatePerSec: big.NewInt(4)},
+	})
+	if len(snap.markets) != 1 || snap.markets[marketA].State.BorrowRatePerSec.Cmp(big.NewInt(4)) != 0 {
+		t.Fatalf("applied markets = %+v", snap.markets)
+	}
+	if _, ok := snap.prices[marketB]; ok {
+		t.Fatal("market without pinned accrual state retained its price")
+	}
+}
+
+func TestPinnedHeaderTime(t *testing.T) {
+	block := big.NewInt(123)
+	if got, err := pinnedHeaderTime(&gethtypes.Header{Number: big.NewInt(123), Time: 456}, block); err != nil || got != 456 {
+		t.Fatalf("pinnedHeaderTime = (%d, %v), want (456, nil)", got, err)
+	}
+	for _, header := range []*gethtypes.Header{
+		nil,
+		{},
+		{Number: big.NewInt(123)},
+		{Number: big.NewInt(124), Time: 456},
+	} {
+		if _, err := pinnedHeaderTime(header, block); err == nil {
+			t.Fatalf("mismatched header accepted: %+v", header)
+		}
 	}
 }
 

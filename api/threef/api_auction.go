@@ -25,7 +25,7 @@ type AuctionAPIService service
 type ApiAuctionControllerGetByIdV1Request struct {
 	ctx        context.Context
 	ApiService *AuctionAPIService
-	id         float32
+	id         int64
 	domain     *bool
 }
 
@@ -48,7 +48,7 @@ Returns a single auction by ID, including terminal auctions. Request-contract EI
 	@param id Auction ID
 	@return ApiAuctionControllerGetByIdV1Request
 */
-func (a *AuctionAPIService) AuctionControllerGetByIdV1(ctx context.Context, id float32) ApiAuctionControllerGetByIdV1Request {
+func (a *AuctionAPIService) AuctionControllerGetByIdV1(ctx context.Context, id int64) ApiAuctionControllerGetByIdV1Request {
 	return ApiAuctionControllerGetByIdV1Request{
 		ApiService: a,
 		ctx:        ctx,

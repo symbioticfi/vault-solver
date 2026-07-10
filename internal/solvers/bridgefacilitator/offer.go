@@ -2,18 +2,15 @@ package bridgefacilitator
 
 import (
 	"math/big"
-	"time"
 
 	"github.com/go-errors/errors"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
-
-// offerTTL is how long a signed offer stays valid.
-const offerTTL = 30 * time.Minute
 
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
@@ -37,16 +34,31 @@ func (s *Solver) buildSignedOffer(
 	if !ok || domainChainID == nil {
 		return threef.CreateOfferDto{}, errors.Errorf("auction %v: missing EIP-712 domain chainId", auction.Id)
 	}
-	chainID := big.NewInt(int64(*domainChainID))
+	chainID := big.NewInt(*domainChainID)
 	// The EIP-712 domain version comes from the auction; fall back to grunt's known default only when
 	// the API omits it (the field is nullable). Name and chainId are required above — no fallback.
 	domainVersion := OfferDomainVersion
 	if v, hasVersion := domain.GetVersionOk(); hasVersion && v != nil && *v != "" {
 		domainVersion = *v
 	}
+	var salt *common.Hash
+	if raw, hasSalt := domain.GetSaltOk(); hasSalt && raw != nil {
+		b, decodeErr := hexutil.Decode(*raw)
+		if decodeErr != nil || len(b) != common.HashLength {
+			return threef.CreateOfferDto{}, errors.Errorf("auction %v: invalid EIP-712 domain salt", auction.Id)
+		}
+		h := common.BytesToHash(b)
+		salt = &h
+	}
 
 	nonce := new(big.Int).SetUint64(s.nextNonce())
-	expiration := big.NewInt(time.Now().Add(offerTTL).Unix())
+	now := s.now()
+	expiresAt := now.Add(s.cfg.Intervals.OfferTTL)
+	expirationUnix := expiresAt.Unix()
+	if expiresAt.Nanosecond() != 0 {
+		expirationUnix++
+	}
+	expiration := big.NewInt(expirationUnix)
 
 	signedOffer := Offer{
 		Maker:          offer.Maker,
@@ -56,7 +68,10 @@ func (s *Solver) buildSignedOffer(
 		Expiration:     expiration,
 		UseCallback:    true,
 	}
-	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
+	digest := OfferDigest(signedOffer, OfferDomain{
+		Name: *domainName, Version: domainVersion, ChainID: chainID,
+		VerifyingContract: offer.Request, Salt: salt,
+	})
 	sig, err := s.deps.Signer.SignHash(digest)
 	if err != nil {
 		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)
@@ -71,7 +86,7 @@ func (s *Solver) buildSignedOffer(
 		expiration.String(),
 		true, // useCallback
 	)
-	dto.SetChainId(float32(chainID.Int64()))
+	dto.SetChainId(chainID.Int64())
 	dto.SetSignature(hexutil.Encode(sig))
 	return *dto, nil
 }

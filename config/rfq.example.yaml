@@ -25,8 +25,14 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
-  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
-  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+  pendingIntervalMs: 120000         # replace a still-pending nonce after 2m (default); each window is 1ms..24h
+  feeBumpBps: 1250                  # raise tip + max fee by 12.5%; allowed 1000..10000
+  maxReplacements: 3                # allowed 1..10; original + replacements = 4 pending windows total
+  # Fee values must be finite and non-negative. Zero/omitted maxFeeGwei derives from the base fee;
+  # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei remains a hard ceiling for
+  # replacements: startup fails for a larger explicit tip, and sending fails if a tip would exceed it.
+  # maxFeeGwei: 50                 # hard cap on max fee per gas
+  # tipGwei: 1                     # priority fee; must be at or below an explicit maxFeeGwei
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)
@@ -53,8 +59,8 @@ solvers:
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
       #              scopes both quoting and filling (an empty list is a startup error).
-      #   internal — Symbiotic-internal: uses the public discounts flow and accepts every advertised
-      #              adapter; `adapters` is optional (extra permissioned recovery inventory).
+      #   internal — Symbiotic-internal: may use the backend's internal-only discounts API; configured
+      #              adapters scope quoting when non-empty but do not restrict discount-driven filling.
       solverMode: external
 
       # tokensToQuote scopes which input tokens the filler will quote, evaluated against

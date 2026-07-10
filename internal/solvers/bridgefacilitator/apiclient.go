@@ -13,11 +13,14 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/httptransport"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
 // getOffersDeadlineWindow is how far in the future the signed GetOffers deadline is set.
 const getOffersDeadlineWindow = 5 * time.Minute
+
+const maxGeneratedResponseBytes = 8 << 20
 
 // apiClient wraps the generated 3F client. It signs per-adapter requests via EIP-712 and injects
 // the resulting Authorization: Bearer header.
@@ -35,7 +38,10 @@ func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout 
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
 	// request would stall the single solver loop, redemption scans included.
-	cfg.HTTPClient = &http.Client{Timeout: timeout}
+	cfg.HTTPClient = &http.Client{
+		Timeout:   timeout,
+		Transport: httptransport.LimitResponses(http.DefaultTransport, maxGeneratedResponseBytes),
+	}
 	return &apiClient{
 		c:       threef.NewAPIClient(cfg),
 		sgnr:    sgnr,
@@ -76,7 +82,7 @@ func (ac *apiClient) listOffers(ctx context.Context, adapter common.Address) ([]
 		Maker(lowerAddr(adapter)).
 		// chainId is the operating chain; the server rebuilds the grunt-api signing domain from it to
 		// verify the signature and routes the EIP-1271 check to that chain.
-		ChainId(float32(ac.chainID.Int64())).
+		ChainId(ac.chainID.Int64()).
 		Deadline(deadline.String()).
 		Authorization("Bearer 0x" + common.Bytes2Hex(sig)).
 		Execute()
