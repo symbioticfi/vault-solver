@@ -24,9 +24,8 @@ import (
 var multicallB = multicall3.NewMulticall3()
 
 // Client is an ethclient.Client plus the chain id and the Multicall3 address, cached at dial time.
-// When a separate write RPC is configured, writeClient carries transaction broadcasts only; every
-// read stays on the embedded (primary) client. writeClient equals the embedded client when no
-// separate write endpoint is configured.
+// writeClient carries transaction broadcasts only and is always dialed against exactly one endpoint;
+// every read stays on the embedded client and may use its configured fallbacks.
 type Client struct {
 	*ethclient.Client
 
@@ -37,13 +36,12 @@ type Client struct {
 
 // Dial connects to the EVM RPC endpoint(s), validates every distinct endpoint against the expected
 // chain id, and pins the Multicall3 address used for batched reads. rpcURLs[0] is the primary; any
-// extra entries are HTTP(S) fallbacks tried in order when the primary is unavailable (see
+// extra entries are HTTP(S) read fallbacks tried in order when the primary is unavailable (see
 // fallbackTransport). HTTP(S), even alone, uses the bounded fallback transport; only one supported
 // non-HTTP endpoint preserves plain ethclient dialing.
 //
-// writeRPCURL, when non-empty, is dialed as a SEPARATE client used only to broadcast transactions
-// (see SendTransaction); every read stays on the primary. Empty reuses the primary for broadcasts,
-// so behaviour is unchanged.
+// writeRPCURL, when non-empty, selects the single endpoint used only to broadcast transactions (see
+// SendTransaction). Empty selects rpcURLs[0]. Broadcasts never traverse read fallbacks.
 func Dial(
 	ctx context.Context,
 	rpcURLs []string,
@@ -81,16 +79,17 @@ func Dial(
 		return nil, err
 	}
 
-	// A distinct write endpoint (e.g. a private/MEV-protected relay) carries only transaction
-	// broadcasts; reads stay on the primary. Empty reuses the primary so behaviour is unchanged.
-	writeClient := ec
-	if writeRPCURL != "" {
-		wc, wcErr := dialClient(ctx, []string{writeRPCURL}, log)
-		if wcErr != nil {
-			ec.Close()
-			return nil, endpointFailure("write rpc", 1, endpointURL(writeRPCURL), endpointClass(wcErr))
-		}
-		writeClient = wc
+	// The write client always has exactly one endpoint. This prevents an ambiguous primary broadcast
+	// failure from falling through to a read fallback whose JSON-RPC response could misclassify the
+	// original attempt as a definitive rejection.
+	writeEndpoint := writeRPCURL
+	if writeEndpoint == "" {
+		writeEndpoint = rpcURLs[0]
+	}
+	writeClient, writeErr := dialClient(ctx, []string{writeEndpoint}, log)
+	if writeErr != nil {
+		ec.Close()
+		return nil, endpointFailure("write rpc", 1, endpointURL(writeEndpoint), endpointClass(writeErr))
 	}
 
 	return &Client{
@@ -121,19 +120,19 @@ func validateEndpointChainID(ctx context.Context, raw string, expected *big.Int,
 	return nil
 }
 
-// SendTransaction broadcasts a signed transaction through the write client. When a separate
-// writeRpcUrl is configured this is the ONLY call routed there — nonce, gas, fee, receipt and
-// block-number reads all stay on the primary client — so fills can be submitted through a private
-// endpoint while state is read from a normal RPC. It overrides the promoted ethclient method.
+// SendTransaction broadcasts a signed transaction through the single-endpoint write client.
+// writeRpcUrl selects that endpoint when configured; otherwise rpcUrls[0] does. Nonce, gas, fee,
+// receipt and block-number reads stay on the fallback-capable read client. It overrides the promoted
+// ethclient method.
 func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	return c.writeClient.SendTransaction(ctx, tx)
 }
 
-// Close closes the primary client and, when a separate write client was dialed, that one too. It
-// overrides the promoted ethclient method so the write client is not leaked.
+// Close closes the read and write clients. It overrides the promoted ethclient method so the
+// independently dialed write client is not leaked.
 func (c *Client) Close() {
 	c.Client.Close()
-	if c.writeClient != nil && c.writeClient != c.Client {
+	if c.writeClient != nil {
 		c.writeClient.Close()
 	}
 }

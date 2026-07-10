@@ -803,8 +803,8 @@ func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
 	}
 }
 
-// TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts fall back to the
-// primary endpoint (unchanged behaviour).
+// TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts use the primary
+// endpoint through the independently dialed, single-endpoint write client.
 func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	var methods []string
 	srv := rpcRecorder(&methods, func(m string) string {

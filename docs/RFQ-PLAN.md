@@ -248,7 +248,9 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
-  JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
+  JSON-RPC error such as a revert), and the read client inherits it unchanged. Transaction broadcasts
+  use a separately dialed, single-endpoint client: `chain.writeRpcUrl` when configured, otherwise the
+  primary `chain.rpcUrl`; an ambiguous broadcast failure never traverses read fallbacks. Endpoints are
   operator-configured (no hardcoded public-RPC lists) and duplicates are de-duped. At startup, every
   read endpoint (primary and fallback) plus any distinct write endpoint is preflighted against
   `chain.chainId`; unreachable or wrong-chain endpoints fail startup. Diagnostics identify endpoints

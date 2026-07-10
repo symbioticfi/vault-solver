@@ -36,17 +36,18 @@ type ObservabilityConfig struct {
 	Debug bool `yaml:"debug"`
 }
 
-// ChainConfig describes the EVM endpoint the bot reads from and sends to.
+// ChainConfig describes the EVM endpoints used for reads and transaction broadcasts.
 type ChainConfig struct {
 	RPCURL string `yaml:"rpcUrl"`
-	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
-	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
+	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, for read calls when the
+	// primary `rpcUrl` is unavailable. Transaction broadcasts never use them. All must be on the same
+	// chain. Optional; empty means no read fallback.
 	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
 	// WriteRPCURL, when set, is used ONLY to broadcast signed transactions (eth_sendRawTransaction).
-	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl`. Point this at a
-	// private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while reading from a
-	// normal RPC. Optional; empty means broadcasts also use `rpcUrl`. Expand from the environment
-	// with ${WRITE_RPC_URL}.
+	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl` and its read fallbacks.
+	// Point this at a private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while
+	// reading from normal RPCs. Optional; empty means broadcasts use only the primary `rpcUrl`, never a
+	// read fallback. Expand from the environment with ${WRITE_RPC_URL}.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the

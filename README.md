@@ -140,9 +140,11 @@ implementation and hands the opaque `solver.config` block to that solver to type
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
 including the shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order when the primary is unavailable. Startup preflights every distinct read and write endpoint
-against the configured chain ID; endpoint errors expose only a safe origin label, never credentials,
-paths, queries, or fragments. **Never commit a real key or live config** — keys are
+in order for reads when the primary is unavailable. Transaction broadcasts use exactly one endpoint:
+`writeRpcUrl` when configured, otherwise the primary `rpcUrl`; they never traverse read fallbacks.
+Startup preflights every distinct read and write endpoint against the configured chain ID; endpoint
+errors expose only a safe origin label, never credentials, paths, queries, or fragments. **Never
+commit a real key or live config** — keys are
 supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
 
 Generated 3F and RFQ upstream clients reject HTTP response bodies larger than 8 MiB. An oversized

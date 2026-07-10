@@ -70,8 +70,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	health := &observability.Health{}
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
 
-	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
-	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
+	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order for reads only.
+	// Broadcasts use a separate single-endpoint client: writeRpcUrl when set, otherwise rpcUrl.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.Dial(
 		ctx,

@@ -30,8 +30,8 @@ var (
 // at this boundary. A normal HTTP 200 — including a JSON-RPC error body such as a revert — is returned
 // as-is and never triggers fallover, so application errors are surfaced unchanged.
 //
-// It plugs in below go-ethereum's rpc/ethclient as the HTTP RoundTripper, so every existing read/send
-// path gains fallback without any other change.
+// It plugs in below go-ethereum's rpc/ethclient as the HTTP RoundTripper. The read client receives all
+// configured endpoints; the separate transaction-broadcast client receives exactly one endpoint.
 type fallbackTransport struct {
 	endpoints []*url.URL
 	base      http.RoundTripper
