@@ -1,5 +1,10 @@
 # RFQ Correctness and Bounded-State Hardening Implementation Plan
 
+> **Public-port status:** This is the source-branch implementation record. The RFQ code and behavioral
+> documentation were ported, but the private `.github/chart/**` deployment files referenced by literal
+> steps below are intentionally absent from the public repository. Do not recreate or edit those paths;
+> [`../../RFQ-PLAN.md`](../../RFQ-PLAN.md), the README, and `config/rfq.example.yaml` are authoritative.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make RFQ order execution bind to the exact signed order, fail closed on unsafe configuration and adapter state, keep the quote-plan cache amortized O(1), and characterize the RFQ trust boundaries with regression tests.

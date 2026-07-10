@@ -717,8 +717,9 @@ conservative fallback because no cached route state means the solver cannot pric
   signed `minBundleProfit` (gas + bid + margin) assumes the whole bundle lands — one skipped leg can fail
   the bundle gate, so `payBid` pays nothing and the Executor emits `BidUnderpaid`, which RedStone counts
   toward slashing/blacklisting. Mitigations to evaluate: derive `minBundleProfit` so the gate passes when
-  the strongest leg lands; feed `BundleResult.bidAuthorized == false` (from receipt decode) into the
-  breaker; prefer single-leg bundles near the profit floor.
+  the strongest leg lands; confirm RedStone reports `BidUnderpaid` as `success:false` in its
+  `liquidation-result` push so the existing WS-driven breaker catches it; prefer single-leg bundles near
+  the profit floor.
 - **Adapter budget calibration.** The callback no longer signs a per-leg `maxAssets`; it takes the live
   adapter rate and relies on the per-leg profit floor. Solver-side, keep the cached per-collateral
   `getMaxAssets` budget clamp as the `InsufficientAllocate` defense with an over-reserve buffer for rate

@@ -170,7 +170,9 @@ Generated code is committed for hermetic builds; refresh from upstream on demand
 make refresh-abi FORGE_OUT=../rfq/out   # re-vendor contract ABIs from a Foundry build
 make refresh-openapi                    # re-pull the live 3F OpenAPI spec
 make refresh-rfq-openapi                # re-pull the RFQ backend OpenAPI spec
-make generate                           # regenerate bindings + API client
+make refresh-lifi-openapi               # re-pull/extract the LI.FI order-server OpenAPI spec
+make refresh-lifi-client                # regenerate only the LI.FI client from its vendored spec
+make generate                           # regenerate all bindings and API clients, including LI.FI
 make check-generated                    # regenerate from vendored inputs and reject drift
 ```
 

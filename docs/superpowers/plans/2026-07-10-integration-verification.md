@@ -1,5 +1,10 @@
 # Cross-Cutting Documentation and Verification Implementation Plan
 
+> **Public-port status:** This is the source-branch verification record. Its private `.github/chart/**`
+> file list and receipt-attribution wording are non-applicable to the public tree and must not be used to
+> recreate removed deployment or callback-receipt code. The current README, config examples, and
+> subsystem plans are the authoritative public verification surface.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reconcile all operator/maintainer documentation with findings 2–20 and run the complete repository verification story after every subsystem lands.

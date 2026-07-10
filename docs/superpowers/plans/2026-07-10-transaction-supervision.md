@@ -1,5 +1,11 @@
 # Transaction Lifecycle and Worker Supervision Implementation Plan
 
+> **Public-port status:** This is the source-branch implementation record. Generic transaction and
+> server supervision was ported, but source-only receipt-attribution workers and private deployment
+> chart paths are not part of the public architecture. OEV shutdown joins its async auction-decision
+> workers, and public deployment manifests remain outside this repository; use the live subsystem plans
+> and README for current paths and ownership.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Make every submitted transaction outcome explicit and canonically confirmed, keep later nonces moving while earlier receipts are pending, supervise every long-lived worker, and characterize the production signer boundary.

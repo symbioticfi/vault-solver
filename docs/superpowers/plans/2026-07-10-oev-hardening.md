@@ -1,5 +1,12 @@
 # OEV Hardening Implementation Plan
 
+> **Public-port status:** This is the source-branch implementation record, not an executable checklist
+> for the current public tree. The public port preserves the audit invariants while keeping generic WS,
+> Executor, and adapter-snapshot ownership in `internal/solvers/redstoneoev/` and Morpho/IRM/bundle logic
+> in `internal/solvers/redstoneoev/strategies/default/`. Receipt attribution was intentionally removed;
+> shutdown instead joins the public async auction-decision workers. Literal root-OEV paths and
+> receipt-attribution steps below are superseded by [`../../OEV-PLAN.md`](../../OEV-PLAN.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Harden the RedStone OEV solver's WebSocket boundary, cache freshness, result handling, bundle search, and Morpho accrual inputs while adding money-boundary characterization tests and synchronized operator/maintainer documentation.
