@@ -251,10 +251,12 @@ func (m *Manager) replace(ctx context.Context, tracked *trackedTx, feeCap *big.I
 	if err != nil {
 		return errors.Errorf("sign replacement %q: %w", tracked.req.Label, err)
 	}
-	tracked.attempts = append(tracked.attempts, signed)
 	if err := ctx.Err(); err != nil {
 		return errors.Errorf("send replacement %s: %w", signed.Hash().Hex(), err)
 	}
+	// Record the signed hash immediately before the broadcast call: a SendTransaction error may be
+	// ambiguous, but a replacement whose signing already outlived its window was never attempted.
+	tracked.attempts = append(tracked.attempts, signed)
 	if err := m.backend.SendTransaction(ctx, signed); err != nil {
 		return errors.Errorf("send replacement %s: %w", signed.Hash().Hex(), err)
 	}

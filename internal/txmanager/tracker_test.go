@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+
+	signerpkg "github.com/symbioticfi/vault-solver/internal/signer"
 )
 
 const trackerTestGuard = time.Second
@@ -85,6 +87,43 @@ type gatedRejectedReplacementBackend struct {
 
 	replacementEntered chan *types.Transaction
 	releaseReplacement chan struct{}
+}
+
+type blockingReplacementSigner struct {
+	signerpkg.Signer
+
+	mu                 sync.Mutex
+	signTxCalls        int
+	replacementStarted chan struct{}
+	releaseReplacement chan struct{}
+	releaseOnce        sync.Once
+}
+
+func (s *blockingReplacementSigner) release() {
+	s.releaseOnce.Do(func() { close(s.releaseReplacement) })
+}
+
+func newBlockingReplacementSigner(base signerpkg.Signer) *blockingReplacementSigner {
+	return &blockingReplacementSigner{
+		Signer:             base,
+		replacementStarted: make(chan struct{}),
+		releaseReplacement: make(chan struct{}),
+	}
+}
+
+func (s *blockingReplacementSigner) SignTx(
+	tx *types.Transaction,
+	chainID *big.Int,
+) (*types.Transaction, error) {
+	s.mu.Lock()
+	s.signTxCalls++
+	call := s.signTxCalls
+	s.mu.Unlock()
+	if call == 2 {
+		close(s.replacementStarted)
+		<-s.releaseReplacement
+	}
+	return s.Signer.SignTx(tx, chainID)
 }
 
 func newGatedRejectedReplacementBackend() *gatedRejectedReplacementBackend {
@@ -585,6 +624,46 @@ func TestTrack_ReplacementPreservesPayloadAndBumpsFees(t *testing.T) {
 	if result.State != StateConfirmed || result.Hash != replacement.Hash() || len(result.Hashes) != 2 ||
 		result.Hashes[0] != original.Hash() || result.Hashes[1] != replacement.Hash() {
 		t.Fatalf("result = %+v, want ordered attempts and canonical replacement hash", result)
+	}
+}
+
+func TestTrack_ReplacementDeadlineDuringSigningKeepsOnlyBroadcastHashes(t *testing.T) {
+	const interval = 10 * time.Millisecond
+	b := newMockBackend()
+	b.heldNonces[7] = true
+	blockingSigner := newBlockingReplacementSigner(mustSigner(t))
+	m := New(b, blockingSigner, big.NewInt(11155111), Config{
+		PollInterval: time.Millisecond, PendingInterval: interval,
+		FeeBumpBps: 1_250, MaxReplacements: 1,
+	}, logr.Discard())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Start(ctx) }()
+	defer func() {
+		blockingSigner.release()
+		cancel()
+		<-done
+	}()
+
+	resultCh := sendAsync(m, Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
+	original := awaitTx(t, b.sentCh)
+	select {
+	case <-blockingSigner.replacementStarted:
+	case <-time.After(trackerTestGuard):
+		t.Fatal("replacement signing did not start")
+	}
+	time.Sleep(2 * interval)
+	blockingSigner.release()
+
+	result := awaitResult(t, resultCh)
+	if result.State != StateUnresolved || !errors.Is(result.Err, ErrUnresolved) {
+		t.Fatalf("result = %+v, want unresolved after replacement window expires", result)
+	}
+	if result.Hash != original.Hash() || len(result.Hashes) != 1 || result.Hashes[0] != original.Hash() {
+		t.Fatalf("result hashes = %s/%v, want only broadcast original %s", result.Hash, result.Hashes, original.Hash())
+	}
+	if got := b.sendCount(); got != 1 {
+		t.Fatalf("SendTransaction calls = %d, want initial broadcast only", got)
 	}
 }
 
