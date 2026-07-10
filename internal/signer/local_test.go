@@ -30,7 +30,11 @@ func TestFromConfig_HexEnvironmentAndHashRecovery(t *testing.T) {
 	if s.Address() != localTestAddress {
 		t.Fatalf("address = %s, want %s", s.Address(), localTestAddress)
 	}
+	assertHashSigner(t, s)
+}
 
+func assertHashSigner(t *testing.T, s Signer) {
+	t.Helper()
 	digest := crypto.Keccak256Hash([]byte("vault-solver signer characterization"))
 	sig, err := s.SignHash(digest)
 	if err != nil {
@@ -56,6 +60,11 @@ func TestLocalSignTx_BindsEIP155SenderAndChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertTransactionSigner(t, s)
+}
+
+func assertTransactionSigner(t *testing.T, s Signer) {
+	t.Helper()
 	chainID := big.NewInt(11_155_111)
 	tx := types.NewTransaction(
 		7,
@@ -115,6 +124,8 @@ func TestFromConfig_EncryptedKeystore(t *testing.T) {
 	if s.Address() != localTestAddress {
 		t.Fatalf("address = %s, want %s", s.Address(), localTestAddress)
 	}
+	assertHashSigner(t, s)
+	assertTransactionSigner(t, s)
 
 	t.Setenv(passphraseEnv, "SENSITIVE-WRONG-PASSPHRASE")
 	_, err = FromConfig(config.SignerConfig{
