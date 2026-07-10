@@ -26,7 +26,7 @@ signer:
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
   pendingIntervalMs: 120000         # replace a still-pending nonce after 2m (default); each window is 1ms..24h
-  feeBumpBps: 1250                  # raise tip + max fee by 12.5% per same-nonce replacement
+  feeBumpBps: 1250                  # raise tip + max fee by 12.5%; allowed 1000..10000
   maxReplacements: 3                # allowed 1..10; original + replacements = 4 pending windows total
   # Fee values must be finite and non-negative. Zero/omitted maxFeeGwei derives from the base fee;
   # zero/omitted tipGwei uses the node suggestion. A positive maxFeeGwei remains a hard ceiling for

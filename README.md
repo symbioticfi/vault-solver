@@ -137,8 +137,9 @@ The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — H
 in order when the primary is unavailable. **Never commit a real key or live config** — keys are
 supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
 
-The `txManager` dispatcher serializes nonce allocation, signing, and initial broadcast; independent
-trackers then require a canonical receipt plus the configured confirmation depth. The shared
+The `txManager` dispatcher serializes nonce allocation plus construction, signing, and initial
+broadcast of each original attempt. Independent trackers construct, sign, and broadcast any
+same-nonce replacements, then require a canonical receipt plus the configured confirmation depth. The shared
 `pendingIntervalMs` (default 120000), `feeBumpBps` (default 1250), and `maxReplacements` (default 3)
 settings bound same-nonce, same-payload replacements. A positive `maxFeeGwei` is a hard ceiling and is
 never exceeded by an initial transaction or replacement. See either annotated example for the exact

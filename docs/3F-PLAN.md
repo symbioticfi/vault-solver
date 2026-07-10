@@ -105,8 +105,8 @@ vault-solver/
 
 ### 5.1 `txmanager` — serialized dispatcher, concurrent trackers
 
-A single service owns the on-chain sending EOA. Its dispatcher serializes nonce seeding/allocation,
-transaction construction, signing, and initial broadcast for
+A single service owns the on-chain sending EOA. Its dispatcher serializes nonce seeding/allocation
+plus original-attempt construction, signing, and initial broadcast for
 `Request{To, Data, Value, GasLimit?, Label}`. Once an initial broadcast is admitted or ambiguous, an
 independent tracker owns that logical transaction, so an earlier pending nonce does not block the
 dispatcher from signing and broadcasting later nonces. The committed nonce floor prevents an
@@ -114,8 +114,9 @@ admitted/ambiguous nonce from being reused even when an RPC pending-nonce respon
 **never** send directly; they build calldata with generated ABI helpers and hand it to txmanager.
 
 Each tracker re-reads receipts for every same-nonce attempt and accepts one only when its block hash
-matches the canonical header and the configured confirmation depth has elapsed. Pending transactions
-receive bounded same-nonce, same-payload EIP-1559 fee replacements: `pendingIntervalMs` (default
+matches the canonical header and the configured confirmation depth has elapsed. Trackers construct,
+sign, and broadcast bounded same-nonce, same-payload EIP-1559 fee replacements concurrently:
+`pendingIntervalMs` (default
 120000 ms) bounds each attempt window, `feeBumpBps` (default 1250) controls each increase,
 `maxReplacements` (default 3) bounds the attempt count, and `maxFeeGwei` is a hard cap. The result state
 is exactly one of `not_broadcast`, `rejected`,
