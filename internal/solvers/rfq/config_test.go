@@ -226,6 +226,12 @@ backendUrl: https://x
 backendSharedSecretEnv: S
 executor: "not-an-address"
 `,
+		"zero executor": `
+backendUrl: https://x
+backendSharedSecretEnv: S
+executor: "0x0000000000000000000000000000000000000000"
+solverMode: internal
+`,
 		"external mode requires adapters":       minimalConfig + "solverMode: external\n",
 		"removed discountsEnabled key rejected": minimalConfig + "discountsEnabled: true\n",
 	}

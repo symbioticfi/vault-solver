@@ -113,7 +113,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.BackendSharedSecretEnv == "" {
 		return nil, errors.New("backendSharedSecretEnv is required")
 	}
-	executor, err := parse.Address(raw.Executor, "executor")
+	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}
