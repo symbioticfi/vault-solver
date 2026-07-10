@@ -26,12 +26,20 @@ var (
 // (see resolveVaults), not re-read here.
 const readsPerAdapter = 3
 
+type multicallClient interface {
+	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
+}
+
+type decimalsReader interface {
+	Get(ctx context.Context, token common.Address) (int, error)
+}
+
 // reader performs the on-chain reads, batching via Multicall3. Token decimals are resolved + cached by
 // the shared chain.Decimals helper (its own mutex), so concurrent quote requests stay safe.
 type reader struct {
-	chain *chain.Client
+	chain multicallClient
 	log   logr.Logger
-	dec   *chain.Decimals
+	dec   decimalsReader
 }
 
 func newReader(c *chain.Client, log logr.Logger) *reader {
@@ -84,15 +92,16 @@ func (r *reader) readVaultInventories(
 	for i, v := range vaults {
 		base := i * readsPerAdapter
 		paused, maxA, mr := res[base], res[base+1], res[base+2]
-		if !maxA.Success || !mr.Success {
+		if !paused.Success || !maxA.Success || !mr.Success {
 			continue
 		}
-		if p, perr := llAdapter.UnpackPaused(paused.ReturnData); paused.Success && perr == nil && p {
+		isPaused, pauseErr := llAdapter.UnpackPaused(paused.ReturnData)
+		if pauseErr != nil || isPaused {
 			continue
 		}
-		maxAssets, e1 := llAdapter.UnpackGetMaxAssets(maxA.ReturnData)
-		maxRate, e2 := llAdapter.UnpackGetMaxRate(mr.ReturnData)
-		if e1 != nil || e2 != nil {
+		maxAssets, maxErr := llAdapter.UnpackGetMaxAssets(maxA.ReturnData)
+		maxRate, rateErr := llAdapter.UnpackGetMaxRate(mr.ReturnData)
+		if maxErr != nil || rateErr != nil {
 			continue
 		}
 		if maxAssets.Sign() <= 0 || maxRate.Sign() <= 0 {
