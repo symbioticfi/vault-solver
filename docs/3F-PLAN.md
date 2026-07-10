@@ -115,9 +115,10 @@ admitted/ambiguous nonce from being reused even when an RPC pending-nonce respon
 
 Each tracker re-reads receipts for every same-nonce attempt and accepts one only when its block hash
 matches the canonical header and the configured confirmation depth has elapsed. Pending transactions
-receive bounded same-nonce, same-payload EIP-1559 fee replacements: `pendingIntervalMs` bounds each
-attempt window, `feeBumpBps` controls each increase, `maxReplacements` bounds the attempt count, and
-`maxFeeGwei` is a hard cap. The result state is exactly one of `not_broadcast`, `rejected`,
+receive bounded same-nonce, same-payload EIP-1559 fee replacements: `pendingIntervalMs` (default
+120000 ms) bounds each attempt window, `feeBumpBps` (default 1250) controls each increase,
+`maxReplacements` (default 3) bounds the attempt count, and `maxFeeGwei` is a hard cap. The result state
+is exactly one of `not_broadcast`, `rejected`,
 `broadcast_unknown`, `pending`, `confirmed`, `reverted`, or `unresolved`, accompanied as applicable by
 `Nonce`, the newest `Hash`, all `Hashes`, a canonical `Receipt`, and `Err`. `SafeToRetry()` is true only
 for `not_broadcast` and `rejected`; consumers branch on `State`, never infer ambiguity or retry safety
@@ -299,7 +300,9 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
-2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
+2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer,
+   **txmanager (36 top-level tests)**, solver interface/registry/engine, observability, and supervised
+   graceful shutdown.
 3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),

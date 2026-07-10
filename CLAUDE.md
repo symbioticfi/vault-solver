@@ -76,10 +76,12 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   operational events; `V(1)` for debug detail. Structured key/values, not formatted strings.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
-- **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —
-  solvers build calldata and submit a request, they never send transactions directly and never race
-  on nonces. Document the goroutine/locking model of any new shared state (see the `apiClient`
-  "single Run goroutine" note).
+- **Concurrency:** shared on-chain sending goes through the single `txmanager`. Its dispatcher alone
+  allocates and commits nonces, signs, and performs initial broadcasts; manager-owned trackers may
+  poll receipts and broadcast same-nonce replacements concurrently. Solvers build calldata and submit
+  requests, never send directly, and branch on `Result.State` / `SafeToRetry()` rather than `Err`
+  alone. Every new goroutine must be owned and joined by its component's `Run` or `Start`. Document the
+  goroutine/locking model of any new shared state (see the `apiClient` "single Run goroutine" note).
 - Keep functions at one altitude, prefer small pure helpers (they're the easily-tested seams),
   table-driven tests, and accept interfaces / return concrete types. Run `golangci-lint` (below) and
   fix findings rather than suppressing them; a `//nolint` must be specific and carry an explanation

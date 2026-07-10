@@ -19,7 +19,8 @@ are listed under [Solvers](#solvers).
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
-  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction sender shared across solvers.
+  Multicall3 reads, a pluggable signer, and a shared nonce dispatcher with concurrent transaction
+  confirmation/replacement trackers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -29,7 +30,7 @@ the relevant protocol API on each tick; no database.
 ## Solvers
 
 Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver in the process shares the chain client, signer, and the single nonce-serialized
+Every solver in the process shares the chain client, signer, and the single nonce-owning
 `txManager`, so multiple solvers on one EOA never race on nonces. Each entry's `config` block is typed
 and validated by its own solver. Adding a solver touches **no** framework code — see the recipe in
 [`CLAUDE.md`](./CLAUDE.md).
@@ -134,6 +135,17 @@ including the shared `chain`/`signer`/`txManager`/`observability` blocks, is doc
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order when the primary is unavailable. **Never commit a real key or live config** — keys are
 supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
+
+The `txManager` dispatcher serializes nonce allocation, signing, and initial broadcast; independent
+trackers then require a canonical receipt plus the configured confirmation depth. The shared
+`pendingIntervalMs` (default 120000), `feeBumpBps` (default 1250), and `maxReplacements` (default 3)
+settings bound same-nonce, same-payload replacements. A positive `maxFeeGwei` is a hard ceiling and is
+never exceeded by an initial transaction or replacement. See either annotated example for the exact
+bounds.
+
+All long-lived listeners and workers are supervised. An observability or RFQ listener failure is
+process-fatal; cancellation shuts down the listeners and joins the transaction manager and solver
+workers before the process returns.
 
 ## Code generation
 
