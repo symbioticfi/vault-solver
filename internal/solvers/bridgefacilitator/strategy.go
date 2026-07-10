@@ -68,7 +68,7 @@ func auctionViewsByID(auctions []threef.AuctionDto) map[int64]auctionView {
 	views := make(map[int64]auctionView, len(auctions))
 	for i := range auctions {
 		av := auctionView{auctions[i]}
-		views[int64(av.dto.Id)] = av
+		views[av.dto.Id] = av
 	}
 	return views
 }
@@ -79,7 +79,7 @@ func buildAuctionSnapshot(
 	offers *offerTracker,
 	now time.Time,
 ) (types.AuctionSnapshot, bool) {
-	auctionID := int64(av.dto.Id)
+	auctionID := av.dto.Id
 	if !av.isOpen() {
 		return types.AuctionSnapshot{}, false
 	}

@@ -241,7 +241,8 @@
             "description": "Chain ID for signature verification",
             "schema": {
               "example": 1,
-              "type": "number"
+              "type": "integer",
+              "format": "int64"
             }
           },
           {
@@ -401,7 +402,8 @@
             "schema": {
               "minimum": 1,
               "example": 123,
-              "type": "number"
+              "type": "integer",
+              "format": "int64"
             }
           },
           {
@@ -422,7 +424,8 @@
             "description": "Chain ID for signature verification",
             "schema": {
               "example": 1,
-              "type": "number"
+              "type": "integer",
+              "format": "int64"
             }
           },
           {
@@ -571,7 +574,8 @@
             "schema": {
               "minimum": 1,
               "example": 42,
-              "type": "number"
+              "type": "integer",
+              "format": "int64"
             }
           },
           {
@@ -621,7 +625,8 @@
         "type": "object",
         "properties": {
           "chainId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Chain ID for EIP-712 signature verification",
             "example": 1
           },
@@ -719,12 +724,14 @@
         "type": "object",
         "properties": {
           "chainId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Chain ID for resolving the request EIP-712 domain",
             "example": 1
           },
           "auctionId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "ID of the auction to submit an offer for",
             "example": 42
           },
@@ -779,7 +786,8 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Created or updated offer ID",
             "example": 123
           }
@@ -792,7 +800,8 @@
         "type": "object",
         "properties": {
           "offerId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Offer ID to cancel",
             "example": 123
           },
@@ -803,7 +812,8 @@
             "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38"
           },
           "chainId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Chain ID for signature verification",
             "example": 1
           },
@@ -827,7 +837,8 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Canceled offer ID",
             "example": 123
           },
@@ -912,12 +923,14 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "Unique offer ID",
             "example": 123
           },
           "auctionId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "description": "ID of the auction associated with the offer",
             "example": 42
           },
@@ -1066,11 +1079,18 @@
             "example": "1"
           },
           "chainId": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "nullable": true,
             "minimum": 1,
             "description": "Resolved EIP-712 domain chain ID or null if unavailable",
             "example": 11155111
+          },
+          "salt": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "Optional EIP-712 domain salt as bytes32"
           }
         },
         "required": [
@@ -1083,7 +1103,8 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "number",
+            "type": "integer",
+            "format": "int64",
             "minimum": 1,
             "description": "Auction ID",
             "example": 42
@@ -1107,6 +1128,8 @@
           },
           "maxRate": {
             "type": "number",
+            "format": "double",
+            "multipleOf": 0.1,
             "nullable": true,
             "description": "Current max rate in basis points for active auctions, or the blended succeeded-offer rate for succeeded/repaid auctions, with tenths-of-a-basis-point precision, or null",
             "example": 50.5

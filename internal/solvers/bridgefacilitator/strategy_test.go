@@ -124,7 +124,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
 	domainName := "request-10"
 	domainVersion := "1"
-	chainID := float32(11_155_111)
+	chainID := int64(11_155_111)
 	auction := testAuctionDto(
 		10,
 		common.HexToAddress("0x0000000000000000000000000000000000000003"),
@@ -133,7 +133,7 @@ func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
 	auction.SetEip712Domain(*threef.NewAuctionEip712DomainDto(
 		*threef.NewNullableString(&domainName),
 		*threef.NewNullableString(&domainVersion),
-		*threef.NewNullableFloat32(&chainID),
+		*threef.NewNullableInt64(&chainID),
 	))
 
 	maker := common.HexToAddress("0x0000000000000000000000000000000000000001")
@@ -165,7 +165,7 @@ func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
 		Nonce:          big.NewInt(1),
 		Expiration:     big.NewInt(3_700),
 		UseCallback:    true,
-	}, domainName, domainVersion, big.NewInt(int64(chainID)), request)
+	}, domainName, domainVersion, big.NewInt(chainID), request)
 	if signer.digest != wantDigest {
 		t.Fatalf("signed digest = %s, want %s", signer.digest, wantDigest)
 	}
@@ -209,13 +209,13 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 }
 
 func testAuctionDto(id int64, depositAsset common.Address, amountRequested string) threef.AuctionDto {
-	maxRate := float32(200)
+	maxRate := float64(200)
 	request := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	return threef.AuctionDto{
-		Id:              float32(id),
+		Id:              id,
 		RequestId:       request.Hex(),
 		AmountRequested: *threef.NewNullableString(&amountRequested),
-		MaxRate:         *threef.NewNullableFloat32(&maxRate),
+		MaxRate:         *threef.NewNullableFloat64(&maxRate),
 		Status:          "open",
 		DepositAsset: *threef.NewNullableAuctionDepositAssetDto(
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),

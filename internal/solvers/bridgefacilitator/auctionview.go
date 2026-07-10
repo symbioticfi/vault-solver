@@ -47,7 +47,7 @@ func (a auctionView) maxRateBps() (float64, bool) {
 	if !ok || r == nil {
 		return 0, false
 	}
-	return float64(*r), true
+	return *r, true
 }
 
 // amountRequested returns the requested principal, or nil if the API didn't resolve it.

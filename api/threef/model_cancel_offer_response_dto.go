@@ -22,7 +22,7 @@ var _ MappedNullable = &CancelOfferResponseDto{}
 // CancelOfferResponseDto struct for CancelOfferResponseDto
 type CancelOfferResponseDto struct {
 	// Canceled offer ID
-	Id float32 `json:"id"`
+	Id int64 `json:"id"`
 	// Updated offer status
 	Status string `json:"status"`
 }
@@ -33,7 +33,7 @@ type _CancelOfferResponseDto CancelOfferResponseDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCancelOfferResponseDto(id float32, status string) *CancelOfferResponseDto {
+func NewCancelOfferResponseDto(id int64, status string) *CancelOfferResponseDto {
 	this := CancelOfferResponseDto{}
 	this.Id = id
 	this.Status = status
@@ -49,9 +49,9 @@ func NewCancelOfferResponseDtoWithDefaults() *CancelOfferResponseDto {
 }
 
 // GetId returns the Id field value
-func (o *CancelOfferResponseDto) GetId() float32 {
+func (o *CancelOfferResponseDto) GetId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -60,7 +60,7 @@ func (o *CancelOfferResponseDto) GetId() float32 {
 
 // GetIdOk returns a tuple with the Id field value
 // and a boolean to check if the value has been set.
-func (o *CancelOfferResponseDto) GetIdOk() (*float32, bool) {
+func (o *CancelOfferResponseDto) GetIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -68,7 +68,7 @@ func (o *CancelOfferResponseDto) GetIdOk() (*float32, bool) {
 }
 
 // SetId sets field value
-func (o *CancelOfferResponseDto) SetId(v float32) {
+func (o *CancelOfferResponseDto) SetId(v int64) {
 	o.Id = v
 }
 

@@ -22,11 +22,11 @@ var _ MappedNullable = &CancelOfferDto{}
 // CancelOfferDto struct for CancelOfferDto
 type CancelOfferDto struct {
 	// Offer ID to cancel
-	OfferId float32 `json:"offerId"`
+	OfferId int64 `json:"offerId"`
 	// Ethereum address of the offer maker
 	Maker string `json:"maker" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Chain ID for signature verification
-	ChainId *float32 `json:"chainId,omitempty"`
+	ChainId *int64 `json:"chainId,omitempty"`
 	// Signature deadline timestamp (uint256)
 	Deadline *string `json:"deadline,omitempty"`
 	// EIP-712 signature (required if chainId is provided)
@@ -39,7 +39,7 @@ type _CancelOfferDto CancelOfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCancelOfferDto(offerId float32, maker string) *CancelOfferDto {
+func NewCancelOfferDto(offerId int64, maker string) *CancelOfferDto {
 	this := CancelOfferDto{}
 	this.OfferId = offerId
 	this.Maker = maker
@@ -55,9 +55,9 @@ func NewCancelOfferDtoWithDefaults() *CancelOfferDto {
 }
 
 // GetOfferId returns the OfferId field value
-func (o *CancelOfferDto) GetOfferId() float32 {
+func (o *CancelOfferDto) GetOfferId() int64 {
 	if o == nil {
-		var ret float32
+		var ret int64
 		return ret
 	}
 
@@ -66,7 +66,7 @@ func (o *CancelOfferDto) GetOfferId() float32 {
 
 // GetOfferIdOk returns a tuple with the OfferId field value
 // and a boolean to check if the value has been set.
-func (o *CancelOfferDto) GetOfferIdOk() (*float32, bool) {
+func (o *CancelOfferDto) GetOfferIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -74,7 +74,7 @@ func (o *CancelOfferDto) GetOfferIdOk() (*float32, bool) {
 }
 
 // SetOfferId sets field value
-func (o *CancelOfferDto) SetOfferId(v float32) {
+func (o *CancelOfferDto) SetOfferId(v int64) {
 	o.OfferId = v
 }
 
@@ -103,9 +103,9 @@ func (o *CancelOfferDto) SetMaker(v string) {
 }
 
 // GetChainId returns the ChainId field value if set, zero value otherwise.
-func (o *CancelOfferDto) GetChainId() float32 {
+func (o *CancelOfferDto) GetChainId() int64 {
 	if o == nil || IsNil(o.ChainId) {
-		var ret float32
+		var ret int64
 		return ret
 	}
 	return *o.ChainId
@@ -113,7 +113,7 @@ func (o *CancelOfferDto) GetChainId() float32 {
 
 // GetChainIdOk returns a tuple with the ChainId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CancelOfferDto) GetChainIdOk() (*float32, bool) {
+func (o *CancelOfferDto) GetChainIdOk() (*int64, bool) {
 	if o == nil || IsNil(o.ChainId) {
 		return nil, false
 	}
@@ -129,8 +129,8 @@ func (o *CancelOfferDto) HasChainId() bool {
 	return false
 }
 
-// SetChainId gets a reference to the given float32 and assigns it to the ChainId field.
-func (o *CancelOfferDto) SetChainId(v float32) {
+// SetChainId gets a reference to the given int64 and assigns it to the ChainId field.
+func (o *CancelOfferDto) SetChainId(v int64) {
 	o.ChainId = &v
 }
 

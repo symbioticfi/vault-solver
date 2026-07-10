@@ -162,7 +162,7 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 					"adapter", t.Adapter.Hex(), "amount", o.Amount)
 				principal = new(big.Int)
 			}
-			s.offers.record(t.Adapter, int64(o.AuctionId), exp, principal)
+			s.offers.record(t.Adapter, o.AuctionId, exp, principal)
 			live++
 		}
 	}

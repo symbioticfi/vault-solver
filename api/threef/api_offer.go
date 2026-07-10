@@ -370,9 +370,9 @@ func (a *OfferAPIService) OfferControllerCreateV1Execute(r ApiOfferControllerCre
 type ApiOfferControllerGetByIdV1Request struct {
 	ctx           context.Context
 	ApiService    *OfferAPIService
-	id            float32
+	id            int64
 	maker         *string
-	chainId       *float32
+	chainId       *int64
 	deadline      *string
 	authorization *string
 	xApiKey       *string
@@ -385,7 +385,7 @@ func (r ApiOfferControllerGetByIdV1Request) Maker(maker string) ApiOfferControll
 }
 
 // Chain ID for signature verification
-func (r ApiOfferControllerGetByIdV1Request) ChainId(chainId float32) ApiOfferControllerGetByIdV1Request {
+func (r ApiOfferControllerGetByIdV1Request) ChainId(chainId int64) ApiOfferControllerGetByIdV1Request {
 	r.chainId = &chainId
 	return r
 }
@@ -421,7 +421,7 @@ Returns a single offer by ID for the authenticated maker. Uses the same API-key 
 	@param id Offer ID
 	@return ApiOfferControllerGetByIdV1Request
 */
-func (a *OfferAPIService) OfferControllerGetByIdV1(ctx context.Context, id float32) ApiOfferControllerGetByIdV1Request {
+func (a *OfferAPIService) OfferControllerGetByIdV1(ctx context.Context, id int64) ApiOfferControllerGetByIdV1Request {
 	return ApiOfferControllerGetByIdV1Request{
 		ApiService: a,
 		ctx:        ctx,
@@ -529,7 +529,7 @@ type ApiOfferControllerGetV1Request struct {
 	ctx           context.Context
 	ApiService    *OfferAPIService
 	maker         *string
-	chainId       *float32
+	chainId       *int64
 	deadline      *string
 	authorization *string
 	xApiKey       *string
@@ -542,7 +542,7 @@ func (r ApiOfferControllerGetV1Request) Maker(maker string) ApiOfferControllerGe
 }
 
 // Chain ID for signature verification
-func (r ApiOfferControllerGetV1Request) ChainId(chainId float32) ApiOfferControllerGetV1Request {
+func (r ApiOfferControllerGetV1Request) ChainId(chainId int64) ApiOfferControllerGetV1Request {
 	r.chainId = &chainId
 	return r
 }

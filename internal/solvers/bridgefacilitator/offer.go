@@ -33,7 +33,7 @@ func (s *Solver) buildSignedOffer(
 	if !ok || domainChainID == nil {
 		return threef.CreateOfferDto{}, errors.Errorf("auction %v: missing EIP-712 domain chainId", auction.Id)
 	}
-	chainID := big.NewInt(int64(*domainChainID))
+	chainID := big.NewInt(*domainChainID)
 	// The EIP-712 domain version comes from the auction; fall back to grunt's known default only when
 	// the API omits it (the field is nullable). Name and chainId are required above — no fallback.
 	domainVersion := OfferDomainVersion
@@ -68,7 +68,7 @@ func (s *Solver) buildSignedOffer(
 		expiration.String(),
 		true, // useCallback
 	)
-	dto.SetChainId(float32(chainID.Int64()))
+	dto.SetChainId(chainID.Int64())
 	dto.SetSignature(hexutil.Encode(sig))
 	return *dto, nil
 }

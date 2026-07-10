@@ -82,7 +82,7 @@ func (ac *apiClient) listOffers(ctx context.Context, adapter common.Address) ([]
 		Maker(lowerAddr(adapter)).
 		// chainId is the operating chain; the server rebuilds the grunt-api signing domain from it to
 		// verify the signature and routes the EIP-1271 check to that chain.
-		ChainId(float32(ac.chainID.Int64())).
+		ChainId(ac.chainID.Int64()).
 		Deadline(deadline.String()).
 		Authorization("Bearer 0x" + common.Bytes2Hex(sig)).
 		Execute()
