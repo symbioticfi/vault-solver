@@ -589,10 +589,11 @@ func TestTrack_RevertWaitsForCanonicalConfirmations(t *testing.T) {
 }
 
 func TestTrack_ReplacementPreservesPayloadAndBumpsFees(t *testing.T) {
+	const interval = 100 * time.Millisecond
 	b := newMockBackend()
 	b.heldNonces[7] = true
 	m, cancel, done := newTestManager(t, b, Config{
-		PollInterval: time.Millisecond, PendingInterval: 5 * time.Millisecond,
+		PollInterval: time.Millisecond, PendingInterval: interval,
 		FeeBumpBps: 1_250, MaxReplacements: 1,
 	})
 	defer func() { cancel(); <-done }()
@@ -699,11 +700,12 @@ func TestTrack_RejectedReplacementKeepsOlderHashEligible(t *testing.T) {
 }
 
 func TestTrack_AmbiguousBroadcastRebroadcastsIdenticalHashBeforeReplacement(t *testing.T) {
+	const interval = 100 * time.Millisecond
 	b := newMockBackend()
 	b.heldNonces[7] = true
 	b.sendErrs = []error{context.DeadlineExceeded, nil, nil}
 	m, cancel, done := newTestManager(t, b, Config{
-		PollInterval: time.Millisecond, PendingInterval: 5 * time.Millisecond,
+		PollInterval: time.Millisecond, PendingInterval: interval,
 		FeeBumpBps: 1_250, MaxReplacements: 1,
 	})
 	defer func() { cancel(); <-done }()
