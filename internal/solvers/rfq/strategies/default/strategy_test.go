@@ -3,6 +3,8 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,5 +187,112 @@ func TestStrategyDeclinesWhenCapacityCannotCoverInput(t *testing.T) {
 	}
 	if got.Decision != types.DecisionDecline {
 		t.Fatalf("decision = %q, want decline", got.Decision)
+	}
+}
+
+func cachePlan() *types.FillPlan {
+	return &types.FillPlan{
+		QuoteID:         "q",
+		TokenIn:         tIn,
+		TokenOut:        tOut,
+		AmountIn:        big.NewInt(1),
+		QuotedAmountOut: big.NewInt(1),
+	}
+}
+
+func TestRememberAmortizesExpiredPlanSweep(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(10_000, 0)
+	s := New(fakePricing{})
+	s.now = func() time.Time { return now }
+	s.nextSweep = now.Add(fillPlanSweepInterval)
+	s.plans["stale"] = cachedFillPlan{
+		plan:      cachePlan(),
+		createdAt: now.Add(-fillPlanTTL - time.Second),
+	}
+
+	s.remember("fresh-before-sweep", cachePlan())
+	if _, ok := s.plans["stale"]; !ok {
+		t.Fatal("remember scanned the full map before nextSweep")
+	}
+
+	now = now.Add(fillPlanSweepInterval)
+	s.remember("fresh-at-sweep", cachePlan())
+	if _, ok := s.plans["stale"]; ok {
+		t.Fatal("scheduled sweep retained an expired plan")
+	}
+	if _, ok := s.plans["fresh-before-sweep"]; !ok {
+		t.Fatal("scheduled sweep removed a live plan")
+	}
+}
+
+func TestCachedLazilyDeletesRequestedExpiredPlan(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(10_000, 0)
+	s := New(fakePricing{})
+	s.now = func() time.Time { return now }
+	s.nextSweep = now.Add(time.Hour)
+	s.plans["expired"] = cachedFillPlan{
+		plan:      cachePlan(),
+		createdAt: now.Add(-fillPlanTTL - time.Second),
+	}
+
+	got := s.cached(types.FillInput{
+		QuoteID:  "expired",
+		TokenIn:  tIn,
+		TokenOut: tOut,
+		AmountIn: big.NewInt(1),
+	})
+	if got != nil {
+		t.Fatalf("cached expired plan = %+v, want nil", got)
+	}
+	if _, ok := s.plans["expired"]; ok {
+		t.Fatal("requested expired plan was not deleted")
+	}
+}
+
+func TestFillPlanCacheConcurrentRememberAndLookup(t *testing.T) {
+	t.Parallel()
+	s := New(fakePricing{})
+	plan := cachePlan()
+	input := types.FillInput{
+		QuoteID:  "shared",
+		TokenIn:  tIn,
+		TokenOut: tOut,
+		AmountIn: big.NewInt(1),
+	}
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				s.remember("shared", plan)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				_ = s.cached(input)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func BenchmarkRememberFillPlanBetweenSweeps(b *testing.B) {
+	s := New(fakePricing{})
+	now := time.Unix(10_000, 0)
+	s.now = func() time.Time { return now }
+	s.nextSweep = now.Add(time.Hour)
+	for i := range 100_000 {
+		id := strconv.Itoa(i)
+		s.plans[id] = cachedFillPlan{plan: cachePlan(), createdAt: now}
+	}
+	plan := cachePlan()
+	b.ResetTimer()
+	for range b.N {
+		s.remember("hot", plan)
 	}
 }

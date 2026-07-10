@@ -18,7 +18,11 @@ import (
 )
 
 const Name = "default"
-const fillPlanTTL = 3 * time.Hour
+
+const (
+	fillPlanTTL           = 3 * time.Hour
+	fillPlanSweepInterval = time.Minute
+)
 
 type Config struct{}
 
@@ -26,8 +30,9 @@ type Strategy struct {
 	pricing types.Pricing
 	now     func() time.Time
 
-	mu    sync.Mutex
-	plans map[string]cachedFillPlan
+	mu        sync.Mutex
+	plans     map[string]cachedFillPlan
+	nextSweep time.Time
 }
 
 type cachedFillPlan struct {
@@ -363,22 +368,35 @@ func (s *Strategy) remember(quoteID string, plan *types.FillPlan) {
 	if quoteID == "" || plan == nil {
 		return
 	}
+	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.now()
+	s.sweepExpiredLocked(now)
+	s.plans[quoteID] = cachedFillPlan{plan: clonePlan(plan), createdAt: now}
+}
+
+func (s *Strategy) sweepExpiredLocked(now time.Time) {
+	if !s.nextSweep.IsZero() && now.Before(s.nextSweep) {
+		return
+	}
 	for id, cached := range s.plans {
 		if now.Sub(cached.createdAt) > fillPlanTTL {
 			delete(s.plans, id)
 		}
 	}
-	s.plans[quoteID] = cachedFillPlan{plan: clonePlan(plan), createdAt: now}
+	s.nextSweep = now.Add(fillPlanSweepInterval)
 }
 
 func (s *Strategy) cached(input types.FillInput) *types.FillPlan {
+	now := s.now()
 	s.mu.Lock()
 	cached, ok := s.plans[input.QuoteID]
+	if ok && now.Sub(cached.createdAt) > fillPlanTTL {
+		delete(s.plans, input.QuoteID)
+		ok = false
+	}
 	s.mu.Unlock()
-	if !ok || s.now().Sub(cached.createdAt) > fillPlanTTL {
+	if !ok {
 		return nil
 	}
 	plan := clonePlan(cached.plan)
