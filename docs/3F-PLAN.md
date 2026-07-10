@@ -1,23 +1,21 @@
 # vault-solver — Implementation Plan (v0)
 
 > A Go service that monitors a configured selection of Symbiotic vaults and runs a
-> pluggable **solver** strategy against them. The first (and currently only) solver
-> implementation is the **3F Bridge Facilitator** off-chain bot. The repository is
-> structured so additional solver implementations can be added later without
-> touching the generic framework.
+> pluggable **solver** strategy against them. The **3F Bridge Facilitator** off-chain
+> bot is one integration alongside RFQ and Redstone/OEV. Each integration remains
+> self-contained so it can evolve without changing the generic framework.
 
-This document is the source of truth for the build. It captures the agreed scope,
-architecture, and decisions. See `3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
-repo root) §4 for the functional blueprint of the 3F solver.
+This document is the source of truth for the 3F solver's agreed scope, architecture,
+decisions, and live follow-up list.
 
 ---
 
 ## 1. Scope
 
-- **In scope:** the off-chain Go bot, serving **multiple `BridgeFacilitatorAdapter`s** — auction
+- **In scope:** the off-chain Go bot, serving **multiple `ThreeFAdapter`s** — auction
   discovery, **per-auction multi-adapter coverage**, offer pricing/sizing/signing (signed payloads),
   on-chain reads for liquidity, position reconciliation, and redemption.
-- **Out of scope:** the on-chain `BridgeFacilitatorAdapter` (Solidity, consumed via generated ABI
+- **Out of scope:** the on-chain `ThreeFAdapter` (Solidity, consumed via generated ABI
   bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
   **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
   **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
@@ -29,7 +27,7 @@ repo root) §4 for the functional blueprint of the 3F solver.
 
 | Topic | Decision |
 |---|---|
-| Language / toolchain | **Go 1.26** (module declares `go 1.26`; toolchain auto-fetch) |
+| Language / toolchain | **Go 1.26.5** (module declares `go 1.26`; CI and local gates pin `GOTOOLCHAIN=go1.26.5`) |
 | Logging | **`logr.Logger`** interface throughout, backed by **zap** via `zapr`; only `main` wires the backend |
 | Metrics | Prometheus (`/metrics`); `logr` keeps the logging dependency swappable |
 | License | _TBD — not yet added_ |
@@ -89,7 +87,8 @@ vault-solver/
 ├── api/
 │   ├── abi/                       # vendored *.abi.json (copied from forge build)
 │   ├── bindings/                  # abigen output (committed), grouped per integration:
-│   │   ├── 3f/{adapter,request,vaultcontroller,whitelist}/  # 3F-specific (future: rfq/, oev/)
+│   │   ├── 3f/{adapter,request,vaultcontroller,whitelist}/  # 3F-specific
+│   │   ├── rfq/  oev/                                      # other integration-specific bindings
 │   │   └── vaultv2/               # shared Symbiotic core, reused by every integration
 │   └── threef/                    # openapi-generator (Java) output (committed)
 ├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
@@ -159,7 +158,7 @@ type Factory func(raw yaml.Node, deps Deps) (Solver, error)
 
 A `registry` maps name→`Factory`. The 3F package self-registers in `init()`; `main`
 blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the only line referencing 3F.
-Adding a future solver is a register + config switch, no framework edit.
+Adding another solver follows the same register + config pattern, with no generic framework edit.
 
 ---
 
@@ -195,6 +194,12 @@ solvers:
 `intervals.offerTTL` defaults to twice `discover` and must be at least `discover`, so the default
 schedule always keeps a signed offer valid through the next discovery pass. One injected solver clock
 drives the signed expiration, DTO expiration, and live-offer cache snapshots.
+
+The vendored 3F schema represents auction, offer, and chain identities as `int64`, preserving exact
+signature inputs beyond JavaScript's 2^53 boundary. Request-contract domains may carry an optional
+bytes32 salt; the solver validates and includes it in `OfferDigest`, while unsalted domains retain the
+original digest. Generated-client responses are bounded to 8 MiB and every request is covered by the
+configured `httpTimeout`, preventing a large or stalled API response from blocking redemption scans.
 
 At startup, the generic chain layer preflights every configured read endpoint (primary and fallback)
 plus any distinct write endpoint against `chainId`. Diagnostics identify endpoints only by safe
@@ -286,8 +291,9 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    `"50.5"`, and unknown response fields are rejected.
 4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
    returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,
-   signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
-   after a successful submit. Strategy output cannot set nonce or signature.
+   validates and includes its optional salt, signs the returned execution offer, submits `createOffer`,
+   and records the live-offer cache only after a successful submit. Strategy output cannot set nonce or
+   signature.
 
 ---
 
@@ -311,7 +317,9 @@ on demand. ABIs required: `ThreeFAdapter` (from core-mirror), `IRequest`/`IVault
 
 ## 8. Build phases
 
-Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contracts/adapters/ThreeFAdapter.sol`, ABI vendored here from the core-mirror Foundry build. This is what the bot binds against (it replaced rfq's `BridgeFacilitatorAdapter`).
+Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's
+`src/contracts/adapters/ThreeFAdapter.sol`, with its ABI vendored from the core-mirror Foundry build.
+This is the active contract the bot binds against.
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
@@ -336,18 +344,19 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
    - Tests: strategy registry/default selection, exact deci-bps conversion/arithmetic and yield-floor
      boundaries, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup,
      `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
-     Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
-     and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
+     Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check, and hermetic production-path
+     characterization from auction API + Multicall snapshot through salted offer submission, plus
+     request enumeration through bounded redemption calldata and unresolved-outcome reconciliation.
+     The `GetOffers` type string and the signer's live-API acceptance are pinned by env-guarded live
+     tests (§9).
 
 ---
 
 ## 9. Open items to confirm during implementation
 
-- **Signed-payload API contract** — confirm with 3F the exact request shape for creating *and listing*
-  offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
-  and that 3F verifies offer creation via the adapter's EIP-1271 `isValidSignature`.
-- **Dynamic "list public 3F adapters" API** — the endpoint that replaces the config whitelist (what
-  marks an adapter public/eligible, and how we filter to ones our signer is the EIP-1271 signer for).
+- **Dynamic "list public 3F adapters" API** — the endpoint that lets deployed solvers discover their
+  adapter set without config-pinned addresses (what marks an adapter public/eligible, and how we filter
+  to ones our signer is the EIP-1271 signer for).
 - Mainnet `RequestWhitelist` address and prod API base URL — supplied by 3F when prod lands.
 - Go module path (`github.com/symbioticfi/vault-solver` placeholder) — adjust to the real org.
 
@@ -373,8 +382,11 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state. The
   configured offer lifetime already covers discovery, and dedup prevents redundant live re-offers.
 **Testing:**
-- **Integration coverage.** Pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config,
-  and redemption outcome/suppression rules) is covered. The full HTTP/on-chain paths (apiclient,
-  chainreader, redemption submission, Run loop) still need an httptest-backed API mock plus a
-  simulated or forked chain backend.
+- **(done) Offer/redemption boundary coverage.** Hermetic tests exercise the production generated API
+  client, decoded Multicall reads, default strategy, local signer, successful/failed offer tracking,
+  real txmanager submission, bounded `finalizeRequest` ordering, and unresolved-result suppression
+  through authoritative on-chain reconciliation.
+- **Long-running integration coverage.** The complete ticker-driven `Run` lifecycle and live/forked
+  chain behavior remain candidates for deployment-level tests; the money-moving offer and redemption
+  boundaries no longer depend on test-only production seams.
 - **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
