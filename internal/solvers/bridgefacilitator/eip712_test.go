@@ -42,7 +42,9 @@ func TestOfferDigest_MatchesApitypes(t *testing.T) {
 	chainID := big.NewInt(11155111)
 	request := common.HexToAddress("0xd824000000000000000000000000000000000842")
 
-	got := OfferDigest(offer, domainName, OfferDomainVersion, chainID, request)
+	got := OfferDigest(offer, OfferDomain{
+		Name: domainName, Version: OfferDomainVersion, ChainID: chainID, VerifyingContract: request,
+	})
 
 	typed := apitypes.TypedData{
 		Types: apitypes.Types{
@@ -89,6 +91,82 @@ func TestOfferDigest_MatchesApitypes(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("digest mismatch:\n manual   %s\n apitypes %s", got.Hex(), want.Hex())
+	}
+}
+
+func TestOfferDigestSaltedAndUnsaltedLargeChainParity(t *testing.T) {
+	offer := Offer{
+		Maker:          common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		Amount:         big.NewInt(1_000_000_000),
+		ExpectedReturn: big.NewInt(5_000_000),
+		Nonce:          big.NewInt(1),
+		Expiration:     big.NewInt(4_102_444_800),
+		UseCallback:    true,
+	}
+	request := common.HexToAddress("0xd824000000000000000000000000000000000842")
+	chainID := big.NewInt(9_007_199_254_740_993)
+	salt := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	for _, tc := range []struct {
+		name string
+		salt *common.Hash
+	}{
+		{name: "unsalted"},
+		{name: "salted", salt: &salt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			domain := OfferDomain{
+				Name: "request-8185", Version: "1", ChainID: chainID,
+				VerifyingContract: request, Salt: tc.salt,
+			}
+			got := OfferDigest(offer, domain)
+
+			domainTypes := []apitypes.Type{
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+				{Name: "verifyingContract", Type: "address"},
+			}
+			typedDomain := apitypes.TypedDataDomain{
+				Name: domain.Name, Version: domain.Version,
+				ChainId: (*math.HexOrDecimal256)(chainID), VerifyingContract: request.Hex(),
+			}
+			if tc.salt != nil {
+				domainTypes = append(domainTypes, apitypes.Type{Name: "salt", Type: "bytes32"})
+				typedDomain.Salt = tc.salt.Hex()
+			}
+			typed := apitypes.TypedData{
+				Types: apitypes.Types{
+					"EIP712Domain": domainTypes,
+					"Offer": {
+						{Name: "maker", Type: "address"},
+						{Name: "amount", Type: "uint256"},
+						{Name: "expectedReturn", Type: "uint256"},
+						{Name: "nonce", Type: "uint256"},
+						{Name: "expiration", Type: "uint256"},
+						{Name: "useCallback", Type: "bool"},
+					},
+				},
+				PrimaryType: "Offer",
+				Domain:      typedDomain,
+				Message: apitypes.TypedDataMessage{
+					"maker": offer.Maker.Hex(), "amount": offer.Amount.String(),
+					"expectedReturn": offer.ExpectedReturn.String(), "nonce": offer.Nonce.String(),
+					"expiration": offer.Expiration.String(), "useCallback": offer.UseCallback,
+				},
+			}
+			domainSep, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
+			if err != nil {
+				t.Fatal(err)
+			}
+			msgHash, err := typed.HashStruct("Offer", typed.Message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSep, msgHash)
+			if got != want {
+				t.Fatalf("digest mismatch: got %s want %s", got, want)
+			}
+		})
 	}
 }
 

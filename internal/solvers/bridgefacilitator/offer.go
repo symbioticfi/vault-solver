@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-errors/errors"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
@@ -40,6 +41,15 @@ func (s *Solver) buildSignedOffer(
 	if v, hasVersion := domain.GetVersionOk(); hasVersion && v != nil && *v != "" {
 		domainVersion = *v
 	}
+	var salt *common.Hash
+	if raw, hasSalt := domain.GetSaltOk(); hasSalt && raw != nil {
+		b, decodeErr := hexutil.Decode(*raw)
+		if decodeErr != nil || len(b) != common.HashLength {
+			return threef.CreateOfferDto{}, errors.Errorf("auction %v: invalid EIP-712 domain salt", auction.Id)
+		}
+		h := common.BytesToHash(b)
+		salt = &h
+	}
 
 	nonce := new(big.Int).SetUint64(s.nextNonce())
 	now := s.now()
@@ -53,7 +63,10 @@ func (s *Solver) buildSignedOffer(
 		Expiration:     expiration,
 		UseCallback:    true,
 	}
-	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
+	digest := OfferDigest(signedOffer, OfferDomain{
+		Name: *domainName, Version: domainVersion, ChainID: chainID,
+		VerifyingContract: offer.Request, Salt: salt,
+	})
 	sig, err := s.deps.Signer.SignHash(digest)
 	if err != nil {
 		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)

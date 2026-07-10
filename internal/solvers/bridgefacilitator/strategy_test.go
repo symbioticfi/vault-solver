@@ -24,10 +24,12 @@ type digestCapturingSigner struct {
 	fakeSigner
 
 	digest common.Hash
+	calls  int
 }
 
 func (s *digestCapturingSigner) SignHash(digest common.Hash) ([]byte, error) {
 	s.digest = digest
+	s.calls++
 	return make([]byte, 65), nil
 }
 
@@ -206,9 +208,86 @@ func TestBuildSignedOfferUsesConfiguredTTL(t *testing.T) {
 		Nonce:          big.NewInt(1),
 		Expiration:     big.NewInt(3_700),
 		UseCallback:    true,
-	}, domainName, domainVersion, big.NewInt(chainID), request)
+	}, OfferDomain{
+		Name: domainName, Version: domainVersion, ChainID: big.NewInt(chainID),
+		VerifyingContract: request,
+	})
 	if signer.digest != wantDigest {
 		t.Fatalf("signed digest = %s, want %s", signer.digest, wantDigest)
+	}
+}
+
+func TestBuildSignedOfferSaltValidation(t *testing.T) {
+	domainName := "request-10"
+	domainVersion := "1"
+	chainID := int64(9_007_199_254_740_993)
+	validSalt := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	validSaltHash := common.HexToHash(validSalt)
+	tests := []struct {
+		name     string
+		setSalt  func(*threef.AuctionEip712DomainDto)
+		wantSalt *common.Hash
+		wantErr  bool
+	}{
+		{name: "omitted"},
+		{name: "null", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSaltNil() }},
+		{name: "valid", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSalt(validSalt) },
+			wantSalt: &validSaltHash},
+		{name: "malformed", setSalt: func(domain *threef.AuctionEip712DomainDto) { domain.SetSalt("not-hex") }, wantErr: true},
+		{name: "31 bytes", setSalt: func(domain *threef.AuctionEip712DomainDto) {
+			domain.SetSalt("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			auction := testAuctionDto(
+				10,
+				common.HexToAddress("0x0000000000000000000000000000000000000003"),
+				"700",
+			)
+			domain := threef.NewAuctionEip712DomainDto(
+				*threef.NewNullableString(&domainName),
+				*threef.NewNullableString(&domainVersion),
+				*threef.NewNullableInt64(&chainID),
+			)
+			if tc.setSalt != nil {
+				tc.setSalt(domain)
+			}
+			auction.SetEip712Domain(*domain)
+
+			maker := common.HexToAddress("0x0000000000000000000000000000000000000001")
+			request := common.HexToAddress(auction.RequestId)
+			signer := &digestCapturingSigner{}
+			s := &Solver{
+				cfg:  &Config{Intervals: Intervals{OfferTTL: 45 * time.Minute}},
+				deps: solver.Deps{Signer: signer},
+				now:  func() time.Time { return time.Unix(1_000, 0) },
+			}
+			offer := types.OfferExecution{
+				AuctionID: 10, Request: request, Maker: maker,
+				Principal: big.NewInt(700), ExpectedReturn: big.NewInt(14),
+			}
+			_, err := s.buildSignedOffer(auctionView{dto: auction}, offer)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("buildSignedOffer error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if signer.calls != 0 {
+					t.Fatalf("invalid salt invoked signer %d times", signer.calls)
+				}
+				return
+			}
+			wantDigest := OfferDigest(Offer{
+				Maker: maker, Amount: offer.Principal, ExpectedReturn: offer.ExpectedReturn,
+				Nonce: big.NewInt(1), Expiration: big.NewInt(3_700), UseCallback: true,
+			}, OfferDomain{
+				Name: domainName, Version: domainVersion, ChainID: big.NewInt(chainID),
+				VerifyingContract: request, Salt: tc.wantSalt,
+			})
+			if signer.calls != 1 || signer.digest != wantDigest {
+				t.Fatalf("signer calls/digest = %d/%s, want 1/%s", signer.calls, signer.digest, wantDigest)
+			}
+		})
 	}
 }
 

@@ -16,13 +16,15 @@ const OfferDomainVersion = "0.0.1"
 const offerTypeString = "Offer(address maker,uint256 amount,uint256 expectedReturn," +
 	"uint256 nonce,uint256 expiration,bool useCallback)"
 
-// eip712DomainTypeString is the standard EIP-712 domain type used by solady's EIP712.
-const eip712DomainTypeString = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+const (
+	unsaltedDomainType = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+	saltedDomainType   = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)"
+)
 
-// offerTypeHash / domainTypeHash are the keccak256 of the type strings above.
 var (
-	offerTypeHash  = crypto.Keccak256Hash([]byte(offerTypeString))
-	domainTypeHash = crypto.Keccak256Hash([]byte(eip712DomainTypeString))
+	offerTypeHash      = crypto.Keccak256Hash([]byte(offerTypeString))
+	unsaltedDomainHash = crypto.Keccak256Hash([]byte(unsaltedDomainType))
+	saltedDomainHash   = crypto.Keccak256Hash([]byte(saltedDomainType))
 )
 
 // Offer is the on-chain Offer tuple the maker signs.
@@ -35,12 +37,22 @@ type Offer struct {
 	UseCallback    bool
 }
 
+// OfferDomain is the exact EIP-712 domain returned with one auction. Salt is optional: its presence
+// changes both the encoded domain type and separator.
+type OfferDomain struct {
+	Name              string
+	Version           string
+	ChainID           *big.Int
+	VerifyingContract common.Address
+	Salt              *common.Hash
+}
+
 // OfferDigest computes the EIP-712 digest a maker signs for `offer` against the Request contract.
-// The domain is per-Request: name/version from the Request, chainID, verifyingContract = the
-// Request address. This is the digest grunt's OfferReceiver._validateOffer verifies, and which our
-// adapter's EIP-1271 isValidSignature checks against offerSigner.
-func OfferDigest(offer Offer, domainName, domainVersion string, chainID *big.Int, request common.Address) common.Hash {
-	ds := domainSeparator(domainName, domainVersion, chainID, request)
+// The domain is per-Request: name/version/optional salt from the auction, chainID, and
+// verifyingContract = the Request address. This is the digest grunt's OfferReceiver._validateOffer
+// verifies, and which our adapter's EIP-1271 isValidSignature checks against offerSigner.
+func OfferDigest(offer Offer, domain OfferDomain) common.Hash {
+	ds := domainSeparator(domain)
 	sh := offerStructHash(offer)
 	// keccak256(0x1901 || domainSeparator || structHash)
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, ds.Bytes(), sh.Bytes())
@@ -58,13 +70,20 @@ func offerStructHash(o Offer) common.Hash {
 	return crypto.Keccak256Hash(buf)
 }
 
-func domainSeparator(name, version string, chainID *big.Int, verifyingContract common.Address) common.Hash {
-	buf := make([]byte, 0, 5*32)
-	buf = append(buf, domainTypeHash.Bytes()...)
-	buf = append(buf, crypto.Keccak256([]byte(name))...)
-	buf = append(buf, crypto.Keccak256([]byte(version))...)
-	buf = append(buf, word(chainID.Bytes())...)
-	buf = append(buf, word(verifyingContract.Bytes())...)
+func domainSeparator(domain OfferDomain) common.Hash {
+	buf := make([]byte, 0, 6*32)
+	typeHash := unsaltedDomainHash
+	if domain.Salt != nil {
+		typeHash = saltedDomainHash
+	}
+	buf = append(buf, typeHash.Bytes()...)
+	buf = append(buf, crypto.Keccak256([]byte(domain.Name))...)
+	buf = append(buf, crypto.Keccak256([]byte(domain.Version))...)
+	buf = append(buf, word(domain.ChainID.Bytes())...)
+	buf = append(buf, word(domain.VerifyingContract.Bytes())...)
+	if domain.Salt != nil {
+		buf = append(buf, domain.Salt.Bytes()...)
+	}
 	return crypto.Keccak256Hash(buf)
 }
 
