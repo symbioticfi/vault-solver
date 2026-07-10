@@ -104,13 +104,12 @@ type SolveMessage struct {
 // SolveData carries the bid. `bid` is a decimal ether string of the signed wei bidAmount; `nonce`
 // and `maxTxGasPrice` are decimal strings; `operationData`/`liquidationSig` are 0x-hex.
 type SolveData struct {
-	Bid               string   `json:"bid"`
-	Nonce             string   `json:"nonce"`
-	OperationCallback string   `json:"operationCallback"`
-	OperationData     string   `json:"operationData"`
-	LiquidationSig    string   `json:"liquidationSig"`
-	MaxTxGasPrice     string   `json:"maxTxGasPrice"`
-	Borrowers         []string `json:"borrowers,omitempty"`
+	Bid               string `json:"bid"`
+	Nonce             string `json:"nonce"`
+	OperationCallback string `json:"operationCallback"`
+	OperationData     string `json:"operationData"`
+	LiquidationSig    string `json:"liquidationSig"`
+	MaxTxGasPrice     string `json:"maxTxGasPrice"`
 }
 
 func marshal(v any) []byte {

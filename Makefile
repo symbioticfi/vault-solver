@@ -213,12 +213,8 @@ test: ## Run tests with race detector + coverage (hermetic only; fork/live suite
 
 # Local-only OEV integration suite — build-tagged, skipped by the default `test` + CI.
 .PHONY: test-oev-live
-test-oev-live: ## OEV live checks — Morpho API borrower + token-pair market discovery
-	go test -tags live -run TestLive -v ./internal/solvers/redstoneoev/
-
-.PHONY: test-oev-refuel
-test-oev-refuel: ## OEV gas-refuel orchestration on an anvil Sepolia fork (needs ETH_RPC_URL_SEPOLIA + OEV_SIGNER_PRIVATE_KEY + sibling rfq-integration)
-	./scripts/oev/oev-fork-refuel.sh
+test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia fork payload dump
+	go test -tags live -run TestLive -v ./internal/solvers/redstoneoev/...
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

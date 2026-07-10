@@ -66,7 +66,7 @@ func TestDetectFeedAuctionFrame(t *testing.T) {
 func TestMarshalSolve(t *testing.T) {
 	msg := SolveMessage{Op: "solve", ID: "abc", Data: SolveData{
 		Bid: "0.0005", Nonce: "3", OperationCallback: "0x7Aa3", OperationData: "0x1234",
-		LiquidationSig: "0xdead", MaxTxGasPrice: "60000000000", Borrowers: []string{"0x629d"},
+		LiquidationSig: "0xdead", MaxTxGasPrice: "60000000000",
 	}}
 	var back map[string]any
 	if err := json.Unmarshal(marshal(msg), &back); err != nil {
@@ -76,7 +76,7 @@ func TestMarshalSolve(t *testing.T) {
 		t.Fatalf("solve top-level wrong: %v", back)
 	}
 	data, _ := back["data"].(map[string]any)
-	for _, k := range []string{"bid", "nonce", "operationCallback", "operationData", "liquidationSig", "maxTxGasPrice", "borrowers"} {
+	for _, k := range []string{"bid", "nonce", "operationCallback", "operationData", "liquidationSig", "maxTxGasPrice"} {
 		if _, ok := data[k]; !ok {
 			t.Fatalf("solve.data missing %q", k)
 		}

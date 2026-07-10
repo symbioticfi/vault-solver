@@ -1,33 +1,23 @@
 package redstoneoev
 
-// reservations.go holds the in-flight-bid headroom reservation subsystem and the auction-id dedup ring.
+// reservations.go holds the in-flight auction lifecycle state and auction-id dedup ring.
 
 import (
-	"math/big"
 	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// positionKey identifies a borrower position (one Morpho market + borrower) — the unit a bid liquidates.
-type positionKey struct {
-	market   common.Hash
-	borrower common.Address
-}
-
-// reservedBid is one sent-but-not-yet-resolved bid's commitment against cached headroom: payBid native,
-// predicted Executor-deposit gas debit, signed nonce, send time, and the positions it liquidates.
+// reservedBid is one sent-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
+// callback funding/gas decisions, while this state lets the solver pass pending auction ids back to the
+// strategy and release reservations by nonce/result frames.
 type reservedBid struct {
-	bidNative  *big.Int
-	gasNative  *big.Int
-	nonce      uint64
-	at         time.Time
-	positions  []positionKey
-	auctionID  string
-	auctionKey common.Hash
-	gasUnits   uint64
-	gasRoutes  string
+	nonce     uint64
+	at        time.Time
+	auctionID string
+	callback  common.Address
+	won       bool
 }
 
 // reservationTTL is only a fallback for missed auction/liquidation result frames. Normal release is
@@ -36,61 +26,38 @@ type reservedBid struct {
 const reservationTTL = 5 * time.Minute
 
 type inFlightState struct {
-	positions map[positionKey]bool
-	bidNative *big.Int
-	gasNative *big.Int
+	pending []pendingAuction
 }
 
-// inFlightSnapshot returns, in ONE pass under resMu, everything buildBid needs about sent-but-unresolved
-// bids: the (market,borrower) set, the reserved callback payBid native, and the reserved Executor-deposit
-// gas debit.
+type pendingAuction struct {
+	ID     string
+	SentAt time.Time
+	Won    bool
+}
+
+// inFlightSnapshot returns the bounded pending-auction state strategies use for de-duping/risk control.
 func (s *Solver) inFlightSnapshot() inFlightState {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
-	out := inFlightState{bidNative: new(big.Int), gasNative: new(big.Int)}
+	var out inFlightState
 	if len(s.res) > 0 {
-		out.positions = make(map[positionKey]bool, len(s.res))
+		out.pending = make([]pendingAuction, 0, len(s.res))
 	}
 	for _, r := range s.res {
-		out.bidNative.Add(out.bidNative, orZero(r.bidNative))
-		out.gasNative.Add(out.gasNative, orZero(r.gasNative))
-		for _, p := range r.positions {
-			out.positions[p] = true
-		}
+		out.pending = append(out.pending, pendingAuction{ID: r.auctionID, SentAt: r.at, Won: r.won})
 	}
 	return out
 }
 
-// reserve records the headroom a just-sent bid commits: bid native, predicted gas debit from
-// the Executor deposit, and the positions it liquidates.
-func (s *Solver) reserve(bidNative, gasNative *big.Int, nonce uint64, now time.Time, positions []positionKey, auctionID string, auctionKey common.Hash, gas gasPrediction) {
+func (s *Solver) reserve(nonce uint64, now time.Time, callback common.Address, auctionID string) {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = append(s.res, reservedBid{
-		bidNative:  orZero(bidNative),
-		gasNative:  orZero(gasNative),
-		nonce:      nonce,
-		at:         now,
-		positions:  positions,
-		auctionID:  auctionID,
-		auctionKey: auctionKey,
-		gasUnits:   gas.Units,
-		gasRoutes:  gasRoutesString(gas.Routes),
+		nonce:     nonce,
+		at:        now,
+		auctionID: auctionID,
+		callback:  callback,
 	})
-}
-
-func (s *Solver) reservationByAuction(id string) (reservedBid, bool) {
-	if id == "" {
-		return reservedBid{}, false
-	}
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	for _, r := range s.res {
-		if r.auctionID == id {
-			return r, true
-		}
-	}
-	return reservedBid{}, false
 }
 
 func (s *Solver) releaseReservationByAuction(id string) {
@@ -100,6 +67,19 @@ func (s *Solver) releaseReservationByAuction(id string) {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = slices.DeleteFunc(s.res, func(r reservedBid) bool { return r.auctionID == id })
+}
+
+func (s *Solver) markReservationWon(id string) {
+	if id == "" {
+		return
+	}
+	s.resMu.Lock()
+	defer s.resMu.Unlock()
+	for i := range s.res {
+		if s.res[i].auctionID == id {
+			s.res[i].won = true
+		}
+	}
 }
 
 // pruneReservations frees a reservation once its bid resolves: when nonce <= the on-chain nonce (the bid
@@ -122,8 +102,8 @@ func (r reservedBid) resolved(onChainNonce uint64, now time.Time) bool {
 const maxSeenAuctions = 1024
 
 // seenAuctions is a bounded, insertion-ordered de-dup set for auction ids: a re-subscribe on reconnect can
-// replay a frame, and bidding twice for one auction burns a second nonce + reserves a second headroom.
-// Touched only by the single WS read goroutine (handleMessage), so it needs no lock.
+// replay a frame, and bidding twice for one auction burns a second nonce for the same opportunity.
+// Touched only while parsing auction frames before bid work is dispatched, so it needs no lock.
 type seenAuctions struct {
 	set   map[string]struct{}
 	order []string

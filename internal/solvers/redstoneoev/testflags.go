@@ -1,6 +1,6 @@
 package redstoneoev
 
-// testflags.go reads dev/test knobs from env vars at point of use. Production leaves them unset.
+// testflags.go reads solver-owned dev/test knobs from env vars at point of use. Production leaves them unset.
 // Malformed values fail closed (error) so a typo can't silently widen scope.
 
 import (
@@ -11,18 +11,8 @@ import (
 )
 
 const (
-	envOnchainPrice = "OEV_ONCHAIN_PRICE_FOR_TEST" // "true"/"1" → dev-testbed on-chain price basis
-	envTestMonitor  = "OEV_TEST_MONITOR"           // "true"/"1" → use Sepolia harness on-chain Morpho monitor
-	envDryRun       = "OEV_DRY_RUN"                // "true"/"1" → observe mode: sign + log would-bids, never send
+	envDryRun = "OEV_DRY_RUN" // "true"/"1" → observe mode: sign + log would-bids, never send
 )
-
-// onchainPriceForTestEnv reports whether OEV_ONCHAIN_PRICE_FOR_TEST selects the dev-testbed on-chain
-// price basis ("true"/"1", case-insensitive); unset/false → false; a malformed value → error.
-func onchainPriceForTestEnv() (bool, error) { return envBool(envOnchainPrice) }
-
-// testMonitorEnv reports whether OEV_TEST_MONITOR selects the Sepolia harness monitor that reads Morpho
-// market/position state on-chain for configured test seeds.
-func testMonitorEnv() (bool, error) { return envBool(envTestMonitor) }
 
 // dryRunEnv reports whether OEV_DRY_RUN puts the bot in observe mode — sign + log each would-bid but never
 // send it ("true"/"1", case-insensitive); unset/false → false; a malformed value → error.

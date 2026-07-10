@@ -136,7 +136,7 @@ strategy returns — so the correctness of the decision is entirely yours to own
 The only shared strategy-adjacent package is `internal/webhook`, a generic HTTP JSON client:
 
 - HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
-- literal or env-backed headers (secrets by env-var name, never inlined)
+- literal or env-backed headers (parsed config retains only the env-var name; `NewClient` resolves it)
 - strict response decode; non-2xx and empty-body responses are errors
 
 It has no solver names, no strategy registry, and no per-solver DTOs — each solver's webhook strategy

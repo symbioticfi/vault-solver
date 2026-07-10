@@ -17,11 +17,29 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 // seedAdapter is the LiquidLane adapter stamped into the seeded market, so tests can assert it flows
 // snapshot → leg → operationData.
 var seedAdapter = common.HexToAddress("0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b")
+var seedCallback = common.HexToAddress("0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1")
+var seedCollateral = common.HexToAddress("0x0000000000000000000000000000000000000c01")
+var seedBidWei = mustBig("500000000000000")
+
+const (
+	seedOracleHex         = "0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D"
+	seedHealthyPrice      = "5000000000000000000000000000"
+	seedLiquidatablePrice = "1550000000000000000000000000"
+)
+
+func newQuote(maxRate string, maxAssets *big.Int) defaultstrategy.AdapterQuote {
+	return defaultstrategy.AdapterQuote{
+		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
+		LoanScale: exp10(6), CollScale: exp10(18),
+	}
+}
 
 // seededSolver wires a Solver that does no chain/WS I/O: a monitor whose snapshot is pre-populated
 // (RedStone source), a stateCache with healthy accounting, and an in-memory signer — exactly the
@@ -35,24 +53,23 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 	sgnr := &testSigner{key: key, addr: crypto.PubkeyToAddress(key.PublicKey)}
 
 	id := common.HexToHash("0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5")
-	oracle := common.HexToAddress("0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D")
+	oracle := common.HexToAddress(seedOracleHex)
 
-	mon := &apiMonitor{log: logr.Discard()}
-	mon.snap.Store(&snapshot{
-		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle, Lltv: mustBig("860000000000000000")}, State: goldenMarket()},
+	seed := defaultstrategy.SnapshotSeed{
+		Markets: map[common.Hash]defaultstrategy.MarketInfo{
+			id: {Params: defaultstrategy.MarketParams{Oracle: oracle, CollateralToken: seedCollateral, Lltv: mustBig("860000000000000000")}, State: goldenMarket()},
 		},
-		// Cached on-chain oracle price ($1550) — used by testMonitor.
-		prices: map[common.Hash]*big.Int{id: mustBig("1550000000000000000000000000")},
-		quotes: map[common.Hash]AdapterQuote{
+		// Cached API/test state price. The hot path still evaluates candidates at the auction frame price.
+		Prices: map[common.Hash]*big.Int{id: mustBig(seedLiquidatablePrice)},
+		Quotes: map[common.Hash]defaultstrategy.AdapterQuote{
 			// The single adapter's quote: sells the RWA at ~$1780 (≈1% under the auctioned $1800.9); ample liquidity.
 			id: newQuote("1780000000000000000000", mustBig("100000000000")),
 		},
 		// Independently-tracked at-risk positions — the SOLE candidate source
 		// now that the frame's pushed positions are no longer consumed. Both fixture borrowers are seeded so
-		// workerCandidates surfaces them, evaluated at the frame/onchain price. The captured frame still
-		// carries these same positions, but they're ignored: candidates come from snap.positions.
-		positions: map[common.Hash]map[common.Address]morpho.PositionState{
+		// workerCandidates surfaces them, evaluated at the auction frame price. The captured frame still
+		// carries these same positions, but they're ignored: candidates come from snap.Positions.
+		Positions: map[common.Hash]map[common.Address]morpho.PositionState{
 			id: {
 				// 0x629d… — goldenBorrower (1.0 TCOL, borrowShares 1685600000000000).
 				common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE"): goldenBorrower(),
@@ -62,20 +79,17 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 				},
 			},
 		},
-		block:     100,
-		blockTime: 1781243340,
-		updatedAt: auctionClock()(),
-	})
+		Block:     100,
+		BlockTime: 1781243340,
+		UpdatedAt: auctionClock()(),
+	}
 
 	cfg := &Config{
-		Executor:        common.HexToAddress("0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"),
-		Callback:        common.HexToAddress("0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"),
-		Adapter:         seedAdapter,
-		BidWei:          mustBig("500000000000000"), // 0.0005 ETH flat bid
-		CallbackAuthTTL: defaultCallbackAuthTTL,
-		MaxTxGasPrice:   big.NewInt(1_000_000_000),
-		MaxStateAge:     defaultMaxStateAge,
-		Sizing:          SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
+		Executor:            common.HexToAddress("0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"),
+		Adapter:             seedAdapter,
+		Callback:            seedCallback,
+		MaxTxGasPrice:       big.NewInt(1_000_000_000),
+		ExecutorStateMaxAge: defaultExecutorStateMaxAge,
 	}
 
 	s := &Solver{
@@ -89,21 +103,55 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}),
 	}
-	s.mon = mon
-	// Healthy accounting: deposit clears MIN_DEPOSIT; callback covers the bid.
+	strategyCfg := defaultstrategy.ConfigForTest(defaultstrategy.Config{
+		BidWei:      seedBidWei,
+		MaxStateAge: defaultExecutorStateMaxAge,
+		Sizing:      defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
+	})
+	s.strategy = defaultstrategy.NewWithSnapshotForTest(strategyCfg, seedAdapter, seedCallback, seed, logr.Discard(), sgnr)
+	seedDefaultDecisionState(t, s, mustBig("2500000000"))
+	// Healthy accounting: deposit clears MIN_DEPOSIT.
 	s.state.store(cachedState{
-		Exec:           ExecutorState{Nonce: big.NewInt(7), Deposit: mustBig("100000000000000000"), Locked: false},
-		CallbackNative: mustBig("1000000000000000000"),
-		Rate:           mustBig("2500000000"), // 2500e6 loan base units per ETH
-		GasLimit:       redstoneExecutorMaxGasUnits,
-		Gas: &gasPredictorState{
-			FreeAssets:   mustBig("100000000000"),
-			Withdrawable: mustBig("100000000000"),
-			Acquire:      map[common.Address]*big.Int{},
-		},
+		Exec:      ExecutorState{Nonce: big.NewInt(7), Deposit: mustBig("100000000000000000"), Locked: false},
+		Adapter:   seedAdapterSnapshot(),
+		GasLimit:  2_000_000,
 		UpdatedAt: auctionClock()(),
 	})
 	return s, sgnr
+}
+
+func seedAdapterSnapshot() types.AdapterSnapshot {
+	return types.AdapterSnapshot{
+		Address:      seedAdapter,
+		Vault:        common.HexToAddress("0x0000000000000000000000000000000000000a10"),
+		Loan:         common.HexToAddress("0x0000000000000000000000000000000000000a11"),
+		LoanDecimals: 6,
+		FreeAssets:   mustBig("100000000000"),
+		Withdrawable: mustBig("100000000000"),
+		Redeemable: []types.RedeemableSnapshot{{
+			Asset:          seedCollateral,
+			Decimals:       18,
+			MaxRate:        mustBig("1780000000000000000000"),
+			MaxAssets:      mustBig("100000000000"),
+			AcquireBalance: big.NewInt(0),
+		}},
+		Filler: true,
+	}
+}
+
+func seedDefaultDecisionState(t testFataler, s *Solver, rate *big.Int) {
+	t.Helper()
+	seedDefaultDecisionStateAt(t, s, rate, auctionClock()())
+}
+
+func seedDefaultDecisionStateAt(t testFataler, s *Solver, rate *big.Int, at time.Time) {
+	t.Helper()
+	seedDefaultDecisionStateWithCallbackBalance(t, s, rate, mustBig("1000000000000000000"), at)
+}
+
+func seedDefaultDecisionStateWithCallbackBalance(t testFataler, s *Solver, rate, callbackNative *big.Int, at time.Time) {
+	t.Helper()
+	defaultStrategyOf(t, s).StoreDecisionStateForTest(rate, callbackNative, at)
 }
 
 type testFataler interface {
@@ -111,28 +159,62 @@ type testFataler interface {
 	Fatalf(format string, args ...any)
 }
 
-func snapshotOf(t testFataler, s *Solver) *snapshot {
+func snapshotOf(t testFataler, s *Solver) *defaultstrategy.SnapshotSeed {
 	t.Helper()
-	return s.mon.snapshot()
+	snap := defaultStrategyOf(t, s).SnapshotForTest()
+	return &snap
 }
 
-func storeSnapshot(t testFataler, s *Solver, snap *snapshot) {
+func storeSnapshot(t testFataler, s *Solver, snap *defaultstrategy.SnapshotSeed) {
 	t.Helper()
-	switch m := s.mon.(type) {
-	case *apiMonitor:
-		m.snap.Store(snap)
-	case *testMonitor:
-		m.snap.Store(snap)
-	default:
-		t.Fatalf("unexpected monitor type %T", s.mon)
+	defaultStrategyOf(t, s).StoreSnapshotForTest(*snap)
+}
+
+func defaultStrategyOf(t testFataler, s *Solver) *defaultstrategy.Strategy {
+	t.Helper()
+	strategy, ok := s.strategy.(*defaultstrategy.Strategy)
+	if ok {
+		return strategy
 	}
+	t.Fatalf("unexpected strategy type %T", s.strategy)
+	return nil
 }
 
-func useOnchainTestMonitor(t *testing.T, s *Solver) {
-	t.Helper()
-	mon := &testMonitor{log: logr.Discard()}
-	mon.snap.Store(snapshotOf(t, s))
-	s.mon = mon
+type recordingBidStrategy struct {
+	called bool
+	input  types.BidInput
+}
+
+func (s *recordingBidStrategy) Run(context.Context) {}
+
+func (s *recordingBidStrategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+	s.called = true
+	s.input = input
+	return types.BidOutput{
+		Decision:      types.DecisionBid,
+		BidAmount:     big.NewInt(1),
+		OperationData: []byte{0x01},
+	}, nil
+}
+
+type blockingBidStrategy struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingBidStrategy) Run(context.Context) {}
+
+func (s *blockingBidStrategy) DecideBid(ctx context.Context, _ types.BidInput) (types.BidOutput, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+		return types.BidOutput{Decision: types.DecisionSkip, Reason: "released"}, nil
+	case <-ctx.Done():
+		return types.BidOutput{}, ctx.Err()
+	}
 }
 
 // setSnapshotBlockTime re-stamps the cached snapshot (and the ops state) for tests that drive
@@ -140,14 +222,16 @@ func useOnchainTestMonitor(t *testing.T, s *Solver) {
 // so the stale-state gate sees freshly-refreshed caches.
 func setSnapshotBlockTime(t *testing.T, s *Solver, tsMs int64) {
 	t.Helper()
+	now := time.Now()
 	snap := *snapshotOf(t, s)
-	snap.blockTime = uint64(tsMs / 1000)
-	snap.updatedAt = time.Now()
+	snap.BlockTime = uint64(tsMs / 1000)
+	snap.UpdatedAt = now
 	storeSnapshot(t, s, &snap)
 	if st, ok := s.state.load(); ok {
-		st.UpdatedAt = time.Now()
+		st.UpdatedAt = now
 		s.state.store(st)
 	}
+	seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), now)
 }
 
 // auctionClock returns a clock within ±600s of the captured auction's timestamp, so clampTsAt keeps
@@ -164,64 +248,45 @@ func decodeAuction(t *testing.T) AuctionMessage {
 	return a
 }
 
-func recoverCallbackAuthSigner(t *testing.T, s *Solver, op operationData) common.Address {
-	t.Helper()
-	legs := make([]LiquidationLeg, len(op.Legs))
-	for i, leg := range op.Legs {
-		legs[i] = LiquidationLeg(leg)
-	}
-	digest, err := CallbackAuthDigest(s.chainID, s.cfg.Callback, s.cfg.Executor, op.Auth, legs)
-	if err != nil {
-		t.Fatalf("callback auth digest: %v", err)
-	}
-	sig := append([]byte(nil), op.AuthSig...)
-	if len(sig) != 65 {
-		t.Fatalf("callback auth signature len = %d, want 65", len(sig))
-	}
-	if sig[64] >= 27 {
-		sig[64] -= 27
-	}
-	pub, err := crypto.SigToPub(digest.Bytes(), sig)
-	if err != nil {
-		t.Fatalf("recover callback auth: %v", err)
-	}
-	return crypto.PubkeyToAddress(*pub)
+func setAuctionPrice(a *AuctionMessage, price string) {
+	a.Payload.Prices = map[string]string{seedOracleHex: price}
 }
 
-// TestBuildBidStaleStateGate pins the background-cache staleness gate: a monitor snapshot or ops state
-// older than cfg.MaxStateAge fails closed with stale_state before any sizing runs.
+// TestBuildBidStaleStateGate pins cache ownership: stale solver Executor accounting fails closed before
+// calling the strategy, while default-strategy cache staleness remains a strategy skip.
 func TestBuildBidStaleStateGate(t *testing.T) {
 	base := auctionClock()()
-	pastMax := func() time.Time { return base.Add(defaultMaxStateAge + time.Second) }
+	pastMax := func() time.Time { return base.Add(defaultExecutorStateMaxAge + time.Second) }
 
 	t.Run("both caches stale", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
-			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != skipExecutorStateStale {
+			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
 		}
 	})
-	t.Run("monitor stale, ops fresh", func(t *testing.T) {
+	t.Run("strategy state stale, executor fresh", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		st, _ := s.state.load()
 		st.UpdatedAt = pastMax()
 		s.state.store(st)
-		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
-			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), base)
+		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != types.SkipReasonStaleState {
+			t.Fatalf("skip = %q, want %q", d.skip, types.SkipReasonStaleState)
 		}
 	})
-	t.Run("ops stale, monitor fresh", func(t *testing.T) {
+	t.Run("executor state stale", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		snap := *snapshotOf(t, s)
-		snap.updatedAt = pastMax()
-		storeSnapshot(t, s, &snap)
-		if d := s.buildBid(decodeAuction(t), pastMax); d.skip != skipStaleState {
-			t.Fatalf("skip = %q, want %q", d.skip, skipStaleState)
+		st, _ := s.state.load()
+		st.UpdatedAt = base
+		s.state.store(st)
+		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != skipExecutorStateStale {
+			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
 		}
 	})
 	t.Run("fresh caches pass the gate", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		if d := s.buildBid(decodeAuction(t), auctionClock()); d.skip == skipStaleState {
-			t.Fatalf("fresh caches must not trip stale_state")
+		if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip == skipExecutorStateStale {
+			t.Fatalf("fresh caches must not trip executor_state_stale")
 		}
 	})
 }
@@ -230,15 +295,9 @@ func TestBuildBidHappyPath(t *testing.T) {
 	s, sgnr := seededSolver(t)
 	a := decodeAuction(t)
 
-	d := s.buildBid(a, auctionClock())
+	d := s.buildBid(t.Context(), a, auctionClock())
 	if d.skip != "" {
 		t.Fatalf("expected a bid, got skip %q", d.skip)
-	}
-	if d.legs != 2 {
-		t.Fatalf("legs = %d, want both profitable same-market borrowers", d.legs)
-	}
-	if len(d.solve.Data.Borrowers) != 2 {
-		t.Fatalf("borrowers = %v, want 2", d.solve.Data.Borrowers)
 	}
 	if d.solve.Data.Bid != "0.0005" {
 		t.Fatalf("bid = %q, want 0.0005 (flat BidWei)", d.solve.Data.Bid)
@@ -246,173 +305,59 @@ func TestBuildBidHappyPath(t *testing.T) {
 	if d.solve.Data.Nonce != "8" { // on-chain 7, next is strictly greater
 		t.Fatalf("nonce = %q, want 8", d.solve.Data.Nonce)
 	}
-	// Flat-bid path: gross carries the bundle's Σ loan-token profit (logging only); the bid is the flat BidWei.
-	if d.gross == nil || d.gross.Sign() <= 0 {
-		t.Fatalf("gross profit = %v, want > 0", d.gross)
-	}
-
 	// Full sign path: the LiquidationSig must recover to our signer over the EXECUTOR_V6 digest the
 	// Executor verifies (keccak(opData) bound into the digest, EIP-191 wrapped).
 	opData, err := hexutil.Decode(d.solve.Data.OperationData)
 	if err != nil {
 		t.Fatal(err)
 	}
-	op, err := decodeOperationData(opData)
-	if err != nil {
-		t.Fatalf("decode operationData: %v", err)
-	}
-	if op.Auth.AuctionKey != auctionKeyHash(a) || op.Auth.BidAmount.Cmp(s.cfg.BidWei) != 0 ||
-		op.Auth.MinBundleProfit.Sign() <= 0 || op.Auth.Deadline.Cmp(callbackAuthDeadline(auctionClock()(), s.cfg.CallbackAuthTTL)) != 0 {
-		t.Fatalf("bad operation auth: %+v", op.Auth)
-	}
-	if len(op.Legs) != 2 || op.Legs[0].MaxSeizeAssets.Sign() <= 0 || op.Legs[0].MinProfit.Sign() <= 0 {
-		t.Fatalf("encoded leg must carry maxSeizeAssets and minProfit, got %+v", op.Legs)
-	}
-	st, _ := s.state.load()
-	wantBundleFloor := nativeToLoan(new(big.Int).Add(d.gasNative, d.bidNative), st.Rate)
-	if op.Auth.MinBundleProfit.Cmp(wantBundleFloor) != 0 {
-		t.Fatalf("minBundleProfit = %s, want %s", op.Auth.MinBundleProfit, wantBundleFloor)
-	}
-	for i, leg := range op.Legs {
-		route := d.gas.Routes[i]
-		wantLegFloor := nativeToLoan(gasCostNative(gasUnitsForRoute(route), s.cfg.MaxTxGasPrice), st.Rate)
-		if leg.MinProfit.Cmp(wantLegFloor) != 0 {
-			t.Fatalf("leg %d minProfit = %s, want %s for route %s", i, leg.MinProfit, wantLegFloor, route)
-		}
-	}
-	if got := recoverCallbackAuthSigner(t, s, op); got != sgnr.addr {
-		t.Fatalf("callback auth recovered %s, want signer %s", got, sgnr.addr)
+	if len(opData) == 0 {
+		t.Fatal("operationData must be non-empty")
 	}
 	if got := recoverSolveSigner(t, s, d.solve.Data); got != sgnr.addr {
 		t.Fatalf("recovered %s, want signer %s", got, sgnr.addr)
 	}
 }
 
-func TestBuildBidAllowsReplayedSameMarketBundle(t *testing.T) {
+func TestBuildBidLetsStrategyOwnDecisionState(t *testing.T) {
 	s, _ := seededSolver(t)
-	a := decodeAuction(t)
+	strategy := &recordingBidStrategy{}
+	s.strategy = strategy
 
-	d := s.buildBid(a, auctionClock())
+	d := s.buildBid(t.Context(), decodeAuction(t), auctionClock())
 	if d.skip != "" {
-		t.Fatalf("expected a bid, got skip %q", d.skip)
+		t.Fatalf("expected strategy bid from execution-only solver state, got skip %q", d.skip)
 	}
-	opData, err := hexutil.Decode(d.solve.Data.OperationData)
-	if err != nil {
-		t.Fatal(err)
+	if !strategy.called {
+		t.Fatal("strategy was not called")
 	}
-	op, err := decodeOperationData(opData)
-	if err != nil {
-		t.Fatalf("decode operationData: %v", err)
+	if strategy.input.Adapter.Address != seedAdapter || strategy.input.Adapter.Loan == (common.Address{}) ||
+		strategy.input.Adapter.LoanDecimals != 6 || len(strategy.input.Adapter.Redeemable) != 1 ||
+		strategy.input.Adapter.Redeemable[0].Decimals != 18 || strategy.input.Adapter.Redeemable[0].MaxRate == nil ||
+		strategy.input.Adapter.Redeemable[0].MaxAssets == nil || !strategy.input.Adapter.Filler {
+		t.Fatalf("adapter snapshot was not passed to strategy: %+v", strategy.input.Adapter)
 	}
-	legs := op.Legs
-	if len(legs) != 2 {
-		t.Fatalf("encoded %d legs, want two same-market legs after replay", len(legs))
+	if strategy.input.Context.Callback != seedCallback {
+		t.Fatalf("callback = %s, want %s", strategy.input.Context.Callback.Hex(), seedCallback.Hex())
 	}
-	if legs[0].MarketId != legs[1].MarketId {
-		t.Fatalf("fixture should select two borrowers from one market, got %s and %s", legs[0].MarketId, legs[1].MarketId)
-	}
-	state := morpho.AccruedMarketState(goldenMarket(), uint64(a.Timestamp/1000))
-	positions := map[common.Address]morpho.PositionState{
-		common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE"): goldenBorrower(),
-		common.HexToAddress("0x378a49c640fd9eea888a6a553caae441e2fdebc6"): {
-			BorrowShares: mustBig("1582399974653062"), Collateral: mustBig("1000000000000000000"),
-		},
-	}
-	for _, leg := range legs {
-		pos, ok := positions[leg.Borrower]
-		if !ok {
-			t.Fatalf("unexpected borrower %s", leg.Borrower)
-		}
-		replay, ok := morpho.ApplySeizeLiquidation(state, pos, leg.MaxSeizeAssets, mustBig("1550000000000000000000000000"))
-		if !ok {
-			t.Fatalf("encoded leg for %s does not replay against current simulated state", leg.Borrower)
-		}
-		state = replay.Market
-		positions[leg.Borrower] = replay.Position
+	if strategy.input.Context.ExecutorMinDeposit.Cmp(minDeposit) != 0 {
+		t.Fatalf("executor minimum deposit = %s, want %s", strategy.input.Context.ExecutorMinDeposit, minDeposit)
 	}
 }
 
-func TestBuildBidCapsBundleByCachedGasLimit(t *testing.T) {
+func TestDefaultStrategyUsesBidInputAdapterSnapshot(t *testing.T) {
 	s, _ := seededSolver(t)
-	st, _ := s.state.load()
-	oneUnknownLeg := fixedGasUnits(defaultPriceUpdateFeeds) + gasFirstUnknownLeg
-	st.GasLimit = headerGasLimitForUsable(oneUnknownLeg)
+	st, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing seeded state")
+	}
+	st.Adapter.Redeemable[0].MaxRate = nil
 	s.state.store(st)
 
-	d := s.buildBid(decodeAuction(t), auctionClock())
-	if d.skip != "" {
-		t.Fatalf("expected one gas-fit bid, got skip %q", d.skip)
+	d := s.buildBid(t.Context(), decodeAuction(t), auctionClock())
+	if d.skip != types.SkipReasonNoLegs {
+		t.Fatalf("skip = %q, want %q when input adapter quote is unusable", d.skip, types.SkipReasonNoLegs)
 	}
-	if d.legs != 1 {
-		t.Fatalf("legs = %d, want only one leg to fit cached gas limit", d.legs)
-	}
-	if d.gas.Units > usableBundleGasLimit(st.GasLimit) {
-		t.Fatalf("predicted gas %d exceeds usable limit %d", d.gas.Units, usableBundleGasLimit(st.GasLimit))
-	}
-}
-
-func TestComposeLoanPerEth(t *testing.T) {
-	cases := []struct {
-		name                             string
-		ethUsd, loanUsd                  *big.Int
-		ethFeedDec, loanFeedDec, loanDec int
-		want                             string
-	}{
-		{"USDC at 2500, 8-dec feeds, 6-dec loan", mustBig("250000000000"), mustBig("100000000"), 8, 8, 6, "2500000000"},
-		{"18-dec loan", mustBig("250000000000"), mustBig("100000000"), 8, 8, 18, "2500000000000000000000"},
-		{"mixed feed decimals", mustBig("2500000000000000000000"), mustBig("100000000"), 18, 8, 6, "2500000000"},
-		{"zero loan price", mustBig("250000000000"), big.NewInt(0), 8, 8, 6, ""},
-		{"negative answer", big.NewInt(-1), mustBig("100000000"), 8, 8, 6, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := composeLoanPerEth(c.ethUsd, c.loanUsd, c.ethFeedDec, c.loanFeedDec, c.loanDec)
-			if c.want == "" {
-				if got != nil {
-					t.Fatalf("want nil, got %s", got)
-				}
-				return
-			}
-			if got == nil || got.String() != c.want {
-				t.Fatalf("got %v, want %s", got, c.want)
-			}
-		})
-	}
-}
-
-func TestValidRateAndConversions(t *testing.T) {
-	if got := validRate(nil); got != nil {
-		t.Fatalf("no cached oracle rate should fail closed, got %v", got)
-	}
-
-	rate := mustBig("2500000000")
-	if got := validRate(rate); got == nil || got.String() != "2500000000" {
-		t.Fatalf("oracle rate present should be used, got %v", got)
-	}
-
-	if got := loanToNative(mustBig("2500000000"), mustBig("2500000000")); got.Cmp(morpho.Wad) != 0 {
-		t.Fatalf("2500e6 loan at 2500e6/ETH = %s native units, want 1 ETH", got)
-	}
-	if got := loanToNative(mustBig("1"), nil); got.Sign() != 0 {
-		t.Fatalf("nil rate should convert to 0, got %s", got)
-	}
-	if got := nativeToLoan(morpho.Wad, mustBig("2500000000")); got.String() != "2500000000" {
-		t.Fatalf("1 native at 2500e6/native = %s loan units", got)
-	}
-}
-
-func selectedBundleForTest(t *testing.T, s *Solver, a AuctionMessage) chosenBundle {
-	t.Helper()
-	scored := s.scoredLegs(a, auctionClock()())
-	if len(scored) == 0 {
-		t.Fatal("precondition: expected scored legs")
-	}
-	st, _ := s.state.load()
-	b, skip := s.selectBundleWithGas(scored, st.Gas, st.GasLimit, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("precondition: selectBundle skip %q", skip)
-	}
-	return b
 }
 
 func TestBuildBidGasProfitabilityGate(t *testing.T) {
@@ -421,54 +366,17 @@ func TestBuildBidGasProfitabilityGate(t *testing.T) {
 	t.Run("net below min skips gas_unprofitable", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		s.cfg.MaxTxGasPrice = mustBig("1000000000000000000")
-		if d := s.buildBid(a, auctionClock()); d.skip != skipGasUnprofitable {
-			t.Fatalf("skip = %q, want %q", d.skip, skipGasUnprofitable)
-		}
-	})
-
-	t.Run("exact boundary passes", func(t *testing.T) {
-		s, _ := seededSolver(t)
-		b := selectedBundleForTest(t, s, a)
-		st, _ := s.state.load()
-		gasUnits := gasPredictionForBundle(b, st.Gas).Units
-		if b.grossLoan.Cmp(new(big.Int).SetUint64(gasUnits)) <= 0 {
-			t.Fatalf("test fixture cannot form exact gas boundary: gross=%s gasUnits=%d", b.grossLoan, gasUnits)
-		}
-		s.cfg.BidWei = new(big.Int).Sub(b.grossLoan, new(big.Int).SetUint64(gasUnits))
-		s.cfg.MaxTxGasPrice = big.NewInt(1)
-		st.Rate = morpho.Wad
-		s.state.store(st)
-		if d := s.buildBid(a, auctionClock()); d.skip != "" {
-			t.Fatalf("exact after-cost boundary should pass, got skip %q", d.skip)
-		}
-	})
-
-	t.Run("one wei below boundary skips", func(t *testing.T) {
-		s, _ := seededSolver(t)
-		b := selectedBundleForTest(t, s, a)
-		st, _ := s.state.load()
-		gasUnits := gasPredictionForBundle(b, st.Gas).Units
-		if b.grossLoan.Cmp(new(big.Int).SetUint64(gasUnits)) <= 0 {
-			t.Fatalf("test fixture cannot form gas boundary: gross=%s gasUnits=%d", b.grossLoan, gasUnits)
-		}
-		s.cfg.BidWei = new(big.Int).Sub(b.grossLoan, new(big.Int).SetUint64(gasUnits))
-		s.cfg.BidWei.Add(s.cfg.BidWei, big.NewInt(1))
-		s.cfg.MaxTxGasPrice = big.NewInt(1)
-		st.Rate = morpho.Wad
-		s.state.store(st)
-		if d := s.buildBid(a, auctionClock()); d.skip != skipGasUnprofitable {
-			t.Fatalf("skip = %q, want %q", d.skip, skipGasUnprofitable)
+		if d := s.buildBid(t.Context(), a, auctionClock()); d.skip != types.SkipReasonGasUnprofitable {
+			t.Fatalf("skip = %q, want %q", d.skip, types.SkipReasonGasUnprofitable)
 		}
 	})
 
 	t.Run("dry-run without rate skips because callback auth needs loan profit floors", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		s.dryRun = true
-		st, _ := s.state.load()
-		st.Rate = nil
-		s.state.store(st)
-		if d := s.buildBid(a, auctionClock()); d.skip != skipGasUnprofitable {
-			t.Fatalf("dry-run no-rate path should skip %q, got %q", skipGasUnprofitable, d.skip)
+		seedDefaultDecisionState(t, s, nil)
+		if d := s.buildBid(t.Context(), a, auctionClock()); d.skip != types.SkipReasonGasUnprofitable {
+			t.Fatalf("dry-run no-rate path should skip %q, got %q", types.SkipReasonGasUnprofitable, d.skip)
 		}
 	})
 }
@@ -477,7 +385,7 @@ func TestBuildBidSignsConfiguredGasPriceCap(t *testing.T) {
 	s, _ := seededSolver(t)
 	s.cfg.MaxTxGasPrice = big.NewInt(1_000_000_000)
 
-	d := s.buildBid(decodeAuction(t), auctionClock())
+	d := s.buildBid(t.Context(), decodeAuction(t), auctionClock())
 	if d.skip != "" {
 		t.Fatalf("expected bid, got skip %q", d.skip)
 	}
@@ -490,301 +398,266 @@ func TestBuildBidSignsConfiguredGasPriceCap(t *testing.T) {
 }
 
 func TestFactoryRejectsLiveBiddingWithoutRateSource(t *testing.T) {
-	t.Setenv("K", "k")
-	t.Setenv(envDryRun, "false")
-
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(wsline+addrs+api+okBid), &node); err != nil {
+	raw := wsline + addrs + "strategy:\n  name: default\n  config:\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n"
+	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
 		t.Fatal(err)
 	}
-	_, err := factory(node, solver.Deps{})
+	cfg, err := parseConfig(node)
 	if err == nil {
-		t.Fatal("expected live factory to reject config without loanEthFeed")
+		_, err = defaultstrategy.ParseConfig(cfg.Strategy.Config)
+	}
+	if err == nil {
+		t.Fatal("expected default strategy construction to reject config without loanEthFeed")
 	}
 }
 
-// TestBuildBidPriceSource proves the price-source switch through buildBid: the test-only on-chain path sizes
-// against the cached on-chain price (ignoring a healthy frame → §6.6 dev-settlement fix), while the
-// production auctioned path trusts the frame — a healthy frame skips, and a liquidatable frame drives a
-// full SIZED bid (the otherwise-untested mainnet sizing path, since the dev testbed only ever runs the
-// on-chain test flag). (Monitor-level marketPrice resolution is covered by TestMarketPriceSource.)
+// TestBuildBidPriceSource proves buildBid trusts the auction frame price: a healthy frame skips, while a
+// liquidatable frame drives a full sized bid.
 func TestBuildBidPriceSource(t *testing.T) {
-	const feed = "0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D"
-	const px5000 = "5000000000000000000000000000" // healthy
-	const px1550 = "1550000000000000000000000000" // the golden position is liquidatable here
 	cases := []struct {
-		name        string
-		onchainTest bool
-		framePx     string
-		wantSkip    string
-		wantSized   bool // for the bidding case, assert a full leg was sized
+		name      string
+		framePx   string
+		wantSkip  string
+		wantSized bool // for the bidding case, assert a full leg was sized
 	}{
-		{"onchain test flag bids against cached $1550 despite a healthy $5000 frame", true, px5000, "", false},
-		{"auctioned trusts the healthy $5000 frame → no_legs", false, px5000, "no_legs", false},
-		{"auctioned sizes a full bid at a liquidatable $1550 frame", false, px1550, "", true},
+		{"healthy $5000 frame skips", seedHealthyPrice, "no_legs", false},
+		{"liquidatable $1550 frame bids", seedLiquidatablePrice, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := decodeAuction(t)
-			a.Payload.Prices = map[string]string{feed: tc.framePx}
+			setAuctionPrice(&a, tc.framePx)
 			s, _ := seededSolver(t)
-			if tc.onchainTest {
-				useOnchainTestMonitor(t, s)
-			}
-			d := s.buildBid(a, auctionClock())
+			d := s.buildBid(t.Context(), a, auctionClock())
 			if d.skip != tc.wantSkip {
 				t.Fatalf("skip = %q, want %q", d.skip, tc.wantSkip)
 			}
-			if tc.wantSized && (d.legs < 1 || len(d.positions) < 1) {
-				t.Fatalf("expected ≥1 sized leg, got legs=%d positions=%d", d.legs, len(d.positions))
+			if tc.wantSized {
+				opData, err := hexutil.Decode(d.solve.Data.OperationData)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(opData) == 0 {
+					t.Fatal("expected non-empty operationData")
+				}
 			}
 		})
 	}
 }
 
-// TestBuildBidReservesInFlightFunding checks that a sent bid's payBid native is debited from the cached
-// headroom so a second auction in the same window can't double-spend it — and that clearing the
-// reservation (as refreshState does after a fresh on-chain read) re-opens the headroom.
-func TestBuildBidReservesInFlightFunding(t *testing.T) {
+func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
 	s, _ := seededSolver(t)
-	a := decodeAuction(t)
-	// Tighten the callback to exactly one bid's worth of native: a second in-flight bid must be blocked.
-	st, _ := s.state.load()
-	st.CallbackNative = new(big.Int).Set(s.cfg.BidWei)
+	seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("2500000000"), big.NewInt(1), auctionClock()())
+
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "callback_balance" {
+		t.Fatalf("callback balance is strategy-owned; skip = %q, want callback_balance", d.skip)
+	}
+}
+
+func TestBuildBidLetsDefaultStrategyOwnDepositGasHeadroom(t *testing.T) {
+	s, _ := seededSolver(t)
+	st, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing cached state")
+	}
+	st.Exec.Deposit = new(big.Int).Add(minDeposit, big.NewInt(1))
 	s.state.store(st)
 
-	d1 := s.buildBid(a, auctionClock())
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "deposit_low" {
+		t.Fatalf("deposit gas headroom is default-strategy-owned; skip = %q, want deposit_low", d.skip)
+	}
+}
+
+func TestBuildBidSkipsSolverEnvelopeBeforeStrategy(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ExecutorState
+		want  string
+	}{
+		{
+			name:  "signer locked",
+			state: ExecutorState{Nonce: big.NewInt(7), Deposit: mustBig("100000000000000000"), Locked: true},
+			want:  "signer_locked",
+		},
+		{
+			name:  "deposit below floor",
+			state: ExecutorState{Nonce: big.NewInt(7), Deposit: big.NewInt(1), Locked: false},
+			want:  "deposit_low",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := seededSolver(t)
+			st, _ := s.state.load()
+			st.Exec = tc.state
+			s.state.store(st)
+
+			strategy := &recordingBidStrategy{}
+			s.strategy = strategy
+			if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != tc.want {
+				t.Fatalf("skip = %q, want %q", d.skip, tc.want)
+			}
+			if strategy.called {
+				t.Fatal("strategy should not be called after solver-owned envelope skip")
+			}
+		})
+	}
+}
+
+// TestBuildBidReservesPendingPosition pins that the default strategy, rather than the solver, keeps the
+// selected Morpho position unavailable while a bid is unresolved.
+func TestBuildBidReservesPendingPosition(t *testing.T) {
+	s, _ := seededSolver(t)
+	a := decodeAuction(t)
+
+	d1 := s.buildBid(t.Context(), a, auctionClock())
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), nil, "", common.Hash{}, gasPrediction{})
+	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, a.ID)
 
-	if d2 := s.buildBid(a, auctionClock()); d2.skip != skipCallbackBalance {
-		t.Fatalf("second in-flight bid should skip callback_balance (native already committed), got %q", d2.skip)
+	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
+		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
 	}
 
-	// A fresh on-chain read whose nonce REACHED d1's (it settled: the Executor sets the nonce to the
-	// consumed bid's nonce) frees the reservation → headroom re-opens. Uses == d1.nonce, not +1, to pin
-	// that settlement (on-chain nonce == bid nonce) is what releases it.
+	// Once the bid resolves, the strategy keeps its accounting reservation until callback balance has been
+	// refreshed after resolution. This prevents bidding against a balance spent by a winning settlement.
 	s.pruneReservations(d1.nonce, time.Unix(1781243340, 0))
-	if d3 := s.buildBid(a, auctionClock()); d3.skip != "" {
-		t.Fatalf("after the bid resolved a bid should be allowed again, got skip %q", d3.skip)
+	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != types.SkipReasonNoLegs {
+		t.Fatalf("resolved position should remain reserved until balance refresh, got %q", d3.skip)
+	}
+	seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), auctionClock()().Add(time.Second))
+	if d4 := s.buildBid(t.Context(), a, auctionClock()); d4.skip != "" {
+		t.Fatalf("after callback balance refresh the strategy should be allowed again, got %q", d4.skip)
 	}
 }
 
-func TestBuildBidChecksDepositGasHeadroom(t *testing.T) {
-	s, _ := seededSolver(t)
-	a := decodeAuction(t)
-
-	probe := s.buildBid(a, auctionClock())
-	if probe.skip != "" {
-		t.Fatalf("fixture should bid before tightening deposit, got skip %q", probe.skip)
-	}
-	required := new(big.Int).Add(minDeposit, probe.gasNative)
-	st, _ := s.state.load()
-	st.Exec.Deposit = new(big.Int).Sub(required, big.NewInt(1))
-	s.state.store(st)
-
-	if d := s.buildBid(a, auctionClock()); d.skip != "deposit_low" {
-		t.Fatalf("deposit below predicted gas headroom should skip deposit_low, got %q", d.skip)
-	}
-}
-
-func TestBuildBidReservesInFlightGasFunding(t *testing.T) {
-	s, _ := seededSolver(t)
-	a := decodeAuction(t)
-
-	probe := s.buildBid(a, auctionClock())
-	if probe.skip != "" {
-		t.Fatalf("fixture should bid before tightening deposit, got skip %q", probe.skip)
-	}
-	st, _ := s.state.load()
-	st.Exec.Deposit = new(big.Int).Add(minDeposit, probe.gasNative)
-	s.state.store(st)
-
-	d1 := s.buildBid(a, auctionClock())
-	if d1.skip != "" {
-		t.Fatalf("first bid should fit exactly one gas reservation, got skip %q", d1.skip)
-	}
-	s.reserve(d1.bidNative, d1.gasNative, d1.nonce, time.Unix(1781243340, 0), nil, "", common.Hash{}, d1.gas)
-
-	if d2 := s.buildBid(a, auctionClock()); d2.skip != skipDepositLow {
-		t.Fatalf("second bid should skip deposit_low because gas is already reserved, got %q", d2.skip)
-	}
-
-	s.pruneReservations(d1.nonce, time.Unix(1781243340, 0))
-	if d3 := s.buildBid(a, auctionClock()); d3.skip != "" {
-		t.Fatalf("after gas reservation clears the bid should fit again, got skip %q", d3.skip)
-	}
-}
-
-// TestBuildBidSkipsInFlightPosition pins that a second rapid auction for an in-flight position is skipped
-// instead of re-bid against the still-stale snapshot.
-func TestBuildBidSkipsInFlightPosition(t *testing.T) {
-	s, _ := seededSolver(t)
-	onlyBorrower := common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE")
-	snap := *snapshotOf(t, s)
-	for market, positions := range snap.positions {
-		for borrower := range positions {
-			if borrower != onlyBorrower {
-				delete(positions, borrower)
-			}
-		}
-		snap.positions[market] = positions
-	}
-	storeSnapshot(t, s, &snap)
-	a := decodeAuction(t)
-
-	d1 := s.buildBid(a, auctionClock())
-	if d1.skip != "" || len(d1.positions) == 0 {
-		t.Fatalf("first bid should succeed with reserved positions, got skip %q positions %d", d1.skip, len(d1.positions))
-	}
-	s.reserve(d1.bidNative, nil, d1.nonce, time.Unix(1781243340, 0), d1.positions, "", common.Hash{}, gasPrediction{})
-
-	if d2 := s.buildBid(a, auctionClock()); d2.skip != "in_flight" {
-		t.Fatalf("a second auction for the same in-flight position(s) must skip in_flight, got %q", d2.skip)
-	}
-
-	// Once the bid resolves (the on-chain nonce REACHES the bid's nonce — settlement sets it to exactly
-	// the consumed nonce), the positions free and become biddable again. Uses == d1.nonce, not +1.
-	s.pruneReservations(d1.nonce, time.Unix(1781243340, 0))
-	if d3 := s.buildBid(a, auctionClock()); d3.skip != "" {
-		t.Fatalf("after the in-flight bid resolved the position should be biddable again, got %q", d3.skip)
-	}
-}
-
-// TestPruneReservations pins the precise headroom release: a bid whose nonce fell below the on-chain nonce
-// (submitted → settled/reverted) or that aged past reservationTTL (lost its auction) is freed, while a
-// recent still-pending bid keeps its reservation. (A7).
+// TestPruneReservations pins reservation lifecycle: a bid whose nonce fell below the on-chain nonce
+// (submitted → settled/reverted) or that aged past reservationTTL is freed, while a recent still-pending
+// bid remains visible to strategies as a pending auction.
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, nil, "", common.Hash{}, gasPrediction{})
-	s.reserve(big.NewInt(200), big.NewInt(20), 10, now, nil, "", common.Hash{}, gasPrediction{})
-	s.reserve(big.NewInt(300), big.NewInt(30), 12, now.Add(-time.Hour), nil, "", common.Hash{}, gasPrediction{})
+	s.reserve(8, now, seedCallback, "auction-8")
+	s.reserve(10, now, seedCallback, "auction-10")
+	s.reserve(12, now.Add(-time.Hour), seedCallback, "auction-old")
 
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() != 0 || inFlight.gasNative.Sign() != 0 {
-		t.Fatalf("all reservations should be freed, got bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("all reservations should be freed, got pending=%v", inFlight.pending)
 	}
 
-	s.reserve(big.NewInt(500), big.NewInt(50), 11, now, nil, "", common.Hash{}, gasPrediction{})
+	s.reserve(11, now, seedCallback, "auction-11")
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "500" || inFlight.gasNative.String() != "50" {
-		t.Fatalf("a recent pending bid should be kept, got bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-11" {
+		t.Fatalf("a recent pending bid should be kept, got pending=%v", inFlight.pending)
 	}
 
 	// A bid is freed exactly when the on-chain nonce reaches its nonce (== r.nonce), not only when it passes.
 	s.pruneReservations(11, now)
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() != 0 || inFlight.gasNative.Sign() != 0 {
-		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got pending=%v", inFlight.pending)
 	}
 }
 
 func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-won", common.Hash{}, gasPrediction{})
+	s.reserve(8, now, seedCallback, "auction-won")
+	s.markReservationWon("auction-won")
 
 	s.pruneReservations(7, now.Add(2*time.Minute))
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "100" || len(inFlight.positions) != 1 {
-		t.Fatalf("won bid must stay reserved while settlement is delayed, bid=%s positions=%d", inFlight.bidNative, len(inFlight.positions))
-	}
-}
-
-func TestReservationByAuctionCarriesGasPrediction(t *testing.T) {
-	s, _ := seededSolver(t)
-	pred := gasPrediction{Units: 350_000, Routes: []gasRoute{gasRouteAcquire}}
-	auctionKey := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	s.reserve(big.NewInt(100), big.NewInt(50), 8, time.Unix(1781243340, 0), nil, "auction-1", auctionKey, pred)
-
-	got, ok := s.reservationByAuction("auction-1")
-	if !ok {
-		t.Fatal("reservationByAuction did not find sent bid")
-	}
-	if got.gasUnits != pred.Units || got.gasRoutes != "acquire" {
-		t.Fatalf("attribution = gas %d routes %q", got.gasUnits, got.gasRoutes)
-	}
-	if got.auctionKey != auctionKey {
-		t.Fatalf("auctionKey = %s, want %s", got.auctionKey, auctionKey)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || !inFlight.pending[0].Won {
+		t.Fatalf("won bid must stay reserved while settlement is delayed, pending=%v", inFlight.pending)
 	}
 }
 
 func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-lost", common.Hash{}, gasPrediction{})
+	s.reserve(8, now, seedCallback, "auction-lost")
 
-	s.handleMessage(context.Background(), []byte(`{
+	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-lost",
 		"data":{"bid":"0.0005","liquidator":"0x1111111111111111111111111111111111111111"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() != 0 || inFlight.gasNative.Sign() != 0 || len(inFlight.positions) != 0 {
-		t.Fatalf("lost auction must release reservation, bid=%s gas=%s inflight=%v", inFlight.bidNative, inFlight.gasNative, inFlight.positions)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("lost auction must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-won", common.Hash{}, gasPrediction{})
-	s.handleMessage(context.Background(), []byte(`{
+	s.reserve(9, now, seedCallback, "auction-won")
+	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-won",
 		"data":{"bid":"0.0005","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "200" || inFlight.gasNative.String() != "20" {
-		t.Fatalf("won auction must stay reserved until liquidation result/nonce, bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-won" {
+		t.Fatalf("won auction must stay reserved until liquidation result/nonce, pending=%v", inFlight.pending)
 	}
 }
 
 func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	pos := []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, pos, "auction-ours", common.Hash{}, gasPrediction{})
+	s.reserve(8, now, seedCallback, "auction-ours")
 
-	s.handleMessage(context.Background(), []byte(`{
+	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-ours",
 		"data":{"success":true,"txHash":"","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() != 0 || inFlight.gasNative.Sign() != 0 || len(inFlight.positions) != 0 {
-		t.Fatalf("our liquidation result must release reservation, bid=%s gas=%s inflight=%v", inFlight.bidNative, inFlight.gasNative, inFlight.positions)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("our liquidation result must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(big.NewInt(200), big.NewInt(20), 9, now, pos, "auction-other", common.Hash{}, gasPrediction{})
-	s.handleMessage(context.Background(), []byte(`{
+	s.reserve(9, now, seedCallback, "auction-other")
+	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-other",
 		"data":{"success":true,"txHash":"","liquidator":"0x1111111111111111111111111111111111111111","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.String() != "200" || inFlight.gasNative.String() != "20" {
-		t.Fatalf("other solver liquidation result must not release our reservation, bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-other" {
+		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", inFlight.pending)
 	}
 }
 
-// TestApplyExecutorStateRunsWithoutBalance pins that Executor-state bookkeeping still runs when only the
-// callback balance read failed. A transient BalanceAt error must not strand reservations or stale nonces.
-func TestApplyExecutorStateRunsWithoutBalance(t *testing.T) {
+func TestLiquidationResultRequestsStateRefresh(t *testing.T) {
+	s, _ := seededSolver(t)
+	s.stateRefreshCh = make(chan struct{}, 1)
+	s.handleMessage(t.Context(), []byte(`{
+		"op":"liquidation-result",
+		"id":"auction-ours",
+		"data":{"success":true,"txHash":"","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`","error":""}
+	}`))
+	select {
+	case <-s.stateRefreshCh:
+	default:
+		t.Fatal("liquidation result did not request solver state refresh")
+	}
+}
+
+func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 
-	// A sent bid (nonce 8) pinning headroom, plus a stale local nonce high-water mark (5).
-	s.reserve(big.NewInt(100), big.NewInt(10), 8, now, []positionKey{{market: common.Hash{1}, borrower: common.Address{2}}}, "", common.Hash{}, gasPrediction{})
+	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
+	s.reserve(8, now, seedCallback, "auction-8")
 	s.nonces.reconcile(5)
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() == 0 || inFlight.gasNative.Sign() == 0 {
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
 		t.Fatal("precondition: the reservation should be present")
 	}
 
-	// On-chain nonce advanced to 9 (the bid settled). Run with bal=nil — the balance-read-failure path.
+	// On-chain nonce advanced to 9 (the bid settled).
 	st := ExecutorState{Nonce: big.NewInt(9), Deposit: mustBig("100000000000000000"), Locked: false}
-	s.applyExecutorState(st, nil, now)
+	s.applyExecutorState(st, now)
 
 	// pruneReservations ran: nonce 8 <= 9 → the reservation is freed.
-	if inFlight := s.inFlightSnapshot(); inFlight.bidNative.Sign() != 0 || inFlight.gasNative.Sign() != 0 {
-		t.Fatalf("pruneReservations must run despite a failed balance read; bid=%s gas=%s", inFlight.bidNative, inFlight.gasNative)
+	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
+		t.Fatalf("pruneReservations must run from executor state; pending=%v", inFlight.pending)
 	}
 	// nonces.reconcile ran: the next nonce is strictly above the on-chain 9.
 	if got := s.nonces.next(0); got != 10 {
@@ -799,15 +672,15 @@ func TestApplyExecutorStateRunsWithoutBalance(t *testing.T) {
 // TestLiquidationResultFeedsBreaker.)
 func TestFullAuctionLifecycle(t *testing.T) {
 	s, sgnr := seededSolver(t)
-	useOnchainTestMonitor(t, s) // size against the cached $1550 (the dev settlement price)
 
 	// 1) Auction → a solve is sent on the wire. Stamp the frame as freshly emitted so the too_late gate
 	// doesn't drop the captured fixture's long-past emit time.
 	fresh := decodeAuction(t)
+	setAuctionPrice(&fresh, seedLiquidatablePrice)
 	fresh.Timestamp = time.Now().UnixMilli()
 	setSnapshotBlockTime(t, s, fresh.Timestamp)
-	s.handleMessage(context.Background(), marshal(fresh))
-	frame := drainSend(s)
+	s.handleMessage(t.Context(), marshal(fresh))
+	frame := waitSend(t, s)
 	if frame == nil {
 		t.Fatal("expected a solve to be sent for a liquidatable auction")
 	}
@@ -815,7 +688,8 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	if err := json.Unmarshal(frame, &solve); err != nil {
 		t.Fatal(err)
 	}
-	if solve.Op != "solve" || solve.ID != "6382e936-c915-496a-bb3e-fa3b4ccc3a8d" || len(solve.Data.Borrowers) != 2 {
+	if solve.Op != "solve" || solve.ID != "6382e936-c915-496a-bb3e-fa3b4ccc3a8d" ||
+		solve.Data.OperationCallback == "" || solve.Data.OperationData == "" || solve.Data.LiquidationSig == "" {
 		t.Fatalf("bad solve: %+v", solve.Data)
 	}
 	// The signature recovers to our signer (full sign path through handleMessage).
@@ -834,7 +708,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 		t.Fatal("breaker should be tripped after 3 recorded failures within the window")
 	}
 	// buildBid (evaluated at the same wall clock as the hot path) must short-circuit to skip "breaker".
-	if d := s.buildBid(decodeAuction(t), time.Now); d.skip != "breaker" {
+	if d := s.buildBid(t.Context(), decodeAuction(t), time.Now); d.skip != "breaker" {
 		t.Fatalf("tripped breaker must skip the bid, got skip %q", d.skip)
 	}
 
@@ -843,10 +717,8 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	a.ID = "9999aaaa-0000-1111-2222-333344445555"
 	a.Timestamp = time.Now().UnixMilli()
 	setSnapshotBlockTime(t, s, a.Timestamp)
-	s.handleMessage(context.Background(), marshal(a))
-	if extra := drainSend(s); extra != nil {
-		t.Fatalf("breaker tripped — expected no solve, got one: %s", extra)
-	}
+	s.handleMessage(t.Context(), marshal(a))
+	expectNoSend(t, s, "breaker tripped")
 }
 
 // drainSend returns the next buffered outbound frame, or nil if none is queued.
@@ -859,6 +731,25 @@ func drainSend(s *Solver) []byte {
 	}
 }
 
+func waitSend(t *testing.T, s *Solver) []byte {
+	t.Helper()
+	select {
+	case f := <-s.ws.send:
+		return f
+	case <-time.After(time.Second):
+		return nil
+	}
+}
+
+func expectNoSend(t *testing.T, s *Solver, why string) {
+	t.Helper()
+	select {
+	case f := <-s.ws.send:
+		t.Fatalf("%s: expected no solve, got one: %s", why, f)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 	s, _ := seededSolver(t)
 	raw := []byte(`{
@@ -866,16 +757,48 @@ func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 	  "timestamp":1726058300000,"durationMs":400,
 	  "payload":{"ETH":"250000000000","BTC":"6000000000000","USDC":"99878787"}
 	}`)
-	s.handleMessage(context.Background(), raw)
+	s.handleMessage(t.Context(), raw)
 	if frame := drainSend(s); frame != nil {
 		t.Fatalf("feed auction must not produce a liquidation solve: %s", frame)
+	}
+}
+
+func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
+	s, _ := seededSolver(t)
+	blocking := &blockingBidStrategy{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	defer close(blocking.release)
+
+	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
+	a.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, a.Timestamp)
+	s.strategy = blocking
+
+	done := make(chan struct{})
+	go func() {
+		s.handleMessage(t.Context(), marshal(a))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("handleMessage blocked behind bid strategy")
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("bid strategy was not called")
 	}
 }
 
 // TestRedstoneClosedPositionNotBid proves we bid off our own tracked on-chain state, not the frame's
 // pushed positions: even though the captured frame lists the borrower as deeply underwater, our cached
 // position shows it fully closed (zero debt/collateral), so buildBid computes it non-liquidatable and
-// does not bid. (The frame's pushed positions are ignored entirely — candidates come from snap.positions.)
+// does not bid. (The frame's pushed positions are ignored entirely — candidates come from snap.Positions.)
 func TestRedstoneClosedPositionNotBid(t *testing.T) {
 	s, _ := seededSolver(t)
 	id := common.HexToHash("0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5")
@@ -883,15 +806,15 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 
 	// Build a FRESH snapshot whose tracked set is a single CLOSED position and store it (the loaded snapshot is
 	// immutable once stored — mutating its maps would write through the atomic). The frame still lists it as
-	// liquidatable, but candidates come from snap.positions.
+	// liquidatable, but candidates come from snap.Positions.
 	cur := snapshotOf(t, s)
 	fresh := *cur
-	fresh.positions = map[common.Hash]map[common.Address]morpho.PositionState{
+	fresh.Positions = map[common.Hash]map[common.Address]morpho.PositionState{
 		id: {borrower: {BorrowShares: big.NewInt(0), Collateral: big.NewInt(0)}},
 	}
 	storeSnapshot(t, s, &fresh)
 
-	if d := s.buildBid(decodeAuction(t), auctionClock()); d.skip != "no_legs" {
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "no_legs" {
 		t.Fatalf("a closed tracked position is not liquidatable → no_legs, got %q", d.skip)
 	}
 }
@@ -902,20 +825,20 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 func TestDryRunSuppressesSend(t *testing.T) {
 	s, _ := seededSolver(t)
 	s.dryRun = true
-	useOnchainTestMonitor(t, s) // size against the cached $1550
 
 	// Real metrics on a fresh registry so we can read the would-bid counter back.
 	reg := prometheus.NewRegistry()
-	m, err := newMetrics(reg)
+	m, err := newMetrics(reg, defaultStrategyName)
 	if err != nil {
 		t.Fatalf("newMetrics: %v", err)
 	}
 	s.metrics = m
 
 	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
 	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
 	setSnapshotBlockTime(t, s, a.Timestamp)
-	s.handleAuction(marshal(a))
+	s.handleAuctionWithContext(t.Context(), marshal(a))
 
 	if f := drainSend(s); f != nil {
 		t.Fatalf("dry-run must not send a solve, got %s", f)
@@ -925,13 +848,47 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	}
 }
 
+func TestMetricsCarryStrategyLabel(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m, err := newMetrics(reg, "webhook")
+	if err != nil {
+		t.Fatalf("newMetrics: %v", err)
+	}
+	m.skip("strategy_skip")
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "oev_skips_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			hasReason := false
+			hasStrategy := false
+			for _, label := range metric.GetLabel() {
+				switch label.GetName() {
+				case "reason":
+					hasReason = label.GetValue() == "strategy_skip"
+				case "strategy":
+					hasStrategy = label.GetValue() == "webhook"
+				}
+			}
+			if hasReason && hasStrategy {
+				return
+			}
+		}
+	}
+	t.Fatal("oev_skips_total missing strategy label")
+}
+
 // TestHandleAuctionEmptyIdDropped pins the auction identity invariant: RedStone auctions must carry an id.
 // Without it we cannot safely correlate solve/result frames, so the frame is ignored before bid building.
 func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	s, _ := seededSolver(t)
-	useOnchainTestMonitor(t, s) // size against the cached $1550
 
 	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
 	a.ID = ""                            // the frame carries no id
 	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
 	setSnapshotBlockTime(t, s, a.Timestamp)
@@ -939,7 +896,7 @@ func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	if f := drainSend(s); f != nil {
 		t.Fatalf("precondition: send channel should be empty, got %s", f)
 	}
-	s.handleAuction(marshal(a))
+	s.handleAuctionWithContext(t.Context(), marshal(a))
 	if f := drainSend(s); f != nil {
 		t.Fatalf("empty-id auction must be ignored, got solve %s", f)
 	}
@@ -956,504 +913,6 @@ func TestDedupKey(t *testing.T) {
 	}
 }
 
-// tokenA is the single loan token used by the bundling tests (the seeded adapter's loan token).
-var tokenA = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48") // USDC-like, 6dp
-
-// scoredFor builds a minimal single-swap scoredLeg with the given borrower nonce and profit (loan units).
-func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
-	var b common.Address
-	b[19] = borrowerByte
-	return scoredLeg{
-		bundleLeg: bundleLeg{
-			LiquidationLeg:  LiquidationLeg{Borrower: b, MarketId: common.Hash{}},
-			expectedLoanOut: profit,
-		},
-		profit: profit,
-	}
-}
-
-func headerGasLimitForUsable(usable uint64) uint64 {
-	return (usable*10_000 + bundleGasLimitSafetyBps - 1) / bundleGasLimitSafetyBps
-}
-
-func TestBundleSearchBounds(t *testing.T) {
-	t.Run("candidate order keeps all candidates by gross", func(t *testing.T) {
-		const candidates = 600
-		scored := make([]scoredLeg, 0, candidates)
-		for i := candidates; i > 0; i-- {
-			scored = append(scored, scoredLeg{
-				bundleLeg: bundleLeg{
-					LiquidationLeg: LiquidationLeg{Borrower: common.BigToAddress(big.NewInt(int64(i)))},
-				},
-				profit: big.NewInt(int64(i)),
-			})
-		}
-
-		got := sortedScoredLegs(scored)
-		if len(got) != candidates {
-			t.Fatalf("candidate count = %d, want %d", len(got), candidates)
-		}
-		if got[0].profit.Int64() != candidates || got[len(got)-1].profit.Int64() != 1 {
-			t.Fatalf("candidate order wrong: first=%s last=%s", got[0].profit, got[len(got)-1].profit)
-		}
-	})
-
-	t.Run("depth follows usable gas", func(t *testing.T) {
-		if got := bundleSearchDepth(1, defaultPriceUpdateFeeds); got != 0 {
-			t.Fatalf("depth below fixed gas = %d, want 0", got)
-		}
-		usable := fixedGasUnits(defaultPriceUpdateFeeds) + gasFirstAcquireLeg + gasAdditionalAcquireLeg
-		if got := bundleSearchDepth(headerGasLimitForUsable(usable), defaultPriceUpdateFeeds); got != 2 {
-			t.Fatalf("depth = %d, want 2", got)
-		}
-	})
-}
-
-// TestSelectBundleSingleToken exercises the flat-bid selection: every scored leg is already expected-positive
-// in sizeLeg, so selectBundle ranks by gross loan profit desc, keeps adding improving gas-fit legs, sums
-// grossLoan, and only skips (no_legs) when the scored set is empty.
-func TestSelectBundleSingleToken(t *testing.T) {
-	newSolver := func(cfg *Config) *Solver {
-		return &Solver{cfg: cfg, log: logr.Discard()}
-	}
-
-	t.Run("bundles all profitable legs into one bid, grossLoan summed", func(t *testing.T) {
-		s := newSolver(&Config{})
-		gasState := &gasPredictorState{
-			FreeAssets:   big.NewInt(0),
-			Withdrawable: big.NewInt(0),
-			Acquire:      map[common.Address]*big.Int{{}: mustBig("100000000000")},
-		}
-		b, skip := s.selectBundleWithGas([]scoredLeg{
-			scoredFor(1, mustBig("60000000")),
-			scoredFor(2, mustBig("30000000")),
-			scoredFor(3, mustBig("9000000")),
-		}, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-		if skip != "" {
-			t.Fatalf("unexpected skip %q", skip)
-		}
-		if len(b.legs) != 3 || b.grossLoan.String() != "99000000" { // 60+30+9
-			t.Fatalf("legs=%d grossLoan=%s, want 3 / 99000000", len(b.legs), b.grossLoan)
-		}
-	})
-
-	t.Run("header gas limit caps the group, keeping the most profitable gas-fit subset", func(t *testing.T) {
-		s := newSolver(&Config{})
-		twoAcquireLegs := fixedGasUnits(defaultPriceUpdateFeeds) + gasFirstAcquireLeg + gasAdditionalAcquireLeg
-		gasState := &gasPredictorState{
-			FreeAssets:   big.NewInt(0),
-			Withdrawable: big.NewInt(0),
-			Acquire:      map[common.Address]*big.Int{{}: mustBig("100000000")},
-		}
-		b, skip := s.selectBundleWithGas([]scoredLeg{
-			scoredFor(1, mustBig("10000000")),
-			scoredFor(2, mustBig("30000000")),
-			scoredFor(3, mustBig("20000000")),
-		}, gasState, headerGasLimitForUsable(twoAcquireLegs), defaultPriceUpdateFeeds)
-		if skip != "" {
-			t.Fatalf("unexpected skip %q", skip)
-		}
-		if len(b.legs) != 2 || b.grossLoan.String() != "50000000" { // top two: 30 + 20
-			t.Fatalf("legs=%d gross=%s, want 2 / 50000000", len(b.legs), b.grossLoan)
-		}
-	})
-
-	t.Run("empty scored set → no_legs", func(t *testing.T) {
-		s := newSolver(&Config{})
-		if _, skip := s.selectBundle(nil); skip != "no_legs" {
-			t.Fatalf("skip = %q, want no_legs", skip)
-		}
-	})
-
-	t.Run("equal-profit legs ordered deterministically (borrower tie-break)", func(t *testing.T) {
-		s := newSolver(&Config{})
-		// Equal profit + zero marketId, so the deterministic tie-break is the borrower byte (ascending) —
-		// the same signed bundle regardless of candidate iteration order.
-		gasState := &gasPredictorState{
-			FreeAssets:   big.NewInt(0),
-			Withdrawable: big.NewInt(0),
-			Acquire:      map[common.Address]*big.Int{{}: mustBig("30000000")},
-		}
-		b, skip := s.selectBundleWithGas([]scoredLeg{
-			scoredFor(3, mustBig("10000000")),
-			scoredFor(1, mustBig("10000000")),
-			scoredFor(2, mustBig("10000000")),
-		}, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-		if skip != "" {
-			t.Fatalf("unexpected skip %q", skip)
-		}
-		if len(b.legs) != 3 || b.legs[0].Borrower[19] != 1 || b.legs[1].Borrower[19] != 2 || b.legs[2].Borrower[19] != 3 {
-			t.Fatalf("borrower order = %d,%d,%d, want 1,2,3 (deterministic tie-break)",
-				b.legs[0].Borrower[19], b.legs[1].Borrower[19], b.legs[2].Borrower[19])
-		}
-	})
-}
-
-// TestSelectBundlePerCollateralBudget pins the shared-liquidity cap: legs seizing the same collateral can't
-// jointly over-commit that collateral's cached getMaxAssets (scoredFor sets expectedLoanOut = profit), so the bundle
-// won't revert with InsufficientAllocate on settlement. A leg on a different collateral is unaffected.
-func TestSelectBundlePerCollateralBudget(t *testing.T) {
-	s := &Solver{cfg: &Config{}, log: logr.Discard()}
-	collA := common.HexToAddress("0x00000000000000000000000000000000000000ca")
-	collB := common.HexToAddress("0x00000000000000000000000000000000000000cb")
-	withColl := func(byteID byte, profit int64, c common.Address, maxA int64) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit)) // expectedLoanOut == profit
-		sl.collateral = c
-		sl.maxAssets = big.NewInt(maxA)
-		return sl
-	}
-	// collA budget 100: leg#1 (60) fits; leg#2 (60) would push it to 120>100 → skipped. collB leg#3 fits.
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{collA: big.NewInt(100), collB: big.NewInt(100)},
-	}
-	b, skip := s.selectBundleWithGas([]scoredLeg{
-		withColl(1, 60, collA, 100),
-		withColl(2, 60, collA, 100),
-		withColl(3, 10, collB, 100),
-	}, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("unexpected skip %q", skip)
-	}
-	got := map[byte]bool{}
-	for _, l := range b.legs {
-		got[l.Borrower[19]] = true
-	}
-	if len(b.legs) != 2 || !got[1] || got[2] || !got[3] {
-		t.Fatalf("included borrowers = %v (legs=%d), want {1,3} — the over-committing same-collateral leg dropped",
-			got, len(b.legs))
-	}
-	if b.grossLoan.String() != "70" { // 60 (leg#1) + 10 (leg#3); leg#2 excluded
-		t.Fatalf("grossLoan = %s, want 70", b.grossLoan)
-	}
-}
-
-func TestSelectBundleAllowsSameMarketStaticLegs(t *testing.T) {
-	s := &Solver{cfg: &Config{}, log: logr.Discard()}
-	marketA := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	marketB := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	withMarket := func(byteID byte, profit int64, market common.Hash) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.MarketId = market
-		return sl
-	}
-
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{{}: big.NewInt(150)},
-	}
-	b, skip := s.selectBundleWithGas([]scoredLeg{
-		withMarket(1, 60, marketA),
-		withMarket(2, 50, marketA),
-		withMarket(3, 40, marketB),
-	}, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("unexpected skip %q", skip)
-	}
-	got := map[byte]bool{}
-	for _, leg := range b.legs {
-		got[leg.Borrower[19]] = true
-	}
-	if len(b.legs) != 3 || !got[1] || !got[2] || !got[3] {
-		t.Fatalf("selected borrowers = %v (legs=%d), want both same-market static legs plus other market", got, len(b.legs))
-	}
-}
-
-func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
-	s := &Solver{
-		cfg: &Config{
-			Sizing: SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
-		},
-		log: logr.Discard(),
-	}
-	market := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	coll := common.HexToAddress("0x00000000000000000000000000000000000000c0")
-	info := MarketInfo{
-		Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll, Lltv: mustBig("500000000000000000")},
-		State: morpho.MarketState{
-			TotalSupplyAssets: mustBig("5000000000"),
-			TotalSupplyShares: mustBig("5000000000"),
-			TotalBorrowAssets: mustBig("3000000000"),
-			TotalBorrowShares: mustBig("3000000000"),
-			Lltv:              mustBig("500000000000000000"),
-			Fee:               big.NewInt(0),
-			BorrowRatePerSec:  big.NewInt(0),
-		},
-	}
-	price := mustBig("1000000000000000000000000000")
-	quote := newQuote("1200000000000000000000", nil)
-	replayable := func(byteID byte) scoredLeg {
-		var borrower common.Address
-		borrower[19] = byteID
-		pos := morpho.PositionState{BorrowShares: mustBig("1200000000"), Collateral: mustBig("1000000000000000000")}
-		cand := Candidate{MarketID: market, Borrower: borrower, Market: info, Position: pos}
-		sized, ok := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, s.cfg.Sizing)
-		if !ok {
-			t.Fatal("fixture should size")
-		}
-		leg := sized.leg
-		leg.MaxSeizeAssets = big.NewInt(1) // stale/bogus: selection must ignore and recompute from source
-		return scoredLeg{
-			bundleLeg: bundleLeg{
-				LiquidationLeg:  leg,
-				expectedLoanOut: big.NewInt(1),
-				collateral:      coll,
-			},
-			profit: mustBig("999999999999999999"),
-			source: evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
-			replay: true,
-		}
-	}
-
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{coll: mustBig("10000000000000000000000")},
-	}
-	b, skip := s.selectBundleWithGas([]scoredLeg{replayable(1), replayable(2)}, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("unexpected skip %q", skip)
-	}
-	if len(b.legs) != 2 {
-		t.Fatalf("selected %d same-market replayed legs, want 2", len(b.legs))
-	}
-	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].expectedLoanOut.Cmp(big.NewInt(1)) == 0 {
-		t.Fatalf("selected stale precomputed leg instead of replaying source: %+v", b.legs[0])
-	}
-	if b.grossLoan.Cmp(mustBig("999999999999999999")) >= 0 {
-		t.Fatalf("grossLoan used stale bogus profit: %s", b.grossLoan)
-	}
-	if _, ok := morpho.ApplySeizeLiquidation(info.State, replayable(1).source.cand.Position, b.legs[0].MaxSeizeAssets, price); !ok {
-		t.Fatal("first replayed leg should apply to initial market state")
-	}
-}
-
-func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
-	collHigh := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	collLow := common.HexToAddress("0x00000000000000000000000000000000000000bb")
-	withColl := func(byteID byte, profit int64, c common.Address) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.collateral = c
-		return sl
-	}
-	s := &Solver{
-		cfg: &Config{
-			MaxTxGasPrice: big.NewInt(1),
-			Sizing:        SizingParams{},
-		},
-		log: logr.Discard(),
-	}
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{collLow: big.NewInt(1_000_000)},
-	}
-	b, skip := s.selectNetBundle([]scoredLeg{
-		withColl(1, 640_000, collHigh), // gross-best, but unknown route is net-negative even as a marginal leg
-		withColl(2, 600_000, collLow),  // lower gross, acquire route clears fixed + acquire gas
-	}, morpho.Wad, gasState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("lower-gross passing route should be selected, got skip %q", skip)
-	}
-	if len(b.legs) != 1 || b.legs[0].Borrower[19] != 2 {
-		t.Fatalf("selected borrowers = %+v, want only lower-gross acquire leg", b.legs)
-	}
-	if got := s.bundleNetNative(b, morpho.Wad, gasState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
-		t.Fatalf("selected bundle net = %s, want >= min margin", got)
-	}
-
-	t.Run("searches past gross-only candidate window", func(t *testing.T) {
-		const formerGrossWindow = 512
-		withAddr := func(addr common.Address, profit int64, c common.Address) scoredLeg {
-			return scoredLeg{
-				bundleLeg: bundleLeg{
-					LiquidationLeg:  LiquidationLeg{Borrower: addr},
-					expectedLoanOut: big.NewInt(profit),
-					collateral:      c,
-				},
-				profit: big.NewInt(profit),
-			}
-		}
-		scored := make([]scoredLeg, 0, formerGrossWindow+2)
-		for i := 0; i <= formerGrossWindow; i++ {
-			scored = append(scored, withAddr(common.BigToAddress(big.NewInt(int64(i+1))), 620_000, collHigh))
-		}
-		wantBorrower := common.BigToAddress(big.NewInt(10_000))
-		scored = append(scored, withAddr(wantBorrower, 600_000, collLow))
-
-		gotBundle, gotSkip := s.selectNetBundle(scored, morpho.Wad, gasState, big.NewInt(1), redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds)
-		if gotSkip != "" {
-			t.Fatalf("lower-gross passing leg after the old window should be selected, got skip %q", gotSkip)
-		}
-		if len(gotBundle.legs) != 1 || gotBundle.legs[0].Borrower != wantBorrower {
-			t.Fatalf("selected borrowers = %+v, want only lower-gross acquire leg past gross-only window", gotBundle.legs)
-		}
-	})
-}
-
-func TestSelectNetBundleAllowsSameMarketStaticLegs(t *testing.T) {
-	market := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	collA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	collB := common.HexToAddress("0x00000000000000000000000000000000000000b2")
-	withMarket := func(byteID byte, profit int64, c common.Address) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.MarketId = market
-		sl.collateral = c
-		return sl
-	}
-	s := &Solver{
-		cfg: &Config{
-			MaxTxGasPrice: big.NewInt(1),
-			Sizing:        SizingParams{},
-		},
-		log: logr.Discard(),
-	}
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire: map[common.Address]*big.Int{
-			collA: big.NewInt(700_000),
-			collB: big.NewInt(700_000),
-		},
-	}
-	b, skip := s.selectNetBundle([]scoredLeg{
-		withMarket(1, 700_000, collA),
-		withMarket(2, 700_000, collB),
-	}, morpho.Wad, gasState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("unexpected skip %q", skip)
-	}
-	if len(b.legs) != 2 {
-		t.Fatalf("selected %d same-market legs, want 2", len(b.legs))
-	}
-}
-
-func TestSelectNetBundleSharesBaseGasAcrossLegs(t *testing.T) {
-	collA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	collB := common.HexToAddress("0x00000000000000000000000000000000000000b2")
-	withColl := func(byteID byte, profit int64, c common.Address) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.collateral = c
-		return sl
-	}
-	s := &Solver{
-		cfg: &Config{
-			MaxTxGasPrice: big.NewInt(1),
-			Sizing:        SizingParams{},
-		},
-		log: logr.Discard(),
-	}
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire: map[common.Address]*big.Int{
-			collA: big.NewInt(590_000),
-			collB: big.NewInt(590_000),
-		},
-	}
-	b, skip := s.selectNetBundle([]scoredLeg{
-		withColl(1, 590_000, collA), // singleton cannot cover fixed + acquire gas
-		withColl(2, 590_000, collB), // together shares fixed gas and clears the bundle gate
-	}, morpho.Wad, gasState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("combined bundle should share base gas and pass, got skip %q", skip)
-	}
-	if len(b.legs) != 2 {
-		t.Fatalf("selected %d legs, want 2", len(b.legs))
-	}
-	if got := s.bundleNetNative(b, morpho.Wad, gasState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
-		t.Fatalf("selected bundle net = %s, want >= min margin", got)
-	}
-}
-
-func TestSelectNetBundleSearchesPastGreedyBudgetTrap(t *testing.T) {
-	coll := common.HexToAddress("0x00000000000000000000000000000000000000cc")
-	withColl := func(byteID byte, profit int64) scoredLeg {
-		sl := scoredFor(byteID, big.NewInt(profit))
-		sl.collateral = coll
-		sl.maxAssets = big.NewInt(1_240_000)
-		return sl
-	}
-	s := &Solver{
-		cfg: &Config{
-			BidWei:        big.NewInt(0),
-			MaxTxGasPrice: big.NewInt(1),
-			Sizing:        SizingParams{},
-		},
-		log: logr.Discard(),
-	}
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{coll: big.NewInt(1_400_000)},
-	}
-	b, skip := s.selectNetBundle([]scoredLeg{
-		withColl(1, 700_000), // gross-best consumes too much shared budget to pair with either 500k leg
-		withColl(2, 620_000),
-		withColl(3, 620_000),
-	}, morpho.Wad, gasState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
-		t.Fatalf("expected lower-gross pair to pass, got skip %q", skip)
-	}
-	got := map[byte]bool{}
-	for _, leg := range b.legs {
-		got[leg.Borrower[19]] = true
-	}
-	if len(b.legs) != 2 || got[1] || !got[2] || !got[3] {
-		t.Fatalf("selected borrowers = %v (legs=%d), want {2,3}", got, len(b.legs))
-	}
-	if gotNet := s.bundleNetNative(b, morpho.Wad, gasState, big.NewInt(1)); gotNet.Cmp(big.NewInt(1)) < 0 {
-		t.Fatalf("selected bundle net = %s, want >= min margin", gotNet)
-	}
-}
-
-func TestSearchBundleDoesNotRequireMonotonicScore(t *testing.T) {
-	s := &Solver{cfg: &Config{}, log: logr.Discard()}
-	legs := []scoredLeg{
-		scoredFor(1, big.NewInt(1)),
-		scoredFor(2, big.NewInt(1)),
-	}
-	scoreFn := func(b chosenBundle) *big.Int {
-		if len(b.legs) < 2 {
-			return big.NewInt(-1)
-		}
-		return big.NewInt(10)
-	}
-
-	gasState := &gasPredictorState{
-		FreeAssets:   big.NewInt(0),
-		Withdrawable: big.NewInt(0),
-		Acquire:      map[common.Address]*big.Int{{}: big.NewInt(2)},
-	}
-	best, ok := s.searchBundle(legs, gasState, redstoneExecutorMaxGasUnits, defaultPriceUpdateFeeds, scoreFn)
-	if !ok {
-		t.Fatal("search should keep temporary negative states when a deeper bundle can become profitable")
-	}
-	if len(best.bundle.legs) != 2 {
-		t.Fatalf("selected %d legs, want 2", len(best.bundle.legs))
-	}
-}
-
-func TestBundleBidNativeUsesProfitShareFloor(t *testing.T) {
-	b := chosenBundle{grossLoan: big.NewInt(1_000)}
-	s := &Solver{
-		cfg: &Config{
-			BidWei:               big.NewInt(100),
-			TotalBundleProfitBps: 2_000,
-		},
-		log: logr.Discard(),
-	}
-	if got := s.bundleBidNative(b, morpho.Wad); got.Cmp(big.NewInt(200)) != 0 {
-		t.Fatalf("bid = %s, want 20%% of gross native", got)
-	}
-	s.cfg.TotalBundleProfitBps = 500
-	if got := s.bundleBidNative(b, morpho.Wad); got.Cmp(big.NewInt(100)) != 0 {
-		t.Fatalf("bid = %s, want minimal bid floor", got)
-	}
-}
-
 // TestBuildBidStaleEpoch pins the fail-closed epoch gate: a non-empty snapshot must be block-tagged and
 // close enough to the auction timestamp that a stuck API cache cannot keep bidding indefinitely.
 func TestBuildBidStaleEpoch(t *testing.T) {
@@ -1462,34 +921,22 @@ func TestBuildBidStaleEpoch(t *testing.T) {
 	s, _ := seededSolver(t)
 
 	fresh := *snapshotOf(t, s)
-	fresh.block, fresh.blockTime = 0, 0
+	fresh.Block, fresh.BlockTime = 0, 0
 	storeSnapshot(t, s, &fresh)
-	if d := s.buildBid(a, now); d.skip != skipStaleEpoch {
-		t.Fatalf("untagged snapshot must skip %s, got %q", skipStaleEpoch, d.skip)
+	if d := s.buildBid(t.Context(), a, now); d.skip != types.SkipReasonStaleEpoch {
+		t.Fatalf("untagged snapshot must skip %s, got %q", types.SkipReasonStaleEpoch, d.skip)
 	}
 
-	fresh.block, fresh.blockTime = 123, uint64(a.Timestamp/1000)
+	fresh.Block, fresh.BlockTime = 123, uint64(a.Timestamp/1000)
 	storeSnapshot(t, s, &fresh)
-	if d := s.buildBid(a, now); d.skip != "" {
+	if d := s.buildBid(t.Context(), a, now); d.skip != "" {
 		t.Fatalf("current tagged snapshot should bid, got skip %q", d.skip)
 	}
 
-	fresh.blockTime = uint64(a.Timestamp/1000) - uint64(snapshotMaxAuctionLag/time.Second) - 1
+	fresh.BlockTime = uint64(a.Timestamp/1000) - uint64(time.Hour/time.Second)
 	storeSnapshot(t, s, &fresh)
-	if d := s.buildBid(a, now); d.skip != skipStaleEpoch {
-		t.Fatalf("old tagged snapshot must skip %s, got %q", skipStaleEpoch, d.skip)
-	}
-}
-
-func TestLegResultCode(t *testing.T) {
-	code := new(big.Int).Lsh(big.NewInt(0xdeadbeef), 224)
-	code.Or(code, new(big.Int).Lsh(big.NewInt(42), 16))
-	code.Or(code, new(big.Int).Lsh(big.NewInt(3), 8))
-	code.Or(code, big.NewInt(7))
-
-	got := legResultCode(code)
-	if got.index != 42 || got.status != 3 || got.reason != 7 || got.selector != "0xdeadbeef" {
-		t.Fatalf("decoded code = (%d,%d,%d,%q), want (42,3,7,0xdeadbeef)", got.index, got.status, got.reason, got.selector)
+	if d := s.buildBid(t.Context(), a, now); d.skip != types.SkipReasonStaleEpoch {
+		t.Fatalf("old tagged snapshot must skip %s, got %q", types.SkipReasonStaleEpoch, d.skip)
 	}
 }
 
@@ -1528,7 +975,7 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 	t.Run("success:false for our callback records a failure and trips at maxFailures", func(t *testing.T) {
 		s, _ := seededSolver(t) // breaker maxFailures = 3
 		for i := 0; i < 3; i++ {
-			s.handleMessage(context.Background(), frame(s.cfg.Callback.Hex(), false))
+			s.handleMessage(t.Context(), frame(seedCallback.Hex(), false))
 		}
 		if tripped, _ := s.breaker.tripped(now); !tripped {
 			t.Fatal("3 failed liquidation-result frames for our callback must trip the breaker")
@@ -1538,7 +985,7 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 	t.Run("success:true records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		for i := 0; i < 5; i++ {
-			s.handleMessage(context.Background(), frame(s.cfg.Callback.Hex(), true))
+			s.handleMessage(t.Context(), frame(seedCallback.Hex(), true))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("successful liquidation-result frames must not trip the breaker")
@@ -1549,7 +996,7 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 		s, _ := seededSolver(t)
 		other := common.HexToAddress("0x2222222222222222222222222222222222222222").Hex()
 		for i := 0; i < 5; i++ {
-			s.handleMessage(context.Background(), frame(other, false))
+			s.handleMessage(t.Context(), frame(other, false))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("another solver's failed liquidations must not trip our breaker")
@@ -1590,14 +1037,41 @@ func TestTooLate(t *testing.T) {
 	}
 }
 
+func TestAuctionBidContextDeadline(t *testing.T) {
+	start := time.Unix(100, 0)
+	a := AuctionMessage{Timestamp: start.Add(-100 * time.Millisecond).UnixMilli(), TimeoutMs: 500}
+
+	ctx, cancel := auctionBidContext(t.Context(), a, start)
+	defer cancel()
+	got, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("bid context missing deadline")
+	}
+	want := time.UnixMilli(a.Timestamp).Add(time.Duration(a.TimeoutMs)*time.Millisecond - bidDecisionDeadlineMargin)
+	if !got.Equal(want) {
+		t.Fatalf("deadline = %s, want %s", got, want)
+	}
+
+	future := AuctionMessage{Timestamp: start.Add(time.Second).UnixMilli(), TimeoutMs: 500}
+	ctx, cancel = auctionBidContext(t.Context(), future, start)
+	defer cancel()
+	got, ok = ctx.Deadline()
+	if !ok {
+		t.Fatal("fallback bid context missing deadline")
+	}
+	want = start.Add(time.Duration(future.TimeoutMs)*time.Millisecond - bidDecisionDeadlineMargin)
+	if !got.Equal(want) {
+		t.Fatalf("fallback deadline = %s, want %s", got, want)
+	}
+}
+
 func TestBuildBidSkips(t *testing.T) {
 	clock := auctionClock()
 	healthy := mustBig("100000000000000000000000000000000000000000000")
 
-	stateWith := func(s *Solver, deposit, callback *big.Int, locked bool) cachedState {
+	stateWith := func(s *Solver, deposit *big.Int, locked bool) cachedState {
 		st, _ := s.state.load()
 		st.Exec = ExecutorState{Nonce: big.NewInt(7), Deposit: deposit, Locked: locked}
-		st.CallbackNative = callback
 		return st
 	}
 	tests := []struct {
@@ -1608,13 +1082,16 @@ func TestBuildBidSkips(t *testing.T) {
 	}{
 		{name: "breaker", mut: func(s *Solver) { s.breaker.blacklist() }, want: "breaker"},
 		{name: "signer_locked", mut: func(s *Solver) {
-			s.state.store(stateWith(s, mustBig("100000000000000000"), mustBig("1000000000000000000"), true))
+			s.state.store(stateWith(s, mustBig("100000000000000000"), true))
 		}, want: "signer_locked"},
 		{name: "deposit_low", mut: func(s *Solver) {
-			s.state.store(stateWith(s, big.NewInt(1), mustBig("1000000000000000000"), false)) // below MIN_DEPOSIT (1e13)
+			s.state.store(stateWith(s, big.NewInt(1), false)) // below MIN_DEPOSIT (1e13)
 		}, want: "deposit_low"},
+		{name: "bid_cap", mut: func(s *Solver) {
+			s.cfg.MaxBidWei = big.NewInt(1)
+		}, want: "bid_cap"},
 		{name: "callback_balance", mut: func(s *Solver) {
-			s.state.store(stateWith(s, mustBig("100000000000000000"), big.NewInt(1), false))
+			seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("2500000000"), big.NewInt(1), clock())
 		}, want: "callback_balance"},
 		{name: "no_legs_when_healthy", priceOverride: healthy, want: "no_legs"},
 	}
@@ -1628,7 +1105,7 @@ func TestBuildBidSkips(t *testing.T) {
 			if tc.priceOverride != nil {
 				frame.Payload.Prices = map[string]string{"0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D": tc.priceOverride.String()}
 			}
-			if d := s.buildBid(frame, clock); d.skip != tc.want {
+			if d := s.buildBid(t.Context(), frame, clock); d.skip != tc.want {
 				t.Fatalf("skip = %q, want %q", d.skip, tc.want)
 			}
 		})

@@ -11,19 +11,21 @@ import (
 // the framework's /metrics). All methods are nil-safe so the solver runs unmetered when no registry
 // is provided.
 type metrics struct {
-	auctions       prometheus.Counter
-	bids           prometheus.Counter
-	wins           prometheus.Counter
-	failedLiq      prometheus.Counter
-	skips          *prometheus.CounterVec
-	hotPath        prometheus.Histogram
-	gasRatio       prometheus.Histogram
-	deposit        prometheus.Gauge
-	callbackNative prometheus.Gauge
-	depositLow     prometheus.Gauge // 1 when the deposit is below the on-chain MIN_DEPOSIT floor
+	auctions   prometheus.Counter
+	bids       prometheus.Counter
+	wins       prometheus.Counter
+	failedLiq  prometheus.Counter
+	skips      *prometheus.CounterVec
+	hotPath    prometheus.Histogram
+	deposit    prometheus.Gauge
+	depositLow prometheus.Gauge // 1 when the deposit is below the on-chain MIN_DEPOSIT floor
 }
 
-func newMetrics(reg prometheus.Registerer) (*metrics, error) {
+func newMetrics(reg prometheus.Registerer, strategyName string) (*metrics, error) {
+	if strategyName == "" {
+		strategyName = defaultStrategyName
+	}
+	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
 	m := &metrics{
 		auctions:  prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_auctions_total", Help: "OEV auction frames seen."}),
 		bids:      prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_bids_total", Help: "Bids sent (or would-bid in dry-run)."}),
@@ -36,15 +38,10 @@ func newMetrics(reg prometheus.Registerer) (*metrics, error) {
 			Name: "oev_hotpath_seconds", Help: "handleAuction wall-clock (the ~400ms budget).",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.4, 1},
 		}),
-		gasRatio: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "oev_settlement_gas_actual_predicted_ratio", Help: "Actual receipt gasUsed divided by predicted settlement gas units.",
-			Buckets: []float64{0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 5},
-		}),
-		deposit:        prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei)."}),
-		callbackNative: prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_callback_native_wei", Help: "Callback contract native balance (wei)."}),
-		depositLow:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_below_floor", Help: "1 when the Executor deposit is below the on-chain MIN_DEPOSIT floor."}),
+		deposit:    prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei)."}),
+		depositLow: prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_below_floor", Help: "1 when the Executor deposit is below the on-chain MIN_DEPOSIT floor."}),
 	}
-	for _, c := range []prometheus.Collector{m.auctions, m.bids, m.wins, m.failedLiq, m.skips, m.hotPath, m.gasRatio, m.deposit, m.callbackNative, m.depositLow} {
+	for _, c := range []prometheus.Collector{m.auctions, m.bids, m.wins, m.failedLiq, m.skips, m.hotPath, m.deposit, m.depositLow} {
 		if err := reg.Register(c); err != nil {
 			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
 		}
@@ -88,16 +85,9 @@ func (m *metrics) latency(d time.Duration) {
 	}
 }
 
-func (m *metrics) settlementGas(predicted, actual uint64) {
-	if m != nil && predicted > 0 {
-		m.gasRatio.Observe(float64(actual) / float64(predicted))
-	}
-}
-
-func (m *metrics) balances(depositWei, callbackWei float64) {
+func (m *metrics) depositWei(depositWei float64) {
 	if m != nil {
 		m.deposit.Set(depositWei)
-		m.callbackNative.Set(callbackWei)
 	}
 }
 
