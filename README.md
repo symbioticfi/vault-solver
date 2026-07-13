@@ -40,9 +40,9 @@ and validated by its own solver. Adding a solver touches **no** framework code �
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
 
-The `3f-bridge-facilitator` and `rfq-filler` solvers expose a pluggable **strategy** — the built-in
-`default` or an external `webhook` you run; see [Strategies](#strategies). (`redstone-oev` has a single
-built-in decision path and no `strategy` config.)
+The `3f-bridge-facilitator`, `rfq-filler`, and `redstone-oev` solvers expose a pluggable
+**strategy** — the built-in `default` or an external `webhook` you run; see
+[Strategies](#strategies).
 
 ### 3F Bridge Facilitator — `3f-bridge-facilitator`
 
@@ -65,6 +65,9 @@ that fills the orders it is awarded, settling on-chain through the adapter.
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
+quoted output at the available `maxAssets` instead of declining; the excess input is reflected as
+worse execution price and price impact.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -78,16 +81,20 @@ signed payload is bundled atomically with the price update and the liquidation.
 
 On settlement it liquidates the position and exits the seized collateral through a single Symbiotic
 `LiquidLaneAdapter`, realizing the spread and paying its bid. It signs and bids but never submits the
-settlement transaction — RedStone's auctioneer does. Design, config, and roadmap:
+settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
+LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
+`operationData`. Operators can set `maxBidWei` as a per-auction spend ceiling over any strategy; it is
+required for the external `webhook` strategy and optional for the built-in `default`. Design, config,
+and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 
 ### Strategies
 
-The 3F and RFQ solvers split on-chain plumbing (reads, signing, submission — fixed) from the
+The solvers split protocol plumbing (reads, signing, submission — fixed) from the
 **decision** — how to size, price, and select — which is a pluggable *strategy*, chosen in config:
 
-- **`default`** — the built-in in-process strategy; used when the `strategy` block is omitted.
+- **`default`** — the built-in in-process strategy for that solver.
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the plan it returns, so your service owns the logic.
 

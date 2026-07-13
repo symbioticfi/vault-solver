@@ -26,7 +26,6 @@ import (
 // Run goroutine's cfg reads stay race-free.
 func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 	s, _ := seededSolver(t)
-	useOnchainTestMonitor(t, s)
 
 	var conns atomic.Int32
 	dropped := make(chan struct{}, 1)

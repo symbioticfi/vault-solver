@@ -1,0 +1,5093 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/quote/request": {
+      "post": {
+        "operationId": "QuotesController_requestQuote",
+        "parameters": [
+          {
+            "name": "X-Integrator-Key",
+            "in": "header",
+            "description": "Raw integrator API key (obtained from integrator onboarding). When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OifQuoteRequestDto"
+              },
+              "examples": {
+                "exact-input": {
+                  "value": {
+                    "user": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                    "intent": {
+                      "intentType": "oif-swap",
+                      "inputs": [
+                        {
+                          "user": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                          "asset": "0x0001000003014a3414036cbd53842c5426634e7929541ec2318f3dcf7e",
+                          "amount": "4000000"
+                        }
+                      ],
+                      "outputs": [
+                        {
+                          "receiver": "0x0001000003aa36a714841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                          "asset": "0x0001000003066eee141c7d4b196cb0c7b01d743fbc6116a902379c7238"
+                        }
+                      ],
+                      "swapType": "exact-input",
+                      "metadata": {
+                        "exclusiveFor": [
+                          "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                        ]
+                      }
+                    },
+                    "supportedTypes": [
+                      "oif-escrow-v0",
+                      "oif-resource-lock-v0"
+                    ]
+                  }
+                },
+                "exact-output": {
+                  "value": {
+                    "user": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                    "intent": {
+                      "intentType": "oif-swap",
+                      "inputs": [
+                        {
+                          "user": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                          "asset": "0x0001000003014a3414036cbd53842c5426634e7929541ec2318f3dcf7e"
+                        }
+                      ],
+                      "outputs": [
+                        {
+                          "receiver": "0x0001000003aa36a714841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                          "asset": "0x0001000003aa36a7141c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                          "amount": "29940002"
+                        }
+                      ],
+                      "swapType": "exact-output",
+                      "metadata": {
+                        "exclusiveFor": [
+                          "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                        ]
+                      }
+                    },
+                    "supportedTypes": [
+                      "oif-escrow-v0",
+                      "oif-resource-lock-v0"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quote request successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetOifQuotesResponseDto"
+                },
+                "example": {
+                  "quotes": [
+                    {
+                      "order": null,
+                      "validUntil": 1777941876,
+                      "quoteId": "quote_yCyE5aWW4NILo2UdM-8ETpia05TCLv",
+                      "preview": {
+                        "inputs": [
+                          {
+                            "user": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                            "asset": "0x0001000003014a3414036cbd53842c5426634e7929541ec2318f3dcf7e",
+                            "amount": "4000000"
+                          }
+                        ],
+                        "outputs": [
+                          {
+                            "receiver": "0x0001000003aa36a714841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                            "asset": "0x0001000003066eee141c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                            "amount": "2000000"
+                          }
+                        ]
+                      },
+                      "metadata": {
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                      },
+                      "partialFill": false,
+                      "failureHandling": "refund-automatic"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unsupported swap type or solver not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Request quote",
+        "tags": [
+          "Quotes",
+          "Bridge API"
+        ]
+      }
+    },
+    "/quotes/submit": {
+      "post": {
+        "description": "We allow solvers to submit quotes on any chain and asset pair. \n    However, for us to actually quote users' intents, the chains need to be enabled by the \"LiFi Intent\" protocol. \n    We periodically update the supported chains, assets, and routes, but if you need a specific chain to be supported, please contact us.",
+        "operationId": "QuotesController_submitQuotes",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Submit or update up to 200K quotes at once. To remove a quote send it with ranges set to empty array eg: `ranges=[]`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitQuotesDto"
+              },
+              "examples": {
+                "submit-quotes": {
+                  "value": {
+                    "quotes": [
+                      {
+                        "fromChain": "11155111",
+                        "toChain": "84532",
+                        "fromAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "toAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1777941876,
+                        "ranges": [
+                          {
+                            "minAmount": "300010",
+                            "maxAmount": "8965672",
+                            "quote": "0.000033332222259258",
+                            "fixedCost": "10"
+                          },
+                          {
+                            "minAmount": "8965673",
+                            "maxAmount": "17631335",
+                            "quote": "0.966539042858243881",
+                            "fixedCost": "100"
+                          },
+                          {
+                            "minAmount": "17631336",
+                            "maxAmount": "26297000",
+                            "quote": "0.982984840173200714"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "84532",
+                        "toChain": "11155111",
+                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1777941876,
+                        "ranges": [
+                          {
+                            "minAmount": "300010",
+                            "maxAmount": "11120005",
+                            "quote": "0.000033332222259258"
+                          },
+                          {
+                            "minAmount": "11120006",
+                            "maxAmount": "21940001",
+                            "quote": "1.3021597290505059"
+                          },
+                          {
+                            "minAmount": "21940002",
+                            "maxAmount": "32760000",
+                            "quote": "0.985487649454179630"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "84532",
+                        "toChain": "421614",
+                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1977941876,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000",
+                            "maxAmount": "100000000",
+                            "quote": "0.5"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "1",
+                        "toChain": "137",
+                        "fromAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                        "toAsset": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+                        "fromDecimals": 18,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1977941876,
+                        "ranges": [
+                          {
+                            "minAmount": "10000000000000000",
+                            "maxAmount": "10000000000000000000",
+                            "quote": "3500.0"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "56",
+                        "toChain": "1",
+                        "fromAsset": "0x55d398326f99059fF775485246999027B3197955",
+                        "toAsset": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "fromDecimals": 18,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1977941876,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000000000000000",
+                            "maxAmount": "1000000000000000000000",
+                            "quote": "0.999"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "submit-quotes-solana": {
+                  "summary": "Solana destination with base58 exclusiveFor",
+                  "value": {
+                    "quotes": [
+                      {
+                        "fromChain": "42161",
+                        "toChain": "1151111081099710",
+                        "fromAsset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                        "toAsset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "4Nd1mY9XzN6vfFh1Cm9wHQXgVxqQ8j8s8MoREvkLqJ7G",
+                        "expiry": 1777941876,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000",
+                            "maxAmount": "100000000",
+                            "quote": "0.99"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quote submission successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitQuotesResponseDto"
+                },
+                "example": {
+                  "status": "success",
+                  "quotesAdded": 1250
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or quote validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Returned if the per-solver quote submission rate limit was exceeded. If it contains a `Retry-After` header (seconds), retry accordingly, otherwise retry  with exponential backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Submit quotes",
+        "tags": [
+          "Quotes",
+          "Solver API"
+        ]
+      }
+    },
+    "/chains/supported": {
+      "get": {
+        "operationId": "ChainsController_getSupportedChains",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The list of supported chains",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SupportedChainDto"
+                  }
+                },
+                "example": [
+                  {
+                    "id": 3,
+                    "chainId": "11155111",
+                    "name": "Ethereum Sepolia",
+                    "chainType": "EVM"
+                  },
+                  {
+                    "id": 4,
+                    "chainId": "84532",
+                    "name": "Base Sepolia",
+                    "chainType": "EVM"
+                  },
+                  {
+                    "id": 5,
+                    "chainId": "11155420",
+                    "name": "Optimism Sepolia",
+                    "chainType": "EVM"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "summary": "Get supported chains",
+        "tags": [
+          "Bridge API"
+        ]
+      }
+    },
+    "/api/v1/integrator/quote/request": {
+      "post": {
+        "operationId": "QuotesControllerV1_getQuote",
+        "parameters": [
+          {
+            "name": "X-Integrator-Key",
+            "in": "header",
+            "description": "Raw integrator API key (obtained from integrator onboarding). When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteRequestDto"
+              },
+              "examples": {
+                "exact-input": {
+                  "value": {
+                    "user": {
+                      "chain": "eip155:84532",
+                      "address": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                    },
+                    "intent": {
+                      "intentType": "oif-swap",
+                      "inputs": [
+                        {
+                          "chain": "eip155:84532",
+                          "user": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                          "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                          "amount": "1000000"
+                        }
+                      ],
+                      "outputs": [
+                        {
+                          "chain": "eip155:11155111",
+                          "receiver": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+                        }
+                      ],
+                      "swapType": "exact-input"
+                    },
+                    "supportedTypes": [
+                      "oif-user-open-v0"
+                    ]
+                  }
+                },
+                "exact-output": {
+                  "value": {
+                    "user": {
+                      "chain": "eip155:84532",
+                      "address": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                    },
+                    "intent": {
+                      "intentType": "oif-swap",
+                      "inputs": [
+                        {
+                          "chain": "eip155:84532",
+                          "user": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                          "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+                        }
+                      ],
+                      "outputs": [
+                        {
+                          "chain": "eip155:11155111",
+                          "receiver": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                          "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                          "amount": "500000"
+                        }
+                      ],
+                      "swapType": "exact-output"
+                    },
+                    "supportedTypes": [
+                      "oif-user-open-v0"
+                    ]
+                  }
+                },
+                "svm-origin": {
+                  "summary": "Solana origin → EVM destination",
+                  "value": {
+                    "user": {
+                      "chain": "solana:1151111081099710",
+                      "address": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15"
+                    },
+                    "intent": {
+                      "intentType": "oif-swap",
+                      "inputs": [
+                        {
+                          "chain": "solana:1151111081099710",
+                          "user": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15",
+                          "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                          "amount": "1000000"
+                        }
+                      ],
+                      "outputs": [
+                        {
+                          "chain": "eip155:8453",
+                          "receiver": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+                        }
+                      ],
+                      "swapType": "exact-input"
+                    },
+                    "supportedTypes": [
+                      "oif-user-open-v0"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quote request successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Request quote",
+        "tags": [
+          "Bridge API v1"
+        ]
+      }
+    },
+    "/orders/submit": {
+      "post": {
+        "description": "Submit an order (intent) to the bridge",
+        "operationId": "OrdersController_submitOrder",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitOrderDto"
+              },
+              "examples": {
+                "with-quote": {
+                  "value": {
+                    "orderType": "CatalystCompactOrder",
+                    "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
+                    "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                    "order": {
+                      "expires": 1942819670,
+                      "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                      "nonce": "1004",
+                      "originChainId": "84532",
+                      "fillDeadline": 1942819670,
+                      "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
+                      "inputs": [
+                        [
+                          "36286452483532273188258183071097127586156282419649613466036116694645176389502",
+                          "1000000"
+                        ]
+                      ],
+                      "outputs": [
+                        {
+                          "oracle": "0x0000000000000000000000007bc921c858c5390d9fd74c337dd009ec9a1b6b8f",
+                          "settler": "0x0000000000000000000000005d14806127d7caafcb8028c7736ae6b8aec583d9",
+                          "chainId": "11155420",
+                          "token": "0x0000000000000000000000001c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                          "amount": "1000000",
+                          "recipient": "0x0000000000000000000000009773dacbc46cafb4e055060565e319922b48607d",
+                          "callbackData": "0x",
+                          "context": "0x"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "without-quote": {
+                  "value": {
+                    "orderType": "CatalystCompactOrder",
+                    "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
+                    "order": {
+                      "expires": 1942819670,
+                      "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                      "nonce": "1004",
+                      "originChainId": "84532",
+                      "fillDeadline": 1942819670,
+                      "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
+                      "inputs": [
+                        [
+                          "36286452483532273188258183071097127586156282419649613466036116694645176389502",
+                          "1000000"
+                        ]
+                      ],
+                      "outputs": [
+                        {
+                          "oracle": "0x0000000000000000000000007bc921c858c5390d9fd74c337dd009ec9a1b6b8f",
+                          "settler": "0x0000000000000000000000005d14806127d7caafcb8028c7736ae6b8aec583d9",
+                          "chainId": "11155420",
+                          "token": "0x0000000000000000000000001c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                          "amount": "1000000",
+                          "recipient": "0x0000000000000000000000009773dacbc46cafb4e055060565e319922b48607d",
+                          "callbackData": "0x",
+                          "context": "0x"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order successfully created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitOrderResponseDto"
+                },
+                "example": {
+                  "order": {
+                    "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                    "nonce": "1004",
+                    "inputs": [
+                      [
+                        "36286452483532273188258183071097127586156282419649613466036116694645176389502",
+                        "1000000"
+                      ]
+                    ],
+                    "expires": "1942819670",
+                    "outputs": [
+                      {
+                        "callbackData": "0x",
+                        "token": "0x0000000000000000000000001c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                        "amount": "1000000",
+                        "oracle": "0x0000000000000000000000007bc921c858c5390d9fd74c337dd009ec9a1b6b8f",
+                        "chainId": "11155420",
+                        "context": "0x",
+                        "settler": "0x0000000000000000000000005d14806127d7caafcb8028c7736ae6b8aec583d9",
+                        "recipient": "0x0000000000000000000000009773dacbc46cafb4e055060565e319922b48607d"
+                      }
+                    ],
+                    "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
+                    "fillDeadline": "1942819670",
+                    "originChainId": "84532"
+                  },
+                  "quote": {
+                    "id": "51",
+                    "createdAt": "2025-10-16T11:51:59.426Z",
+                    "updatedAt": "2025-10-16T11:57:14.716Z",
+                    "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                    "fromChainNetworkId": "84532",
+                    "toChainNetworkId": "11155111",
+                    "fromAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "toAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                    "fromAssetDecimals": 6,
+                    "toAssetDecimals": 6,
+                    "quote": "0.98548764945417963",
+                    "inputAmount": "30380900",
+                    "outputAmount": "29940002",
+                    "expiry": "2026-05-05T00:44:36.000Z",
+                    "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                    "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                    "orderId": 13,
+                    "solverId": 1
+                  },
+                  "sponsorSignature": null,
+                  "allocatorSignature": null,
+                  "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
+                  "meta": {
+                    "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                    "submitTime": 1760615834,
+                    "orderStatus": "Signed",
+                    "destinationAddress": "0x9773dacbc46cafb4e055060565e319922b48607d",
+                    "orderIdentifier": "intent_qVo7_1TkJ7VekL99O7SGS9cRHv0si6",
+                    "onChainOrderId": "0x41fa6469a1f6d84bf1adb5529bc1f14d559cb85f771639a9962b714fc4f2e122",
+                    "signedAt": "2025-10-16T11:57:14.715Z",
+                    "expiredAt": null,
+                    "deliveredAt": null,
+                    "settledAt": null,
+                    "lastCompactDepositBlockNumber": null,
+                    "orderInitiatedTxHash": null,
+                    "orderDeliveredTxHash": null,
+                    "orderVerifiedTxHash": null,
+                    "orderSettledTxHash": null,
+                    "refundTxHash": null,
+                    "refundedAt": null,
+                    "solverAddress": null
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Order submission failed because of validation errors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Order submissions are temporarily disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Submit order",
+        "tags": [
+          "Bridge API"
+        ]
+      }
+    },
+    "/orders": {
+      "get": {
+        "operationId": "OrdersController_getOrders",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Limit the number of results",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10,
+              "example": 10,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of results to skip",
+            "schema": {
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 0,
+              "example": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Status of the order",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Submitted",
+                "Open",
+                "Signed",
+                "Delivered",
+                "Settled",
+                "Refunded"
+              ]
+            }
+          },
+          {
+            "name": "nonce",
+            "required": false,
+            "in": "query",
+            "description": "Nonce value for the order",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "user",
+            "required": false,
+            "in": "query",
+            "description": "Address of the initiator of the order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "settlementContractAddress",
+            "required": false,
+            "in": "query",
+            "description": "Address of the destination settlement contract",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "catalystOrderId",
+            "required": false,
+            "in": "query",
+            "description": "Internal order id returned by Lifi Intents API",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "onChainOrderId",
+            "required": false,
+            "in": "query",
+            "description": "On chain order id propagated in the logs/events.",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "name": "exclusiveFor",
+            "required": false,
+            "in": "query",
+            "description": "\"Exclusive for\" address referencing a specific solver",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "originChainId",
+            "required": false,
+            "in": "query",
+            "description": "Filter by origin (source) chain ID",
+            "schema": {
+              "minLength": 1,
+              "example": "1",
+              "type": "string"
+            }
+          },
+          {
+            "name": "destinationChainId",
+            "required": false,
+            "in": "query",
+            "description": "Filter by destination chain ID",
+            "schema": {
+              "minLength": 1,
+              "example": "137",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Orders successfully retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetOrdersResponseDto"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "order": {
+                        "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                        "nonce": "1004",
+                        "inputs": [
+                          [
+                            "36286452483532273188258183071097127586156282419649613466036116694645176389502",
+                            "1000000"
+                          ]
+                        ],
+                        "expires": "1942819670",
+                        "outputs": [
+                          {
+                            "callbackData": "0x",
+                            "token": "0x0000000000000000000000001c7d4b196cb0c7b01d743fbc6116a902379c7238",
+                            "amount": "1000000",
+                            "oracle": "0x0000000000000000000000007bc921c858c5390d9fd74c337dd009ec9a1b6b8f",
+                            "chainId": "11155420",
+                            "context": "0x",
+                            "settler": "0x0000000000000000000000005d14806127d7caafcb8028c7736ae6b8aec583d9",
+                            "recipient": "0x0000000000000000000000009773dacbc46cafb4e055060565e319922b48607d"
+                          }
+                        ],
+                        "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
+                        "fillDeadline": "1942819670",
+                        "originChainId": "84532"
+                      },
+                      "quote": {
+                        "id": "51",
+                        "createdAt": "2025-10-16T11:51:59.426Z",
+                        "updatedAt": "2025-10-16T11:57:14.716Z",
+                        "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                        "fromChainNetworkId": "84532",
+                        "toChainNetworkId": "11155111",
+                        "fromAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "toAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "fromAssetDecimals": 6,
+                        "toAssetDecimals": 6,
+                        "quote": "0.98548764945417963",
+                        "inputAmount": "30380900",
+                        "outputAmount": "29940002",
+                        "expiry": "2026-05-05T00:44:36.000Z",
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                        "orderId": 13,
+                        "solverId": 1
+                      },
+                      "sponsorSignature": null,
+                      "allocatorSignature": null,
+                      "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
+                      "meta": {
+                        "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                        "submitTime": 1760615834,
+                        "orderStatus": "Delivered",
+                        "destinationAddress": "0x9773dacbc46cafb4e055060565e319922b48607d",
+                        "orderIdentifier": "intent_qVo7_1TkJ7VekL99O7SGS9cRHv0si6",
+                        "onChainOrderId": "0x41fa6469a1f6d84bf1adb5529bc1f14d559cb85f771639a9962b714fc4f2e122",
+                        "signedAt": "2025-10-16T11:57:14.715Z",
+                        "expiredAt": null,
+                        "deliveredAt": "2025-10-16T12:08:45.000Z",
+                        "settledAt": null,
+                        "lastCompactDepositBlockNumber": null,
+                        "orderInitiatedTxHash": null,
+                        "orderDeliveredTxHash": "0x9c4e2a7f1b3d5e8c0a6f2b4d7e9c1a3f5b7d0e2c4a6f8b0d2e4c6a8f0b2d4e6c",
+                        "orderVerifiedTxHash": null,
+                        "orderSettledTxHash": null,
+                        "refundTxHash": null,
+                        "refundedAt": null,
+                        "solverAddress": "0xc7dd6725037229bce71aa5f7d1aa72454e316304"
+                      }
+                    },
+                    {
+                      "order": {
+                        "user": "0xAE013Dc3a3456459766A729a15c427A6607bd98d",
+                        "nonce": "1934696233",
+                        "inputs": [
+                          [
+                            "162645876805862407557836451532389263558424949304",
+                            "10000"
+                          ]
+                        ],
+                        "expires": "1759481697",
+                        "outputs": [
+                          {
+                            "callbackData": "0x",
+                            "token": "0x000000000000000000000000036cbd53842c5426634e7929541ec2318f3dcf7e",
+                            "amount": "10000",
+                            "oracle": "0x00000000000000000000000000d5b500eca100f7cdedc800ec631aca00baac00",
+                            "chainId": "84532",
+                            "context": "0x",
+                            "settler": "0x00000000000000000000000000000000d7278408ce7a490015577c41e57143a5",
+                            "recipient": "0x000000000000000000000000ae013dc3a3456459766a729a15c427a6607bd98d"
+                          }
+                        ],
+                        "inputOracle": "0x00d5b500ECa100F7cdeDC800eC631Aca00BaAC00",
+                        "fillDeadline": "1759481697",
+                        "originChainId": "11155111"
+                      },
+                      "quote": null,
+                      "sponsorSignature": null,
+                      "allocatorSignature": null,
+                      "inputSettler": "0x000001bf3f3175bd007f3889b50000c7006e72c0",
+                      "meta": {
+                        "quoteId": null,
+                        "submitTime": 1759839240,
+                        "orderStatus": "Signed",
+                        "destinationAddress": "0xae013dc3a3456459766a729a15c427a6607bd98d",
+                        "orderIdentifier": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE",
+                        "onChainOrderId": "0xaa7a2bb561edeba0160c9c22263ebdc56f606d7197bb51fcaae40c84a51e93d2",
+                        "signedAt": "2025-10-03T08:45:24.000Z",
+                        "expiredAt": null,
+                        "deliveredAt": null,
+                        "settledAt": null,
+                        "lastCompactDepositBlockNumber": null,
+                        "orderInitiatedTxHash": "0xef8cf31df4950bc18b02fdcf875329630b9296f7acc5055eb02871b8497197ba",
+                        "orderDeliveredTxHash": null,
+                        "orderVerifiedTxHash": null,
+                        "orderSettledTxHash": null,
+                        "refundTxHash": null,
+                        "refundedAt": null,
+                        "solverAddress": null
+                      }
+                    }
+                  ],
+                  "meta": {
+                    "total": 2,
+                    "limit": 10,
+                    "offset": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get orders",
+        "tags": [
+          "Bridge API"
+        ]
+      }
+    },
+    "/orders/status": {
+      "get": {
+        "description": "Get order status by on-chain-id or intent-id. At least one of the parameters is required.",
+        "operationId": "OrdersController_getOrderStatus",
+        "parameters": [
+          {
+            "name": "onChainOrderId",
+            "required": false,
+            "in": "query",
+            "description": "On chain order id propagated in the logs/events.",
+            "schema": {
+              "example": "0xc7b44934463285434d1acc3405a6514e6677adfaae180ec042204d3cfc218d81",
+              "type": "string"
+            }
+          },
+          {
+            "name": "catalystOrderId",
+            "required": false,
+            "in": "query",
+            "description": "Internal order id returned by Lifi Intents API",
+            "schema": {
+              "example": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order status successfully retrieved by on-chain-id or intent-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitOrderResponseDto"
+                },
+                "example": {
+                  "order": {
+                    "user": "0xAE013Dc3a3456459766A729a15c427A6607bd98d",
+                    "nonce": "1934696233",
+                    "inputs": [
+                      [
+                        "162645876805862407557836451532389263558424949304",
+                        "10000"
+                      ]
+                    ],
+                    "expires": "1759481697",
+                    "outputs": [
+                      {
+                        "callbackData": "0x",
+                        "token": "0x000000000000000000000000036cbd53842c5426634e7929541ec2318f3dcf7e",
+                        "amount": "10000",
+                        "oracle": "0x00000000000000000000000000d5b500eca100f7cdedc800ec631aca00baac00",
+                        "chainId": "84532",
+                        "context": "0x",
+                        "settler": "0x00000000000000000000000000000000d7278408ce7a490015577c41e57143a5",
+                        "recipient": "0x000000000000000000000000ae013dc3a3456459766a729a15c427a6607bd98d"
+                      }
+                    ],
+                    "inputOracle": "0x00d5b500ECa100F7cdeDC800eC631Aca00BaAC00",
+                    "fillDeadline": "1759481697",
+                    "originChainId": "11155111"
+                  },
+                  "quote": {
+                    "id": "51",
+                    "createdAt": "2025-10-16T11:51:59.426Z",
+                    "updatedAt": "2025-10-16T11:57:14.716Z",
+                    "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                    "fromChainNetworkId": "84532",
+                    "toChainNetworkId": "11155111",
+                    "fromAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "toAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                    "fromAssetDecimals": 6,
+                    "toAssetDecimals": 6,
+                    "quote": "0.98548764945417963",
+                    "inputAmount": "30380900",
+                    "outputAmount": "29940002",
+                    "expiry": "2026-05-05T00:44:36.000Z",
+                    "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                    "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
+                    "orderId": 13,
+                    "solverId": 1
+                  },
+                  "sponsorSignature": null,
+                  "allocatorSignature": null,
+                  "inputSettler": "0x000001bf3f3175bd007f3889b50000c7006e72c0",
+                  "meta": {
+                    "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
+                    "submitTime": 1759839240,
+                    "orderStatus": "Signed",
+                    "destinationAddress": "0xae013dc3a3456459766a729a15c427a6607bd98d",
+                    "orderIdentifier": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE",
+                    "onChainOrderId": "0xaa7a2bb561edeba0160c9c22263ebdc56f606d7197bb51fcaae40c84a51e93d2",
+                    "signedAt": "2025-10-03T08:45:24.000Z",
+                    "expiredAt": null,
+                    "deliveredAt": null,
+                    "settledAt": null,
+                    "lastCompactDepositBlockNumber": null,
+                    "orderInitiatedTxHash": "0xef8cf31df4950bc18b02fdcf875329630b9296f7acc5055eb02871b8497197ba",
+                    "orderDeliveredTxHash": null,
+                    "orderVerifiedTxHash": null,
+                    "orderSettledTxHash": null,
+                    "refundTxHash": null,
+                    "refundedAt": null,
+                    "solverAddress": null
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get order status",
+        "tags": [
+          "Bridge API"
+        ]
+      }
+    },
+    "/solver-api/solver/identities": {
+      "get": {
+        "operationId": "SolverApiV0Controller_getSolverIdentities",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Solver identities successfully retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSolverIdentitiesResponseDto"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": 1,
+                      "createdAt": "2025-10-16T12:47:41.863Z",
+                      "updatedAt": "2025-10-16T12:47:41.863Z",
+                      "address": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "solverId": 2
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Get solver identities (accounts registered to track reputation)",
+        "tags": [
+          "Solver API"
+        ]
+      }
+    },
+    "/solver-api/quotes": {
+      "get": {
+        "operationId": "SolverApiV0Controller_getSolverQuotes",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Limit the number of results",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 50,
+              "example": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of results to skip",
+            "schema": {
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 0,
+              "example": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "fromChain",
+            "required": false,
+            "in": "query",
+            "description": "Source chain network ID",
+            "schema": {
+              "minLength": 1,
+              "example": "11155111",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toChain",
+            "required": false,
+            "in": "query",
+            "description": "Destination chain network ID",
+            "schema": {
+              "minLength": 1,
+              "example": "84532",
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromAsset",
+            "required": false,
+            "in": "query",
+            "description": "Source asset address",
+            "schema": {
+              "example": "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toAsset",
+            "required": false,
+            "in": "query",
+            "description": "Destination asset address",
+            "schema": {
+              "example": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Solver uplodad quotes successfully retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSolverQuotesResponseDto"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "90",
+                      "createdAt": "2025-10-20T23:31:56.408Z",
+                      "updatedAt": "2025-10-20T23:31:56.408Z",
+                      "fromChainNetworkId": "11155111",
+                      "toChainNetworkId": "84532",
+                      "fromAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                      "toAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                      "fromAssetDecimals": 6,
+                      "toAssetDecimals": 6,
+                      "fromDecimals": 6,
+                      "toDecimals": 6,
+                      "expiry": "2026-05-05T00:44:36.000Z",
+                      "quote": "0.000033332222259258",
+                      "minAmount": "300011",
+                      "maxAmount": "8965673",
+                      "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "fromAssetRecordId": null,
+                      "toAssetRecordId": null,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 12,
+                      "solverId": 2,
+                      "integratorKeyHash": null
+                    },
+                    {
+                      "id": "91",
+                      "createdAt": "2025-10-20T23:31:56.408Z",
+                      "updatedAt": "2025-10-20T23:31:56.408Z",
+                      "fromChainNetworkId": "11155111",
+                      "toChainNetworkId": "84532",
+                      "fromAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                      "toAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                      "fromAssetDecimals": 6,
+                      "toAssetDecimals": 6,
+                      "fromDecimals": 6,
+                      "toDecimals": 6,
+                      "expiry": "2026-05-05T00:44:36.000Z",
+                      "quote": "0.966539042858243881",
+                      "minAmount": "8965674",
+                      "maxAmount": "17631336",
+                      "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "fromAssetRecordId": null,
+                      "toAssetRecordId": null,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 12,
+                      "solverId": 2,
+                      "integratorKeyHash": null
+                    },
+                    {
+                      "id": "92",
+                      "createdAt": "2025-10-20T23:31:56.408Z",
+                      "updatedAt": "2025-10-20T23:31:56.408Z",
+                      "fromChainNetworkId": "11155111",
+                      "toChainNetworkId": "84532",
+                      "fromAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                      "toAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                      "fromAssetDecimals": 6,
+                      "toAssetDecimals": 6,
+                      "fromDecimals": 6,
+                      "toDecimals": 6,
+                      "expiry": "2026-05-05T00:44:36.000Z",
+                      "quote": "0.982984840173200714",
+                      "minAmount": "17631337",
+                      "maxAmount": "26297001",
+                      "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "fromAssetRecordId": null,
+                      "toAssetRecordId": null,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 12,
+                      "solverId": 2,
+                      "integratorKeyHash": null
+                    },
+                    {
+                      "id": "93",
+                      "createdAt": "2025-10-20T23:31:56.408Z",
+                      "updatedAt": "2025-10-20T23:31:56.408Z",
+                      "fromChainNetworkId": "84532",
+                      "toChainNetworkId": "11155111",
+                      "fromAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                      "toAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                      "fromAssetDecimals": 6,
+                      "toAssetDecimals": 6,
+                      "fromDecimals": 6,
+                      "toDecimals": 6,
+                      "expiry": "2026-05-05T00:44:36.000Z",
+                      "quote": "0.000033332222259258",
+                      "minAmount": "300010",
+                      "maxAmount": "11120005",
+                      "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "fromAssetRecordId": null,
+                      "toAssetRecordId": null,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 11,
+                      "solverId": 2,
+                      "integratorKeyHash": null
+                    },
+                    {
+                      "id": "94",
+                      "createdAt": "2025-10-20T23:31:56.408Z",
+                      "updatedAt": "2025-10-20T23:31:56.408Z",
+                      "fromChainNetworkId": "84532",
+                      "toChainNetworkId": "11155111",
+                      "fromAssetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                      "toAssetAddress": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                      "fromAssetDecimals": 6,
+                      "toAssetDecimals": 6,
+                      "fromDecimals": 6,
+                      "toDecimals": 6,
+                      "expiry": "2026-05-05T00:44:36.000Z",
+                      "quote": "1.3021597290505059",
+                      "minAmount": "11120006",
+                      "maxAmount": "21940001",
+                      "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                      "fromAssetRecordId": null,
+                      "toAssetRecordId": null,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 11,
+                      "solverId": 2,
+                      "integratorKeyHash": null
+                    }
+                  ],
+                  "meta": {
+                    "total": 240006,
+                    "limit": 5,
+                    "offset": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Get solver inventory (uploaded quotes)",
+        "tags": [
+          "Solver API"
+        ]
+      }
+    },
+    "/solver-api/account/register": {
+      "post": {
+        "description": "To track reputation, the solver account must be registered. We accept both ECDSA (EOA) and EIP-1271 (smart account) signatures.",
+        "operationId": "SolverApiV0Controller_registerSolverAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "For EIP-1271 signatures, the chain ID is required and should be a chain we support. Supported chains can be requested from `/chains/supported` endpoint.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterSolverAddressDto"
+              },
+              "examples": {
+                "with-ecdsa": {
+                  "value": {
+                    "address": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f",
+                    "message": "Once upon a time a long message was signed by a smart account",
+                    "signature": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b"
+                  }
+                },
+                "without-1271": {
+                  "value": {
+                    "address": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f",
+                    "message": "Once upon a time a long message was signed by a smart account",
+                    "signature": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b",
+                    "chainId": "8453"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Solver registered account successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolverIdentityDto"
+                },
+                "example": {
+                  "id": 7,
+                  "createdAt": "2025-10-08T18:49:32.795Z",
+                  "updatedAt": "2025-10-08T18:49:32.795Z",
+                  "address": "0x6fb2a3fdce5780c65d01997b2d5f6a8851d7858f",
+                  "solverId": 2
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or malformed signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key, or address already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Register solver account (reputation tracking)",
+        "tags": [
+          "Solver API"
+        ]
+      }
+    },
+    "/solver-api/account/unregister": {
+      "post": {
+        "operationId": "SolverApiV0Controller_unregisterSolverAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnregisterSolverAddressDto"
+              },
+              "examples": {
+                "default": {
+                  "value": {
+                    "address": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Solver unregistered account successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnregisterSolverAccountResponseDto"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Solver account unregistered successfully"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Solver account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Remove solver account (reputation tracking)",
+        "tags": [
+          "Solver API"
+        ]
+      }
+    },
+    "/api/v1/solver/register/message": {
+      "get": {
+        "description": "Generates a unique nonce-based message tied to your solver ID. The message is valid for 24 hours. Sign it with your account and submit to POST /api/v1/solver/register.",
+        "operationId": "AccountsController_getRegistrationMessage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Registration message generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetRegistrationMessageResponseDto"
+                },
+                "example": {
+                  "data": {
+                    "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Get a server-issued registration message to sign",
+        "tags": [
+          "Solver API V1"
+        ]
+      }
+    },
+    "/api/v1/solver/register": {
+      "post": {
+        "description": "Submit a signed server-issued message to register an account for reputation tracking. Supports EVM ECDSA (EOA), EVM EIP-1271 (smart contract wallet), and Solana ed25519 signatures. The message must have been obtained from GET /api/v1/solver/register/message. Note: the message is single-use and is consumed on the first POST attempt regardless of outcome. If registration fails, call GET /register/message again before retrying.",
+        "operationId": "AccountsController_registerSolverAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterAccountV1Dto"
+              },
+              "examples": {
+                "evm-ecdsa": {
+                  "summary": "EVM — externally-owned account (ECDSA)",
+                  "value": {
+                    "account": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f",
+                    "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000.",
+                    "signature": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b",
+                    "chain": "eip155:1"
+                  }
+                },
+                "evm-eip1271": {
+                  "summary": "EVM — smart-contract wallet (EIP-1271)",
+                  "value": {
+                    "account": "0x4e1B3aF2cF6B5b8a0e7c9D1F2A3b4C5d6E7F8090",
+                    "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000.",
+                    "signature": "0x000000000000000000000000a0b1c2d3e4f5061728394a5b6c7d8e9f001122330000000000000000000000000000000000000000000000000000000000000041b9b3c01ce62b1a26b8e7d0a5f4e3c2d1b0a9988776655443322110011223344556778899aabbccddeeff00112233445566778899aabbccddeeff001122334455661c00",
+                    "chain": "eip155:8453"
+                  }
+                },
+                "solana-ed25519": {
+                  "summary": "Solana — ed25519 signature",
+                  "value": {
+                    "account": "8SNb8yViYLV4yCZ9VL3jvDzufHuRjcaZEjz5i8DVonhK",
+                    "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000.",
+                    "signature": "43j9ckHLEAm5Dq5pQbMSnynYbpZ6QGSvS432KW3iZsB4xXAYTaMQaCUjEWjakV3w6SPthP1unynmVPpgkCzUc9DZ",
+                    "chain": "solana:1151111081099710"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Solver account registered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterAccountV1ResponseDto"
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or malformed signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key, or address already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Register a solver account (V1)",
+        "tags": [
+          "Solver API V1"
+        ]
+      }
+    },
+    "/api/v1/solver/unregister": {
+      "post": {
+        "description": "Removes a registered account. The account is accepted in its native form per chain: EVM hex, Solana base58, Tron T-prefixed base58check or 0x hex. The chain selects how the account is parsed; accounts are keyed by address alone. Only accounts registered to the calling solver can be removed.",
+        "operationId": "AccountsController_unregisterSolverAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnregisterAccountV1Dto"
+              },
+              "examples": {
+                "evm": {
+                  "summary": "EVM — hex address",
+                  "value": {
+                    "account": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f",
+                    "chain": "eip155:1"
+                  }
+                },
+                "solana": {
+                  "summary": "Solana — base58 public key",
+                  "value": {
+                    "account": "8SNb8yViYLV4yCZ9VL3jvDzufHuRjcaZEjz5i8DVonhK",
+                    "chain": "solana:1151111081099710"
+                  }
+                },
+                "tron": {
+                  "summary": "Tron — base58check address",
+                  "value": {
+                    "account": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+                    "chain": "tron:728126428"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Solver account unregistered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnregisterAccountV1ResponseDto"
+                },
+                "example": {
+                  "success": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Solver account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Unregister a solver account (V1)",
+        "tags": [
+          "Solver API V1"
+        ]
+      }
+    },
+    "/api/v1/solver/supported-contracts": {
+      "get": {
+        "description": "Returns the oracle, input settler, and output settler contracts the calling solver supports, grouped by kind. Each contract is a { chain, address } object where chain is a CAIP-2 identifier.",
+        "operationId": "SupportedContractsController_getSupportedContracts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Current supported contracts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportedContractsResponseDto"
+                },
+                "example": {
+                  "data": {
+                    "oracle": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                      }
+                    ],
+                    "inputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x000025c3226c00b2cdc200005a1600509f4e00c0"
+                      }
+                    ],
+                    "outputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000000000ec36b683c2e6ac89e9a75989c22a2e"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Get the solver supported contracts",
+        "tags": [
+          "Solver API V1"
+        ]
+      },
+      "put": {
+        "description": "Replaces the entire supported-contracts set for the calling solver. Idempotent, meant to be called on every solver startup. Each contract is a { chain, address } object and must be configured for its chain and kind, otherwise the whole request is rejected. A missing or empty list clears that kind.",
+        "operationId": "SupportedContractsController_replaceSupportedContracts",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutSupportedContractsDto"
+              },
+              "examples": {
+                "default": {
+                  "summary": "Oracle and settler contracts on Ethereum",
+                  "value": {
+                    "oracle": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000003E06000007A224AeE90052fA6bb46d43C9"
+                      }
+                    ],
+                    "inputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x000025c3226C00B2Cdc200005a1600509f4e00C0"
+                      }
+                    ],
+                    "outputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Supported contracts replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportedContractsResponseDto"
+                },
+                "example": {
+                  "data": {
+                    "oracle": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                      }
+                    ],
+                    "inputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x000025c3226c00b2cdc200005a1600509f4e00c0"
+                      }
+                    ],
+                    "outputSettler": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000000000ec36b683c2e6ac89e9a75989c22a2e"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed chain or address, unsupported chain, or unconfigured contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Replace the solver supported contracts",
+        "tags": [
+          "Solver API V1"
+        ]
+      }
+    },
+    "/routes": {
+      "get": {
+        "description": "Get supported routes by source and destination chain IDs. If none of the parameters are provided, all supported routes will be returned.",
+        "operationId": "RoutesV0Controller_getSupportedRoutes",
+        "parameters": [
+          {
+            "name": "fromChain",
+            "required": false,
+            "in": "query",
+            "description": "Source chain network ID to filter routes from (e.g. \"11155111\")",
+            "schema": {
+              "example": "11155111",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toChain",
+            "required": false,
+            "in": "query",
+            "description": "Destination chain network ID to filter routes to (e.g. \"84532\")",
+            "schema": {
+              "example": "84532",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list of supported routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSupportedRoutesResponseDto"
+                },
+                "example": {
+                  "routes": [
+                    {
+                      "id": "405",
+                      "createdAt": "2025-10-26T21:00:40.364Z",
+                      "updatedAt": "2025-10-26T21:00:40.364Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 11,
+                      "fromTokenId": 35,
+                      "toTokenId": 35,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "406",
+                      "createdAt": "2025-10-26T21:00:40.366Z",
+                      "updatedAt": "2025-10-26T21:00:40.366Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 12,
+                      "fromTokenId": 35,
+                      "toTokenId": 36,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "407",
+                      "createdAt": "2025-10-26T21:00:40.368Z",
+                      "updatedAt": "2025-10-26T21:00:40.368Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 13,
+                      "fromTokenId": 35,
+                      "toTokenId": 37,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "408",
+                      "createdAt": "2025-10-26T21:00:40.369Z",
+                      "updatedAt": "2025-10-26T21:00:40.369Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 11,
+                      "toChainRecordId": 15,
+                      "fromTokenId": 35,
+                      "toTokenId": 38,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "409",
+                      "createdAt": "2025-10-26T21:00:40.371Z",
+                      "updatedAt": "2025-10-26T21:00:40.371Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 11,
+                      "fromTokenId": 36,
+                      "toTokenId": 35,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "410",
+                      "createdAt": "2025-10-26T21:00:40.374Z",
+                      "updatedAt": "2025-10-26T21:00:40.374Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 12,
+                      "fromTokenId": 36,
+                      "toTokenId": 36,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "411",
+                      "createdAt": "2025-10-26T21:00:40.375Z",
+                      "updatedAt": "2025-10-26T21:00:40.375Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 13,
+                      "fromTokenId": 36,
+                      "toTokenId": 37,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "412",
+                      "createdAt": "2025-10-26T21:00:40.377Z",
+                      "updatedAt": "2025-10-26T21:00:40.377Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 12,
+                      "toChainRecordId": 15,
+                      "fromTokenId": 36,
+                      "toTokenId": 38,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "413",
+                      "createdAt": "2025-10-26T21:00:40.378Z",
+                      "updatedAt": "2025-10-26T21:00:40.378Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 13,
+                      "toChainRecordId": 11,
+                      "fromTokenId": 37,
+                      "toTokenId": 35,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "414",
+                      "createdAt": "2025-10-26T21:00:40.379Z",
+                      "updatedAt": "2025-10-26T21:00:40.379Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 13,
+                      "toChainRecordId": 12,
+                      "fromTokenId": 37,
+                      "toTokenId": 36,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "415",
+                      "createdAt": "2025-10-26T21:00:40.380Z",
+                      "updatedAt": "2025-10-26T21:00:40.380Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 13,
+                      "toChainRecordId": 13,
+                      "fromTokenId": 37,
+                      "toTokenId": 37,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "416",
+                      "createdAt": "2025-10-26T21:00:40.381Z",
+                      "updatedAt": "2025-10-26T21:00:40.381Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 13,
+                      "toChainRecordId": 15,
+                      "fromTokenId": 37,
+                      "toTokenId": 38,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "417",
+                      "createdAt": "2025-10-26T21:00:40.382Z",
+                      "updatedAt": "2025-10-26T21:00:40.382Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 15,
+                      "toChainRecordId": 11,
+                      "fromTokenId": 38,
+                      "toTokenId": 35,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155111",
+                        "name": "Ethereum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "418",
+                      "createdAt": "2025-10-26T21:00:40.383Z",
+                      "updatedAt": "2025-10-26T21:00:40.383Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 15,
+                      "toChainRecordId": 12,
+                      "fromTokenId": 38,
+                      "toTokenId": 36,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "84532",
+                        "name": "Base Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "419",
+                      "createdAt": "2025-10-26T21:00:40.384Z",
+                      "updatedAt": "2025-10-26T21:00:40.384Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 15,
+                      "toChainRecordId": 13,
+                      "fromTokenId": 38,
+                      "toTokenId": 37,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "11155420",
+                        "name": "Optimism Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+                        "decimals": 6
+                      }
+                    },
+                    {
+                      "id": "420",
+                      "createdAt": "2025-10-26T21:00:40.385Z",
+                      "updatedAt": "2025-10-26T21:00:40.385Z",
+                      "minAmount": 1000000,
+                      "maxAmount": 10000000000,
+                      "fee": 0,
+                      "gasFee": 0,
+                      "fromChainRecordId": 15,
+                      "toChainRecordId": 15,
+                      "fromTokenId": 38,
+                      "toTokenId": 38,
+                      "isActive": true,
+                      "fromChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "toChain": {
+                        "chainType": "EVM",
+                        "chainId": "421614",
+                        "name": "Arbitrum Sepolia",
+                        "isActive": true
+                      },
+                      "fromToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      },
+                      "toToken": {
+                        "symbol": "USDC",
+                        "name": "USDC",
+                        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+                        "decimals": 6
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get supported routes",
+        "tags": [
+          "Bridge API"
+        ]
+      }
+    },
+    "/api/v1/integrator/routes": {
+      "get": {
+        "description": "Discover which routes are currently working on the intent server. Returns all active routes, optionally filtered by source and destination chain (CAIP-2 format).",
+        "operationId": "RoutesV1Controller_getSupportedRoutes",
+        "parameters": [
+          {
+            "name": "fromChain",
+            "required": false,
+            "in": "query",
+            "description": "Source chain network ID to filter routes from (CAIP-2 format, e.g. \"eip155:1\")",
+            "schema": {
+              "example": "eip155:1",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toChain",
+            "required": false,
+            "in": "query",
+            "description": "Destination chain network ID to filter routes to (CAIP-2 format, e.g. \"eip155:8453\")",
+            "schema": {
+              "example": "eip155:8453",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list of supported routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSupportedRoutesResponseV1Dto"
+                },
+                "example": {
+                  "routes": [
+                    {
+                      "fromChain": "eip155:11155111",
+                      "toChain": "eip155:11155111",
+                      "fromToken": {
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "toToken": {
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "minAmount": "1000000",
+                      "maxAmount": "10000000000"
+                    },
+                    {
+                      "fromChain": "eip155:11155111",
+                      "toChain": "eip155:84532",
+                      "fromToken": {
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "toToken": {
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "minAmount": "1000000",
+                      "maxAmount": "10000000000"
+                    },
+                    {
+                      "fromChain": "eip155:84532",
+                      "toChain": "eip155:11155111",
+                      "fromToken": {
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "toToken": {
+                        "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "minAmount": "1000000",
+                      "maxAmount": "10000000000"
+                    },
+                    {
+                      "fromChain": "eip155:84532",
+                      "toChain": "eip155:11155111",
+                      "fromToken": {
+                        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "symbol": "USDC",
+                        "decimals": 6,
+                        "name": "USDC"
+                      },
+                      "toToken": {
+                        "address": "0x841f63697cfa0e3b54c4d42b3d679f07f7f2485f",
+                        "symbol": null,
+                        "decimals": 6,
+                        "name": null
+                      },
+                      "minAmount": "21940002",
+                      "maxAmount": "32760000"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CAIP-2 chain identifier format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get supported routes",
+        "tags": [
+          "Bridge API v1"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Lifi Intents API Reference",
+    "description": "",
+    "version": "0.0.19",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "api-key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "API Key for authentication"
+      }
+    },
+    "schemas": {
+      "OifQuoteRequestDto": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "User requesting the quote and recipient of refund inputs in case of failures. Must be provided in ERC-7930 interoperable address format.",
+            "example": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f"
+          },
+          "intent": {
+            "type": "object",
+            "properties": {
+              "intentType": {
+                "type": "string",
+                "description": "Intent type",
+                "example": "oif-swap",
+                "enum": [
+                  "oif-swap"
+                ]
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "type": "string",
+                      "description": "User address in EIP-7930 interoperable format",
+                      "example": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f"
+                    },
+                    "asset": {
+                      "type": "string",
+                      "description": "Asset address in EIP-7930 interoperable format",
+                      "example": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f"
+                    },
+                    "amount": {
+                      "description": "Amount as string-encoded integer (optional for quote requests)",
+                      "example": "4000000000",
+                      "type": "string"
+                    },
+                    "lock": {
+                      "description": "Optional lock reference",
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "the-compact",
+                            "rhinestone"
+                          ],
+                          "description": "Lock type identifier",
+                          "example": "the-compact"
+                        },
+                        "params": {
+                          "description": "Lock-specific parameters",
+                          "example": {
+                            "nonce": "123",
+                            "expiry": 1234567890
+                          },
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "user",
+                    "asset"
+                  ]
+                },
+                "description": "Available inputs for the quote. Order is significant if preference is input-priority"
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "receiver": {
+                      "type": "string",
+                      "description": "Receiver address in EIP-7930 interoperable format",
+                      "example": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f"
+                    },
+                    "asset": {
+                      "type": "string",
+                      "description": "Asset address in EIP-7930 interoperable format",
+                      "example": "0x0001000003014a3414841f63697cfa0e3b54c4d42b3d679f07f7f2485f"
+                    },
+                    "amount": {
+                      "description": "Amount as string-encoded integer (optional for quote requests)",
+                      "example": "2000000000000000000",
+                      "type": "string"
+                    },
+                    "calldata": {
+                      "description": "Optional calldata describing how the receiver will consume the output",
+                      "example": "0x095ea7b3...",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "receiver",
+                    "asset"
+                  ]
+                },
+                "description": "Requested outputs for the quote"
+              },
+              "swapType": {
+                "default": "exact-input",
+                "description": "Swap type for the quote",
+                "example": "exact-input",
+                "type": "string",
+                "enum": [
+                  "exact-input",
+                  "exact-output"
+                ]
+              },
+              "minValidUntil": {
+                "description": "Minimum validity timestamp in seconds",
+                "example": 1700000000,
+                "type": "number"
+              },
+              "preference": {
+                "description": "Quote preference",
+                "example": "price",
+                "type": "string",
+                "enum": [
+                  "price",
+                  "speed",
+                  "input-priority",
+                  "trust-minimization"
+                ]
+              },
+              "originSubmission": {
+                "description": "Explicit preference for submission responsibility and acceptable auth schemes",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "protocol"
+                    ],
+                    "description": "Who submits the origin transaction",
+                    "example": "user"
+                  },
+                  "schemes": {
+                    "description": "Acceptable signing/authorization schemes for interoperability",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "erc-4337",
+                        "permit2",
+                        "erc20-permit",
+                        "eip-3009"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              "failureHandling": {
+                "description": "Failure handling policy for execution that the integrator supports",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "refund-automatic",
+                    "refund-claim",
+                    "needs-new-signature"
+                  ]
+                }
+              },
+              "partialFill": {
+                "description": "Whether the integrator supports partial fills",
+                "example": false,
+                "type": "boolean"
+              },
+              "metadata": {
+                "description": "Metadata for the order, never required, potentially contains provider specific data",
+                "type": "object",
+                "properties": {
+                  "exclusiveFor": {
+                    "description": "Restrict quote lookup to quotes belonging to the specified solver(s). Accepts a single solver address or an array of solver addresses. If omitted, the best available quote across all whitelisted solvers is returned. If provided, only quotes whose exclusiveFor matches one of the given addresses are considered; if none exist or are acceptable, an empty quotes array is returned.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "intentType",
+              "inputs",
+              "outputs"
+            ],
+            "description": "Intent details for the quote request"
+          },
+          "supportedTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Order types supported by the provider",
+            "example": [
+              "oif-escrow-v0",
+              "oif-resource-lock-v0"
+            ]
+          }
+        },
+        "required": [
+          "user",
+          "intent",
+          "supportedTypes"
+        ]
+      },
+      "QuotePreviewDto": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "description": "Inputs for the preview",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user": {
+                  "type": "string",
+                  "example": "0x000100000101742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+                },
+                "asset": {
+                  "type": "string",
+                  "example": "0x000100000101A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+                },
+                "amount": {
+                  "type": "string",
+                  "example": "4000000000"
+                }
+              }
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "description": "Outputs for the preview",
+            "items": {
+              "type": "object",
+              "properties": {
+                "receiver": {
+                  "type": "string",
+                  "example": "0x000100000101742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+                },
+                "asset": {
+                  "type": "string",
+                  "example": "0x000100000101dAC17F958D2ee523a2206206994597C13D831ec7"
+                },
+                "amount": {
+                  "type": "string",
+                  "example": "3995000000"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "inputs",
+          "outputs"
+        ]
+      },
+      "OifQuoteMetadataDto": {
+        "type": "object",
+        "properties": {
+          "exclusiveFor": {
+            "type": "object",
+            "description": "Solver address with exclusivity on this quote, or null when no solver is exclusive",
+            "example": "0x1234567890123456789012345678901234567890",
+            "nullable": true
+          }
+        },
+        "required": [
+          "exclusiveFor"
+        ]
+      },
+      "OifQuoteDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "object",
+            "description": "Order details (null for quote requests)",
+            "nullable": true,
+            "example": null
+          },
+          "validUntil": {
+            "type": "number",
+            "description": "Quote validity timestamp in seconds",
+            "example": 1700000000
+          },
+          "eta": {
+            "type": "number",
+            "description": "Estimated time of arrival in seconds",
+            "example": 30
+          },
+          "quoteId": {
+            "type": "string",
+            "description": "Unique quote identifier",
+            "example": "quote-123-abc"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider identifier",
+            "example": "UniswapX"
+          },
+          "preview": {
+            "description": "Informational amounts for UX/display",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuotePreviewDto"
+              }
+            ]
+          },
+          "failureHandling": {
+            "type": "string",
+            "description": "Failure handling policy for execution",
+            "enum": [
+              "refund-automatic",
+              "refund-claim",
+              "needs-new-signature"
+            ],
+            "example": "refund-automatic"
+          },
+          "partialFill": {
+            "type": "boolean",
+            "description": "Whether the quote supports partial fills",
+            "example": false
+          },
+          "metadata": {
+            "description": "Metadata for the order, potentially contains provider specific data",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OifQuoteMetadataDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "preview",
+          "failureHandling",
+          "partialFill",
+          "metadata"
+        ]
+      },
+      "GetOifQuotesResponseDto": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "description": "Array of generated quotes",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OifQuoteDto"
+            }
+          }
+        },
+        "required": [
+          "quotes"
+        ]
+      },
+      "HttpErrorDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 400
+          },
+          "message": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "example": [
+              "field must not be empty"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "example": "Bad Request"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "error"
+        ]
+      },
+      "SubmitQuotesDto": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fromChain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Source chain network ID",
+                  "example": "84532"
+                },
+                "toChain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Destination chain network ID",
+                  "example": "11155420"
+                },
+                "fromAsset": {
+                  "description": "Source asset address. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                  "example": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                  "type": "string"
+                },
+                "toAsset": {
+                  "description": "Destination asset address. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                  "example": "0x5fd84259d66Cd46123540766Be93DFE6D43130D8",
+                  "type": "string"
+                },
+                "fromDecimals": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Decimals of the source token",
+                  "example": 6
+                },
+                "toDecimals": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Decimals of the destination token",
+                  "example": 6
+                },
+                "ranges": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "minAmount": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d*)$",
+                        "description": "Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.",
+                        "example": "1000000"
+                      },
+                      "maxAmount": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d*)$",
+                        "description": "Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.",
+                        "example": "1000000000"
+                      },
+                      "quote": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d*)(\\.\\d+)?$",
+                        "description": "Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.\n\nFull formula:\n\n    outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )\n\nExample (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).",
+                        "example": "0.99"
+                      },
+                      "fixedCost": {
+                        "description": "The fixed cost to add to the quote (as a fee). Should be expressed in \"fromAsset\" units",
+                        "example": "10",
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d*)$"
+                      }
+                    },
+                    "required": [
+                      "minAmount",
+                      "maxAmount",
+                      "quote"
+                    ]
+                  },
+                  "description": "Array of quote ranges with different price tiers"
+                },
+                "expiry": {
+                  "type": "integer",
+                  "minimum": 1000000000,
+                  "maximum": 4102444800,
+                  "description": "Expiry timestamp of the quote in seconds",
+                  "example": 1672531200
+                },
+                "exclusiveFor": {
+                  "description": "Exclusive solver address allowed to fill this quote. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                  "example": "0x1234567890123456789012345678901234567890",
+                  "type": "string"
+                },
+                "integratorKeyHash": {
+                  "description": "Integrator key hash identifying the integrator this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote available to all integrators.",
+                  "example": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "fromChain",
+                "toChain",
+                "fromAsset",
+                "toAsset",
+                "fromDecimals",
+                "toDecimals",
+                "ranges",
+                "expiry"
+              ]
+            },
+            "description": "Array of quotes to submit"
+          }
+        },
+        "required": [
+          "quotes"
+        ]
+      },
+      "SubmitQuotesResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Status of the quote submission",
+            "example": "success"
+          },
+          "quotesAdded": {
+            "type": "number",
+            "description": "Number of quotes successfully added",
+            "example": 1250
+          }
+        },
+        "required": [
+          "status",
+          "quotesAdded"
+        ]
+      },
+      "SupportedChainDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "Unique identifier for the chain",
+            "example": 3
+          },
+          "chainId": {
+            "type": "string",
+            "description": "Chain ID as a string",
+            "example": "11155111"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the chain",
+            "example": "Ethereum Sepolia"
+          },
+          "chainType": {
+            "type": "string",
+            "description": "Type of blockchain (EVM, SVM, TVM)",
+            "example": "EVM",
+            "enum": [
+              "EVM",
+              "SVM",
+              "TVM"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "chainId",
+          "name",
+          "chainType"
+        ]
+      },
+      "QuoteRequestDto": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "description": "User requesting the quote and recipient of refund inputs in case of failures",
+            "type": "object",
+            "properties": {
+              "chain": {
+                "type": "string",
+                "minLength": 1,
+                "description": "CAIP-2 chain identifier. For Ethereum, is eip155:${chainId}. CAIP-2 Namespaces: https://namespaces.chainagnostic.org",
+                "example": "eip155:1"
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "description": "CAIP-10 address in CAIP-2 namespace format. For Ethereum, is checksummed address.",
+                "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+              }
+            },
+            "required": [
+              "chain",
+              "address"
+            ]
+          },
+          "intent": {
+            "type": "object",
+            "properties": {
+              "intentType": {
+                "type": "string",
+                "description": "Intent type (otherwise return quotes: [])",
+                "example": "oif-swap",
+                "enum": [
+                  "oif-swap"
+                ]
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "chain": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "CAIP-2 chain identifier for this input (e.g., \"eip155:1\"). Applies to both user and asset.",
+                      "example": "eip155:1"
+                    },
+                    "user": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Native address of the user providing the input assets",
+                      "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+                    },
+                    "asset": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Native address of the token/asset being provided as input",
+                      "example": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "description": "Amount available. For exact-input: exact amount user will provide and is used for quoting. For exact-output: ignored by the quote decoder and not used for quoting",
+                      "example": "4000000000",
+                      "nullable": true
+                    },
+                    "lock": {
+                      "description": "Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder."
+                    }
+                  },
+                  "required": [
+                    "chain",
+                    "user",
+                    "asset"
+                  ]
+                },
+                "description": "Available inputs for the quote. Order is significant if preference is input-priority. Constraint: Amount must be positive whole integer"
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "chain": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "CAIP-2 chain identifier for this output (e.g., \"eip155:1\"). Applies to both receiver and asset.",
+                      "example": "eip155:1"
+                    },
+                    "receiver": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Native address that will receive the output assets",
+                      "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+                    },
+                    "asset": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Native address of the token/asset to be received as output",
+                      "example": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "description": "For exact-input: ignored by the quote decoder and not used for quoting. For exact-output: exact amount user wants to receive and is used for quoting",
+                      "example": "2000000000000000000",
+                      "nullable": true
+                    },
+                    "calldata": {
+                      "description": "Optional calldata describing how the receiver will consume the output. Enables composability with other protocols",
+                      "example": "0x095ea7b3...",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "chain",
+                    "receiver",
+                    "asset"
+                  ]
+                },
+                "description": "Requested outputs for the quote. Constraint: Amount must be positive whole integer"
+              },
+              "swapType": {
+                "default": "exact-input",
+                "description": "Swap type for the quote. exact-input: quotes are based on inputs[].amount and outputs[].amount is ignored. exact-output: quotes are based on outputs[].amount and inputs[].amount is ignored. If none available, return []",
+                "example": "exact-input",
+                "type": "string",
+                "enum": [
+                  "exact-input",
+                  "exact-output"
+                ]
+              },
+              "minValidUntil": {
+                "description": "Minimum validity timestamp in unix timestamp (seconds). Only select solver quotes with longer TTL.",
+                "example": 1700000000,
+                "type": "number"
+              },
+              "preference": {
+                "description": "Quote preference (unsupported, ignored if provided)",
+                "type": "string",
+                "enum": [
+                  "price",
+                  "speed",
+                  "input-priority",
+                  "trust-minimization"
+                ]
+              },
+              "originSubmission": {
+                "description": "Explicit preference for submission responsibility and acceptable auth schemes. Shape: { mode: \"user\" | \"protocol\", auth?: string[] }. Unsupported, ignored for now - needs gasless feature."
+              },
+              "failureHandling": {
+                "description": "Failure handling policy for execution that the integrator supports (unsupported, ignored)",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "refund-automatic",
+                    "refund-claim",
+                    "needs-new-signature"
+                  ]
+                }
+              },
+              "partialFill": {
+                "description": "Whether the integrator supports partial fills. Partial fills are not supported - if true, return quotes: []",
+                "example": false,
+                "type": "boolean"
+              },
+              "metadata": {
+                "description": "Metadata for the order, never required, potentially contains provider specific data",
+                "type": "object",
+                "properties": {
+                  "exclusiveFor": {
+                    "description": "Restrict quote lookup to quotes belonging to the specified solver(s). Accepts a single solver address or an array of solver addresses. If omitted, the best available quote across all whitelisted solvers is returned. If provided, only quotes whose exclusiveFor matches one of the given addresses are considered; if none exist or are acceptable, an empty quotes array is returned.",
+                    "example": [
+                      "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+                    ],
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "intentType",
+              "inputs",
+              "outputs"
+            ],
+            "description": "Intent details for the quote request"
+          },
+          "supportedTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Order types supported by the provider. If provided, only return quotes if \"oif-user-open-v0\" is contained, otherwise return []",
+            "example": [
+              "oif-user-open-v0"
+            ]
+          }
+        },
+        "required": [
+          "user",
+          "intent",
+          "supportedTypes"
+        ]
+      },
+      "QuoteMetadataDto": {
+        "type": "object",
+        "properties": {
+          "exclusiveFor": {
+            "type": "object",
+            "description": "Exclusive for address (hex32) - solver address that can fill this quote, or null",
+            "example": "0x1234567890123456789012345678901234567890",
+            "nullable": true
+          }
+        },
+        "required": [
+          "exclusiveFor"
+        ]
+      },
+      "QuoteDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "description": "Order details",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OifUserOpenIntentOrderDto"
+              },
+              {
+                "$ref": "#/components/schemas/OifEscrowOrderDto"
+              },
+              {
+                "$ref": "#/components/schemas/Oif3009OrderDto"
+              }
+            ]
+          },
+          "validUntil": {
+            "type": "number",
+            "description": "Quote validity timestamp in unix timestamp (seconds)",
+            "example": 1700000000
+          },
+          "eta": {
+            "type": "number",
+            "description": "Estimated time of arrival in seconds",
+            "example": 8
+          },
+          "quoteId": {
+            "type": "string",
+            "description": "Unique quote identifier",
+            "example": "quote-123-abc"
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider identifier",
+            "enum": [
+              "LI.FI Intent"
+            ],
+            "example": "LI.FI Intent"
+          },
+          "preview": {
+            "description": "Informational amounts for UX/display, must be verified against the order",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuotePreviewDto"
+              }
+            ]
+          },
+          "failureHandling": {
+            "type": "string",
+            "description": "Failure handling policy for execution",
+            "enum": [
+              "refund-automatic"
+            ],
+            "example": "refund-automatic"
+          },
+          "partialFill": {
+            "type": "boolean",
+            "description": "Whether the quote supports partial fills",
+            "example": false
+          },
+          "metadata": {
+            "description": "Metadata for the order, potentially contains provider specific data",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuoteMetadataDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "order",
+          "quoteId",
+          "provider",
+          "preview",
+          "failureHandling",
+          "partialFill",
+          "metadata"
+        ]
+      },
+      "QuoteResponseDto": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "description": "Array of generated quotes. List of available quotes, may be empty if no quotes are available",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteDto"
+            }
+          }
+        },
+        "required": [
+          "quotes"
+        ]
+      },
+      "SubmitOrderDto": {
+        "type": "object",
+        "properties": {
+          "orderType": {
+            "default": "CatalystCompactOrder",
+            "description": "The type of the order",
+            "type": "string",
+            "enum": [
+              "CatalystCompactOrder"
+            ]
+          },
+          "order": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "description": "User address on source chain (initiator of the intent)",
+                "example": "0x",
+                "type": "string"
+              },
+              "nonce": {
+                "description": "Nonce value of the intent",
+                "type": "string"
+              },
+              "originChainId": {
+                "description": "Origin chain ID (network id)",
+                "type": "string"
+              },
+              "fillDeadline": {
+                "description": "Fill deadline of the intent in seconds",
+                "type": "string"
+              },
+              "expires": {
+                "description": "Expiry timestamp of the intent in seconds",
+                "type": "string"
+              },
+              "inputOracle": {
+                "description": "The local oracle address",
+                "type": "string"
+              },
+              "inputs": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Input token amounts as [tokenId, amount] pairs"
+              },
+              "outputs": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "oracle": {
+                      "type": "string",
+                      "description": "The remote oracle address"
+                    },
+                    "settler": {
+                      "type": "string",
+                      "description": "The remote filler address"
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "The token identifier"
+                    },
+                    "amount": {
+                      "description": "The amount of tokens",
+                      "type": "string"
+                    },
+                    "recipient": {
+                      "type": "string",
+                      "description": "The recipient address"
+                    },
+                    "chainId": {
+                      "description": "The chain ID",
+                      "type": "string"
+                    },
+                    "callbackData": {
+                      "type": "string",
+                      "description": "The remote call data",
+                      "nullable": true
+                    },
+                    "context": {
+                      "type": "string",
+                      "description": "The fulfillment context",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "oracle",
+                    "settler",
+                    "token",
+                    "recipient"
+                  ]
+                },
+                "description": "Array of output objects"
+              }
+            },
+            "required": [
+              "user",
+              "inputOracle",
+              "inputs",
+              "outputs"
+            ],
+            "description": "StandardOrder payload based on OIF standard"
+          },
+          "quoteId": {
+            "description": "The quote identifier",
+            "example": "quote_e1u_HImibdAnVwGOOOGSq4uYedOGup",
+            "type": "string"
+          },
+          "inputSettler": {
+            "description": "Input settler address on source chain. Used to determine the type of order [escrow, compact] (mandatory for all orders)",
+            "example": "0x",
+            "type": "string"
+          },
+          "sponsorSignature": {
+            "description": "Sponsor signature (mandatory for signed compact orders)",
+            "type": "string"
+          },
+          "allocatorSignature": {
+            "description": "Allocator signature (mandatory for compact orders)",
+            "type": "string"
+          },
+          "compactRegistrationTxHash": {
+            "description": "Transaction hash on source chain containing CompactRegistered event (mandatory for unsigned compact orders)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order",
+          "inputSettler"
+        ]
+      },
+      "CompactOrderOutputResponseDto": {
+        "type": "object",
+        "properties": {
+          "oracle": {
+            "type": "string",
+            "description": "The remote oracle address"
+          },
+          "settler": {
+            "type": "string",
+            "description": "The remote filler address"
+          },
+          "token": {
+            "type": "string",
+            "description": "The token identifier"
+          },
+          "amount": {
+            "type": "string",
+            "description": "The amount of tokens"
+          },
+          "recipient": {
+            "type": "string",
+            "description": "The recipient address"
+          },
+          "chainId": {
+            "type": "string",
+            "description": "The chain ID"
+          },
+          "callbackData": {
+            "type": "string",
+            "description": "The remote call data"
+          },
+          "context": {
+            "type": "string",
+            "description": "The fulfillment context"
+          }
+        },
+        "required": [
+          "oracle",
+          "settler",
+          "token",
+          "amount",
+          "recipient",
+          "chainId",
+          "callbackData",
+          "context"
+        ]
+      },
+      "CompactOrderResponseDto": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "User address on source chain (initiator of the intent)"
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Nonce value of the intent"
+          },
+          "originChainId": {
+            "type": "string",
+            "description": "Origin chain ID (network id)"
+          },
+          "fillDeadline": {
+            "type": "string",
+            "description": "Fill deadline of the intent in seconds"
+          },
+          "expires": {
+            "type": "string",
+            "description": "Expiry timestamp of the intent in seconds"
+          },
+          "inputOracle": {
+            "type": "string",
+            "description": "The local oracle address"
+          },
+          "inputs": {
+            "type": "array",
+            "description": "Input token amounts as [tokenId, amount] pairs",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "outputs": {
+            "description": "Array of output objects",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompactOrderOutputResponseDto"
+            }
+          }
+        },
+        "required": [
+          "user",
+          "nonce",
+          "originChainId",
+          "fillDeadline",
+          "expires",
+          "inputOracle",
+          "inputs",
+          "outputs"
+        ]
+      },
+      "OrderMetaDto": {
+        "type": "object",
+        "properties": {
+          "submitTime": {
+            "type": "number",
+            "description": "Timestamp when the order was submitted in seconds",
+            "example": 1640995200
+          },
+          "orderStatus": {
+            "type": "string",
+            "description": "Current status of the order",
+            "enum": [
+              "Submitted",
+              "Open",
+              "Signed",
+              "Delivered",
+              "Settled",
+              "Refunded"
+            ],
+            "example": "Signed"
+          },
+          "orderIdentifier": {
+            "type": "string",
+            "description": "Unique identifier for the order (intent id)",
+            "example": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE"
+          },
+          "onChainOrderId": {
+            "type": "string",
+            "description": "On-chain order ID",
+            "example": "0xaa7a2bb561edeba0160c9c22263ebdc56f606d7197bb51fcaae40c84a51e93d2"
+          },
+          "destinationAddress": {
+            "type": "string",
+            "description": "Parsed destination address of the order",
+            "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5"
+          },
+          "orderInitiatedTxHash": {
+            "type": "object",
+            "description": "Transaction hash when order was initiated (on-chain order) [eg: Open escrow event]",
+            "example": "0x1234567890abcdef1234567890abcdef12345678",
+            "nullable": true
+          },
+          "orderDeliveredTxHash": {
+            "type": "object",
+            "description": "Transaction hash of the OutputFilled event",
+            "example": "0x1234567890abcdef1234567890abcdef12345678",
+            "nullable": true
+          },
+          "orderVerifiedTxHash": {
+            "type": "object",
+            "description": "Transaction hash of the OutputProven event",
+            "example": "0x1234567890abcdef1234567890abcdef12345678",
+            "nullable": true
+          },
+          "orderSettledTxHash": {
+            "type": "object",
+            "description": "Transaction hash of the Finalised event",
+            "example": "0x1234567890abcdef1234567890abcdef12345678",
+            "nullable": true
+          },
+          "refundTxHash": {
+            "type": "object",
+            "description": "Transaction hash of the Refunded event",
+            "example": "0x1234567890abcdef1234567890abcdef12345678",
+            "nullable": true
+          },
+          "signedAt": {
+            "type": "object",
+            "description": "Date when the order was signed",
+            "example": "2024-01-01T00:00:00.000Z",
+            "nullable": true
+          },
+          "expiredAt": {
+            "type": "object",
+            "description": "Date when the order expires",
+            "example": "2024-01-02T00:00:00.000Z",
+            "nullable": true
+          },
+          "deliveredAt": {
+            "type": "object",
+            "description": "Date when the order was delivered",
+            "example": "2024-01-01T12:00:00.000Z",
+            "nullable": true
+          },
+          "settledAt": {
+            "type": "object",
+            "description": "Date when the order was settled",
+            "example": "2024-01-01T18:00:00.000Z",
+            "nullable": true
+          },
+          "refundedAt": {
+            "type": "object",
+            "description": "Date when the order was refunded",
+            "example": "2024-01-01T18:00:00.000Z",
+            "nullable": true
+          },
+          "lastCompactDepositBlockNumber": {
+            "type": "object",
+            "description": "Last compact deposit block number",
+            "example": "12345678",
+            "nullable": true
+          },
+          "quoteId": {
+            "type": "object",
+            "description": "Quote ID associated with the order",
+            "example": "quote-123456",
+            "nullable": true
+          },
+          "solverAddress": {
+            "type": "object",
+            "description": "Solver address that filled the order",
+            "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5",
+            "nullable": true
+          },
+          "integratorKeyHash": {
+            "type": "string",
+            "description": "Integrator key hash identifying the integrator this order belongs to",
+            "example": "62af8704764faf8ea82fc61ce9c4c3908b6cb97d463a634e9e587d7c885db0ef"
+          }
+        },
+        "required": [
+          "submitTime",
+          "orderStatus",
+          "orderIdentifier",
+          "onChainOrderId",
+          "destinationAddress",
+          "orderInitiatedTxHash",
+          "orderDeliveredTxHash",
+          "orderVerifiedTxHash",
+          "orderSettledTxHash",
+          "refundTxHash",
+          "signedAt",
+          "expiredAt",
+          "deliveredAt",
+          "settledAt",
+          "refundedAt",
+          "lastCompactDepositBlockNumber",
+          "quoteId"
+        ]
+      },
+      "SubmitOrderResponseDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "description": "The order details",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CompactOrderResponseDto"
+              }
+            ]
+          },
+          "quote": {
+            "description": "The quote details",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuoteResponseDto"
+              }
+            ]
+          },
+          "sponsorSignature": {
+            "type": "object",
+            "description": "Sponsor signature",
+            "example": null,
+            "nullable": true
+          },
+          "allocatorSignature": {
+            "type": "object",
+            "description": "Allocator signature",
+            "example": null,
+            "nullable": true
+          },
+          "inputSettler": {
+            "type": "string",
+            "description": "Input settler address",
+            "example": "0x000001bf3F3175BD007f3889b50000c7006E72c0"
+          },
+          "meta": {
+            "description": "Order metadata",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderMetaDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "order",
+          "quote",
+          "inputSettler",
+          "meta"
+        ]
+      },
+      "PaginationMetaDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "description": "Total number of items",
+            "example": 100,
+            "minimum": 0
+          },
+          "limit": {
+            "type": "number",
+            "description": "Number of items per page",
+            "example": 10,
+            "minimum": 1
+          },
+          "offset": {
+            "type": "number",
+            "description": "Number of items to skip",
+            "example": 0,
+            "minimum": 0
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset"
+        ]
+      },
+      "GetOrdersResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Orders with quote/signature details and metadata",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmitOrderResponseDto"
+            }
+          },
+          "meta": {
+            "description": "Pagination metadata",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaginationMetaDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "SolverIdentityDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "Unique identifier for the solver identity",
+            "example": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Creation timestamp",
+            "example": "2025-10-16T12:47:41.863Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "Last update timestamp",
+            "example": "2025-10-16T12:47:41.863Z"
+          },
+          "address": {
+            "type": "string",
+            "description": "Solver address in its chain-native string form",
+            "example": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+          },
+          "solverId": {
+            "type": "number",
+            "description": "Associated solver ID",
+            "example": 2
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "updatedAt",
+          "address",
+          "solverId"
+        ]
+      },
+      "GetSolverIdentitiesResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Array of solver identities",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolverIdentityDto"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "SolverQuoteDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the solver quote",
+            "example": "84"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Creation timestamp",
+            "example": "2025-10-16T12:49:51.599Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "Last update timestamp",
+            "example": "2025-10-16T12:49:51.599Z"
+          },
+          "fromChainNetworkId": {
+            "type": "string",
+            "description": "Source chain network ID",
+            "example": "11155111"
+          },
+          "toChainNetworkId": {
+            "type": "string",
+            "description": "Destination chain network ID",
+            "example": "84532"
+          },
+          "fromAssetAddress": {
+            "type": "string",
+            "description": "Source asset address",
+            "example": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+          },
+          "toAssetAddress": {
+            "type": "string",
+            "description": "Destination asset address",
+            "example": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+          },
+          "fromAssetDecimals": {
+            "type": "number",
+            "description": "Source asset decimals",
+            "example": 6
+          },
+          "toAssetDecimals": {
+            "type": "number",
+            "description": "Destination asset decimals",
+            "example": 6
+          },
+          "fromDecimals": {
+            "type": "number",
+            "description": "Source decimals (legacy field)",
+            "example": 6
+          },
+          "toDecimals": {
+            "type": "number",
+            "description": "Destination decimals (legacy field)",
+            "example": 6
+          },
+          "expiry": {
+            "type": "string",
+            "description": "Quote expiry timestamp",
+            "example": "2026-05-05T00:44:36.000Z"
+          },
+          "quote": {
+            "type": "string",
+            "description": "Quote rate for this range",
+            "example": "0.000033332222259258"
+          },
+          "minAmount": {
+            "type": "string",
+            "description": "Minimum amount for this quote range",
+            "example": "300011"
+          },
+          "maxAmount": {
+            "type": "string",
+            "description": "Maximum amount for this quote range",
+            "example": "8965673"
+          },
+          "exclusiveFor": {
+            "type": "object",
+            "description": "Exclusive for address",
+            "example": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+            "nullable": true
+          },
+          "fromAssetRecordId": {
+            "type": "object",
+            "description": "Source asset record ID",
+            "example": 7,
+            "nullable": true
+          },
+          "toAssetRecordId": {
+            "type": "object",
+            "description": "Destination asset record ID",
+            "example": 8,
+            "nullable": true
+          },
+          "fromChainRecordId": {
+            "type": "object",
+            "description": "Source chain record ID",
+            "example": 11,
+            "nullable": true
+          },
+          "toChainRecordId": {
+            "type": "object",
+            "description": "Destination chain record ID",
+            "example": 12,
+            "nullable": true
+          },
+          "solverId": {
+            "type": "number",
+            "description": "Associated solver ID",
+            "example": 2
+          },
+          "integratorKeyHash": {
+            "type": "object",
+            "description": "Integrator key hash this quote is tagged for, or null for open-market quotes",
+            "example": "a1b2c3d4e5f6...",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "updatedAt",
+          "fromChainNetworkId",
+          "toChainNetworkId",
+          "fromAssetAddress",
+          "toAssetAddress",
+          "fromAssetDecimals",
+          "toAssetDecimals",
+          "fromDecimals",
+          "toDecimals",
+          "expiry",
+          "quote",
+          "minAmount",
+          "maxAmount",
+          "exclusiveFor",
+          "fromAssetRecordId",
+          "toAssetRecordId",
+          "fromChainRecordId",
+          "toChainRecordId",
+          "solverId"
+        ]
+      },
+      "GetSolverQuotesResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Array of solver quotes",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolverQuoteDto"
+            }
+          },
+          "meta": {
+            "description": "Pagination metadata",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaginationMetaDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "RegisterSolverAddressDto": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "The address of the solver",
+            "example": "0x1234567890123456789012345678901234567890",
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The message to sign",
+            "example": "Hello, world!"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The signature of the message",
+            "example": "0x1234567890..."
+          },
+          "chainId": {
+            "description": "The chain ID where the address exists (required for EIP-1271 validation). Can empty in case of ECDSA signature",
+            "example": "1",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "address",
+          "message",
+          "signature"
+        ]
+      },
+      "UnregisterSolverAddressDto": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "The address of the solver",
+            "example": "0x1234567890123456789012345678901234567890",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ]
+      },
+      "UnregisterSolverAccountResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if the unregistration was successful",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "description": "Success message",
+            "example": "Solver account unregistered successfully"
+          }
+        },
+        "required": [
+          "success",
+          "message"
+        ]
+      },
+      "RegistrationMessageDataDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Server-issued message to sign for account registration",
+            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "GetRegistrationMessageResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Registration message payload",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RegistrationMessageDataDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "RegisterAccountV1Dto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server-issued registration message",
+            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Signature of the message. EVM: hex-encoded ECDSA or EIP-1271 signature. Solana: base58-encoded ed25519 signature.",
+            "example": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b"
+          },
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Must be unique across all solvers.",
+            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
+          },
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier for the account. Supported chains: GET /chains/supported.",
+            "example": "eip155:1"
+          }
+        },
+        "required": [
+          "message",
+          "signature",
+          "account",
+          "chain"
+        ]
+      },
+      "RegisterAccountV1ResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if registration was successful",
+            "example": true
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "UnregisterAccountV1Dto": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key. Tron: T-prefixed base58check or 0x hex.",
+            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
+          },
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier. Selects how the account is parsed; accounts are keyed by address alone.",
+            "example": "eip155:1"
+          }
+        },
+        "required": [
+          "account",
+          "chain"
+        ]
+      },
+      "UnregisterAccountV1ResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if unregistration was successful",
+            "example": true
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "ChainAddressDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier",
+            "example": "eip155:1"
+          },
+          "address": {
+            "type": "string",
+            "description": "Native contract address for the chain",
+            "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+          }
+        },
+        "required": [
+          "chain",
+          "address"
+        ]
+      },
+      "ContractsByKindDto": {
+        "type": "object",
+        "properties": {
+          "oracle": {
+            "description": "Oracle contracts the solver supports",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          },
+          "inputSettler": {
+            "description": "Input settler contracts the solver supports",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          },
+          "outputSettler": {
+            "description": "Output settler contracts the solver supports",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          }
+        },
+        "required": [
+          "oracle",
+          "inputSettler",
+          "outputSettler"
+        ]
+      },
+      "SupportedContractsResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ContractsByKindDto"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "PutSupportedContractsDto": {
+        "type": "object",
+        "properties": {
+          "oracle": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          },
+          "inputSettler": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          },
+          "outputSettler": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          }
+        }
+      },
+      "RouteChainInfoDto": {
+        "type": "object",
+        "properties": {
+          "chainType": {
+            "type": "string",
+            "description": "Type of blockchain (EVM, Bitcoin, etc.)",
+            "example": "EVM",
+            "enum": [
+              "EVM",
+              "SVM"
+            ]
+          },
+          "chainId": {
+            "type": "string",
+            "description": "Chain ID as a string",
+            "example": "11155111"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the chain",
+            "example": "Ethereum Sepolia"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Whether the chain is currently active",
+            "example": true
+          }
+        },
+        "required": [
+          "chainType",
+          "chainId",
+          "name",
+          "isActive"
+        ]
+      },
+      "TokenInfoDto": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "object",
+            "description": "Token symbol (null if token not registered in system)",
+            "example": "USDC",
+            "nullable": true
+          },
+          "name": {
+            "type": "object",
+            "description": "Token name (null if token not registered in system)",
+            "example": "USDC",
+            "nullable": true
+          },
+          "address": {
+            "type": "string",
+            "description": "Token contract address",
+            "example": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+          },
+          "decimals": {
+            "type": "number",
+            "description": "Token decimals",
+            "example": 6
+          }
+        },
+        "required": [
+          "symbol",
+          "name",
+          "address",
+          "decimals"
+        ]
+      },
+      "SupportedRouteDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the route",
+            "example": "64"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Route creation timestamp",
+            "example": "2025-07-30T19:59:51.500Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "Route last update timestamp",
+            "example": "2025-07-30T19:59:51.500Z"
+          },
+          "minAmount": {
+            "type": "number",
+            "description": "Minimum amount for this route (in token units)",
+            "example": 1000000
+          },
+          "maxAmount": {
+            "type": "number",
+            "description": "Maximum amount for this route (in token units)",
+            "example": 10000000000
+          },
+          "fee": {
+            "type": "number",
+            "description": "Route fee (in token units)",
+            "example": 0
+          },
+          "gasFee": {
+            "type": "number",
+            "description": "Gas fee for the route (in token units)",
+            "example": 0
+          },
+          "fromChainRecordId": {
+            "type": "object",
+            "description": "Source chain record ID",
+            "example": 3,
+            "nullable": true
+          },
+          "toChainRecordId": {
+            "type": "object",
+            "description": "Destination chain record ID",
+            "example": 3,
+            "nullable": true
+          },
+          "fromTokenId": {
+            "type": "object",
+            "description": "Source token record ID",
+            "example": 5,
+            "nullable": true
+          },
+          "toTokenId": {
+            "type": "object",
+            "description": "Destination token record ID",
+            "example": 6,
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Whether the route is currently active",
+            "example": true
+          },
+          "fromChain": {
+            "description": "Source chain information",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouteChainInfoDto"
+              }
+            ]
+          },
+          "toChain": {
+            "description": "Destination chain information",
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouteChainInfoDto"
+              }
+            ]
+          },
+          "fromToken": {
+            "description": "Source token information for this route",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfoDto"
+              }
+            ]
+          },
+          "toToken": {
+            "description": "Destination token information for this route",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfoDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "updatedAt",
+          "minAmount",
+          "maxAmount",
+          "fee",
+          "gasFee",
+          "fromChainRecordId",
+          "toChainRecordId",
+          "fromTokenId",
+          "toTokenId",
+          "isActive",
+          "fromChain",
+          "toChain",
+          "fromToken",
+          "toToken"
+        ]
+      },
+      "GetSupportedRoutesResponseDto": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "description": "Array of supported routes",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportedRouteDto"
+            }
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "TokenInfoV1Dto": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Token contract address",
+            "example": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+          },
+          "symbol": {
+            "type": "object",
+            "description": "Token symbol (null if token not registered in system)",
+            "example": "USDC",
+            "nullable": true
+          },
+          "decimals": {
+            "type": "number",
+            "description": "Token decimals",
+            "example": 6
+          },
+          "name": {
+            "type": "object",
+            "description": "Token name (null if token not registered in system)",
+            "example": "USDC",
+            "nullable": true
+          }
+        },
+        "required": [
+          "address",
+          "symbol",
+          "decimals",
+          "name"
+        ]
+      },
+      "SupportedRouteV1Dto": {
+        "type": "object",
+        "properties": {
+          "fromChain": {
+            "type": "string",
+            "description": "Source chain network ID (CAIP-2 format)",
+            "example": "eip155:11155111"
+          },
+          "toChain": {
+            "type": "string",
+            "description": "Destination chain network ID (CAIP-2 format)",
+            "example": "eip155:84532"
+          },
+          "fromToken": {
+            "description": "Source token information",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfoV1Dto"
+              }
+            ]
+          },
+          "toToken": {
+            "description": "Destination token information",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TokenInfoV1Dto"
+              }
+            ]
+          },
+          "minAmount": {
+            "type": "string",
+            "description": "Minimum amount for this route (in token base units, as string)",
+            "example": "1000000"
+          },
+          "maxAmount": {
+            "type": "string",
+            "description": "Maximum amount for this route (in token base units, as string)",
+            "example": "10000000000"
+          }
+        },
+        "required": [
+          "fromChain",
+          "toChain",
+          "fromToken",
+          "toToken",
+          "minAmount",
+          "maxAmount"
+        ]
+      },
+      "GetSupportedRoutesResponseV1Dto": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "description": "Array of supported routes",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportedRouteV1Dto"
+            }
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      }
+    }
+  }
+}

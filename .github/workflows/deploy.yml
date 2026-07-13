@@ -1,76 +1,61 @@
-name: Deploy
+name: build & deploy
+
 on:
-  workflow_call:
-    inputs:
-      namespace:
-        description: 'namespace'
-        required: true
-        type: 'string'
-      network:
-        description: 'network'
-        required: true
-        type: 'string'
-      digest:
-        description: 'image digest'
-        required: true
-        type: 'string'
+  push:
+    branches: [stage, main]
+
+permissions:
+  contents: read
 
 jobs:
-  daemon:
-    name: Deploy vault-solver daemon
-    uses: symbioticfi/github-workflows-common/.github/workflows/deploy.yml@main
-    secrets: inherit
-    with:
-      NAME: vault-solver
-      NAMESPACE: '${{ inputs.namespace }}'
-      OPTIONS: >-
-          -f .github/chart/common.yaml
-          -f .github/chart/${{ inputs.network }}.yaml
-          -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
-          --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
-          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && '0x5Ef14C81eBf7941523f8195F2E55b2A22700C181' || inputs.network == 'mainnet' && '0xe60E84218BB81539cc599A1E213d6F67058C69Cf' || '0xc12714738A4772Bf966b2e999037D39315589263' }}
-          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissionless
-          --set deployment.containers.vault-solver.env.RFQ_ADAPTER.value='${{ inputs.network == 'hoodi' && '"0x788Ab0D58bC7E5537109064F95875013c886ACC8"\, "0x9292Ad3e9C3747cFA31885657B5A458002205281"' || '"0x8F38656B85fb440018c109A5118aFfDfD923721c"\, "0xe4eb1E756F2d78F77B9ebE304515fA61B2451A33"' }}'
-          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-vault-solver"
-          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/vault-solver\,secrets/data/application/${{ inputs.namespace }}/vault-solver-keys"
+  ci:
+    uses: ./.github/workflows/ci.yml
 
-  vault-solver:
-    name: Deploy ${{ matrix.name }}
-    # The first/second/third solvers are the dedicated mGLOBAL fillers. mGLOBAL is
-    # not launched on mainnet yet (tabled), so skip them on mainnet — only the
-    # permissionless mF-ONE daemon deploys there.
-    if: ${{ inputs.network != 'mainnet' }}
-    uses: symbioticfi/github-workflows-common/.github/workflows/deploy.yml@main
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: vault-solver-first
-            executorHoodi: "0x910af97D2402681a6B57D0794B9246Eae17c0B24"
-            executorSepolia: "0xc2251516e23A2b8E01249f8e9084297EDd8559b7"
-            rfqAdapterHoodi: "0xFAb7c0202e99E98b9D9a9124FCad458413a7657C"   # dedicated mGLOBAL LiquidLane vault 1
-            rfqAdapterSepolia: "0x5eaA348ecBe55113Eee161ae289960aFCDd3E52D" # dedicated mGLOBAL LiquidLane vault 1
-          - name: vault-solver-second
-            executorHoodi: "0x37bF9f850b7C3334D3Fc252D79215C088D8be30d"
-            executorSepolia: "0xC879456C5Ce99d3a6B81797f40b0BF28143E1640"
-            rfqAdapterHoodi: "0x055D6B6f3454d733B99d5D71841bd6493E5ca664"   # dedicated mGLOBAL LiquidLane vault 2
-            rfqAdapterSepolia: "0x7fCE4C36D52f8d7A67B00e86EbF69808203eEBB7" # dedicated mGLOBAL LiquidLane vault 2
-          - name: vault-solver-third
-            executorHoodi: "0x1B321F3B62AF7B3dF25E01800094802e3621C9dc"
-            executorSepolia: "0x92E04ea2a18c8E87EAf6803691772b15eBb939ED"
-            rfqAdapterHoodi: "0x9B745481799355c33F8196d857420BEe7E222e0f"   # dedicated mGLOBAL LiquidLane vault 3
-            rfqAdapterSepolia: "0x3f7ee97C17D69477F822980E6f4DA5bbB0323043" # dedicated mGLOBAL LiquidLane vault 3
-    with:
-      NAME: ${{ matrix.name }}
-      NAMESPACE: '${{ inputs.namespace }}'
-      OPTIONS: >-
-          -f .github/chart/common.yaml
-          -f .github/chart/${{ inputs.network }}.yaml
-          -f .github/chart/vault-solver/${{ inputs.namespace }}.yaml
-          --set deployment.containers.vault-solver.image.tag=${{ github.sha }}@${{ inputs.digest }}
-          --set deployment.containers.vault-solver.env.EXECUTOR.value=${{ inputs.network == 'hoodi' && matrix.executorHoodi || matrix.executorSepolia }}
-          --set deployment.containers.vault-solver.env.TOKENS_TO_QUOTE.value=permissioned
-          --set deployment.containers.vault-solver.env.RFQ_ADAPTER.value='"${{ inputs.network == 'hoodi' && matrix.rfqAdapterHoodi || matrix.rfqAdapterSepolia }}"'
-          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-role"="${{ inputs.namespace }}-${{ matrix.name }}"
-          --set "podAnnotations.vault\.security\.banzaicloud\.io/vault-env-from-path"="secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}\,secrets/data/application/${{ inputs.namespace }}/${{ matrix.name }}-keys"
+  image:
+    environment: deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
+
+      - id: meta
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # pin@v3
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # pin@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # pin@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: final
+          push: true
+          tags: symbioticfi/vault-solver:${{ github.sha }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.meta.outputs.date }}
+
+  dispatch:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: deploy
+    steps:
+      - name: Trigger deploy
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          workflow=$([ "$REF_NAME" = "main" ] && echo deploy_prod.yml || echo deploy_stage.yml)
+          gh workflow run "$workflow" \
+            --repo symbioticfi/vault-solver-deploy --ref main \
+            -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"
