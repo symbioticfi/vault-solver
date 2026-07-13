@@ -4,47 +4,12 @@ on:
   push:
     branches: [stage, main]
 
-permissions:
-  contents: read
-
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  image:
-    environment: deploy
-    needs: ci
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # pin@v7.0.0
-
-      - id: meta
-        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # pin@v3
-
-      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # pin@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # pin@v6
-        with:
-          context: .
-          file: deploy/Dockerfile
-          target: final
-          push: true
-          tags: symbioticfi/vault-solver:${{ github.sha }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            COMMIT=${{ github.sha }}
-            DATE=${{ steps.meta.outputs.date }}
-
   dispatch:
-    needs: image
+    needs: ci
     runs-on: ubuntu-latest
     environment: deploy
     steps:
@@ -52,10 +17,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
-          DIGEST: ${{ needs.image.outputs.digest }}
           REF_NAME: ${{ github.ref_name }}
+          SOURCE_DATE: ${{ github.event.head_commit.timestamp }}
         run: |
           workflow=$([ "$REF_NAME" = "main" ] && echo deploy_prod.yml || echo deploy_stage.yml)
           gh workflow run "$workflow" \
             --repo symbioticfi/vault-solver-deploy --ref main \
-            -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"
+            -f image_tag="$IMAGE_TAG" -f source_ref="$REF_NAME" -f source_date="$SOURCE_DATE" \
+            -f registry=registry.gprptest.net -f repository=vault-solver
