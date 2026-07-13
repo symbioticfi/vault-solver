@@ -173,17 +173,24 @@ func TestStrategyDiscountLegUsesMaxRate(t *testing.T) {
 	}
 }
 
-func TestStrategyDeclinesWhenCapacityCannotCoverInput(t *testing.T) {
+func TestStrategyCapsQuoteAtAvailableAssetsWhenCapacityCannotCoverInput(t *testing.T) {
+	discountID := common.HexToHash("0x01")
 	input := baseInput(t, []types.QuoteCandidate{{
 		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "500000"),
-		MaxRate:   mustBig(t, "1000000000000000000"),
+		MaxAssets:  mustBig(t, "500000"),
+		MaxRate:    mustBig(t, "1000000000000000000"),
+		DiscountID: &discountID,
 	}})
 	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).DecideQuote(t.Context(), input)
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != types.DecisionDecline {
-		t.Fatalf("decision = %q, want decline", got.Decision)
+	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "500000" {
+		t.Fatalf("output = %+v, want quote capped at maxAssets 500000", got)
+	}
+	if len(got.Legs) != 1 ||
+		got.Legs[0].AmountIn.Cmp(input.AmountIn) != 0 ||
+		got.Legs[0].AmountOut.String() != "500000" {
+		t.Fatalf("legs = %+v, want full input quoted for capped output", got.Legs)
 	}
 }
