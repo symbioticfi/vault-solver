@@ -22,9 +22,9 @@ type offerState struct {
 }
 
 // offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through
-// the same adapter while one is live, and so we can tell when an auction is fully covered. Rebuilt
-// from the 3F API at startup (restart-safe), updated in memory as offers are submitted; Run goroutine
-// only, no locking.
+// the same adapter while one is live, and so we can tell when an auction is fully covered. Hydrated
+// from the 3F API when an adapter becomes usable (restart-safe), updated in memory as offers are
+// submitted; Run goroutine only, no locking.
 type offerTracker struct {
 	offers map[offerKey]offerState
 }
@@ -48,6 +48,17 @@ func (t *offerTracker) liveEntries(now time.Time) []offerKey {
 // record stores the expiration and principal of an offer we hold through adapter for auctionID.
 func (t *offerTracker) record(adapter common.Address, auctionID int64, expiration time.Time, principal *big.Int) {
 	t.offers[offerKey{adapter, auctionID}] = offerState{expiry: expiration, principal: new(big.Int).Set(principal)}
+}
+
+// retainAdapters drops cached offers made by adapters that are no longer usable. In particular,
+// rotating an adapter's offerSigner invalidates its outstanding signatures, so those offers must no
+// longer reduce the amount covered by the active snapshot.
+func (t *offerTracker) retainAdapters(active map[common.Address]struct{}) {
+	for key := range t.offers {
+		if _, ok := active[key.adapter]; !ok {
+			delete(t.offers, key)
+		}
+	}
 }
 
 // liveCoverage sums the principal of our unexpired offers on auctionID across every adapter — how much

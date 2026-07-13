@@ -20,7 +20,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-// offerStatusIgnored are 3F offer statuses that are not live coverage when rebuilding the cache: a
+// offerStatusIgnored are 3F offer statuses that are not live coverage when hydrating the cache: a
 // FAILED consume or a NOT_ACCEPTED bid won't cover the auction, so discovery should re-offer.
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
@@ -46,6 +46,26 @@ type Solver struct {
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
 	nonceSeq   atomic.Uint64
 	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+}
+
+func mergeAdapterSources(static []Target, discovered []common.Address) []common.Address {
+	adapters := make([]common.Address, 0, len(static)+len(discovered))
+	seen := make(map[common.Address]struct{}, cap(adapters))
+	add := func(adapter common.Address) {
+		if _, ok := seen[adapter]; ok {
+			return
+		}
+		seen[adapter] = struct{}{}
+		adapters = append(adapters, adapter)
+	}
+	for _, target := range static {
+		add(target.Adapter)
+	}
+	for _, adapter := range discovered {
+		add(adapter)
+	}
+	return adapters
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -81,23 +101,23 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
-	// Resolve every adapter's vault/collateral and drop any for which this solver is not the
-	// authorised EIP-1271 signer (see resolveTargets).
-	if err := s.resolveTargets(ctx); err != nil {
+	// Build the initial static+factory snapshot. A successfully empty factory is valid: the daemon
+	// stays alive and picks up future entities on a discovery tick.
+	if err := s.refreshTargetsAndHydrate(ctx); err != nil {
 		return err
+	}
+	// Preserve the legacy static-only fail-closed startup contract. Factory-backed deployments may
+	// start empty because later registry entries are expected; static-only initial validation failure
+	// remains a configuration error.
+	if s.cfg.AdapterFactory == (common.Address{}) && len(s.targets) == 0 {
+		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
 	}
 
 	s.log.Info("starting",
-		"adapters", len(s.cfg.Targets),
+		"adapters", len(s.targets),
 		"apiBaseUrl", s.cfg.APIBaseURL,
 		"discover", s.cfg.Intervals.Discover.String(),
 	)
-
-	// Best-effort at startup: load existing offers so a restart doesn't re-offer where we already hold
-	// a live offer. Per-adapter failures are logged and skipped; a missing entry costs at most one
-	// redundant, bounded-safe offer. There is no redeem-only mode — startup either kept ≥1 matching
-	// adapter (above) and runs offers + redeems, or resolveTargets already shut the solver down.
-	s.rebuildOfferCache(ctx)
 
 	discoverT := time.NewTicker(s.cfg.Intervals.Discover)
 	redeemT := time.NewTicker(s.cfg.Intervals.RedeemPoll)
@@ -115,6 +135,9 @@ func (s *Solver) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-discoverT.C:
+			if err := s.refreshTargetsAndHydrate(ctx); err != nil {
+				s.log.Error(err, "refresh adapters; keeping last-known-good targets")
+			}
 			s.discoverAndOffer(ctx)
 		case <-redeemT.C:
 			s.redeemAll(ctx)
@@ -124,16 +147,15 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 }
 
-// rebuildOfferCache records each adapter's still-unexpired offers so discovery skips auctions we
-// already cover. Best-effort: a per-adapter list failure is logged and skipped so one bad adapter
-// can't blank the others' caches.
-func (s *Solver) rebuildOfferCache(ctx context.Context) {
+// hydrateOfferCache records each newly usable adapter's still-unexpired offers so discovery skips
+// auctions we already cover. Best-effort: one adapter's list failure cannot block the snapshot.
+func (s *Solver) hydrateOfferCache(ctx context.Context, targets []Target) {
 	now := time.Now()
 	live := 0
-	for _, t := range s.cfg.Targets {
+	for _, t := range targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
-			s.log.Error(err, "rebuild offer cache: list offers", "adapter", t.Adapter.Hex())
+			s.log.Error(err, "hydrate offer cache: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
 		for _, o := range offers {
@@ -154,7 +176,9 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 			live++
 		}
 	}
-	s.log.Info("loaded existing offers into dedup cache", "live", live)
+	if len(targets) > 0 {
+		s.log.Info("loaded existing offers into dedup cache", "adapters", len(targets), "live", live)
+	}
 }
 
 // adapterOffering tracks one adapter's liquidity/exposure snapshot for one offer pass.
@@ -166,6 +190,9 @@ type adapterOffering struct {
 // discoverAndOffer lists open auctions, snapshots adapter liquidity/exposure once, delegates offer
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
+	if len(s.targets) == 0 {
+		return
+	}
 	auctions, err := s.api.listAuctions(ctx)
 	if err != nil {
 		s.log.Error(err, "discover: list auctions")
@@ -173,8 +200,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
-	offerings := make([]*adapterOffering, 0, len(s.cfg.Targets))
-	for _, t := range s.cfg.Targets {
+	offerings := make([]*adapterOffering, 0, len(s.targets))
+	for _, t := range s.targets {
 		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if lerr != nil {
 			s.log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
@@ -228,14 +255,14 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 
 // redeemAll runs the redeemer for every matched adapter.
 func (s *Solver) redeemAll(ctx context.Context) {
-	for _, t := range s.cfg.Targets {
+	for _, t := range s.targets {
 		s.redeemReady(ctx, t)
 	}
 }
 
 // reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
-	for _, t := range s.cfg.Targets {
+	for _, t := range s.targets {
 		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if err != nil {
 			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
@@ -251,43 +278,71 @@ func (s *Solver) nextNonce() uint64 {
 	return s.nonceSeq.Add(1)
 }
 
-// resolveTargets resolves every adapter's vault, collateral, and EIP-1271 signer at startup (two
-// batched Multicalls via reader.resolveAdapters) and keeps only the adapters that resolved and have
-// this solver as their on-chain offerSigner — the rest are dropped with a warning. If none remain,
-// it returns a startup error.
-func (s *Solver) resolveTargets(ctx context.Context) error {
-	adapters := make([]common.Address, len(s.cfg.Targets))
-	for i := range s.cfg.Targets {
-		adapters[i] = s.cfg.Targets[i].Adapter
+// refreshTargets builds and validates a complete adapter snapshot before installing it. A returned
+// error leaves the last-known-good snapshot untouched; a successful empty snapshot is authoritative.
+func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
+	var discovered []common.Address
+	if s.cfg.AdapterFactory != (common.Address{}) {
+		var err error
+		discovered, err = s.reader.factoryAdapters(ctx, s.cfg.AdapterFactory)
+		if err != nil {
+			return nil, err
+		}
 	}
-	resolved, err := s.reader.resolveAdapters(ctx, adapters)
-	if err != nil {
-		return err // whole-batch transport/RPC failure, not a per-adapter revert
+	adapters := mergeAdapterSources(s.cfg.Targets, discovered)
+	if len(adapters) == 0 {
+		s.offers.retainAdapters(nil)
+		s.targets = nil
+		return nil, nil
 	}
 
-	kept := make([]Target, 0, len(s.cfg.Targets))
-	for i, t := range s.cfg.Targets {
+	resolved, err := s.reader.resolveAdapters(ctx, adapters)
+	if err != nil {
+		return nil, err
+	}
+	previous := make(map[common.Address]struct{}, len(s.targets))
+	for _, target := range s.targets {
+		previous[target.Adapter] = struct{}{}
+	}
+
+	kept := make([]Target, 0, len(adapters))
+	added := make([]Target, 0, len(adapters))
+	for i, adapterAddr := range adapters {
 		r := resolved[i]
 		if r.err != nil {
-			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", t.Adapter.Hex())
+			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
 			continue
 		}
 		if r.signer != s.signerAddr {
 			s.log.Info("skipping adapter: solver is not its EIP-1271 signer",
-				"adapter", t.Adapter.Hex(),
+				"adapter", adapterAddr.Hex(),
 				"want", s.signerAddr.Hex(),
 				"got", r.signer.Hex())
 			continue
 		}
-		t.Vault, t.Collateral = r.vault, r.collateral
+		target := Target{Adapter: adapterAddr, Vault: r.vault, Collateral: r.collateral}
+		kept = append(kept, target)
+		if _, ok := previous[adapterAddr]; !ok {
+			added = append(added, target)
+		}
 		s.log.Info("resolved target",
-			"adapter", t.Adapter.Hex(), "vault", r.vault.Hex(), "collateral", r.collateral.Hex())
-		kept = append(kept, t)
+			"adapter", adapterAddr.Hex(), "vault", r.vault.Hex(), "collateral", r.collateral.Hex())
 	}
 
-	s.cfg.Targets = kept
-	if len(s.cfg.Targets) == 0 {
-		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
+	active := make(map[common.Address]struct{}, len(kept))
+	for _, target := range kept {
+		active[target.Adapter] = struct{}{}
 	}
+	s.offers.retainAdapters(active)
+	s.targets = kept
+	return added, nil
+}
+
+func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
+	added, err := s.refreshTargets(ctx)
+	if err != nil {
+		return err
+	}
+	s.hydrateOfferCache(ctx, added)
 	return nil
 }

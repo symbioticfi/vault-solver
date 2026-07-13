@@ -35,10 +35,10 @@ LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
-# CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, universal delegator, vault/ERC4626
-# interfaces) come from the core-mirror build, since they aren't in rfq/out.
+# CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
+# and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor
-CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IVaultV2 IERC4626
+CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 
@@ -54,7 +54,7 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IVaultV2 IERC4626
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
-            UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
+            IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
             SymbioticOevSolver:oev/callback RedStoneExecutor:oev/executor Morpho:oev/morpho \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
             AggregatorV3:oev/aggregator \

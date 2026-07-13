@@ -53,7 +53,10 @@ to the vault with yield.
 
 It holds no API key: each adapter is registered with 3F by its vault creator, who sets this solver's
 signer as the adapter's EIP-1271 signer, so offers are authorized by signature alone. Design, config,
-and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md) · example
+and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md). The adapter set is discovered from a configured
+on-chain `IAdapterFactory` (optionally unioned with static `adapters`), refreshed before each auction
+discovery pass, and filtered to non-zero vault/asset targets whose `offerSigner` matches this process.
+An empty factory is valid and is polled until eligible adapters appear. Example:
 [`config/3f.example.yaml`](config/3f.example.yaml).
 
 ### RFQ Filler — `rfq-filler`

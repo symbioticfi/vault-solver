@@ -60,6 +60,19 @@ func TestCollectRequests(t *testing.T) {
 	}
 }
 
+func TestDecodeAddr_RejectsZeroAddress(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeAddr(
+		chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, common.Address{})},
+		bfAdapter.UnpackVault,
+		"adapter.vault()",
+	)
+	if err == nil {
+		t.Fatal("expected a zero address to fail validation")
+	}
+}
+
 // TestPpmToBps covers the ceil(ppm/100) conversion of minYieldPerRequest (ppm) to the bps the pre-screen
 // compares against the auction maxRate — rounded up so the bot never bids below the on-chain floor.
 func TestPpmToBps(t *testing.T) {
@@ -173,6 +186,77 @@ func abiEncodeAddress(t *testing.T, addr common.Address) []byte {
 	return enc
 }
 
+func abiEncodeUint256(t *testing.T, value int64) []byte {
+	t.Helper()
+	uintType, err := abi.NewType("uint256", "", nil)
+	if err != nil {
+		t.Fatalf("abi.NewType uint256: %v", err)
+	}
+	enc, err := abi.Arguments{{Type: uintType}}.Pack(big.NewInt(value))
+	if err != nil {
+		t.Fatalf("abi uint256 Pack: %v", err)
+	}
+	return enc
+}
+
+func TestFactoryAdapters_EmptyRegistry(t *testing.T) {
+	t.Parallel()
+
+	round := abiEncodeAggregate3Results(t, abiEncodeUint256(t, 0))
+	c, stop := newMulticallFakeClient(t, round)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("factory adapters = %v, want empty", got)
+	}
+}
+
+func TestFactoryAdapters_EnumeratesEntitiesInRegistryOrder(t *testing.T) {
+	t.Parallel()
+
+	want := []common.Address{
+		common.HexToAddress("0x00000000000000000000000000000000000000A0"),
+		common.HexToAddress("0x00000000000000000000000000000000000000A1"),
+		common.HexToAddress("0x00000000000000000000000000000000000000A2"),
+	}
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(len(want))))
+	entitiesRound := abiEncodeAggregate3Results(t,
+		abiEncodeAddress(t, want[0]), abiEncodeAddress(t, want[1]), abiEncodeAddress(t, want[2]),
+	)
+	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("factory adapters = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
+		}
+	}
+}
+
+func TestFactoryAdapters_RejectsEntityCountAboveLimit(t *testing.T) {
+	t.Parallel()
+
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(maxFactoryEntities+1)))
+	c, stop := newMulticallFakeClient(t, countRound)
+	defer stop()
+
+	_, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err == nil {
+		t.Fatal("expected an oversized factory registry to be rejected before allocation")
+	}
+}
+
 // TestResolveAdapters verifies the two-Multicall batch resolves each adapter's vault, signer, and
 // collateral and maps them back by index: round 1 returns [vault0, signer0, vault1, signer1] and
 // round 2 returns [asset0, asset1], so a layout off-by-one would cross adapters' fields.
@@ -217,4 +301,35 @@ func TestResolveAdapters(t *testing.T) {
 				w.vault.Hex(), w.signer.Hex(), w.collateral.Hex())
 		}
 	}
+}
+
+func TestResolveAdapters_RejectsUnexpectedMulticallResultCounts(t *testing.T) {
+	t.Parallel()
+
+	adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000A0")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000B0")
+	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
+
+	t.Run("adapter fields", func(t *testing.T) {
+		t.Parallel()
+		shortRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault))
+		c, stop := newMulticallFakeClient(t, shortRound)
+		defer stop()
+
+		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}); err == nil {
+			t.Fatal("expected an error for an incomplete adapter-field response")
+		}
+	})
+
+	t.Run("assets", func(t *testing.T) {
+		t.Parallel()
+		fieldsRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer))
+		emptyAssetRound := abiEncodeAggregate3Results(t)
+		c, stop := newMulticallFakeClient(t, fieldsRound, emptyAssetRound)
+		defer stop()
+
+		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}); err == nil {
+			t.Fatal("expected an error for an incomplete asset response")
+		}
+	})
 }

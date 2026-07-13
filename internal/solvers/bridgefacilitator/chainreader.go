@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/vaultcontroller"
+	"github.com/symbioticfi/vault-solver/api/bindings/adapterfactory"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
@@ -19,10 +20,11 @@ import (
 //
 // The ThreeFAdapter computes its own JIT-funding headroom on-chain via getMaxAssets() (it folds in the
 // delegator's per-adapter limitOf, the vault's withdrawable liquidity, and any pending sweep), so the bot
-// no longer reads the delegator/vault directly for sizing. The collateral token is still read once at
-// startup via IERC4626(vault).asset() to match auctions.
+// no longer reads the delegator/vault directly for sizing. The collateral token is read during each
+// adapter refresh via IERC4626(vault).asset() to match auctions.
 var (
 	bfAdapter = adapter.NewThreeFAdapter()
+	factoryB  = adapterfactory.NewIAdapterFactory()
 	vc        = vaultcontroller.NewIVaultController()
 	erc4626b  = erc4626.NewIERC4626()
 )
@@ -32,6 +34,11 @@ var (
 // requestsLength() count. (50 is a compile-time constant, immutable per deployment, so it is mirrored
 // here rather than read.)
 const maxRequests = 50
+
+// maxFactoryEntities bounds the configured factory snapshot before allocating one call per entity.
+// A real deployment is orders of magnitude smaller; the cap turns corrupt or malicious count data
+// into a refresh error so the solver can retain its last-known-good targets instead of exhausting RAM.
+const maxFactoryEntities = 10_000
 
 // reader performs the adapter- and Request-side on-chain reads the solver relies on, batching via
 // Multicall3 where calls are independent.
@@ -43,7 +50,58 @@ func newReader(c *chain.Client) *reader {
 	return &reader{chain: c}
 }
 
-// resolvedAdapter is one adapter's startup resolution: its vault, that vault's collateral (the
+// factoryAdapters returns the factory's complete entity snapshot in registry order. The registry is
+// append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
+func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
+	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})
+	if err != nil {
+		return nil, err
+	}
+	if len(res) != 1 || !res[0].Success {
+		return nil, errors.New("adapter factory totalEntities() reverted")
+	}
+	total, err := factoryB.UnpackTotalEntities(res[0].ReturnData)
+	if err != nil {
+		return nil, errors.Errorf("adapter factory totalEntities(): %w", err)
+	}
+	if total.Cmp(big.NewInt(maxFactoryEntities)) > 0 {
+		return nil, errors.Errorf("adapter factory entity count %s exceeds safety limit %d", total.String(), maxFactoryEntities)
+	}
+	count := int(total.Int64())
+	if count == 0 {
+		return nil, nil
+	}
+
+	calls := make([]chain.Call, count)
+	for i := range calls {
+		calls[i] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(i)))}
+	}
+	res, err = r.chain.Multicall(ctx, calls)
+	if err != nil {
+		return nil, err
+	}
+	if len(res) != count {
+		return nil, errors.Errorf("adapter factory returned %d entities, want %d", len(res), count)
+	}
+
+	adapters := make([]common.Address, count)
+	for i := range res {
+		if !res[i].Success {
+			return nil, errors.Errorf("adapter factory entity(%d) reverted", i)
+		}
+		adapterAddr, unpackErr := factoryB.UnpackEntity(res[i].ReturnData)
+		if unpackErr != nil {
+			return nil, errors.Errorf("adapter factory entity(%d): %w", i, unpackErr)
+		}
+		if adapterAddr == (common.Address{}) {
+			return nil, errors.Errorf("adapter factory entity(%d) is zero", i)
+		}
+		adapters[i] = adapterAddr
+	}
+	return adapters, nil
+}
+
+// resolvedAdapter is one adapter's refresh resolution: its vault, that vault's collateral (the
 // ERC-4626 asset, used to match auctions), and its EIP-1271 offer-signer. err is set (other fields
 // zero) if any read reverted, so the caller can drop just that adapter.
 type resolvedAdapter struct {
@@ -53,8 +111,8 @@ type resolvedAdapter struct {
 	err        error
 }
 
-// decodeAddr returns the address a Multicall sub-call returned, or an error tagged with `what` if it
-// reverted or failed to decode.
+// decodeAddr returns the non-zero address a Multicall sub-call returned, or an error tagged with
+// `what` if it reverted, failed to decode, or returned zero.
 func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error), what string) (common.Address, error) {
 	if !res.Success {
 		return common.Address{}, errors.Errorf("%s reverted", what)
@@ -62,6 +120,9 @@ func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error
 	addr, err := unpack(res.ReturnData)
 	if err != nil {
 		return common.Address{}, errors.Errorf("decode %s: %w", what, err)
+	}
+	if addr == (common.Address{}) {
+		return common.Address{}, errors.Errorf("%s returned zero address", what)
 	}
 	return addr, nil
 }
@@ -83,6 +144,9 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address)
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return nil, err
+	}
+	if len(res) != len(calls) {
+		return nil, errors.Errorf("adapter resolution returned %d results, want %d", len(res), len(calls))
 	}
 
 	// Decode round 1; queue an asset() call for each adapter whose vault and signer both resolved.
@@ -110,6 +174,9 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address)
 	ares, err := r.chain.Multicall(ctx, assetCalls)
 	if err != nil {
 		return nil, err
+	}
+	if len(ares) != len(assetCalls) {
+		return nil, errors.Errorf("asset resolution returned %d results, want %d", len(ares), len(assetCalls))
 	}
 	for k, idx := range assetIdx {
 		collateral, derr := decodeAddr(ares[k], erc4626b.UnpackAsset, "vault.asset()")
