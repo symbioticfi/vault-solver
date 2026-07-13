@@ -50,7 +50,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	requireSingleRoute := qs.permissionedTokens[req.TokenIn]
+	requireSingleRoute := requiresSingleRoute(qs.tokensToQuote, qs.permissionedTokens, req.TokenIn)
 	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, requireSingleRoute, qs.now())
 	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {

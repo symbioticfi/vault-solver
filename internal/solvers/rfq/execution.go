@@ -50,6 +50,7 @@ type executionService struct {
 	orderLimit         int
 	vaults             []recoveryVault
 	whitelist          adapterWhitelist // nil disables adapter filtering
+	tokensToQuote      string
 	permissionedTokens map[common.Address]bool
 	discountsEnabled   bool // false (external solver) skips the backend discounts API entirely
 	backend            orderBackend
@@ -280,7 +281,7 @@ func (e *executionService) buildFillPlan(
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	requireSingleRoute := e.permissionedTokens[req.TokenIn]
+	requireSingleRoute := requiresSingleRoute(e.tokensToQuote, e.permissionedTokens, req.TokenIn)
 	input := newFillInput(e.chainID, e.executor, req, inv, required, requireSingleRoute, e.now())
 	plan, err := e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {

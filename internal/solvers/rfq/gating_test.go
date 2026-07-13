@@ -39,6 +39,28 @@ func TestQuotesTokenInScope(t *testing.T) {
 	}
 }
 
+func TestRequiresSingleRoute(t *testing.T) {
+	permissioned := map[common.Address]bool{permissionedToken: true}
+	tests := []struct {
+		name  string
+		scope string
+		token common.Address
+		want  bool
+	}{
+		{"permissioned scope and token", tokensToQuotePermissioned, permissionedToken, true},
+		{"permissioned scope but permissionless token", tokensToQuotePermissioned, permissionlessToken, false},
+		{"all scope", tokensToQuoteAll, permissionedToken, false},
+		{"permissionless scope", tokensToQuotePermissionless, permissionedToken, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresSingleRoute(tt.scope, permissioned, tt.token); got != tt.want {
+				t.Fatalf("requiresSingleRoute() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseConfigTokenScope(t *testing.T) {
 	const base = `
 backendUrl: https://rfq-backend.example
@@ -98,7 +120,7 @@ func (s *inputRecordingStrategy) BuildFillPlan(
 	return s.fillPlan, nil
 }
 
-func TestQuoteMarksPermissionedTokenAsSingleRoute(t *testing.T) {
+func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	strategy := &inputRecordingStrategy{quoteOut: types.QuoteOutput{
 		Decision:        types.DecisionQuote,
 		QuotedAmountOut: big.NewInt(1_000000),
@@ -109,6 +131,7 @@ func TestQuoteMarksPermissionedTokenAsSingleRoute(t *testing.T) {
 		}},
 	}}
 	srv := testServer()
+	srv.quotes.tokensToQuote = tokensToQuotePermissioned
 	srv.quotes.permissionedTokens = map[common.Address]bool{permissionedToken: true}
 	srv.quotes.strategy = strategy
 	request := validQuoteBody()

@@ -126,7 +126,7 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}
 }
 
-func TestQuoteRejectsWebhookMultiLegPlanForPermissionedToken(t *testing.T) {
+func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -150,6 +150,7 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedToken(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	quoteServer := testServer()
+	quoteServer.quotes.tokensToQuote = tokensToQuotePermissioned
 	quoteServer.quotes.permissionedTokens = map[common.Address]bool{tIn: true}
 	quoteServer.quotes.strategy = webhookstrategy.New(client)
 	request := validQuoteBody()

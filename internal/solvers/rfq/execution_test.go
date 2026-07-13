@@ -343,10 +343,11 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	}
 }
 
-func TestExecutionRecoveryMarksPermissionedTokenAsSingleRoute(t *testing.T) {
+func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	strategy := &inputRecordingStrategy{fillPlan: baseFillPlan()}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
+	e.tokensToQuote = tokensToQuotePermissioned
 	e.permissionedTokens = map[common.Address]bool{tIn: true}
 	e.strategy = strategy
 
@@ -364,7 +365,7 @@ func TestExecutionRecoveryMarksPermissionedTokenAsSingleRoute(t *testing.T) {
 	}
 }
 
-func TestExecutionRejectsPermissionedMultiLegFillPlan(t *testing.T) {
+func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	plan := baseFillPlan()
 	plan.Legs = []types.FillLeg{
 		{
@@ -377,6 +378,7 @@ func TestExecutionRejectsPermissionedMultiLegFillPlan(t *testing.T) {
 	}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
+	e.tokensToQuote = tokensToQuotePermissioned
 	e.permissionedTokens = map[common.Address]bool{tIn: true}
 	e.strategy = fixedFillStrategy{plan: plan}
 

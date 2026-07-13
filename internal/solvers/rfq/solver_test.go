@@ -21,6 +21,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 		BackendURL:         "https://rfq-backend.example",
 		Executor:           common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		Adapters:           []recoveryVault{{Adapter: listed}},
+		TokensToQuote:      tokensToQuotePermissioned,
 		PermissionedTokens: map[common.Address]bool{permissionedToken: true},
 	}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
@@ -43,6 +44,9 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	scopedToConfigured(t, "execution", exec.whitelist)
 	if !quotes.permissionedTokens[permissionedToken] || !exec.permissionedTokens[permissionedToken] {
 		t.Fatal("permissionedTokens were not wired to both quote and execution services")
+	}
+	if exec.tokensToQuote != cfg.TokensToQuote {
+		t.Fatalf("execution tokensToQuote = %q, want %q", exec.tokensToQuote, cfg.TokensToQuote)
 	}
 
 	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution

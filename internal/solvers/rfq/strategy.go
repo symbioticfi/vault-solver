@@ -107,6 +107,14 @@ func validateSingleRoute(requireSingleRoute bool, legCount int) error {
 	return nil
 }
 
+func requiresSingleRoute(
+	tokensToQuote string,
+	permissionedTokens map[common.Address]bool,
+	tokenIn common.Address,
+) bool {
+	return tokensToQuote == tokensToQuotePermissioned && permissionedTokens[tokenIn]
+}
+
 func cloneBig(n *big.Int) *big.Int {
 	if n == nil {
 		return nil

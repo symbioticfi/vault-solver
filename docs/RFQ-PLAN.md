@@ -108,13 +108,14 @@ candidates); the strategy owns the decision. Two ship in-tree:
   **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
   `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.
 
-`permissionedTokens` is a solver-owned hard constraint as well as a quote-scope input. For those
-input tokens the solver sets `RequireSingleRoute` on both quote and fill snapshots. A strategy must
-choose one candidate that covers the entire `amountIn`; partial candidates, including direct and
-discount variants of the same adapter, cannot be combined. The default strategy chooses the best
-fully viable candidate and declines if none exists. The solver independently rejects any quoted or
-fill plan whose leg count is not exactly one, so webhook and post-restart recovery fail closed at the
-same boundary. Permissionless inputs retain greedy multi-candidate aggregation.
+`permissionedTokens` is both the membership set for `tokensToQuote` and, only when that scope is
+`permissioned`, a solver-owned hard constraint. The solver sets `RequireSingleRoute` on both quote
+and fill snapshots for admitted tokens in that scope. A strategy must choose one candidate that
+covers the entire `amountIn`; partial candidates, including direct and discount variants of the same
+adapter, cannot be combined. The default strategy chooses the best fully viable candidate and
+declines if none exists. The solver independently rejects any quoted or fill plan whose leg count is
+not exactly one, so webhook and post-restart recovery fail closed at the same boundary. The `all` and
+`permissionless` scopes retain greedy multi-candidate aggregation.
 
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
 brain; the solver only enforces its own structural and safety constraints) are documented once in
@@ -217,11 +218,11 @@ dropping features.
    Unit-tested (whitelist build/filter, config flag + zero-address rejection, factory wiring, quote
    200/204 paths incl. disabled toggle, recovery discount filter, mismatch → failed order with no
    tx).
-5. **(done) Permissioned-token single-route constraint** — quote and fill inputs identify
-   permissioned `tokenIn` values, the default strategy selects one fully covering candidate instead
-   of aggregating, and the solver rejects multi-leg strategy/webhook outputs before publication or
-   calldata construction. Cold fill recovery applies the same constraint. Unit-tested across
-   permissionless aggregation, single-route selection/decline, webhook rejection, and restart recovery.
+5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
+   quote and fill inputs require one fully covering candidate instead of aggregation, and the solver
+   rejects multi-leg strategy/webhook outputs before publication or calldata construction. Cold fill
+   recovery applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
+   single-route selection/decline, webhook rejection, and restart recovery.
 
 **Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
 cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`paused`, `getMaxAssets`,
@@ -258,7 +259,7 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 ### Parity with the current TS filler
 
 **Status (verified against the current TS `rfq-filler` working tree): functional parity for the
-permissionless path, plus the permissioned-token single-route constraint described above.** The
+permissionless path, plus the permissioned-scope single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
 and the recovery RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed

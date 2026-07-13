@@ -62,8 +62,8 @@ type Config struct {
 	// PermissionedTokens. Typically set per instance via env (e.g. tokensToQuote: ${TOKENS_TO_QUOTE}).
 	TokensToQuote string
 	// PermissionedTokens is the local set of input-token addresses treated as permissioned. The
-	// TokensToQuote scope is evaluated against it, and permissioned inputs must use exactly one route.
-	// Empty means no input token is permissioned.
+	// TokensToQuote scope is evaluated against it. When TokensToQuote is "permissioned", admitted
+	// inputs must use exactly one route. Empty means no input token is permissioned.
 	PermissionedTokens map[common.Address]bool
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
 	// scoped to, and the candidate universe used to rebuild a fill plan when the quote-time plan isn't

@@ -105,6 +105,7 @@ func buildServices(
 		orderLimit:         cfg.OrderLimit,
 		vaults:             cfg.Adapters,
 		whitelist:          execWhitelist,
+		tokensToQuote:      cfg.TokensToQuote,
 		permissionedTokens: cfg.PermissionedTokens,
 		discountsEnabled:   cfg.usesDiscounts(),
 		backend:            newBackendClient(cfg.BackendURL),

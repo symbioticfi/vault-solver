@@ -61,7 +61,7 @@ solvers:
       # permissionedTokens. Values: "all" (default) | "permissioned" (only tokens in the list below) |
       # "permissionless" (only tokens NOT in the list). Often set per instance via env.
       # tokensToQuote: all
-      # permissionedTokens:            # input tokens in this set must also use exactly one candidate route
+      # permissionedTokens:            # with tokensToQuote: permissioned, inputs must use one candidate route
       #   - "0x..."
 
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the

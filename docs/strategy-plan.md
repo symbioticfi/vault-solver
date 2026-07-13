@@ -104,9 +104,9 @@ Two strategy kinds are conventional across solvers:
 
 Both plug into the same trusted boundary: the solver executes their output the same way, so a solver
 is never coupled to which strategy is loaded. A solver may still enforce solver-owned structural or
-safety constraints before publishing or executing a plan. For example, RFQ marks permissioned-token
-inputs as single-route and rejects any strategy output that does not contain exactly one leg; route
-selection and economics remain strategy-owned.
+safety constraints before publishing or executing a plan. For example, RFQ marks inputs as
+single-route when `tokensToQuote` is `permissioned` and rejects any strategy output that does not
+contain exactly one leg; route selection and economics remain strategy-owned.
 
 ## Adding your own strategy
 
