@@ -50,7 +50,8 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, qs.now())
+	requireSingleRoute := qs.permissionedTokens[req.TokenIn]
+	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, requireSingleRoute, qs.now())
 	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
@@ -61,6 +62,9 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}
 	if out.QuotedAmountOut == nil {
 		return nil, errors.New("quote: strategy returned quote without amountOut")
+	}
+	if err := validateSingleRoute(input.RequireSingleRoute, len(out.Legs)); err != nil {
+		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
 
 	qs.log.V(1).Info("quoted",

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -52,6 +53,7 @@ func newQuoteInput(
 	req strategyRequest,
 	inv []solverInventory,
 	required *big.Int,
+	requireSingleRoute bool,
 	now time.Time,
 ) types.QuoteInput {
 	candidates := make([]types.QuoteCandidate, 0, len(inv))
@@ -71,16 +73,17 @@ func newQuoteInput(
 		})
 	}
 	return types.QuoteInput{
-		RequestID:         req.RequestID,
-		QuoteID:           req.QuoteID,
-		ChainID:           chainID,
-		Executor:          executor,
-		TokenIn:           req.TokenIn,
-		TokenOut:          req.TokenOut,
-		AmountIn:          cloneBig(req.Amount),
-		RequiredAmountOut: cloneBig(required),
-		Candidates:        candidates,
-		Now:               now,
+		RequestID:          req.RequestID,
+		QuoteID:            req.QuoteID,
+		ChainID:            chainID,
+		Executor:           executor,
+		TokenIn:            req.TokenIn,
+		TokenOut:           req.TokenOut,
+		AmountIn:           cloneBig(req.Amount),
+		RequiredAmountOut:  cloneBig(required),
+		RequireSingleRoute: requireSingleRoute,
+		Candidates:         candidates,
+		Now:                now,
 	}
 }
 
@@ -90,10 +93,18 @@ func newFillInput(
 	req strategyRequest,
 	inv []solverInventory,
 	required *big.Int,
+	requireSingleRoute bool,
 	now time.Time,
 ) types.FillInput {
-	q := newQuoteInput(chainID, executor, req, inv, required, now)
+	q := newQuoteInput(chainID, executor, req, inv, required, requireSingleRoute, now)
 	return types.FillInput(q)
+}
+
+func validateSingleRoute(requireSingleRoute bool, legCount int) error {
+	if requireSingleRoute && legCount != 1 {
+		return errors.Errorf("single-route input requires exactly one leg, got %d", legCount)
+	}
+	return nil
 }
 
 func cloneBig(n *big.Int) *big.Int {

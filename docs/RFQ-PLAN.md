@@ -108,8 +108,16 @@ candidates); the strategy owns the decision. Two ship in-tree:
   **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
   `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.
 
+`permissionedTokens` is a solver-owned hard constraint as well as a quote-scope input. For those
+input tokens the solver sets `RequireSingleRoute` on both quote and fill snapshots. A strategy must
+choose one candidate that covers the entire `amountIn`; partial candidates, including direct and
+discount variants of the same adapter, cannot be combined. The default strategy chooses the best
+fully viable candidate and declines if none exists. The solver independently rejects any quoted or
+fill plan whose leg count is not exactly one, so webhook and post-restart recovery fail closed at the
+same boundary. Permissionless inputs retain greedy multi-candidate aggregation.
+
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
-brain; the solver executes the output verbatim) are documented once in
+brain; the solver only enforces its own structural and safety constraints) are documented once in
 [`strategy-plan.md`](strategy-plan.md), shared with every solver. The concrete RFQ input/output types
 (`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`, `QuoteCandidate`) live in
 `internal/solvers/rfq/strategies/types`.
@@ -179,8 +187,8 @@ list serves two purposes:
 
 ## 4. Build phases
 
-All three phases are committed scope — the goal is full parity with the TS filler, including discount
-legs. Phasing is about sequencing and reviewable increments, not dropping features.
+All phases below are committed scope. Phasing is about sequencing and reviewable increments, not
+dropping features.
 
 0. **(done)** Vendor RFQ ABIs: `Executor`/`Reactor` from `../rfq/out`, and `LiquidLaneAdapter`/
    `UniversalDelegator`/`IVaultV2`/`IERC4626` from a standalone `core-mirror` build →
@@ -209,6 +217,11 @@ legs. Phasing is about sequencing and reviewable increments, not dropping featur
    Unit-tested (whitelist build/filter, config flag + zero-address rejection, factory wiring, quote
    200/204 paths incl. disabled toggle, recovery discount filter, mismatch → failed order with no
    tx).
+5. **(done) Permissioned-token single-route constraint** — quote and fill inputs identify
+   permissioned `tokenIn` values, the default strategy selects one fully covering candidate instead
+   of aggregating, and the solver rejects multi-leg strategy/webhook outputs before publication or
+   calldata construction. Cold fill recovery applies the same constraint. Unit-tested across
+   permissionless aggregation, single-route selection/decline, webhook rejection, and restart recovery.
 
 **Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
 cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`paused`, `getMaxAssets`,
@@ -233,9 +246,10 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing is a faithful port for now** — the `default` strategy is a faithful port of the TS greedy
-  discount + leg selection; a richer quoting strategy is a later follow-up (mirrors the 3F pricing
-  TODO), or an operator can plug their own via the `webhook` strategy (see the strategy layer below).
+- **Pricing follows the TS greedy port for permissionless inputs** — permissioned inputs deliberately
+  use the single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
+  3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
+  layer below).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
@@ -243,7 +257,8 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): full functional parity.** The
+**Status (verified against the current TS `rfq-filler` working tree): functional parity for the
+permissionless path, plus the permissioned-token single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
 and the recovery RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed

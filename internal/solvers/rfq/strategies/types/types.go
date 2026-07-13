@@ -31,7 +31,8 @@ type Pricing interface {
 	) (map[common.Address]*big.Int, error)
 }
 
-// QuoteInput is the RFQ strategy decision snapshot. It is intentionally solver-local.
+// QuoteInput is the RFQ strategy decision snapshot. RequireSingleRoute is a solver-owned structural
+// constraint; pricing and candidate selection remain strategy-owned.
 type QuoteInput struct {
 	RequestID string
 	QuoteID   string
@@ -42,9 +43,10 @@ type QuoteInput struct {
 	TokenOut common.Address
 	AmountIn *big.Int
 
-	RequiredAmountOut *big.Int
-	Candidates        []QuoteCandidate
-	Now               time.Time
+	RequiredAmountOut  *big.Int
+	RequireSingleRoute bool
+	Candidates         []QuoteCandidate
+	Now                time.Time
 }
 
 type QuoteCandidate struct {
@@ -79,17 +81,18 @@ type FillInput struct {
 	ChainID   int64
 	Executor  common.Address
 
-	TokenIn           common.Address
-	TokenOut          common.Address
-	AmountIn          *big.Int
-	RequiredAmountOut *big.Int
+	TokenIn            common.Address
+	TokenOut           common.Address
+	AmountIn           *big.Int
+	RequiredAmountOut  *big.Int
+	RequireSingleRoute bool
 
 	Candidates []QuoteCandidate
 	Now        time.Time
 }
 
-// FillPlan is the execution output trusted strategies hand to the solver. The solver only translates
-// this plan into Executor calldata.
+// FillPlan is the execution output trusted strategies hand to the solver. The solver enforces its
+// structural constraints, then translates the plan into Executor calldata.
 type FillPlan struct {
 	QuoteID         string
 	RequestID       string

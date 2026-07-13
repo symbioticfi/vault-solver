@@ -201,6 +201,9 @@ func evaluateGroup(
 		}
 		return eligible[i].candidate.MaxRate.Cmp(eligible[j].candidate.MaxRate) > 0
 	})
+	if input.RequireSingleRoute {
+		return evaluateSingleRoute(input, eligible, tokenInDecimals)
+	}
 	eligible = dedupeByAdapter(eligible)
 	if len(eligible) == 0 {
 		return nil
@@ -252,6 +255,37 @@ func evaluateGroup(
 		QuotedAmountOut: quotedAmountOut,
 		Legs:            legs,
 	}
+}
+
+func evaluateSingleRoute(
+	input types.QuoteInput,
+	eligible []eligibleLeg,
+	tokenInDecimals int,
+) *types.QuoteOutput {
+	var best *types.QuoteOutput
+	for _, e := range eligible {
+		c := e.candidate
+		amountOut := liquidlanemath.AmountOutForRate(input.AmountIn, e.rate, tokenInDecimals, c.AssetDecimals)
+		if amountOut.Sign() <= 0 || amountOut.Cmp(c.MaxAssets) > 0 {
+			continue
+		}
+		if input.RequiredAmountOut != nil && amountOut.Cmp(input.RequiredAmountOut) < 0 {
+			continue
+		}
+		quote := &types.QuoteOutput{
+			Decision:        types.DecisionQuote,
+			QuotedAmountOut: amountOut,
+			Legs: []types.QuoteLeg{{
+				CandidateID: c.ID,
+				AmountIn:    new(big.Int).Set(input.AmountIn),
+				AmountOut:   new(big.Int).Set(amountOut),
+			}},
+		}
+		if best == nil || quote.QuotedAmountOut.Cmp(best.QuotedAmountOut) > 0 {
+			best = quote
+		}
+	}
+	return best
 }
 
 func dedupeByAdapter(legs []eligibleLeg) []eligibleLeg {
@@ -401,6 +435,9 @@ func validateCachedPlan(input types.FillInput, plan *types.FillPlan) error {
 	if input.RequiredAmountOut != nil &&
 		(plan.QuotedAmountOut == nil || plan.QuotedAmountOut.Cmp(input.RequiredAmountOut) < 0) {
 		return errors.New("cached fill plan output is below required amount out")
+	}
+	if input.RequireSingleRoute && len(plan.Legs) != 1 {
+		return errors.Errorf("cached single-route fill plan has %d legs", len(plan.Legs))
 	}
 	return nil
 }

@@ -187,3 +187,93 @@ func TestStrategyDeclinesWhenCapacityCannotCoverInput(t *testing.T) {
 		t.Fatalf("decision = %q, want decline", got.Decision)
 	}
 }
+
+func TestStrategyRouteConstraints(t *testing.T) {
+	adapter2 := common.HexToAddress("0x0000000000000000000000000000000000000004")
+	discountID := common.HexToHash("0x01")
+	candidate := func(
+		id string,
+		adapter common.Address,
+		maxAssets string,
+		maxRate string,
+		discount *common.Hash,
+	) types.QuoteCandidate {
+		return types.QuoteCandidate{
+			ID: id, Adapter: adapter, Asset: tOut, AssetDecimals: 6,
+			MaxAssets: mustBig(t, maxAssets), MaxRate: mustBig(t, maxRate), DiscountID: discount,
+		}
+	}
+
+	tests := []struct {
+		name               string
+		requireSingleRoute bool
+		requiredAmountOut  *big.Int
+		candidates         []types.QuoteCandidate
+		wantDecision       types.Decision
+		wantLegs           int
+		wantCandidate      string
+		wantAmountOut      string
+	}{
+		{
+			name: "permissionless input aggregates candidates",
+			candidates: []types.QuoteCandidate{
+				candidate("c0", vlt, "600000", "1000000000000000000", nil),
+				candidate("c1", adapter2, "500000", "1000000000000000000", nil),
+			},
+			wantDecision: types.DecisionQuote, wantLegs: 2, wantAmountOut: "1000000",
+		},
+		{
+			name:               "permissioned input selects best full candidate",
+			requireSingleRoute: true,
+			requiredAmountOut:  mustBig(t, "1100000"),
+			candidates: []types.QuoteCandidate{
+				candidate("direct", vlt, "2000000", "1000000000000000000", nil),
+				candidate("discount", adapter2, "2000000", "1200000000000000000", &discountID),
+			},
+			wantDecision: types.DecisionQuote, wantLegs: 1,
+			wantCandidate: "discount", wantAmountOut: "1200000",
+		},
+		{
+			name:               "permissioned input declines partial candidates",
+			requireSingleRoute: true,
+			candidates: []types.QuoteCandidate{
+				candidate("c0", vlt, "600000", "1000000000000000000", nil),
+				candidate("c1", adapter2, "500000", "1000000000000000000", nil),
+			},
+			wantDecision: types.DecisionDecline,
+		},
+		{
+			name:               "permissioned input does not mix direct and discount candidates",
+			requireSingleRoute: true,
+			candidates: []types.QuoteCandidate{
+				candidate("direct", vlt, "600000", "1000000000000000000", nil),
+				candidate("discount", vlt, "600000", "1200000000000000000", &discountID),
+			},
+			wantDecision: types.DecisionDecline,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := baseInput(t, tt.candidates)
+			input.RequireSingleRoute = tt.requireSingleRoute
+			input.RequiredAmountOut = tt.requiredAmountOut
+
+			got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).
+				DecideQuote(t.Context(), input)
+			if err != nil {
+				t.Fatalf("DecideQuote: %v", err)
+			}
+			if got.Decision != tt.wantDecision || len(got.Legs) != tt.wantLegs {
+				t.Fatalf("output = %+v, want decision %q with %d legs", got, tt.wantDecision, tt.wantLegs)
+			}
+			if tt.wantCandidate != "" && got.Legs[0].CandidateID != tt.wantCandidate {
+				t.Fatalf("candidate = %q, want %q", got.Legs[0].CandidateID, tt.wantCandidate)
+			}
+			if tt.wantAmountOut != "" &&
+				(got.QuotedAmountOut == nil || got.QuotedAmountOut.String() != tt.wantAmountOut) {
+				t.Fatalf("quotedAmountOut = %v, want %s", got.QuotedAmountOut, tt.wantAmountOut)
+			}
+		})
+	}
+}
