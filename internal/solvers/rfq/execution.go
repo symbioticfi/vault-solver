@@ -45,19 +45,21 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID          int64
-	executor         common.Address
-	orderLimit       int
-	vaults           []recoveryVault
-	whitelist        adapterWhitelist // nil disables adapter filtering
-	discountsEnabled bool             // false (external solver) skips the backend discounts API entirely
-	backend          orderBackend
-	store            *store
-	reader           recoveryReader
-	strategy         types.Strategy
-	txm              txSender
-	log              logr.Logger
-	now              func() time.Time
+	chainID            int64
+	executor           common.Address
+	orderLimit         int
+	vaults             []recoveryVault
+	whitelist          adapterWhitelist // nil disables adapter filtering
+	tokensToQuote      string
+	permissionedTokens map[common.Address]bool
+	discountsEnabled   bool // false (external solver) skips the backend discounts API entirely
+	backend            orderBackend
+	store              *store
+	reader             recoveryReader
+	strategy           types.Strategy
+	txm                txSender
+	log                logr.Logger
+	now                func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -252,8 +254,8 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 }
 
 // buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
-// strategy owns cached quote lookup and recovery; solver only assembles the snapshot and executes the
-// returned plan.
+// strategy owns cached quote lookup, recovery, and route economics; the solver assembles the snapshot
+// and enforces solver-owned structural constraints on the returned plan.
 func (e *executionService) buildFillPlan(
 	ctx context.Context,
 	exec *executable,
@@ -279,8 +281,16 @@ func (e *executionService) buildFillPlan(
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	input := newFillInput(e.chainID, e.executor, req, inv, required, e.now())
-	return e.strategy.BuildFillPlan(ctx, input)
+	requireSingleRoute := requiresSingleRoute(e.tokensToQuote, e.permissionedTokens, req.TokenIn)
+	input := newFillInput(e.chainID, e.executor, req, inv, required, requireSingleRoute, e.now())
+	plan, err := e.strategy.BuildFillPlan(ctx, input)
+	if err != nil || plan == nil {
+		return plan, err
+	}
+	if err := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); err != nil {
+		return nil, errors.Errorf("fill: strategy: %w", err)
+	}
+	return plan, nil
 }
 
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and

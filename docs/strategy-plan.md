@@ -99,11 +99,14 @@ Two strategy kinds are conventional across solvers:
   is internal to the strategy.
 - **`webhook`** — delegates the decision to an external HTTP service. It POSTs the solver's input
   snapshot as JSON and hands back the plan the service returns. The external decider is the brain; the
-  in-process handler is transport-only and adds no decision logic and no second-guessing of its own.
+  in-process handler is transport-only and adds no economic decision logic of its own.
   This is the seam for running custom decision logic out-of-process without forking the solver.
 
 Both plug into the same trusted boundary: the solver executes their output the same way, so a solver
-is never coupled to which strategy is loaded.
+is never coupled to which strategy is loaded. A solver may still enforce solver-owned structural or
+safety constraints before publishing or executing a plan. For example, RFQ marks inputs as
+single-route when `tokensToQuote` is `permissioned` and rejects any strategy output that does not
+contain exactly one leg; route selection and economics remain strategy-owned.
 
 ## Adding your own strategy
 
@@ -111,7 +114,8 @@ Strategies are pluggable per solver, and there are two ways to add one.
 
 **Out-of-tree, no Go changes — run a `webhook`.** Point the solver's `strategy` at your own HTTP
 service (see below). It receives the solver's raw-facts input as JSON and returns the plan to execute;
-the solver runs it verbatim. This is the fastest path and keeps your decision logic in your own
+the solver runs it subject to the same solver-owned structural and safety constraints as an in-tree
+strategy. This is the fastest path and keeps your decision logic in your own
 codebase and language.
 
 **In-tree — register a new strategy on the solver.** To ship a strategy alongside a solver, implement

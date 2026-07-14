@@ -58,10 +58,10 @@ solvers:
       solverMode: external
 
       # tokensToQuote scopes which input tokens the filler will quote, evaluated against
-      # permissionedTokens: "all" (default) | "permissioned" (only tokens in the list below) |
+      # permissionedTokens. Values: "all" (default) | "permissioned" (only tokens in the list below) |
       # "permissionless" (only tokens NOT in the list). Often set per instance via env.
       # tokensToQuote: all
-      # permissionedTokens:            # input-token addresses treated as permissioned for the scope above
+      # permissionedTokens:            # with tokensToQuote: permissioned, inputs must use one candidate route
       #   - "0x..."
 
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the

@@ -18,9 +18,11 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	listed := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	cfg := &Config{
-		BackendURL: "https://rfq-backend.example",
-		Executor:   common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		Adapters:   []recoveryVault{{Adapter: listed}},
+		BackendURL:         "https://rfq-backend.example",
+		Executor:           common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		Adapters:           []recoveryVault{{Adapter: listed}},
+		TokensToQuote:      tokensToQuotePermissioned,
+		PermissionedTokens: map[common.Address]bool{permissionedToken: true},
 	}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
@@ -40,6 +42,12 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	quotes, exec := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	scopedToConfigured(t, "execution", exec.whitelist)
+	if !quotes.permissionedTokens[permissionedToken] || !exec.permissionedTokens[permissionedToken] {
+		t.Fatal("permissionedTokens were not wired to both quote and execution services")
+	}
+	if exec.tokensToQuote != cfg.TokensToQuote {
+		t.Fatalf("execution tokensToQuote = %q, want %q", exec.tokensToQuote, cfg.TokensToQuote)
+	}
 
 	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution
 	// stays unrestricted (nil) so discount recovery can fill through any advertised adapter.

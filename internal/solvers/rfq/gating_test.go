@@ -1,9 +1,12 @@
 package rfq
 
 import (
+	"context"
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
 // mGLOBAL (permissioned) and mF-ONE (permissionless) Hoodi addresses, used as token fixtures.
@@ -33,6 +36,28 @@ func TestQuotesTokenInScope(t *testing.T) {
 		if got := qs.quotesTokenIn(c.token); got != c.want {
 			t.Errorf("scope=%q token=%s: got %v, want %v", c.scope, c.token.Hex(), got, c.want)
 		}
+	}
+}
+
+func TestRequiresSingleRoute(t *testing.T) {
+	permissioned := map[common.Address]bool{permissionedToken: true}
+	tests := []struct {
+		name  string
+		scope string
+		token common.Address
+		want  bool
+	}{
+		{"permissioned scope and token", tokensToQuotePermissioned, permissionedToken, true},
+		{"permissioned scope but permissionless token", tokensToQuotePermissioned, permissionlessToken, false},
+		{"all scope", tokensToQuoteAll, permissionedToken, false},
+		{"permissionless scope", tokensToQuotePermissionless, permissionedToken, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresSingleRoute(tt.scope, permissioned, tt.token); got != tt.want {
+				t.Fatalf("requiresSingleRoute() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -69,5 +94,57 @@ permissionedTokens:
 
 	if _, err := parseCfg(t, base+"tokensToQuote: bogus\n"); err == nil {
 		t.Errorf("expected error for invalid tokensToQuote")
+	}
+}
+
+type inputRecordingStrategy struct {
+	quoteInput types.QuoteInput
+	fillInput  types.FillInput
+	quoteOut   types.QuoteOutput
+	fillPlan   *types.FillPlan
+}
+
+func (s *inputRecordingStrategy) DecideQuote(
+	_ context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	s.quoteInput = input
+	return s.quoteOut, nil
+}
+
+func (s *inputRecordingStrategy) BuildFillPlan(
+	_ context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	s.fillInput = input
+	return s.fillPlan, nil
+}
+
+func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
+	strategy := &inputRecordingStrategy{quoteOut: types.QuoteOutput{
+		Decision:        types.DecisionQuote,
+		QuotedAmountOut: big.NewInt(1_000000),
+		Legs: []types.QuoteLeg{{
+			CandidateID: "candidate-0",
+			AmountIn:    big.NewInt(1_000000000000000000),
+			AmountOut:   big.NewInt(1_000000),
+		}},
+	}}
+	srv := testServer()
+	srv.quotes.tokensToQuote = tokensToQuotePermissioned
+	srv.quotes.permissionedTokens = map[common.Address]bool{permissionedToken: true}
+	srv.quotes.strategy = strategy
+	request := validQuoteBody()
+	request.TokenIn = permissionedToken.Hex()
+
+	response, err := srv.quotes.quote(t.Context(), &request)
+	if err != nil {
+		t.Fatalf("quote: %v", err)
+	}
+	if response == nil {
+		t.Fatal("quote declined, want response")
+	}
+	if !strategy.quoteInput.RequireSingleRoute {
+		t.Fatal("permissioned quote input did not require a single route")
 	}
 }

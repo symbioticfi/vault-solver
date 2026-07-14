@@ -125,3 +125,45 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 		t.Fatalf("unexpected webhook output: %+v", out)
 	}
 }
+
+func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if !strings.Contains(string(body), `"requireSingleRoute":true`) {
+			t.Fatalf("webhook request missing single-route constraint: %s", body)
+		}
+		_, _ = w.Write([]byte(`{
+			"decision": "quote",
+			"quotedAmountOut": "1000000",
+			"legs": [
+				{"candidateId": "candidate-0", "amountIn": "500000000000000000", "amountOut": "500000"},
+				{"candidateId": "candidate-1", "amountIn": "500000000000000000", "amountOut": "500000"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+	client, err := webhook.NewClient(webhook.Config{URL: srv.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	quoteServer := testServer()
+	quoteServer.quotes.tokensToQuote = tokensToQuotePermissioned
+	quoteServer.quotes.permissionedTokens = map[common.Address]bool{tIn: true}
+	quoteServer.quotes.strategy = webhookstrategy.New(client)
+	request := validQuoteBody()
+	request.Adapters = append(request.Adapters, quoteAdapter{
+		Adapter: "0x0000000000000000000000000000000000000004", Asset: tOut.Hex(), AssetDecimals: 6,
+		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+	})
+
+	response, err := quoteServer.quotes.quote(t.Context(), &request)
+	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
+		t.Fatalf("quote error = %v, want single-route rejection", err)
+	}
+	if response != nil {
+		t.Fatalf("quote response = %+v, want nil", response)
+	}
+}

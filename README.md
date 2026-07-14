@@ -65,6 +65,8 @@ that fills the orders it is awarded, settling on-chain through the adapter.
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
+cover the full order through one candidate route. Other scopes keep the existing multi-route behavior.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining; the excess input is reflected as
 worse execution price and price impact.
