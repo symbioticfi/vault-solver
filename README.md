@@ -51,8 +51,9 @@ or more Symbiotic `BridgeFacilitatorAdapter`s. 3F auctions the right to front a 
 of its adapters, funds the loans it wins just-in-time, and permissionlessly redeems repaid loans back
 to the vault with yield.
 
-It holds no API key: each adapter is registered with 3F by its vault creator, who sets this solver's
-signer as the adapter's EIP-1271 signer, so offers are authorized by signature alone. Design, config,
+It holds no API key: each adapter is registered with 3F by its vault creator, who authorizes this
+solver's signer as the adapter's offer signer — directly (an EOA) or via an EIP-1271 contract signer —
+so offers are authorized by signature alone. Design, config,
 and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md) · example
 [`config/3f.example.yaml`](config/3f.example.yaml).
 
