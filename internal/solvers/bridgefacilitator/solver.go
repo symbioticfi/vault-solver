@@ -110,7 +110,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	// Preserve the explicit-list fail-closed startup contract. Factory-discovered deployments may
 	// start empty because later registry entries are expected.
 	if s.cfg.Targets != nil && len(s.targets) == 0 {
-		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
+		return errors.Errorf("no configured adapter passed startup validation (must resolve and accept this solver %s as an authorized offer signer via ERC-1271); see per-adapter warnings above", s.signerAddr.Hex())
 	}
 
 	s.log.Info("starting",

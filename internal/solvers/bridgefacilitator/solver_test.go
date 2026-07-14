@@ -199,7 +199,7 @@ func TestRun_ExplicitEmptyAdaptersSkipFactoryDiscoveryAndFailStartup(t *testing.
 		signerAddr: signer,
 		offers:     newOfferTracker(),
 	}
-	want := "no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want " + signer.Hex() + "); see per-adapter warnings above"
+	want := "no configured adapter passed startup validation (must resolve and accept this solver " + signer.Hex() + " as an authorized offer signer via ERC-1271); see per-adapter warnings above"
 	if err := s.Run(t.Context()); err == nil || err.Error() != want {
 		t.Fatalf("Run error = %v, want %q", err, want)
 	}
@@ -225,7 +225,7 @@ func TestRun_StaticOnlyStillFailsStartupWhenNoAdapterPassesValidation(t *testing
 		signerAddr: signer,
 		offers:     newOfferTracker(),
 	}
-	want := "no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want " + signer.Hex() + "); see per-adapter warnings above"
+	want := "no configured adapter passed startup validation (must resolve and accept this solver " + signer.Hex() + " as an authorized offer signer via ERC-1271); see per-adapter warnings above"
 	if err := s.Run(t.Context()); err == nil || err.Error() != want {
 		t.Fatalf("Run error = %v, want %q", err, want)
 	}
