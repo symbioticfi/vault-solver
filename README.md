@@ -51,13 +51,15 @@ or more Symbiotic `BridgeFacilitatorAdapter`s. 3F auctions the right to front a 
 of its adapters, funds the loans it wins just-in-time, and permissionlessly redeems repaid loans back
 to the vault with yield.
 
-It holds no API key: each adapter is registered with 3F by its vault creator, who sets this solver's
-signer as the adapter's EIP-1271 signer, so offers are authorized by signature alone. Design, config,
+It holds no API key: each adapter is registered with 3F by its vault creator, who authorizes this
+solver's signer as the adapter's offer signer — directly (an EOA) or via an EIP-1271 contract signer —
+so offers are authorized by signature alone. Design, config,
 and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md). When `adapters` is present, the solver operates only
 on that explicit list. Otherwise it discovers all entries of the configured on-chain `IAdapterFactory`,
 refreshing before each auction-discovery pass with a hard 2,000-entity safety limit; a larger reported
-count is an error. Either source is filtered to non-zero vault/asset targets whose `offerSigner` matches
-this process. An empty factory is valid and is polled until eligible adapters appear. Example:
+count is an error. Either source is filtered to non-zero vault/asset targets that authorize this
+solver's signer (validated via the adapter's ERC-1271 `isValidSignature`). An empty factory is valid and
+is polled until eligible adapters appear. Example:
 [`config/3f.example.yaml`](config/3f.example.yaml).
 
 ### RFQ Filler — `rfq-filler`
@@ -69,6 +71,8 @@ that fills the orders it is awarded, settling on-chain through the adapter.
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
+cover the full order through one candidate route. Other scopes keep the existing multi-route behavior.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining; the excess input is reflected as
 worse execution price and price impact.

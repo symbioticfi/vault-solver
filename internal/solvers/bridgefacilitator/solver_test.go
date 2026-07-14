@@ -40,7 +40,7 @@ func TestRefreshTargets_ExplicitAdaptersSkipFactoryDiscovery(t *testing.T) {
 	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
 	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
 	c, stop := newMulticallFakeClient(t,
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue)),
 		abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset)),
 	)
 	defer stop()
@@ -71,7 +71,7 @@ func TestRefreshTargets_RetainsLastKnownGoodOnWholeRefreshFailure(t *testing.T) 
 	vault := common.HexToAddress("0x00000000000000000000000000000000000000B0")
 	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
 	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
-	round1 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer))
+	round1 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue))
 	round2 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset))
 	c, stop := newMulticallFakeClient(t, round1, round2, []byte{0x01})
 	defer stop()
@@ -112,12 +112,12 @@ func TestRefreshTargets_RemovesAndReaddsWhenSignerEligibilityChanges(t *testing.
 	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
 	otherSigner := common.HexToAddress("0x00000000000000000000000000000000000000C1")
 	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
-	matching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer))
-	notMatching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner))
+	matching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue))
+	notMatching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner), abiEncodeBytes4(t, [4]byte{0xff, 0xff, 0xff, 0xff}))
 	assetRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset))
 	c, stop := newMulticallFakeClient(t,
 		matching, assetRound,
-		notMatching, assetRound,
+		notMatching, // unauthorized: no asset round is issued
 		matching, assetRound,
 		matching, assetRound,
 	)
@@ -212,10 +212,9 @@ func TestRun_StaticOnlyStillFailsStartupWhenNoAdapterPassesValidation(t *testing
 	vault := common.HexToAddress("0x00000000000000000000000000000000000000B0")
 	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
 	otherSigner := common.HexToAddress("0x00000000000000000000000000000000000000C1")
-	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
 	c, stop := newMulticallFakeClient(t,
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset)),
+		// Unauthorized (isValidSignature non-magic): the adapter is dropped, so no asset round is issued.
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner), abiEncodeBytes4(t, [4]byte{0xff, 0xff, 0xff, 0xff})),
 	)
 	defer stop()
 
@@ -240,13 +239,13 @@ func TestRefreshTargetsAndHydrate_HydratesOnlyNewlyUsableAdapters(t *testing.T) 
 	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
 	otherSigner := common.HexToAddress("0x00000000000000000000000000000000000000C1")
 	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
-	matching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer))
-	notMatching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner))
+	matching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue))
+	notMatching := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, otherSigner), abiEncodeBytes4(t, [4]byte{0xff, 0xff, 0xff, 0xff}))
 	assetRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset))
 	c, stop := newMulticallFakeClient(t,
 		matching, assetRound,
 		matching, assetRound,
-		notMatching, assetRound,
+		notMatching, // unauthorized: no asset round is issued
 		matching, assetRound,
 	)
 	defer stop()
@@ -290,7 +289,7 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 0)),
 		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
 		abiEncodeAggregate3Results(t, abiEncodeAddress(t, adapterAddr)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue)),
 		abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset)),
 	)
 	defer stop()

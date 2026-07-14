@@ -342,3 +342,53 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 		t.Fatalf("should not have sent a tx without a fill plan")
 	}
 }
+
+func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
+	strategy := &inputRecordingStrategy{fillPlan: baseFillPlan()}
+	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
+	e.discountsEnabled = false
+	e.tokensToQuote = tokensToQuotePermissioned
+	e.permissionedTokens = map[common.Address]bool{tIn: true}
+	e.strategy = strategy
+
+	plan, err := e.buildFillPlan(
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	)
+	if err != nil {
+		t.Fatalf("buildFillPlan: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("buildFillPlan returned nil")
+	}
+	if !strategy.fillInput.RequireSingleRoute {
+		t.Fatal("permissioned fill recovery input did not require a single route")
+	}
+}
+
+func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
+	plan := baseFillPlan()
+	plan.Legs = []types.FillLeg{
+		{
+			Adapter: vlt, AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+		},
+		{
+			Adapter:  common.HexToAddress("0x0000000000000000000000000000000000000004"),
+			AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+		},
+	}
+	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
+	e.discountsEnabled = false
+	e.tokensToQuote = tokensToQuotePermissioned
+	e.permissionedTokens = map[common.Address]bool{tIn: true}
+	e.strategy = fixedFillStrategy{plan: plan}
+
+	got, err := e.buildFillPlan(
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	)
+	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
+		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)
+	}
+	if got != nil {
+		t.Fatalf("buildFillPlan = %+v, want nil", got)
+	}
+}

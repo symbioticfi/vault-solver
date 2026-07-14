@@ -293,17 +293,21 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      `GetOffers` in an `Authorization: Bearer` header); `createOffer` sends no `x-api-key`. Removed the
      key-gen, `apiKeyEnv`, and the `ensureOfferAddress`/`setOfferAddress` onboarding. Onboarding (deploy
      adapter → register with 3F → set this signer as EIP-1271 signer) is the vault creator's job.
-   - **Dynamic adapter sources.** When `adapters[]` is present it is the exclusive source; otherwise
-     `adapterFactory` is enumerated at startup and each discovery tick, with a hard 2,000-entity limit
-     that returns an error for a larger reported count. Every candidate's vault/collateral and
-     EIP-1271 signer are re-resolved; successful snapshots replace the active set, whole-refresh
-     failures retain the last-known-good set, and a factory-backed deployment may validly idle with
-     zero eligible adapters. Explicit-list startup retains its fail-closed behavior.
-     Newly usable adapters hydrate existing offers before the next decision pass.
+   - **Dynamic adapter sources + ERC-1271 offer-signer check.** When `adapters[]` is present it is the
+     exclusive source; otherwise `adapterFactory` is enumerated at startup and each discovery tick, with
+     a hard 2,000-entity limit that returns an error for a larger reported count. Every candidate's
+     vault/collateral is re-resolved, and offer-signer authorization is validated via the adapter's own
+     ERC-1271 `isValidSignature` (**not** an address match): a one-time payload is signed with the solver
+     key at startup and validated against each adapter, so an adapter is kept iff its `offerSigner`
+     authorizes our key — our EOA *or* an EIP-1271 contract signer; the probe is reusable across ticks.
+     Successful snapshots replace the active set, whole-refresh failures retain the last-known-good set,
+     and a factory-backed deployment may validly idle with zero eligible adapters. Explicit-list startup
+     retains its fail-closed behavior. Newly usable adapters hydrate existing offers before the next
+     decision pass.
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
      more single-adapter offers through the configured trusted strategy; uncovered remainder retries
      next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
+   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 
@@ -314,8 +318,10 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 - **Signed-payload API contract** — confirm with 3F the exact request shape for creating *and listing*
   offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
   and that 3F verifies offer creation via the adapter's EIP-1271 `isValidSignature`.
-- Mainnet `RequestWhitelist` address — operational onboarding input supplied by 3F; the bot discovers
-  adapter instances from their factory and does not configure this address itself.
+- Filtering to adapters our key is authorized to sign for is settled: the adapter's ERC-1271
+  `isValidSignature` probe (§8), reused across factory-discovery ticks.
+- Mainnet `RequestWhitelist` address and prod API base URL — operational onboarding inputs supplied by
+  3F; the bot discovers adapter instances from their factory and does not configure the whitelist itself.
 - Go module path (`github.com/symbioticfi/vault-solver` placeholder) — adjust to the real org.
 
 ---
