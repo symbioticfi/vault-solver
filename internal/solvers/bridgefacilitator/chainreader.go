@@ -7,11 +7,13 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/vaultcontroller"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
 // Contract bindings (abigen --v2): typed Pack/Unpack helpers for the Multicall3 sub-calls below, so an
@@ -33,6 +35,35 @@ var (
 // here rather than read.)
 const maxRequests = 50
 
+// erc1271MagicValue is the ERC-1271 return value of isValidSignature(bytes32,bytes) for a valid
+// signature (`bytes4(keccak256("isValidSignature(bytes32,bytes)"))`).
+var erc1271MagicValue = [4]byte{0x16, 0x26, 0xba, 0x7e}
+
+// eligibilityProbeMessage is signed once at startup to build the signerProbe. Its hash is arbitrary and
+// deliberately distinct from any EIP-712 offer digest, so the resulting signature cannot be replayed as
+// an offer; the adapter's isValidSignature validates the raw hash against its offerSigner regardless.
+const eligibilityProbeMessage = "vault-solver:3f:offer-signer-eligibility:v1"
+
+// signerProbe is a fixed (hash, signature) pair produced once from the solver's key. It is fed to each
+// adapter's ERC-1271 isValidSignature to test whether this solver is an authorized offer signer for that
+// adapter — matching the exact on-chain check 3F uses to accept offers, so it works whether the adapter's
+// offerSigner is this solver's EOA (ecrecover) or an EIP-1271 contract that authorizes this key. The pair
+// is reusable across every adapter and across periodic re-checks (see resolveAdapters).
+type signerProbe struct {
+	hash [32]byte
+	sig  []byte
+}
+
+// newSignerProbe signs the fixed eligibility message with the solver's key once.
+func newSignerProbe(s signer.Signer) (signerProbe, error) {
+	hash := crypto.Keccak256Hash([]byte(eligibilityProbeMessage))
+	sig, err := s.SignHash(hash)
+	if err != nil {
+		return signerProbe{}, errors.Errorf("sign offer-signer eligibility probe: %w", err)
+	}
+	return signerProbe{hash: hash, sig: sig}, nil
+}
+
 // reader performs the adapter- and Request-side on-chain reads the solver relies on, batching via
 // Multicall3 where calls are independent.
 type reader struct {
@@ -44,13 +75,28 @@ func newReader(c *chain.Client) *reader {
 }
 
 // resolvedAdapter is one adapter's startup resolution: its vault, that vault's collateral (the
-// ERC-4626 asset, used to match auctions), and its EIP-1271 offer-signer. err is set (other fields
-// zero) if any read reverted, so the caller can drop just that adapter.
+// ERC-4626 asset, used to match auctions), its offer-signer (diagnostic only), and whether this solver
+// is an authorized offer signer for it (adapter.isValidSignature accepted the probe). err is set (other
+// fields zero) if a required read reverted, so the caller can drop just that adapter.
 type resolvedAdapter struct {
 	vault      common.Address
 	collateral common.Address
 	signer     common.Address
+	authorized bool
 	err        error
+}
+
+// authorizedByProbe reports whether the adapter's ERC-1271 isValidSignature accepted the probe
+// signature. A revert or any non-magic return means not authorized (drop the adapter), not a hard error.
+func authorizedByProbe(res chain.CallResult) bool {
+	if !res.Success {
+		return false
+	}
+	magic, err := bfAdapter.UnpackIsValidSignature(res.ReturnData)
+	if err != nil {
+		return false
+	}
+	return magic == erc1271MagicValue
 }
 
 // decodeAddr returns the address a Multicall sub-call returned, or an error tagged with `what` if it
@@ -66,18 +112,21 @@ func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error
 	return addr, nil
 }
 
-// resolveAdapters resolves every adapter's vault, collateral, and offer-signer in two Multicalls
-// regardless of adapter count: round 1 batches each adapter's vault()+offerSigner(); round 2 batches
-// asset() on the vaults round 1 returned. Per-call AllowFailure isolates a bad adapter to its own err;
-// a returned error is a whole-batch RPC failure.
-func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address) ([]resolvedAdapter, error) {
+// resolveAdapters resolves every adapter's vault, collateral, and offer-signer, and validates offer-signer
+// authorization via the adapter's ERC-1271 isValidSignature(probe), in two Multicalls regardless of adapter
+// count: round 1 batches each adapter's vault()+offerSigner()+isValidSignature(probe); round 2 batches
+// asset() on the vaults of adapters that resolved and are authorized. Per-call AllowFailure isolates a bad
+// adapter to its own err; a returned error is a whole-batch RPC failure. The probe is reusable — the same
+// call drives startup validation and periodic re-validation.
+func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address, probe signerProbe) ([]resolvedAdapter, error) {
 	out := make([]resolvedAdapter, len(adapters))
 
-	calls := make([]chain.Call, 0, 2*len(adapters))
+	calls := make([]chain.Call, 0, 3*len(adapters))
 	for _, a := range adapters {
 		calls = append(calls,
 			chain.Call{Target: a, Data: bfAdapter.PackVault(), AllowFailure: true},
 			chain.Call{Target: a, Data: bfAdapter.PackOfferSigner(), AllowFailure: true},
+			chain.Call{Target: a, Data: bfAdapter.PackIsValidSignature(probe.hash, probe.sig), AllowFailure: true},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -85,21 +134,26 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address)
 		return nil, err
 	}
 
-	// Decode round 1; queue an asset() call for each adapter whose vault and signer both resolved.
+	// Decode round 1; queue an asset() call for each adapter that resolved and is an authorized signer.
 	assetCalls := make([]chain.Call, 0, len(adapters))
 	assetIdx := make([]int, 0, len(adapters)) // assetIdx[k] = out index of assetCalls[k]
 	for i := range adapters {
-		vault, derr := decodeAddr(res[2*i], bfAdapter.UnpackVault, "adapter.vault()")
+		base := 3 * i
+		vault, derr := decodeAddr(res[base], bfAdapter.UnpackVault, "adapter.vault()")
 		if derr != nil {
 			out[i].err = derr
 			continue
 		}
-		signer, derr := decodeAddr(res[2*i+1], bfAdapter.UnpackOfferSigner, "adapter.offerSigner()")
+		offerSigner, derr := decodeAddr(res[base+1], bfAdapter.UnpackOfferSigner, "adapter.offerSigner()")
 		if derr != nil {
 			out[i].err = derr
 			continue
 		}
-		out[i].vault, out[i].signer = vault, signer
+		out[i].vault, out[i].signer = vault, offerSigner
+		out[i].authorized = authorizedByProbe(res[base+2])
+		if !out[i].authorized {
+			continue // not an authorized offer signer; the caller drops it (no collateral read needed)
+		}
 		assetCalls = append(assetCalls, chain.Call{Target: vault, Data: erc4626b.PackAsset(), AllowFailure: true})
 		assetIdx = append(assetIdx, i)
 	}

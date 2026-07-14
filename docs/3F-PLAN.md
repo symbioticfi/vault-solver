@@ -287,13 +287,17 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      key-gen, `apiKeyEnv`, and the `ensureOfferAddress`/`setOfferAddress` onboarding. Onboarding (deploy
      adapter → register with 3F → set this signer as EIP-1271 signer) is the vault creator's job.
    - **`adapter` → `adapters[]`.** Config whitelist; each adapter's vault/collateral resolved once at
-     startup; on-chain EIP-1271 signer check drops any adapter this solver isn't authorised for
-     (fail-closed; zero remaining → startup shutdown). **No redeem-only mode** — with ≥1 matching adapter
-     the bot runs offers + redeems for the matched set; with none it shuts down.
+     startup; the **offer-signer check** drops any adapter this solver isn't authorised for. It is done
+     via the adapter's own ERC-1271 `isValidSignature`, **not an address match**: a one-time payload is
+     signed with the solver key at startup and validated against each adapter, so an adapter is kept iff
+     its `offerSigner` authorizes our key — our EOA *or* an EIP-1271 contract signer. The probe is
+     reusable for periodic re-validation. Fail-closed; zero remaining → startup shutdown. **No
+     redeem-only mode** — with ≥1 matching adapter the bot runs offers + redeems for the matched set;
+     with none it shuts down.
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
      more single-adapter offers through the configured trusted strategy; uncovered remainder retries
      next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `authorizedSigner`
+   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 
@@ -305,7 +309,9 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
   offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
   and that 3F verifies offer creation via the adapter's EIP-1271 `isValidSignature`.
 - **Dynamic "list public 3F adapters" API** — the endpoint that replaces the config whitelist (what
-  marks an adapter public/eligible, and how we filter to ones our signer is the EIP-1271 signer for).
+  marks an adapter public/eligible). Filtering to adapters our key is authorized to sign for is settled:
+  the adapter's ERC-1271 `isValidSignature` probe (§8); dynamic discovery + periodic re-validation reuse
+  it and land separately.
 - Mainnet `RequestWhitelist` address and prod API base URL — supplied by 3F when prod lands.
 - Go module path (`github.com/symbioticfi/vault-solver` placeholder) — adjust to the real org.
 

@@ -43,7 +43,8 @@ type Solver struct {
 	reader     *reader
 	strategy   types.Strategy
 	log        logr.Logger
-	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
+	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
+	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
 	nonceSeq   atomic.Uint64
 	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
 }
@@ -60,6 +61,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
+	probe, err := newSignerProbe(deps.Signer)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Solver{
 		cfg:        cfg,
 		deps:       deps,
@@ -68,6 +74,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),
+		probe:      probe,
 		offers:     newOfferTracker(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
@@ -260,7 +267,7 @@ func (s *Solver) resolveTargets(ctx context.Context) error {
 	for i := range s.cfg.Targets {
 		adapters[i] = s.cfg.Targets[i].Adapter
 	}
-	resolved, err := s.reader.resolveAdapters(ctx, adapters)
+	resolved, err := s.reader.resolveAdapters(ctx, adapters, s.probe)
 	if err != nil {
 		return err // whole-batch transport/RPC failure, not a per-adapter revert
 	}
@@ -272,11 +279,11 @@ func (s *Solver) resolveTargets(ctx context.Context) error {
 			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", t.Adapter.Hex())
 			continue
 		}
-		if r.signer != s.signerAddr {
-			s.log.Info("skipping adapter: solver is not its EIP-1271 signer",
+		if !r.authorized {
+			s.log.Info("skipping adapter: solver is not an authorized offer signer",
 				"adapter", t.Adapter.Hex(),
-				"want", s.signerAddr.Hex(),
-				"got", r.signer.Hex())
+				"solver", s.signerAddr.Hex(),
+				"offerSigner", r.signer.Hex())
 			continue
 		}
 		t.Vault, t.Collateral = r.vault, r.collateral
@@ -287,7 +294,7 @@ func (s *Solver) resolveTargets(ctx context.Context) error {
 
 	s.cfg.Targets = kept
 	if len(s.cfg.Targets) == 0 {
-		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
+		return errors.Errorf("no configured adapter passed startup validation (must resolve and accept this solver %s as an authorized offer signer via ERC-1271); see per-adapter warnings above", s.signerAddr.Hex())
 	}
 	return nil
 }

@@ -173,9 +173,29 @@ func abiEncodeAddress(t *testing.T, addr common.Address) []byte {
 	return enc
 }
 
+// abiEncodeBytes4 ABI-encodes a bytes4 return value (the raw returnData for a Solidity function
+// returning bytes4, e.g. ERC-1271 isValidSignature).
+func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
+	t.Helper()
+	ty, err := abi.NewType("bytes4", "", nil)
+	if err != nil {
+		t.Fatalf("abi.NewType bytes4: %v", err)
+	}
+	enc, err := abi.Arguments{{Type: ty}}.Pack(b)
+	if err != nil {
+		t.Fatalf("abi bytes4 Pack: %v", err)
+	}
+	return enc
+}
+
+// testProbe is any non-empty (hash, sig) pair; the fake client returns canned replies regardless of
+// calldata, so its contents don't matter — only the isValidSignature return slots do.
+var testProbe = signerProbe{hash: [32]byte{0x01}, sig: []byte{0x02}}
+
 // TestResolveAdapters verifies the two-Multicall batch resolves each adapter's vault, signer, and
-// collateral and maps them back by index: round 1 returns [vault0, signer0, vault1, signer1] and
-// round 2 returns [asset0, asset1], so a layout off-by-one would cross adapters' fields.
+// collateral and marks it authorized when isValidSignature returns the ERC-1271 magic value. Round 1
+// returns [vault0, signer0, magic0, vault1, signer1, magic1] and round 2 returns [asset0, asset1], so a
+// layout off-by-one would cross adapters' fields.
 func TestResolveAdapters(t *testing.T) {
 	t.Parallel()
 
@@ -191,30 +211,73 @@ func TestResolveAdapters(t *testing.T) {
 	asset1 := common.HexToAddress("0x00000000000000000000000000000000000000D1")
 
 	round1 := abiEncodeAggregate3Results(t,
-		abiEncodeAddress(t, vault0), abiEncodeAddress(t, signer0),
-		abiEncodeAddress(t, vault1), abiEncodeAddress(t, signer1),
+		abiEncodeAddress(t, vault0), abiEncodeAddress(t, signer0), abiEncodeBytes4(t, erc1271MagicValue),
+		abiEncodeAddress(t, vault1), abiEncodeAddress(t, signer1), abiEncodeBytes4(t, erc1271MagicValue),
 	)
 	round2 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset0), abiEncodeAddress(t, asset1))
 
 	c, stop := newMulticallFakeClient(t, round1, round2)
 	defer stop()
 
-	got, err := newReader(c).resolveAdapters(context.Background(), adapters)
+	got, err := newReader(c).resolveAdapters(context.Background(), adapters, testProbe)
 	if err != nil {
 		t.Fatalf("resolveAdapters: %v", err)
 	}
 	want := []resolvedAdapter{
-		{vault: vault0, signer: signer0, collateral: asset0},
-		{vault: vault1, signer: signer1, collateral: asset1},
+		{vault: vault0, signer: signer0, collateral: asset0, authorized: true},
+		{vault: vault1, signer: signer1, collateral: asset1, authorized: true},
 	}
 	for i, w := range want {
 		if got[i].err != nil {
 			t.Fatalf("adapter %d: unexpected err %v", i, got[i].err)
 		}
-		if got[i].vault != w.vault || got[i].signer != w.signer || got[i].collateral != w.collateral {
-			t.Errorf("adapter %d = {vault:%s signer:%s collateral:%s}, want {vault:%s signer:%s collateral:%s}",
-				i, got[i].vault.Hex(), got[i].signer.Hex(), got[i].collateral.Hex(),
-				w.vault.Hex(), w.signer.Hex(), w.collateral.Hex())
+		if got[i].vault != w.vault || got[i].signer != w.signer ||
+			got[i].collateral != w.collateral || got[i].authorized != w.authorized {
+			t.Errorf("adapter %d = {vault:%s signer:%s collateral:%s authorized:%v}, want {vault:%s signer:%s collateral:%s authorized:%v}",
+				i, got[i].vault.Hex(), got[i].signer.Hex(), got[i].collateral.Hex(), got[i].authorized,
+				w.vault.Hex(), w.signer.Hex(), w.collateral.Hex(), w.authorized)
 		}
+	}
+}
+
+// TestResolveAdaptersDropsUnauthorized verifies an adapter whose isValidSignature returns a non-magic
+// value is marked unauthorized and has no collateral read (round 2 only queries the authorized vault).
+func TestResolveAdaptersDropsUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	adapters := []common.Address{
+		common.HexToAddress("0x00000000000000000000000000000000000000A0"),
+		common.HexToAddress("0x00000000000000000000000000000000000000A1"),
+	}
+	vault0 := common.HexToAddress("0x00000000000000000000000000000000000000B0")
+	signer0 := common.HexToAddress("0x00000000000000000000000000000000000000C0")
+	asset0 := common.HexToAddress("0x00000000000000000000000000000000000000D0")
+	vault1 := common.HexToAddress("0x00000000000000000000000000000000000000B1")
+	signer1 := common.HexToAddress("0x00000000000000000000000000000000000000C1")
+
+	round1 := abiEncodeAggregate3Results(t,
+		abiEncodeAddress(t, vault0), abiEncodeAddress(t, signer0), abiEncodeBytes4(t, erc1271MagicValue),
+		abiEncodeAddress(t, vault1), abiEncodeAddress(t, signer1), abiEncodeBytes4(t, [4]byte{0xff, 0xff, 0xff, 0xff}),
+	)
+	// Only the authorized adapter's vault gets an asset() call in round 2.
+	round2 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset0))
+
+	c, stop := newMulticallFakeClient(t, round1, round2)
+	defer stop()
+
+	got, err := newReader(c).resolveAdapters(context.Background(), adapters, testProbe)
+	if err != nil {
+		t.Fatalf("resolveAdapters: %v", err)
+	}
+	if got[0].err != nil || !got[0].authorized || got[0].collateral != asset0 {
+		t.Errorf("adapter 0 = {authorized:%v collateral:%s err:%v}, want authorized with collateral %s",
+			got[0].authorized, got[0].collateral.Hex(), got[0].err, asset0.Hex())
+	}
+	if got[1].authorized || got[1].collateral != (common.Address{}) {
+		t.Errorf("adapter 1 = {authorized:%v collateral:%s}, want unauthorized with no collateral",
+			got[1].authorized, got[1].collateral.Hex())
+	}
+	if got[1].signer != signer1 {
+		t.Errorf("adapter 1 signer = %s, want %s (kept for diagnostics)", got[1].signer.Hex(), signer1.Hex())
 	}
 }
