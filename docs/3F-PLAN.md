@@ -337,7 +337,8 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **(done) Dynamic adapter discovery.** When `adapters` is omitted, every entry in the configured
   `IAdapterFactory` is enumerated at startup and before each discovery pass, subject to a hard 2,000-entry
   limit that errors above it. When `adapters` is present, only that explicit list is used. Either source
-  is filtered to adapters whose non-zero vault/asset resolve and whose EIP-1271 signer matches this process.
+  is filtered to adapters whose non-zero vault/asset resolve and that authorize this solver's signer via
+  the adapter's ERC-1271 `isValidSignature` (**not** an address match; EOA or contract signer).
 - **Custom offer pricing/scoring.** The default local strategy bids at the auction's current `maxRate`
   and sizes by `getMaxAssets` headroom plus adapter per-request limits. Operators that need spread,
   risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local

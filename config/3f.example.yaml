@@ -50,8 +50,9 @@ solvers:
       # discovery pass, with a hard limit of 2,000 (a larger reported count is an error). A factory with
       # no entities is valid: the daemon stays ready and picks up later deployments automatically.
       # Uncommenting adapters makes that list exclusive and skips factory discovery. Either source keeps
-      # only entries whose adapter.offerSigner() matches this solver and whose adapter.vault()/vault.asset()
-      # resolve to non-zero addresses.
+      # only entries that authorize this solver's signer (validated via the adapter's ERC-1271
+      # isValidSignature — the solver EOA or an EIP-1271 contract signer) and whose
+      # adapter.vault()/vault.asset() resolve to non-zero addresses.
       adapterFactory: "0x5e0c165Acc4653bD4cf966A454C9aF1647E65Eb1"
       # adapters:                       # optional exclusive override
       #   - "0x..."
