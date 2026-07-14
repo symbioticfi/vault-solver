@@ -36,9 +36,9 @@ var (
 const maxRequests = 50
 
 // maxFactoryEntities bounds the configured factory snapshot before allocating one call per entity.
-// A real deployment is orders of magnitude smaller; the cap turns corrupt or malicious count data
-// into a refresh error so the solver can retain its last-known-good targets instead of exhausting RAM.
-const maxFactoryEntities = 10_000
+// A real deployment is orders of magnitude smaller; larger reported counts are rejected so corrupt
+// or malicious data cannot exhaust RAM.
+const maxFactoryEntities = 2_000
 
 // reader performs the adapter- and Request-side on-chain reads the solver relies on, batching via
 // Multicall3 where calls are independent.
@@ -50,7 +50,7 @@ func newReader(c *chain.Client) *reader {
 	return &reader{chain: c}
 }
 
-// factoryAdapters returns the factory's complete entity snapshot in registry order. The registry is
+// factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
 // append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
 func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
 	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})

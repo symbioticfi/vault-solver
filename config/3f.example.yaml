@@ -46,12 +46,14 @@ solvers:
         name: default                  #   "default" (in-process sizing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 
-      # The factory is enumerated at startup and before every discovery pass. Its entities are unioned
-      # with the optional static adapters list, deduplicated, and kept only when adapter.offerSigner()
-      # matches this solver and adapter.vault()/vault.asset() resolve to non-zero addresses. A factory
-      # with no entities is valid: the daemon stays ready and picks up later deployments automatically.
+      # When adapters is omitted, all factory entities are enumerated at startup and before every
+      # discovery pass, with a hard limit of 2,000 (a larger reported count is an error). A factory with
+      # no entities is valid: the daemon stays ready and picks up later deployments automatically.
+      # Uncommenting adapters makes that list exclusive and skips factory discovery. Either source keeps
+      # only entries whose adapter.offerSigner() matches this solver and whose adapter.vault()/vault.asset()
+      # resolve to non-zero addresses.
       adapterFactory: "0x5e0c165Acc4653bD4cf966A454C9aF1647E65Eb1"
-      # adapters:                       # optional backwards-compatible static additions
+      # adapters:                       # optional exclusive override
       #   - "0x..."
 
       # Per-request caps (min yield / min & max assets per request), funding headroom (getMaxAssets),

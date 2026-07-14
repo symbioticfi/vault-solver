@@ -49,23 +49,17 @@ type Solver struct {
 	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 }
 
-func mergeAdapterSources(static []Target, discovered []common.Address) []common.Address {
-	adapters := make([]common.Address, 0, len(static)+len(discovered))
-	seen := make(map[common.Address]struct{}, cap(adapters))
-	add := func(adapter common.Address) {
+func deduplicateAdapters(adapters []common.Address) []common.Address {
+	unique := make([]common.Address, 0, len(adapters))
+	seen := make(map[common.Address]struct{}, len(adapters))
+	for _, adapter := range adapters {
 		if _, ok := seen[adapter]; ok {
-			return
+			continue
 		}
 		seen[adapter] = struct{}{}
-		adapters = append(adapters, adapter)
+		unique = append(unique, adapter)
 	}
-	for _, target := range static {
-		add(target.Adapter)
-	}
-	for _, adapter := range discovered {
-		add(adapter)
-	}
-	return adapters
+	return unique
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -101,15 +95,14 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
-	// Build the initial static+factory snapshot. A successfully empty factory is valid: the daemon
-	// stays alive and picks up future entities on a discovery tick.
+	// Build the initial explicit-or-factory snapshot. A successfully empty factory is valid: the
+	// daemon stays alive and picks up future entities on a discovery tick.
 	if err := s.refreshTargetsAndHydrate(ctx); err != nil {
 		return err
 	}
-	// Preserve the legacy static-only fail-closed startup contract. Factory-backed deployments may
-	// start empty because later registry entries are expected; static-only initial validation failure
-	// remains a configuration error.
-	if s.cfg.AdapterFactory == (common.Address{}) && len(s.targets) == 0 {
+	// Preserve the explicit-list fail-closed startup contract. Factory-discovered deployments may
+	// start empty because later registry entries are expected.
+	if s.cfg.Targets != nil && len(s.targets) == 0 {
 		return errors.Errorf("no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want %s); see per-adapter warnings above", s.signerAddr.Hex())
 	}
 
@@ -281,15 +274,20 @@ func (s *Solver) nextNonce() uint64 {
 // refreshTargets builds and validates a complete adapter snapshot before installing it. A returned
 // error leaves the last-known-good snapshot untouched; a successful empty snapshot is authoritative.
 func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
-	var discovered []common.Address
-	if s.cfg.AdapterFactory != (common.Address{}) {
+	var adapters []common.Address
+	if s.cfg.Targets != nil {
+		adapters = make([]common.Address, len(s.cfg.Targets))
+		for i := range s.cfg.Targets {
+			adapters[i] = s.cfg.Targets[i].Adapter
+		}
+	} else {
 		var err error
-		discovered, err = s.reader.factoryAdapters(ctx, s.cfg.AdapterFactory)
+		adapters, err = s.reader.factoryAdapters(ctx, s.cfg.AdapterFactory)
 		if err != nil {
 			return nil, err
 		}
 	}
-	adapters := mergeAdapterSources(s.cfg.Targets, discovered)
+	adapters = deduplicateAdapters(adapters)
 	if len(adapters) == 0 {
 		s.offers.retainAdapters(nil)
 		s.targets = nil

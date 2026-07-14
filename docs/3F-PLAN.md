@@ -35,7 +35,7 @@ repo root) §4 for the functional blueprint of the 3F solver.
 | License | _TBD — not yet added_ |
 | Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
 | API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
-| Adapter scope | One solver serves a **dynamic set of adapters** discovered from a configured on-chain `IAdapterFactory`, optionally unioned with a static config list. The snapshot is refreshed before every auction-discovery pass and filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
+| Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
 | Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
@@ -162,9 +162,9 @@ solvers:
       strategy:
         name: default                        # default local strategy, or webhook
         config: {}
-      adapterFactory: "0x…factory"             # totalEntities/entity registry, refreshed each discover pass
-      adapters:                                 # optional static additions; unioned + deduplicated
-        - "0x…adapterA"
+      adapterFactory: "0x…factory"             # used when adapters is omitted; max 2,000 entities
+      # adapters:                               # optional exclusive override; factory is not queried
+      #   - "0x…adapterA"
       redeemBatchSize: 10                     # optional (default 10)
       httpTimeout: 30s                        # optional
       intervals: { discover: 5m, redeemPoll: 5m, reconcile: 15m }
@@ -174,12 +174,14 @@ solvers:
 adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
 **per-request caps are read on-chain** (`minYieldPerRequest` — ppm, converted to bps by the reader;
 `minAssetsPerRequest`; `maxAssetsPerRequest` — set via `setLimitsPerRequest`) — config carries the
-adapter factory plus optional static adapter addresses. On startup and before each discovery pass, the
-solver reads `totalEntities()` + `entity(i)`, unions the result with static entries, deduplicates it,
-and resolves every candidate. A factory-backed deployment may start with a successful empty snapshot
-and keep running; the legacy static-only configuration still fails startup if none of its adapters
-validate. A later whole-refresh RPC failure preserves the last-known-good snapshot; a successful
-refresh replaces it, so signer changes remove and can later re-add an adapter. Newly usable adapters
+adapter factory plus an optional exclusive adapter list. When `adapters` is present, the solver resolves
+only those entries and does not query the factory. When it is omitted, the solver reads
+`totalEntities()` + `entity(i)` for every registry entry on startup and before each discovery pass, then
+resolves every candidate. A reported count above the hard 2,000-entity limit returns an error. A
+factory-backed deployment may start with a successful empty snapshot and keep running; an
+explicit-list configuration still fails startup if none of its adapters validate. A later whole-refresh
+RPC failure preserves the last-known-good snapshot; a successful refresh replaces it, so signer changes
+remove and can later re-add an adapter. Newly usable adapters
 hydrate their live offer cache before quote decisions. Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and
 any pending sweep), so the bot reads no separate sleeve cap. Concurrency is the contract's
@@ -291,11 +293,12 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      `GetOffers` in an `Authorization: Bearer` header); `createOffer` sends no `x-api-key`. Removed the
      key-gen, `apiKeyEnv`, and the `ensureOfferAddress`/`setOfferAddress` onboarding. Onboarding (deploy
      adapter → register with 3F → set this signer as EIP-1271 signer) is the vault creator's job.
-   - **Dynamic adapter sources.** `adapterFactory` is enumerated at startup and each discovery tick;
-     optional `adapters[]` entries remain backwards compatible and are unioned/deduplicated. Every
-     candidate's vault/collateral and EIP-1271 signer are re-resolved; successful snapshots replace the
-     active set, whole-refresh failures retain the last-known-good set, and a factory-backed deployment
-     may validly idle with zero eligible adapters. Static-only startup retains its fail-closed behavior.
+   - **Dynamic adapter sources.** When `adapters[]` is present it is the exclusive source; otherwise
+     `adapterFactory` is enumerated at startup and each discovery tick, with a hard 2,000-entity limit
+     that returns an error for a larger reported count. Every candidate's vault/collateral and
+     EIP-1271 signer are re-resolved; successful snapshots replace the active set, whole-refresh
+     failures retain the last-known-good set, and a factory-backed deployment may validly idle with
+     zero eligible adapters. Explicit-list startup retains its fail-closed behavior.
      Newly usable adapters hydrate existing offers before the next decision pass.
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
      more single-adapter offers through the configured trusted strategy; uncovered remainder retries
@@ -325,9 +328,10 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
-- **(done) Dynamic adapter discovery.** The configured `IAdapterFactory` is enumerated at startup and
-  before each discovery pass, unioned with optional static adapters, and filtered to adapters whose
-  non-zero vault/asset resolve and whose EIP-1271 signer matches this process.
+- **(done) Dynamic adapter discovery.** When `adapters` is omitted, every entry in the configured
+  `IAdapterFactory` is enumerated at startup and before each discovery pass, subject to a hard 2,000-entry
+  limit that errors above it. When `adapters` is present, only that explicit list is used. Either source
+  is filtered to adapters whose non-zero vault/asset resolve and whose EIP-1271 signer matches this process.
 - **Custom offer pricing/scoring.** The default local strategy bids at the auction's current `maxRate`
   and sizes by `getMaxAssets` headroom plus adapter per-request limits. Operators that need spread,
   risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local

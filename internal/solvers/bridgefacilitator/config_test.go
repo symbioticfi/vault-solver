@@ -110,8 +110,15 @@ func TestParseConfig_AdapterFactory(t *testing.T) {
 	if cfg.AdapterFactory != want {
 		t.Fatalf("adapter factory = %s, want %s", cfg.AdapterFactory.Hex(), want.Hex())
 	}
-	if len(cfg.Targets) != 0 {
-		t.Fatalf("static targets = %+v, want none", cfg.Targets)
+	if cfg.Targets != nil {
+		t.Fatalf("static targets = %+v, want nil when adapters is omitted", cfg.Targets)
+	}
+}
+
+func TestParseConfig_ExplicitEmptyAdaptersRemainAuthoritative(t *testing.T) {
+	cfg := mustParse(t, oneFactory+"adapters: []\n")
+	if cfg.Targets == nil || len(cfg.Targets) != 0 {
+		t.Fatalf("static targets = %+v, want a present empty list", cfg.Targets)
 	}
 }
 

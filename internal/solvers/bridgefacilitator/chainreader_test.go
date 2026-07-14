@@ -244,16 +244,54 @@ func TestFactoryAdapters_EnumeratesEntitiesInRegistryOrder(t *testing.T) {
 	}
 }
 
+func TestFactoryAdapterLimitIsTwoThousand(t *testing.T) {
+	t.Parallel()
+
+	if maxFactoryEntities != 2_000 {
+		t.Fatalf("maxFactoryEntities = %d, want 2000", maxFactoryEntities)
+	}
+}
+
+func TestFactoryAdapters_AcceptsEntityCountAtLimit(t *testing.T) {
+	t.Parallel()
+
+	want := make([]common.Address, maxFactoryEntities)
+	encoded := make([][]byte, maxFactoryEntities)
+	for i := range want {
+		want[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
+		encoded[i] = abiEncodeAddress(t, want[i])
+	}
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, maxFactoryEntities))
+	entitiesRound := abiEncodeAggregate3Results(t, encoded...)
+	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("factory adapters length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
+		}
+	}
+}
+
 func TestFactoryAdapters_RejectsEntityCountAboveLimit(t *testing.T) {
 	t.Parallel()
 
-	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(maxFactoryEntities+1)))
+	const totalEntities = 2_001
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, totalEntities))
 	c, stop := newMulticallFakeClient(t, countRound)
 	defer stop()
 
 	_, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
-	if err == nil {
-		t.Fatal("expected an oversized factory registry to be rejected before allocation")
+	want := "adapter factory entity count 2001 exceeds safety limit 2000"
+	if err == nil || err.Error() != want {
+		t.Fatalf("factoryAdapters error = %v, want %q", err, want)
 	}
 }
 

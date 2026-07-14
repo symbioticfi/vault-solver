@@ -14,24 +14,53 @@ import (
 	"github.com/go-logr/logr"
 )
 
-func TestMergeAdapterSources_DeduplicatesWithStaticOrderFirst(t *testing.T) {
+func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
 	t.Parallel()
 
 	a := common.HexToAddress("0x00000000000000000000000000000000000000A0")
 	b := common.HexToAddress("0x00000000000000000000000000000000000000B0")
 	c := common.HexToAddress("0x00000000000000000000000000000000000000C0")
-	static := []Target{{Adapter: a}, {Adapter: b}, {Adapter: a}}
-	factory := []common.Address{b, c, c}
-
-	got := mergeAdapterSources(static, factory)
+	got := deduplicateAdapters([]common.Address{a, b, a, c, b})
 	want := []common.Address{a, b, c}
 	if len(got) != len(want) {
-		t.Fatalf("merged adapters = %v, want %v", got, want)
+		t.Fatalf("deduplicated adapters = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("merged adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
+			t.Fatalf("deduplicated adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
 		}
+	}
+}
+
+func TestRefreshTargets_ExplicitAdaptersSkipFactoryDiscovery(t *testing.T) {
+	t.Parallel()
+
+	adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000A0")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000B0")
+	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
+	asset := common.HexToAddress("0x00000000000000000000000000000000000000D0")
+	c, stop := newMulticallFakeClient(t,
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset)),
+	)
+	defer stop()
+
+	s := &Solver{
+		cfg: &Config{
+			Targets:        []Target{{Adapter: adapterAddr}},
+			AdapterFactory: common.HexToAddress("0x00000000000000000000000000000000000000F0"),
+		},
+		reader:     newReader(c),
+		log:        logr.Discard(),
+		signerAddr: signer,
+		offers:     newOfferTracker(),
+	}
+	added, err := s.refreshTargets(t.Context())
+	if err != nil {
+		t.Fatalf("refreshTargets: %v", err)
+	}
+	if len(added) != 1 || len(s.targets) != 1 || s.targets[0].Adapter != adapterAddr {
+		t.Fatalf("refresh added=%v targets=%v, want only configured adapter %s", added, s.targets, adapterAddr.Hex())
 	}
 }
 
@@ -151,6 +180,28 @@ func TestRun_AllowsEmptyFactorySnapshotAtStartup(t *testing.T) {
 	defer cancel()
 	if err := s.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run returned %v, want context deadline after staying alive", err)
+	}
+}
+
+func TestRun_ExplicitEmptyAdaptersSkipFactoryDiscoveryAndFailStartup(t *testing.T) {
+	t.Parallel()
+
+	factoryAddr := common.HexToAddress("0x00000000000000000000000000000000000000F0")
+	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1))
+	c, stop := newMulticallFakeClient(t, countRound)
+	defer stop()
+
+	s := &Solver{
+		cfg:        &Config{Targets: []Target{}, AdapterFactory: factoryAddr},
+		reader:     newReader(c),
+		log:        logr.Discard(),
+		signerAddr: signer,
+		offers:     newOfferTracker(),
+	}
+	want := "no configured adapter passed startup validation (must resolve and have this solver as its EIP-1271 signer, want " + signer.Hex() + "); see per-adapter warnings above"
+	if err := s.Run(t.Context()); err == nil || err.Error() != want {
+		t.Fatalf("Run error = %v, want %q", err, want)
 	}
 }
 

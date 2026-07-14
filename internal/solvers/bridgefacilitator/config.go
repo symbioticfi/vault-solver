@@ -17,7 +17,7 @@ import (
 type rawConfig struct {
 	APIBaseURL      string            `yaml:"apiBaseUrl"`
 	RedeemBatchSize int               `yaml:"redeemBatchSize"`
-	Adapters        []string          `yaml:"adapters"`
+	Adapters        *[]string         `yaml:"adapters"`
 	AdapterFactory  string            `yaml:"adapterFactory"`
 	HTTPTimeout     string            `yaml:"httpTimeout"`
 	Intervals       rawIntervals      `yaml:"intervals"`
@@ -43,7 +43,8 @@ type Config struct {
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
 	// (including redemption scans). Applied as the 3F http.Client timeout.
 	HTTPTimeout time.Duration
-	// Targets is the configured static adapter set. Factory-discovered targets are merged at runtime.
+	// Targets is the configured static adapter set. Nil means adapters was omitted and the factory
+	// should be discovered; a non-nil slice is authoritative.
 	Targets        []Target
 	AdapterFactory common.Address
 	Intervals      Intervals
@@ -152,8 +153,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 }
 
 func parseTargets(raw rawConfig) ([]Target, error) {
-	targets := make([]Target, 0, len(raw.Adapters))
-	for i, a := range raw.Adapters {
+	if raw.Adapters == nil {
+		return nil, nil
+	}
+	targets := make([]Target, 0, len(*raw.Adapters))
+	for i, a := range *raw.Adapters {
 		adapter, err := cfgparse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
 		if err != nil {
 			return nil, err
