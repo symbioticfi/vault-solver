@@ -54,7 +54,12 @@ to the vault with yield.
 It holds no API key: each adapter is registered with 3F by its vault creator, who authorizes this
 solver's signer as the adapter's offer signer — directly (an EOA) or via an EIP-1271 contract signer —
 so offers are authorized by signature alone. Design, config,
-and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md) · example
+and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md). When `adapters` is present, the solver operates only
+on that explicit list. Otherwise it discovers all entries of the configured on-chain `IAdapterFactory`,
+refreshing before each auction-discovery pass with a hard 2,000-entity safety limit; a larger reported
+count is an error. Either source is filtered to non-zero vault/asset targets that authorize this
+solver's signer (validated via the adapter's ERC-1271 `isValidSignature`). An empty factory is valid and
+is polled until eligible adapters appear. Example:
 [`config/3f.example.yaml`](config/3f.example.yaml).
 
 ### RFQ Filler — `rfq-filler`

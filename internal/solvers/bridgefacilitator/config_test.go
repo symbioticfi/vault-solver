@@ -35,6 +35,11 @@ adapters:
   - "0x0000000000000000000000000000000000000002"
 `
 
+const oneFactory = `
+apiBaseUrl: https://bf.example
+adapterFactory: "0x0000000000000000000000000000000000000003"
+`
+
 func TestParseConfig_RedeemBatchSizeDefaults(t *testing.T) {
 	cfg := mustParse(t, oneTarget)
 	if cfg.RedeemBatchSize != defaultRedeemBatchSize {
@@ -99,6 +104,35 @@ func TestParseConfig_AdaptersList(t *testing.T) {
 	}
 }
 
+func TestParseConfig_AdapterFactory(t *testing.T) {
+	cfg := mustParse(t, oneFactory)
+	want := common.HexToAddress("0x0000000000000000000000000000000000000003")
+	if cfg.AdapterFactory != want {
+		t.Fatalf("adapter factory = %s, want %s", cfg.AdapterFactory.Hex(), want.Hex())
+	}
+	if cfg.Targets != nil {
+		t.Fatalf("static targets = %+v, want nil when adapters is omitted", cfg.Targets)
+	}
+}
+
+func TestParseConfig_ExplicitEmptyAdaptersRemainAuthoritative(t *testing.T) {
+	cfg := mustParse(t, oneFactory+"adapters: []\n")
+	if cfg.Targets == nil || len(cfg.Targets) != 0 {
+		t.Fatalf("static targets = %+v, want a present empty list", cfg.Targets)
+	}
+}
+
+func TestParseConfig_StaticAndFactorySources(t *testing.T) {
+	cfg := mustParse(t, oneTarget+`adapterFactory: "0x0000000000000000000000000000000000000003"
+`)
+	if len(cfg.Targets) != 1 {
+		t.Fatalf("static targets = %+v, want one", cfg.Targets)
+	}
+	if cfg.AdapterFactory != common.HexToAddress("0x0000000000000000000000000000000000000003") {
+		t.Fatalf("adapter factory = %s", cfg.AdapterFactory.Hex())
+	}
+}
+
 func TestParseConfig_Strategy(t *testing.T) {
 	cfg, err := parse(t, oneTarget+`
 strategy:
@@ -123,11 +157,14 @@ strategy:
 	}
 }
 
-func TestParseConfig_RejectsEmptyAndZeroAdapters(t *testing.T) {
+func TestParseConfig_RejectsEmptyAndZeroAdapterSources(t *testing.T) {
 	if _, err := parse(t, minimalConfig); err == nil {
-		t.Fatal("expected an error when no adapters are configured")
+		t.Fatal("expected an error when neither adapters nor adapterFactory is configured")
 	}
 	if _, err := parse(t, minimalConfig+"adapters:\n  - \"0x0000000000000000000000000000000000000000\"\n"); err == nil {
 		t.Fatal("expected an error for a zero adapter address")
+	}
+	if _, err := parse(t, minimalConfig+"adapterFactory: \"0x0000000000000000000000000000000000000000\"\n"); err == nil {
+		t.Fatal("expected an error for a zero adapter factory address")
 	}
 }

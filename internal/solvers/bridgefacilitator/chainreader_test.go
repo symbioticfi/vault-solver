@@ -60,6 +60,19 @@ func TestCollectRequests(t *testing.T) {
 	}
 }
 
+func TestDecodeAddr_RejectsZeroAddress(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeAddr(
+		chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, common.Address{})},
+		bfAdapter.UnpackVault,
+		"adapter.vault()",
+	)
+	if err == nil {
+		t.Fatal("expected a zero address to fail validation")
+	}
+}
+
 // TestPpmToBps covers the ceil(ppm/100) conversion of minYieldPerRequest (ppm) to the bps the pre-screen
 // compares against the auction maxRate — rounded up so the bot never bids below the on-chain floor.
 func TestPpmToBps(t *testing.T) {
@@ -173,6 +186,19 @@ func abiEncodeAddress(t *testing.T, addr common.Address) []byte {
 	return enc
 }
 
+func abiEncodeUint256(t *testing.T, value int64) []byte {
+	t.Helper()
+	uintType, err := abi.NewType("uint256", "", nil)
+	if err != nil {
+		t.Fatalf("abi.NewType uint256: %v", err)
+	}
+	enc, err := abi.Arguments{{Type: uintType}}.Pack(big.NewInt(value))
+	if err != nil {
+		t.Fatalf("abi uint256 Pack: %v", err)
+	}
+	return enc
+}
+
 // abiEncodeBytes4 ABI-encodes a bytes4 return value (the raw returnData for a Solidity function
 // returning bytes4, e.g. ERC-1271 isValidSignature).
 func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
@@ -186,6 +212,102 @@ func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
 		t.Fatalf("abi bytes4 Pack: %v", err)
 	}
 	return enc
+}
+
+func TestFactoryAdapters_EmptyRegistry(t *testing.T) {
+	t.Parallel()
+
+	round := abiEncodeAggregate3Results(t, abiEncodeUint256(t, 0))
+	c, stop := newMulticallFakeClient(t, round)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("factory adapters = %v, want empty", got)
+	}
+}
+
+func TestFactoryAdapters_EnumeratesEntitiesInRegistryOrder(t *testing.T) {
+	t.Parallel()
+
+	want := []common.Address{
+		common.HexToAddress("0x00000000000000000000000000000000000000A0"),
+		common.HexToAddress("0x00000000000000000000000000000000000000A1"),
+		common.HexToAddress("0x00000000000000000000000000000000000000A2"),
+	}
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(len(want))))
+	entitiesRound := abiEncodeAggregate3Results(t,
+		abiEncodeAddress(t, want[0]), abiEncodeAddress(t, want[1]), abiEncodeAddress(t, want[2]),
+	)
+	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("factory adapters = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
+		}
+	}
+}
+
+func TestFactoryAdapterLimitIsTwoThousand(t *testing.T) {
+	t.Parallel()
+
+	if maxFactoryEntities != 2_000 {
+		t.Fatalf("maxFactoryEntities = %d, want 2000", maxFactoryEntities)
+	}
+}
+
+func TestFactoryAdapters_AcceptsEntityCountAtLimit(t *testing.T) {
+	t.Parallel()
+
+	want := make([]common.Address, maxFactoryEntities)
+	encoded := make([][]byte, maxFactoryEntities)
+	for i := range want {
+		want[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
+		encoded[i] = abiEncodeAddress(t, want[i])
+	}
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, maxFactoryEntities))
+	entitiesRound := abiEncodeAggregate3Results(t, encoded...)
+	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
+	defer stop()
+
+	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	if err != nil {
+		t.Fatalf("factoryAdapters: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("factory adapters length = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
+		}
+	}
+}
+
+func TestFactoryAdapters_RejectsEntityCountAboveLimit(t *testing.T) {
+	t.Parallel()
+
+	const totalEntities = 2_001
+	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, totalEntities))
+	c, stop := newMulticallFakeClient(t, countRound)
+	defer stop()
+
+	_, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	want := "adapter factory entity count 2001 exceeds safety limit 2000"
+	if err == nil || err.Error() != want {
+		t.Fatalf("factoryAdapters error = %v, want %q", err, want)
+	}
 }
 
 // testProbe is any non-empty (hash, sig) pair; the fake client returns canned replies regardless of
@@ -238,6 +360,37 @@ func TestResolveAdapters(t *testing.T) {
 				w.vault.Hex(), w.signer.Hex(), w.collateral.Hex(), w.authorized)
 		}
 	}
+}
+
+func TestResolveAdapters_RejectsUnexpectedMulticallResultCounts(t *testing.T) {
+	t.Parallel()
+
+	adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000A0")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000B0")
+	signer := common.HexToAddress("0x00000000000000000000000000000000000000C0")
+
+	t.Run("adapter fields", func(t *testing.T) {
+		t.Parallel()
+		shortRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault))
+		c, stop := newMulticallFakeClient(t, shortRound)
+		defer stop()
+
+		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
+			t.Fatal("expected an error for an incomplete adapter-field response")
+		}
+	})
+
+	t.Run("assets", func(t *testing.T) {
+		t.Parallel()
+		fieldsRound := abiEncodeAggregate3Results(t, abiEncodeAddress(t, vault), abiEncodeAddress(t, signer), abiEncodeBytes4(t, erc1271MagicValue))
+		emptyAssetRound := abiEncodeAggregate3Results(t)
+		c, stop := newMulticallFakeClient(t, fieldsRound, emptyAssetRound)
+		defer stop()
+
+		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
+			t.Fatal("expected an error for an incomplete asset response")
+		}
+	})
 }
 
 // TestResolveAdaptersDropsUnauthorized verifies an adapter whose isValidSignature returns a non-magic

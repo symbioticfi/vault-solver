@@ -17,7 +17,8 @@ import (
 type rawConfig struct {
 	APIBaseURL      string            `yaml:"apiBaseUrl"`
 	RedeemBatchSize int               `yaml:"redeemBatchSize"`
-	Adapters        []string          `yaml:"adapters"`
+	Adapters        *[]string         `yaml:"adapters"`
+	AdapterFactory  string            `yaml:"adapterFactory"`
 	HTTPTimeout     string            `yaml:"httpTimeout"`
 	Intervals       rawIntervals      `yaml:"intervals"`
 	Strategy        rawStrategyConfig `yaml:"strategy"`
@@ -42,10 +43,12 @@ type Config struct {
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
 	// (including redemption scans). Applied as the 3F http.Client timeout.
 	HTTPTimeout time.Duration
-	// Targets is the list of vault+adapter pairs this facilitator serves.
-	Targets   []Target
-	Intervals Intervals
-	Strategy  StrategyConfig
+	// Targets is the configured static adapter set. Nil means adapters was omitted and the factory
+	// should be discovered; a non-nil slice is authoritative.
+	Targets        []Target
+	AdapterFactory common.Address
+	Intervals      Intervals
+	Strategy       StrategyConfig
 }
 
 type StrategyConfig struct {
@@ -53,9 +56,9 @@ type StrategyConfig struct {
 	Config yaml.Node
 }
 
-// Target is one adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
-// Collateral (vault.asset()) are resolved on-chain at startup (resolveTargets); per-request caps also
-// live on-chain (setLimitsPerRequest), read each poll.
+// Target is one adapter the bot facilitates. Only static adapter addresses are config: Vault
+// (adapter.vault()) and Collateral (vault.asset()) are resolved on-chain on every adapter refresh;
+// per-request caps also live on-chain (setLimitsPerRequest), read each poll.
 type Target struct {
 	Adapter common.Address
 	// Auctions are matched to this target by their deposit asset equalling Collateral.
@@ -104,6 +107,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	var adapterFactory common.Address
+	if raw.AdapterFactory != "" {
+		adapterFactory, err = cfgparse.NonZeroAddress(raw.AdapterFactory, "adapterFactory")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(targets) == 0 && adapterFactory == (common.Address{}) {
+		return nil, errors.New("at least one adapters entry or adapterFactory is required")
+	}
 
 	discover, err := cfgparse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
 	if err != nil {
@@ -133,17 +146,18 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		RedeemBatchSize: redeemBatch,
 		HTTPTimeout:     httpTimeout,
 		Targets:         targets,
+		AdapterFactory:  adapterFactory,
 		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 		Strategy:        strategy,
 	}, nil
 }
 
 func parseTargets(raw rawConfig) ([]Target, error) {
-	if len(raw.Adapters) == 0 {
-		return nil, errors.New("at least one adapters entry is required")
+	if raw.Adapters == nil {
+		return nil, nil
 	}
-	targets := make([]Target, 0, len(raw.Adapters))
-	for i, a := range raw.Adapters {
+	targets := make([]Target, 0, len(*raw.Adapters))
+	for i, a := range *raw.Adapters {
 		adapter, err := cfgparse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
 		if err != nil {
 			return nil, err
