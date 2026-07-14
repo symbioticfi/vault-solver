@@ -62,6 +62,17 @@ func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 	return total
 }
 
+// liveCount reports how many offers are still unexpired as of now.
+func (t *offerTracker) liveCount(now time.Time) int {
+	live := 0
+	for _, st := range t.offers {
+		if st.expiry.After(now) {
+			live++
+		}
+	}
+	return live
+}
+
 // pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
 func (t *offerTracker) pruneExpired(now time.Time) {
 	for k, st := range t.offers {

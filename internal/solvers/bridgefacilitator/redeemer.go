@@ -11,9 +11,11 @@ import (
 func (s *Solver) redeemReady(ctx context.Context, target Target) {
 	ready, err := s.reader.readyToRedeem(ctx, target.Adapter)
 	if err != nil {
+		s.metrics.incRedeemScanFailed()
 		s.log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
 		return
 	}
+	s.metrics.addRedeemable(len(ready))
 	s.log.V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
 	if len(ready) == 0 {
 		return
@@ -39,8 +41,10 @@ func (s *Solver) redeemReady(ctx context.Context, target Target) {
 		Label: "redeem",
 	})
 	if res.Err != nil {
+		s.metrics.incRedeemTxFailed()
 		s.log.Error(res.Err, "redeem: tx failed", "requests", len(ready))
 		return
 	}
+	s.metrics.addRedeemed(len(ready))
 	s.log.Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
 }

@@ -42,6 +42,7 @@ type Solver struct {
 	api        *apiClient
 	reader     *reader
 	strategy   types.Strategy
+	metrics    *metrics
 	log        logr.Logger
 	signerAddr common.Address // the solver's own EIP-1271 signer address, set in factory
 	nonceSeq   atomic.Uint64
@@ -59,6 +60,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	var mx *metrics
+	if deps.Metrics != nil {
+		if mx, err = newMetrics(deps.Metrics.Registerer()); err != nil {
+			return nil, err
+		}
+	}
 
 	s := &Solver{
 		cfg:        cfg,
@@ -66,6 +73,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		api:        api,
 		reader:     newReader(deps.Chain),
 		strategy:   offerStrategy,
+		metrics:    mx,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),
 		offers:     newOfferTracker(),
@@ -133,6 +141,7 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 	for _, t := range s.cfg.Targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
+			s.metrics.incCacheRebuildFailed()
 			s.log.Error(err, "rebuild offer cache: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
@@ -154,6 +163,8 @@ func (s *Solver) rebuildOfferCache(ctx context.Context) {
 			live++
 		}
 	}
+	s.metrics.addCacheLoaded(live)
+	s.metrics.setLiveOffers(live)
 	s.log.Info("loaded existing offers into dedup cache", "live", live)
 }
 
@@ -171,6 +182,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Error(err, "discover: list auctions")
 		return
 	}
+	s.metrics.observeDiscover(len(auctions))
 	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
 	offerings := make([]*adapterOffering, 0, len(s.cfg.Targets))
@@ -192,6 +204,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 
 	now := time.Now()
 	s.offers.pruneExpired(now) // keep the dedup map bounded
+	s.metrics.setLiveOffers(s.offers.liveCount(now))
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {
 		return // no open, offerable auctions this pass
@@ -214,13 +227,16 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
+			s.metrics.incOfferSubmitFailed()
 			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
 
 		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
 			s.offers.record(offer.Maker, offer.AuctionID, exp, offer.Principal)
+			s.metrics.setLiveOffers(s.offers.liveCount(time.Now()))
 		}
+		s.metrics.incOfferSubmitted()
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
