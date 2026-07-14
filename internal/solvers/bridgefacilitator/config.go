@@ -72,7 +72,7 @@ type Intervals struct {
 
 // Default loop cadences (used when a field is unset).
 const (
-	defaultDiscover   = time.Hour
+	defaultDiscover   = 5 * time.Minute
 	defaultRedeemPoll = 5 * time.Minute
 	defaultReconcile  = 15 * time.Minute
 )

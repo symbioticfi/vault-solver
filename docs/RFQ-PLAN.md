@@ -103,7 +103,10 @@ candidates); the strategy owns the decision. Two ship in-tree:
 
 - **`default`** — the in-process faithful port (greedy discount + leg selection). It caches its
   quote-time plan by `quoteId` and, on a cold cache, rebuilds from live on-chain state, re-binding the
-  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`).
+  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`). When aggregate
+  adapter capacity cannot cover an exact-input request, it still returns the available `maxAssets` as
+  output and assigns the residual input to the final leg, surfacing the shortfall as price impact
+  instead of declining the quote.
 - **`webhook`** — a transport-only adapter that delegates to an external decider over JSON. It keeps
   **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
   `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.

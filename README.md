@@ -67,6 +67,9 @@ own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 cover the full order through one candidate route. Other scopes keep the existing multi-route behavior.
+When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
+quoted output at the available `maxAssets` instead of declining; the excess input is reflected as
+worse execution price and price impact.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

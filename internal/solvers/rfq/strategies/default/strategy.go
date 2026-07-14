@@ -247,7 +247,9 @@ func evaluateGroup(
 		return nil
 	}
 	if remainingIn.Sign() != 0 {
-		return nil
+		// Keep the exact-input quote while capping output at available liquidity. The residual input
+		// appears as price impact instead of suppressing the quote entirely.
+		legs[len(legs)-1].AmountIn.Add(legs[len(legs)-1].AmountIn, remainingIn)
 	}
 
 	return &types.QuoteOutput{
