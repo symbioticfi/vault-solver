@@ -174,6 +174,66 @@ func TestGetOffersDigest_MatchesApitypes(t *testing.T) {
 	}
 }
 
+func TestCancelOfferDigest_Golden(t *testing.T) {
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	got := CancelOfferDigest(maker, big.NewInt(123), big.NewInt(4102444800), big.NewInt(11155111)).Hex()
+	// GOLDEN: pinned from TestCancelOfferDigest_MatchesApitypes cross-check (chainId 11155111).
+	want := "0xedd4e81f1c6199ac2ea6552ec75d9c517f4469b4c485e244d3412dbe566439fb"
+	if got != want {
+		t.Fatalf("digest = %s, want %s", got, want)
+	}
+}
+
+// TestCancelOfferDigest_MatchesApitypes cross-checks the signed cancellation payload used by
+// POST /v1/offer/cancel against go-ethereum's independent EIP-712 implementation.
+func TestCancelOfferDigest_MatchesApitypes(t *testing.T) {
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	offerID := big.NewInt(123)
+	deadline := big.NewInt(4102444800)
+	chainID := big.NewInt(11155111)
+
+	got := CancelOfferDigest(maker, offerID, deadline, chainID)
+
+	typed := apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+			},
+			"CancelOffer": {
+				{Name: "maker", Type: "address"},
+				{Name: "offerId", Type: "uint256"},
+				{Name: "deadline", Type: "uint256"},
+			},
+		},
+		PrimaryType: "CancelOffer",
+		Domain: apitypes.TypedDataDomain{
+			Name:    apiKeyDomainName,
+			Version: apiKeyDomainVersion,
+			ChainId: (*math.HexOrDecimal256)(chainID),
+		},
+		Message: apitypes.TypedDataMessage{
+			"maker":    maker.Hex(),
+			"offerId":  offerID.String(),
+			"deadline": deadline.String(),
+		},
+	}
+	domainSep, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
+	if err != nil {
+		t.Fatalf("hash domain: %v", err)
+	}
+	msgHash, err := typed.HashStruct("CancelOffer", typed.Message)
+	if err != nil {
+		t.Fatalf("hash message: %v", err)
+	}
+	want := crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSep, msgHash)
+
+	if got != want {
+		t.Fatalf("digest mismatch:\n manual   %s\n apitypes %s", got.Hex(), want.Hex())
+	}
+}
+
 // TestGetOffersDigest_MatchesLiveAcceptedSignature verifies that the scaffolded GetOffers type
 // string is accepted by the live 3F API. Skipped offline (SOLVER_LIVE_AUTH != "1").
 // A correctly-formed sig returns 200/empty or 403 (unauthorized maker) — NOT a signature error.

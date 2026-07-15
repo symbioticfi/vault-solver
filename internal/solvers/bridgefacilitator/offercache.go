@@ -17,8 +17,12 @@ type offerKey struct {
 
 // offerState is one outstanding offer: when it expires and the principal it covers.
 type offerState struct {
-	expiry    time.Time
-	principal *big.Int
+	id             int64
+	expiry         time.Time
+	principal      *big.Int
+	expectedReturn *big.Int
+	nonce          *big.Int
+	status         string
 }
 
 // offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through
@@ -45,9 +49,16 @@ func (t *offerTracker) liveEntries(now time.Time) []offerKey {
 	return keys
 }
 
-// record stores the expiration and principal of an offer we hold through adapter for auctionID.
-func (t *offerTracker) record(adapter common.Address, auctionID int64, expiration time.Time, principal *big.Int) {
-	t.offers[offerKey{adapter, auctionID}] = offerState{expiry: expiration, principal: new(big.Int).Set(principal)}
+// record stores the remote identity and local lifecycle state of an offer we hold through adapter for auctionID.
+func (t *offerTracker) record(adapter common.Address, auctionID int64, st offerState) {
+	t.offers[offerKey{adapter, auctionID}] = offerState{
+		id:             st.id,
+		expiry:         st.expiry,
+		principal:      cloneBigOrZero(st.principal),
+		expectedReturn: cloneBig(st.expectedReturn),
+		nonce:          cloneBig(st.nonce),
+		status:         st.status,
+	}
 }
 
 // retainAdapters drops cached offers made by adapters that are no longer usable. In particular,
@@ -89,4 +100,11 @@ func parseUnixTime(s string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return time.Unix(sec, 0), nil
+}
+
+func cloneBigOrZero(n *big.Int) *big.Int {
+	if n == nil {
+		return new(big.Int)
+	}
+	return new(big.Int).Set(n)
 }

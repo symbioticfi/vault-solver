@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"math"
 	"math/big"
 	"net/http"
 	"strings"
@@ -18,6 +19,8 @@ import (
 
 // getOffersDeadlineWindow is how far in the future the signed GetOffers deadline is set.
 const getOffersDeadlineWindow = 5 * time.Minute
+
+const maxExactFloat32Int = 1 << 24
 
 // apiClient wraps the generated 3F client. It signs per-adapter requests via EIP-712 and injects
 // the resulting Authorization: Bearer header.
@@ -54,14 +57,21 @@ func (ac *apiClient) listAuctions(ctx context.Context) ([]threef.AuctionDto, err
 	return auctions, nil
 }
 
-// createOffer submits a signed offer.
-func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto) error {
-	_, httpResp, e := ac.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
+// createOffer submits a signed offer and returns the remote offer ID assigned by 3F.
+func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto) (int64, error) {
+	resp, httpResp, e := ac.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResp(httpResp)
 	if e != nil {
-		return apiErr("create offer", httpResp, e)
+		return 0, apiErr("create offer", httpResp, e)
 	}
-	return nil
+	if resp == nil {
+		return 0, errors.New("3f api: create offer: empty response")
+	}
+	offerID, err := apiIDFromFloat(resp.Id, "create offer id")
+	if err != nil {
+		return 0, err
+	}
+	return offerID, nil
 }
 
 // listOffers returns the adapter's outstanding offers. Authenticated via a per-adapter EIP-712
@@ -85,6 +95,62 @@ func (ac *apiClient) listOffers(ctx context.Context, adapter common.Address) ([]
 		return nil, apiErr("list offers", httpResp, e)
 	}
 	return o, nil
+}
+
+// getOfferByID returns one remote offer for adapter using the same signed authentication as listOffers.
+func (ac *apiClient) getOfferByID(ctx context.Context, adapter common.Address, offerID int64) (*threef.OfferDto, error) {
+	apiID, err := apiIDToFloat(offerID, "offer id")
+	if err != nil {
+		return nil, err
+	}
+	deadline := big.NewInt(time.Now().Add(getOffersDeadlineWindow).Unix())
+	sig, err := ac.sgnr.SignHash(GetOffersDigest(adapter, deadline, ac.chainID))
+	if err != nil {
+		return nil, errors.Errorf("3f api: sign GetOffers: %w", err)
+	}
+	o, httpResp, e := ac.c.OfferAPI.OfferControllerGetByIdV1(ctx, apiID).
+		Maker(lowerAddr(adapter)).
+		ChainId(float32(ac.chainID.Int64())).
+		Deadline(deadline.String()).
+		Authorization("Bearer 0x" + common.Bytes2Hex(sig)).
+		Execute()
+	closeResp(httpResp)
+	if e != nil {
+		return nil, apiErr("get offer", httpResp, e)
+	}
+	return o, nil
+}
+
+// cancelOffer signs and submits a 3F cancel request. Solver policy does not call this yet; it is wired
+// here so follow-up repricing/cancel flows can use the generated API surface without leaking it outward.
+func (ac *apiClient) cancelOffer(ctx context.Context, adapter common.Address, offerID int64) (int64, string, error) {
+	apiID, err := apiIDToFloat(offerID, "offer id")
+	if err != nil {
+		return 0, "", err
+	}
+	deadline := big.NewInt(time.Now().Add(getOffersDeadlineWindow).Unix())
+	sig, err := ac.sgnr.SignHash(CancelOfferDigest(adapter, big.NewInt(offerID), deadline, ac.chainID))
+	if err != nil {
+		return 0, "", errors.Errorf("3f api: sign CancelOffer: %w", err)
+	}
+	dto := threef.NewCancelOfferDto(apiID, lowerAddr(adapter))
+	dto.SetChainId(float32(ac.chainID.Int64()))
+	dto.SetDeadline(deadline.String())
+	dto.SetSignature("0x" + common.Bytes2Hex(sig))
+
+	resp, httpResp, e := ac.c.OfferAPI.OfferControllerCancelV1(ctx).CancelOfferDto(*dto).Execute()
+	closeResp(httpResp)
+	if e != nil {
+		return 0, "", apiErr("cancel offer", httpResp, e)
+	}
+	if resp == nil {
+		return 0, "", errors.New("3f api: cancel offer: empty response")
+	}
+	id, err := apiIDFromFloat(resp.Id, "cancel offer id")
+	if err != nil {
+		return 0, "", err
+	}
+	return id, resp.Status, nil
 }
 
 // closeResp closes the response body. The generated client already closes it inside Execute; this
@@ -117,3 +183,21 @@ func statusOf(resp *http.Response) string {
 
 // lowerAddr renders an address as a lowercase hex string; the 3F API rejects checksummed addresses.
 func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
+
+func apiIDFromFloat(v float32, field string) (int64, error) {
+	f := float64(v)
+	if f < 1 || math.Trunc(f) != f {
+		return 0, errors.Errorf("3f api: %s: invalid id %v", field, v)
+	}
+	return int64(v), nil
+}
+
+func apiIDToFloat(v int64, field string) (float32, error) {
+	if v < 1 {
+		return 0, errors.Errorf("3f api: %s: invalid id %d", field, v)
+	}
+	if v > maxExactFloat32Int {
+		return 0, errors.Errorf("3f api: %s: id %d exceeds exact float32 range", field, v)
+	}
+	return float32(v), nil
+}

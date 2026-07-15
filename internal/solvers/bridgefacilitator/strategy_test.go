@@ -76,7 +76,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000001")
 	collateral := common.HexToAddress("0x0000000000000000000000000000000000000003")
 	offers := newOfferTracker()
-	offers.record(adapter, 10, now.Add(time.Minute), big.NewInt(100))
+	offers.record(adapter, 10, testOfferState(now.Add(time.Minute), big.NewInt(100)))
 
 	input := buildStrategyInput(
 		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},

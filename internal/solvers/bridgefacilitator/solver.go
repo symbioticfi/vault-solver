@@ -20,12 +20,15 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-// offerStatusIgnored are 3F offer statuses that are not live coverage when hydrating the cache: a
-// FAILED consume or a NOT_ACCEPTED bid won't cover the auction, so discovery should re-offer.
+// offerStatusIgnored are 3F offer statuses that are not live coverage when hydrating the cache.
 var offerStatusIgnored = map[string]bool{
+	"CANCELED":     true,
+	"CANCELLED":    true,
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
 }
+
+const offerStatusSubmitted = "SUBMITTED"
 
 // Name is the registry key that selects this solver from config.
 const Name = "3f-bridge-facilitator"
@@ -166,13 +169,41 @@ func (s *Solver) hydrateOfferCache(ctx context.Context, targets []Target) {
 			if perr != nil || !exp.After(now) {
 				continue // unparseable or already expired — we may freely re-offer
 			}
-			principal, ok := new(big.Int).SetString(o.Amount, 10)
+			principal, ok := parseUint256String(o.Amount)
 			if !ok {
 				s.log.V(1).Info("offer cache: unparseable amount; coverage may undercount",
 					"adapter", t.Adapter.Hex(), "amount", o.Amount)
 				principal = new(big.Int)
 			}
-			s.offers.record(t.Adapter, int64(o.AuctionId), exp, principal)
+			offerID, ierr := apiIDFromFloat(o.Id, "offer id")
+			if ierr != nil {
+				s.log.V(1).Info("offer cache: invalid offer id; lifecycle state may be incomplete",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+			}
+			auctionID, ierr := apiIDFromFloat(o.AuctionId, "auction id")
+			if ierr != nil {
+				s.log.V(1).Info("offer cache: invalid auction id; skipping offer",
+					"adapter", t.Adapter.Hex(), "auctionId", o.AuctionId)
+				continue
+			}
+			expectedReturn, ok := parseUint256String(o.ExpectedReturn)
+			if !ok {
+				s.log.V(1).Info("offer cache: unparseable expectedReturn",
+					"adapter", t.Adapter.Hex(), "expectedReturn", o.ExpectedReturn)
+			}
+			nonce, ok := parseUint256String(o.Nonce)
+			if !ok {
+				s.log.V(1).Info("offer cache: unparseable nonce",
+					"adapter", t.Adapter.Hex(), "nonce", o.Nonce)
+			}
+			s.offers.record(t.Adapter, auctionID, offerState{
+				id:             offerID,
+				expiry:         exp,
+				principal:      principal,
+				expectedReturn: expectedReturn,
+				nonce:          nonce,
+				status:         normalizedOfferStatus(o.Status),
+			})
 			live++
 		}
 	}
@@ -240,17 +271,39 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			s.log.Error(buildErr, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
-		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
+		offerID, subErr := s.api.createOffer(ctx, dto)
+		if subErr != nil {
 			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
 
 		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
-			s.offers.record(offer.Maker, offer.AuctionID, exp, offer.Principal)
+			nonce, _ := parseUint256String(dto.Nonce)
+			s.offers.record(offer.Maker, offer.AuctionID, offerState{
+				id:             offerID,
+				expiry:         exp,
+				principal:      offer.Principal,
+				expectedReturn: offer.ExpectedReturn,
+				nonce:          nonce,
+				status:         offerStatusSubmitted,
+			})
 		}
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
-			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
+			"offerId", offerID, "request", offer.Request.Hex(),
+			"principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
+}
+
+func parseUint256String(s string) (*big.Int, bool) {
+	n, ok := new(big.Int).SetString(s, 10)
+	if !ok || n.Sign() < 0 {
+		return nil, false
+	}
+	return n, true
+}
+
+func normalizedOfferStatus(status string) string {
+	return strings.ToUpper(strings.TrimSpace(status))
 }
 
 // redeemAll runs the redeemer for every matched adapter.
