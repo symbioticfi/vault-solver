@@ -8,6 +8,17 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+func testOfferState(expiry time.Time, principal *big.Int) offerState {
+	return offerState{
+		id:             123,
+		expiry:         expiry,
+		principal:      principal,
+		expectedReturn: big.NewInt(5),
+		nonce:          big.NewInt(7),
+		status:         offerStatusSubmitted,
+	}
+}
+
 func TestOfferTracker(t *testing.T) {
 	tr := newOfferTracker()
 	now := time.Unix(1_000_000, 0)
@@ -27,7 +38,7 @@ func TestOfferTracker(t *testing.T) {
 		t.Fatal("empty tracker should report no live offers")
 	}
 
-	tr.record(adapterA, 42, now.Add(30*time.Minute), big.NewInt(100))
+	tr.record(adapterA, 42, testOfferState(now.Add(30*time.Minute), big.NewInt(100)))
 	if !live(now, adapterA, 42) {
 		t.Fatal("offer should be live before expiry")
 	}
@@ -54,9 +65,9 @@ func TestOfferTrackerLiveCoverage(t *testing.T) {
 	}
 
 	// Coverage sums principals across adapters on the same auction.
-	tr.record(adapterA, 42, now.Add(30*time.Minute), big.NewInt(100))
-	tr.record(adapterB, 42, now.Add(30*time.Minute), big.NewInt(60))
-	tr.record(adapterA, 7, now.Add(30*time.Minute), big.NewInt(999)) // other auction, excluded
+	tr.record(adapterA, 42, testOfferState(now.Add(30*time.Minute), big.NewInt(100)))
+	tr.record(adapterB, 42, testOfferState(now.Add(30*time.Minute), big.NewInt(60)))
+	tr.record(adapterA, 7, testOfferState(now.Add(30*time.Minute), big.NewInt(999))) // other auction, excluded
 	if got := tr.liveCoverage(42, now); got.Cmp(big.NewInt(160)) != 0 {
 		t.Fatalf("coverage = %s, want 160", got)
 	}
@@ -64,6 +75,36 @@ func TestOfferTrackerLiveCoverage(t *testing.T) {
 	// Expired offers don't count toward coverage.
 	if got := tr.liveCoverage(42, now.Add(31*time.Minute)); got.Sign() != 0 {
 		t.Fatalf("coverage after expiry = %s, want 0", got)
+	}
+}
+
+func TestOfferTrackerRecordsRemoteLifecycleState(t *testing.T) {
+	tr := newOfferTracker()
+	now := time.Unix(1_000_000, 0)
+	adapter := common.Address{0xAA}
+	principal := big.NewInt(100)
+	expectedReturn := big.NewInt(5)
+	nonce := big.NewInt(7)
+
+	tr.record(adapter, 42, offerState{
+		id:             123,
+		expiry:         now.Add(time.Hour),
+		principal:      principal,
+		expectedReturn: expectedReturn,
+		nonce:          nonce,
+		status:         offerStatusSubmitted,
+	})
+	principal.SetInt64(999)
+	expectedReturn.SetInt64(999)
+	nonce.SetInt64(999)
+
+	got := tr.offers[offerKey{adapter: adapter, auction: 42}]
+	if got.id != 123 || got.status != offerStatusSubmitted {
+		t.Fatalf("state id/status = %d/%q", got.id, got.status)
+	}
+	if got.principal.String() != "100" || got.expectedReturn.String() != "5" || got.nonce.String() != "7" {
+		t.Fatalf("state amounts were not cloned: principal=%s expectedReturn=%s nonce=%s",
+			got.principal, got.expectedReturn, got.nonce)
 	}
 }
 

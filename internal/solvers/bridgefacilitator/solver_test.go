@@ -91,7 +91,7 @@ func TestRefreshTargets_RetainsLastKnownGoodOnWholeRefreshFailure(t *testing.T) 
 		t.Fatalf("first refresh added=%v targets=%v", added, s.targets)
 	}
 	now := time.Now()
-	s.offers.record(adapterAddr, 42, now.Add(time.Hour), big.NewInt(100))
+	s.offers.record(adapterAddr, 42, testOfferState(now.Add(time.Hour), big.NewInt(100)))
 
 	if _, err := s.refreshTargets(t.Context()); err == nil {
 		t.Fatal("expected the second refresh to fail")
@@ -135,7 +135,7 @@ func TestRefreshTargets_RemovesAndReaddsWhenSignerEligibilityChanges(t *testing.
 		t.Fatalf("initial refresh added=%v targets=%v err=%v", added, s.targets, err)
 	}
 	now := time.Now()
-	s.offers.record(adapterAddr, 42, now.Add(time.Hour), big.NewInt(100))
+	s.offers.record(adapterAddr, 42, testOfferState(now.Add(time.Hour), big.NewInt(100)))
 	added, err = s.refreshTargets(t.Context())
 	if err != nil || len(added) != 0 || len(s.targets) != 0 {
 		t.Fatalf("removal refresh added=%v targets=%v err=%v", added, s.targets, err)
