@@ -22,6 +22,8 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: 3f-bridge-facilitator
     config:
@@ -37,6 +39,10 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if cfg.TxManager.Confirmations != DefaultConfirmations {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
+	if cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
+		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs {
+		t.Fatalf("unexpected tx replacement defaults: %+v", cfg.TxManager)
+	}
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
 		t.Fatalf("expected default addr %q, got %q", DefaultObservabilityAddr, cfg.Observability.Addr)
 	}
@@ -48,6 +54,8 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: 3f-bridge-facilitator
     config: {apiBaseUrl: https://bf.dev.gcp.3f.xyz}
@@ -73,6 +81,8 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: rfq-filler
     config: {}
@@ -110,6 +120,8 @@ chain:
   chainId: 11155111
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: x
     config: {}
@@ -136,6 +148,8 @@ chain:
   chainId: 1
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: x
     config: {}
@@ -160,6 +174,8 @@ chain:
   chainId: 1
 signer:
   keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 100
 solvers:
   - name: x
     config: {}
@@ -180,6 +196,7 @@ func TestLoad_ExpandsEnvInSolverConfigBlock(t *testing.T) {
 	body := `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100}
 solvers:
   - name: x
     config:
@@ -230,13 +247,43 @@ solvers: [{name: x}]
 		"missing solver name": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100}
 solvers: [{}]
+`,
+		"missing max fee cap": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+solvers: [{name: x}]
+`,
+		"non-finite max fee cap": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: .nan}
+solvers: [{name: x}]
+`,
+		"negative tip": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, tipGwei: -1}
+solvers: [{name: x}]
 `,
 		"unknown field": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 solvers: [{name: x}]
 bogus: true
+`,
+		"negative replacement interval": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, replacementIntervalMs: -1}
+solvers: [{name: x}]
+`,
+		"timeout below replacement interval": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, replacementIntervalMs: 30000, pendingTimeoutMs: 10000}
+solvers: [{name: x}]
 `,
 	}
 	for name, body := range cases {
