@@ -10,7 +10,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/oev/aggregator"
+	"github.com/symbioticfi/vault-solver/api/bindings/chainlink/aggregator"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
 	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/oracle"

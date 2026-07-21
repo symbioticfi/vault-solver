@@ -21,7 +21,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	be.discounts = &discountsResponse{Discounts: []discountListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
-		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		Discount: "500", MaxAssets: "10000000", MaxRate: "1000000000000000000",
 	}}}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)

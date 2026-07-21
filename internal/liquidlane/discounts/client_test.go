@@ -1,4 +1,4 @@
-package rfq
+package discounts
 
 import (
 	"context"
@@ -9,59 +9,7 @@ import (
 	"testing"
 )
 
-// The generated rfqbackend client carries the spec's `/api/v1` prefix, so the backend client rooted at
-// the httptest server URL hits `/api/v1/orders`; the shared private-discounts client transport rewrite
-// sends discount calls to `/api-internal/v1/discounts` instead (orders unchanged).
-
-func TestBackendClient_ListOpenOrders(t *testing.T) {
-	var gotPath, gotStatus, gotFiller, gotLimit string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotStatus = r.URL.Query().Get("orderStatus")
-		gotFiller = r.URL.Query().Get("filler")
-		gotLimit = r.URL.Query().Get("limit")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
-			`"orders":[{"type":"Priority","orderId":"00000000-0000-0000-0000-0000000000a1","orderStatus":"open",` +
-			`"quoteId":"00000000-0000-0000-0000-0000000000b1",` +
-			`"swapper":"0x0000000000000000000000000000000000000099","txHash":null,"nonce":"0x1",` +
-			`"input":{"token":"0x0000000000000000000000000000000000000001","amount":"1000"},` +
-			`"outputs":[],"settledAmounts":[]}],"cursor":null}`))
-	}))
-	defer srv.Close()
-
-	orders, err := newBackendClient(srv.URL).
-		listOpenOrders(context.Background(), "0x0000000000000000000000000000000000000f11", 20)
-	if err != nil {
-		t.Fatalf("listOpenOrders: %v", err)
-	}
-	if gotPath != "/api/v1/orders" || gotStatus != "open" ||
-		gotFiller != "0x0000000000000000000000000000000000000f11" || gotLimit != "20" {
-		t.Fatalf("request = path %q status %q filler %q limit %q", gotPath, gotStatus, gotFiller, gotLimit)
-	}
-	if len(orders) != 1 ||
-		orders[0].OrderID != "00000000-0000-0000-0000-0000000000a1" ||
-		orders[0].QuoteID != "00000000-0000-0000-0000-0000000000b1" {
-		t.Fatalf("orders = %+v", orders)
-	}
-	// txHash was an explicit null; it must round-trip as a nil pointer, not a garbage string.
-	if orders[0].TxHash != nil {
-		t.Fatalf("txHash = %v, want nil", *orders[0].TxHash)
-	}
-}
-
-func TestBackendClient_NonOKStatusErrors(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	if _, err := newBackendClient(srv.URL).getOrder(context.Background(), "o1"); err == nil {
-		t.Fatalf("expected an error on 500")
-	}
-}
-
-func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
+func TestClientResolveSingle(t *testing.T) {
 	var gotPath, gotMethod, gotID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotMethod = r.URL.Path, r.Method
@@ -81,9 +29,9 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 	defer srv.Close()
 
 	id := "0x" + hash64
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), id)
+	res, err := NewClient(srv.URL).Resolve(context.Background(), id)
 	if err != nil {
-		t.Fatalf("resolveDiscount: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if gotPath != "/api-internal/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
@@ -98,7 +46,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 	}
 }
 
-func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
+func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
@@ -111,16 +59,16 @@ func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64)
+	res, err := NewClient(srv.URL).Resolve(context.Background(), "0x"+hash64)
 	if err != nil {
-		t.Fatalf("resolveDiscount (batch): %v", err)
+		t.Fatalf("Resolve batch: %v", err)
 	}
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
 	}
 }
 
-func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
+func TestClientResolveBatchMultipleRejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entry := `{"discountId":"0x` + hash64 + `",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
@@ -134,12 +82,12 @@ func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64); err == nil {
+	if _, err := NewClient(srv.URL).Resolve(context.Background(), "0x"+hash64); err == nil {
 		t.Fatalf("expected an error when the backend resolves more than one discount")
 	}
 }
 
-func TestBackendClient_ListDiscounts(t *testing.T) {
+func TestClientListDiscounts(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -154,9 +102,9 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := newBackendClient(srv.URL).listDiscounts(context.Background())
+	resp, err := NewClient(srv.URL).ListDiscounts(context.Background())
 	if err != nil {
-		t.Fatalf("listDiscounts: %v", err)
+		t.Fatalf("ListDiscounts: %v", err)
 	}
 	if gotPath != "/api-internal/v1/discounts" {
 		t.Fatalf("path = %q", gotPath)
@@ -167,5 +115,24 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	}
 }
 
-// hash64 is the 64-hex-char body of a 0x-prefixed discountId used across the backend client tests.
+func TestClientPreservesBaseURLPathPrefix(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(
+			`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+				`"protocol":"0x0000000000000000000000000000000000000001","discounts":[]}`,
+		))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL + "/backend").ListDiscounts(t.Context()); err != nil {
+		t.Fatalf("ListDiscounts: %v", err)
+	}
+	if gotPath != "/backend/api-internal/v1/discounts" {
+		t.Fatalf("path = %q, want prefixed internal path", gotPath)
+	}
+}
+
 const hash64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -1,9 +1,9 @@
-// Package gas predicts gas used by LiquidLane adapter swap routes.
+// Package gas provides LiquidLane route gas prediction and Chainlink-backed gas conversion facts.
 //
 // It is intentionally limited to LiquidLane adapter swap accounting: callers provide
 // expected swap demands plus a compact adapter liquidity snapshot, and the package
-// returns route labels and route gas units. Solver-specific settlement overhead,
-// auction/executor gas limits, price updates, bids, and profitability stay outside.
+// returns route labels and route gas units. Solver-specific settlement and payload overhead,
+// auction/executor gas limits, price updates, bids, and economics stay outside.
 package gas
 
 const (
