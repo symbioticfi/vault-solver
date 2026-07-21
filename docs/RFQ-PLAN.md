@@ -25,12 +25,14 @@ push path; orders are found exclusively by polling the backend.
   leg's **adapter** address.
 - **State** — in-memory only: `strategies` (by `quoteId`), `orders` (state machine), `attempts`.
 
-The `/quote` request inventory (`adapters[]`) and the strategy use **adapter/asset** terminology
-(`adapter`, `asset`, `assetDecimals`, `maxAssets`, `maxRate`, `discountId`) — a 1:1 match for the TS
-`solverQuoteRequestSchema`. Pricing leg types: **direct** (`discountId == null`, public adapter rate)
-and **discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the
-backend `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4),
-after the direct path is solid; they are sequenced last, not dropped.
+The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
+solver maps that boundary shape into the shared LiquidLane terms from
+[`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): `Inventory` is
+`adapter + tokenIn + tokenOut + maxAssets + maxRate`, and RFQ's external `asset` field is the shared
+`tokenOut`. Pricing leg types are **direct** (`discountId == null`, public adapter rate) and
+**discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the backend
+`/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
+the direct path is solid; they are sequenced last, not dropped.
 
 ---
 
@@ -86,7 +88,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (quote-server wiring) + `strategies/` (the pluggable decision layer: `default` = pricing/discount/leg selection, `webhook` = external decider) |
 | `execution.ts` | `execution.go` (poll loop, order state machine, fill; fill-plan production/recovery lives in the strategy) |
 | `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
-| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client: `/orders`, `/discounts`) |
+| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client for `/orders`) + shared `internal/liquidlane/discounts` (`/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
 | `domain.ts` | `store.go` types + `strategies/types` (strategy input/output, fill plan, legs, candidates) |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
@@ -122,9 +124,15 @@ not exactly one, so webhook and post-restart recovery fail closed at the same bo
 
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
 brain; the solver only enforces its own structural and safety constraints) are documented once in
-[`strategy-plan.md`](strategy-plan.md), shared with every solver. The concrete RFQ input/output types
-(`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`, `QuoteCandidate`) live in
+[`strategy-plan.md`](strategy-plan.md), shared with every solver. Shared LiquidLane fact conventions
+are documented in [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md). The concrete RFQ
+input/output types (`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`, `QuoteCandidate`) live in
 `internal/solvers/rfq/strategies/types`.
+
+Signed-discount HTTP transport and validation are shared through `internal/liquidlane/discounts`.
+Advertised offers are parsed once into typed addresses, ids, amounts, decimals, and deadlines before
+they become `liquidlane.Inventory`; expired or malformed offers fail closed. RFQ keeps only its
+executor-specific `discountSwap` calldata mapping.
 
 ---
 
@@ -281,9 +289,10 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   each deployment's `backendUrl` accordingly (mismatch ⇒ 404 on every backend call).
 - **Internal discounts path** — the discounts API is internal-only and served under `/api-internal/v1`
   (orders stay on `/api/v1`). Rather than regenerate the client for a routing detail,
-  `internalDiscountTransport` (`backend.go`) rewrites the generated `/api/v1/discount(s)` requests to
-  `/api-internal/v1/...` at the transport layer; orders pass through unchanged. Covered by the
-  `backend_test.go` httptest assertions.
+  the shared discounts client rewrites generated `/api/v1/discount(s)` requests to
+  `/api-internal/v1/...` at its transport boundary; orders pass through unchanged. RFQ uses it through
+  `internal/liquidlane/discounts`; LIFI reuses the same client and validation for its discount-backed
+  fills. Covered by httptest assertions.
 - The `{adapter, tokenToRedeem}` discount-resolve selector exists in TS types but is unused by
   execution (both sides resolve by `discountId`); Go omits it. Cosmetic.
 

@@ -22,9 +22,9 @@ var _ MappedNullable = &TokenInfoDto{}
 // TokenInfoDto struct for TokenInfoDto
 type TokenInfoDto struct {
 	// Token symbol (null if token not registered in system)
-	Symbol map[string]interface{} `json:"symbol"`
+	Symbol NullableString `json:"symbol"`
 	// Token name (null if token not registered in system)
-	Name map[string]interface{} `json:"name"`
+	Name NullableString `json:"name"`
 	// Token contract address
 	Address string `json:"address"`
 	// Token decimals
@@ -37,7 +37,7 @@ type _TokenInfoDto TokenInfoDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewTokenInfoDto(symbol map[string]interface{}, name map[string]interface{}, address string, decimals float32) *TokenInfoDto {
+func NewTokenInfoDto(symbol NullableString, name NullableString, address string, decimals float32) *TokenInfoDto {
 	this := TokenInfoDto{}
 	this.Symbol = symbol
 	this.Name = name
@@ -55,55 +55,55 @@ func NewTokenInfoDtoWithDefaults() *TokenInfoDto {
 }
 
 // GetSymbol returns the Symbol field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *TokenInfoDto) GetSymbol() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *TokenInfoDto) GetSymbol() string {
+	if o == nil || o.Symbol.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.Symbol
+	return *o.Symbol.Get()
 }
 
 // GetSymbolOk returns a tuple with the Symbol field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *TokenInfoDto) GetSymbolOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.Symbol) {
-		return map[string]interface{}{}, false
+func (o *TokenInfoDto) GetSymbolOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.Symbol, true
+	return o.Symbol.Get(), o.Symbol.IsSet()
 }
 
 // SetSymbol sets field value
-func (o *TokenInfoDto) SetSymbol(v map[string]interface{}) {
-	o.Symbol = v
+func (o *TokenInfoDto) SetSymbol(v string) {
+	o.Symbol.Set(&v)
 }
 
 // GetName returns the Name field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *TokenInfoDto) GetName() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *TokenInfoDto) GetName() string {
+	if o == nil || o.Name.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.Name
+	return *o.Name.Get()
 }
 
 // GetNameOk returns a tuple with the Name field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *TokenInfoDto) GetNameOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.Name) {
-		return map[string]interface{}{}, false
+func (o *TokenInfoDto) GetNameOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.Name, true
+	return o.Name.Get(), o.Name.IsSet()
 }
 
 // SetName sets field value
-func (o *TokenInfoDto) SetName(v map[string]interface{}) {
-	o.Name = v
+func (o *TokenInfoDto) SetName(v string) {
+	o.Name.Set(&v)
 }
 
 // GetAddress returns the Address field value
@@ -164,12 +164,8 @@ func (o TokenInfoDto) MarshalJSON() ([]byte, error) {
 
 func (o TokenInfoDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if o.Symbol != nil {
-		toSerialize["symbol"] = o.Symbol
-	}
-	if o.Name != nil {
-		toSerialize["name"] = o.Name
-	}
+	toSerialize["symbol"] = o.Symbol.Get()
+	toSerialize["name"] = o.Name.Get()
 	toSerialize["address"] = o.Address
 	toSerialize["decimals"] = o.Decimals
 	return toSerialize, nil

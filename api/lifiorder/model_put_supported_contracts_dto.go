@@ -19,9 +19,9 @@ var _ MappedNullable = &PutSupportedContractsDto{}
 
 // PutSupportedContractsDto struct for PutSupportedContractsDto
 type PutSupportedContractsDto struct {
-	Oracle        []PutSupportedContractsDtoOracleInner `json:"oracle,omitempty"`
-	InputSettler  []PutSupportedContractsDtoOracleInner `json:"inputSettler,omitempty"`
-	OutputSettler []PutSupportedContractsDtoOracleInner `json:"outputSettler,omitempty"`
+	Oracle        []QuoteRequestDtoIntentMetadataOracleInner `json:"oracle,omitempty"`
+	InputSettler  []QuoteRequestDtoIntentMetadataOracleInner `json:"inputSettler,omitempty"`
+	OutputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
 }
 
 // NewPutSupportedContractsDto instantiates a new PutSupportedContractsDto object
@@ -42,9 +42,9 @@ func NewPutSupportedContractsDtoWithDefaults() *PutSupportedContractsDto {
 }
 
 // GetOracle returns the Oracle field value if set, zero value otherwise.
-func (o *PutSupportedContractsDto) GetOracle() []PutSupportedContractsDtoOracleInner {
+func (o *PutSupportedContractsDto) GetOracle() []QuoteRequestDtoIntentMetadataOracleInner {
 	if o == nil || IsNil(o.Oracle) {
-		var ret []PutSupportedContractsDtoOracleInner
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
 		return ret
 	}
 	return o.Oracle
@@ -52,7 +52,7 @@ func (o *PutSupportedContractsDto) GetOracle() []PutSupportedContractsDtoOracleI
 
 // GetOracleOk returns a tuple with the Oracle field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *PutSupportedContractsDto) GetOracleOk() ([]PutSupportedContractsDtoOracleInner, bool) {
+func (o *PutSupportedContractsDto) GetOracleOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
 	if o == nil || IsNil(o.Oracle) {
 		return nil, false
 	}
@@ -68,15 +68,15 @@ func (o *PutSupportedContractsDto) HasOracle() bool {
 	return false
 }
 
-// SetOracle gets a reference to the given []PutSupportedContractsDtoOracleInner and assigns it to the Oracle field.
-func (o *PutSupportedContractsDto) SetOracle(v []PutSupportedContractsDtoOracleInner) {
+// SetOracle gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the Oracle field.
+func (o *PutSupportedContractsDto) SetOracle(v []QuoteRequestDtoIntentMetadataOracleInner) {
 	o.Oracle = v
 }
 
 // GetInputSettler returns the InputSettler field value if set, zero value otherwise.
-func (o *PutSupportedContractsDto) GetInputSettler() []PutSupportedContractsDtoOracleInner {
+func (o *PutSupportedContractsDto) GetInputSettler() []QuoteRequestDtoIntentMetadataOracleInner {
 	if o == nil || IsNil(o.InputSettler) {
-		var ret []PutSupportedContractsDtoOracleInner
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
 		return ret
 	}
 	return o.InputSettler
@@ -84,7 +84,7 @@ func (o *PutSupportedContractsDto) GetInputSettler() []PutSupportedContractsDtoO
 
 // GetInputSettlerOk returns a tuple with the InputSettler field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *PutSupportedContractsDto) GetInputSettlerOk() ([]PutSupportedContractsDtoOracleInner, bool) {
+func (o *PutSupportedContractsDto) GetInputSettlerOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
 	if o == nil || IsNil(o.InputSettler) {
 		return nil, false
 	}
@@ -100,15 +100,15 @@ func (o *PutSupportedContractsDto) HasInputSettler() bool {
 	return false
 }
 
-// SetInputSettler gets a reference to the given []PutSupportedContractsDtoOracleInner and assigns it to the InputSettler field.
-func (o *PutSupportedContractsDto) SetInputSettler(v []PutSupportedContractsDtoOracleInner) {
+// SetInputSettler gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the InputSettler field.
+func (o *PutSupportedContractsDto) SetInputSettler(v []QuoteRequestDtoIntentMetadataOracleInner) {
 	o.InputSettler = v
 }
 
 // GetOutputSettler returns the OutputSettler field value if set, zero value otherwise.
-func (o *PutSupportedContractsDto) GetOutputSettler() []PutSupportedContractsDtoOracleInner {
+func (o *PutSupportedContractsDto) GetOutputSettler() []QuoteRequestDtoIntentMetadataOracleInner {
 	if o == nil || IsNil(o.OutputSettler) {
-		var ret []PutSupportedContractsDtoOracleInner
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
 		return ret
 	}
 	return o.OutputSettler
@@ -116,7 +116,7 @@ func (o *PutSupportedContractsDto) GetOutputSettler() []PutSupportedContractsDto
 
 // GetOutputSettlerOk returns a tuple with the OutputSettler field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *PutSupportedContractsDto) GetOutputSettlerOk() ([]PutSupportedContractsDtoOracleInner, bool) {
+func (o *PutSupportedContractsDto) GetOutputSettlerOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
 	if o == nil || IsNil(o.OutputSettler) {
 		return nil, false
 	}
@@ -132,8 +132,8 @@ func (o *PutSupportedContractsDto) HasOutputSettler() bool {
 	return false
 }
 
-// SetOutputSettler gets a reference to the given []PutSupportedContractsDtoOracleInner and assigns it to the OutputSettler field.
-func (o *PutSupportedContractsDto) SetOutputSettler(v []PutSupportedContractsDtoOracleInner) {
+// SetOutputSettler gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the OutputSettler field.
+func (o *PutSupportedContractsDto) SetOutputSettler(v []QuoteRequestDtoIntentMetadataOracleInner) {
 	o.OutputSettler = v
 }
 

@@ -26,11 +26,10 @@ type QuoteRequestDtoIntentInputsInner struct {
 	// Native address of the user providing the input assets
 	User string `json:"user"`
 	// Native address of the token/asset being provided as input
-	Asset string `json:"asset"`
-	// Amount available. For exact-input: exact amount user will provide and is used for quoting. For exact-output: ignored by the quote decoder and not used for quoting
+	Asset  string         `json:"asset"`
 	Amount NullableString `json:"amount,omitempty"`
 	// Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder.
-	Lock interface{} `json:"lock,omitempty"`
+	Lock map[string]interface{} `json:"lock,omitempty"`
 }
 
 type _QuoteRequestDtoIntentInputsInner QuoteRequestDtoIntentInputsInner
@@ -170,10 +169,10 @@ func (o *QuoteRequestDtoIntentInputsInner) UnsetAmount() {
 	o.Amount.Unset()
 }
 
-// GetLock returns the Lock field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *QuoteRequestDtoIntentInputsInner) GetLock() interface{} {
-	if o == nil {
-		var ret interface{}
+// GetLock returns the Lock field value if set, zero value otherwise.
+func (o *QuoteRequestDtoIntentInputsInner) GetLock() map[string]interface{} {
+	if o == nil || IsNil(o.Lock) {
+		var ret map[string]interface{}
 		return ret
 	}
 	return o.Lock
@@ -181,12 +180,11 @@ func (o *QuoteRequestDtoIntentInputsInner) GetLock() interface{} {
 
 // GetLockOk returns a tuple with the Lock field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-// NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *QuoteRequestDtoIntentInputsInner) GetLockOk() (*interface{}, bool) {
+func (o *QuoteRequestDtoIntentInputsInner) GetLockOk() (map[string]interface{}, bool) {
 	if o == nil || IsNil(o.Lock) {
-		return nil, false
+		return map[string]interface{}{}, false
 	}
-	return &o.Lock, true
+	return o.Lock, true
 }
 
 // HasLock returns a boolean if a field has been set.
@@ -198,8 +196,8 @@ func (o *QuoteRequestDtoIntentInputsInner) HasLock() bool {
 	return false
 }
 
-// SetLock gets a reference to the given interface{} and assigns it to the Lock field.
-func (o *QuoteRequestDtoIntentInputsInner) SetLock(v interface{}) {
+// SetLock gets a reference to the given map[string]interface{} and assigns it to the Lock field.
+func (o *QuoteRequestDtoIntentInputsInner) SetLock(v map[string]interface{}) {
 	o.Lock = v
 }
 
@@ -219,7 +217,7 @@ func (o QuoteRequestDtoIntentInputsInner) ToMap() (map[string]interface{}, error
 	if o.Amount.IsSet() {
 		toSerialize["amount"] = o.Amount.Get()
 	}
-	if o.Lock != nil {
+	if !IsNil(o.Lock) {
 		toSerialize["lock"] = o.Lock
 	}
 	return toSerialize, nil

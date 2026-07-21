@@ -24,17 +24,17 @@ type SubmitOrderDtoOrder struct {
 	// User address on source chain (initiator of the intent)
 	User string `json:"user"`
 	// Nonce value of the intent
-	Nonce *string `json:"nonce,omitempty"`
+	Nonce string `json:"nonce"`
 	// Origin chain ID (network id)
-	OriginChainId *string `json:"originChainId,omitempty"`
+	OriginChainId string `json:"originChainId"`
 	// Fill deadline of the intent in seconds
-	FillDeadline *string `json:"fillDeadline,omitempty"`
+	FillDeadline string `json:"fillDeadline"`
 	// Expiry timestamp of the intent in seconds
-	Expires *string `json:"expires,omitempty"`
+	Expires string `json:"expires"`
 	// The local oracle address
 	InputOracle string `json:"inputOracle"`
 	// Input token amounts as [tokenId, amount] pairs
-	Inputs [][]string `json:"inputs"`
+	Inputs [][]interface{} `json:"inputs"`
 	// Array of output objects
 	Outputs []SubmitOrderDtoOrderOutputsInner `json:"outputs"`
 }
@@ -45,9 +45,13 @@ type _SubmitOrderDtoOrder SubmitOrderDtoOrder
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSubmitOrderDtoOrder(user string, inputOracle string, inputs [][]string, outputs []SubmitOrderDtoOrderOutputsInner) *SubmitOrderDtoOrder {
+func NewSubmitOrderDtoOrder(user string, nonce string, originChainId string, fillDeadline string, expires string, inputOracle string, inputs [][]interface{}, outputs []SubmitOrderDtoOrderOutputsInner) *SubmitOrderDtoOrder {
 	this := SubmitOrderDtoOrder{}
 	this.User = user
+	this.Nonce = nonce
+	this.OriginChainId = originChainId
+	this.FillDeadline = fillDeadline
+	this.Expires = expires
 	this.InputOracle = inputOracle
 	this.Inputs = inputs
 	this.Outputs = outputs
@@ -86,132 +90,100 @@ func (o *SubmitOrderDtoOrder) SetUser(v string) {
 	o.User = v
 }
 
-// GetNonce returns the Nonce field value if set, zero value otherwise.
+// GetNonce returns the Nonce field value
 func (o *SubmitOrderDtoOrder) GetNonce() string {
-	if o == nil || IsNil(o.Nonce) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.Nonce
+
+	return o.Nonce
 }
 
-// GetNonceOk returns a tuple with the Nonce field value if set, nil otherwise
+// GetNonceOk returns a tuple with the Nonce field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrder) GetNonceOk() (*string, bool) {
-	if o == nil || IsNil(o.Nonce) {
+	if o == nil {
 		return nil, false
 	}
-	return o.Nonce, true
+	return &o.Nonce, true
 }
 
-// HasNonce returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrder) HasNonce() bool {
-	if o != nil && !IsNil(o.Nonce) {
-		return true
-	}
-
-	return false
-}
-
-// SetNonce gets a reference to the given string and assigns it to the Nonce field.
+// SetNonce sets field value
 func (o *SubmitOrderDtoOrder) SetNonce(v string) {
-	o.Nonce = &v
+	o.Nonce = v
 }
 
-// GetOriginChainId returns the OriginChainId field value if set, zero value otherwise.
+// GetOriginChainId returns the OriginChainId field value
 func (o *SubmitOrderDtoOrder) GetOriginChainId() string {
-	if o == nil || IsNil(o.OriginChainId) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.OriginChainId
+
+	return o.OriginChainId
 }
 
-// GetOriginChainIdOk returns a tuple with the OriginChainId field value if set, nil otherwise
+// GetOriginChainIdOk returns a tuple with the OriginChainId field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrder) GetOriginChainIdOk() (*string, bool) {
-	if o == nil || IsNil(o.OriginChainId) {
+	if o == nil {
 		return nil, false
 	}
-	return o.OriginChainId, true
+	return &o.OriginChainId, true
 }
 
-// HasOriginChainId returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrder) HasOriginChainId() bool {
-	if o != nil && !IsNil(o.OriginChainId) {
-		return true
-	}
-
-	return false
-}
-
-// SetOriginChainId gets a reference to the given string and assigns it to the OriginChainId field.
+// SetOriginChainId sets field value
 func (o *SubmitOrderDtoOrder) SetOriginChainId(v string) {
-	o.OriginChainId = &v
+	o.OriginChainId = v
 }
 
-// GetFillDeadline returns the FillDeadline field value if set, zero value otherwise.
+// GetFillDeadline returns the FillDeadline field value
 func (o *SubmitOrderDtoOrder) GetFillDeadline() string {
-	if o == nil || IsNil(o.FillDeadline) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.FillDeadline
+
+	return o.FillDeadline
 }
 
-// GetFillDeadlineOk returns a tuple with the FillDeadline field value if set, nil otherwise
+// GetFillDeadlineOk returns a tuple with the FillDeadline field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrder) GetFillDeadlineOk() (*string, bool) {
-	if o == nil || IsNil(o.FillDeadline) {
+	if o == nil {
 		return nil, false
 	}
-	return o.FillDeadline, true
+	return &o.FillDeadline, true
 }
 
-// HasFillDeadline returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrder) HasFillDeadline() bool {
-	if o != nil && !IsNil(o.FillDeadline) {
-		return true
-	}
-
-	return false
-}
-
-// SetFillDeadline gets a reference to the given string and assigns it to the FillDeadline field.
+// SetFillDeadline sets field value
 func (o *SubmitOrderDtoOrder) SetFillDeadline(v string) {
-	o.FillDeadline = &v
+	o.FillDeadline = v
 }
 
-// GetExpires returns the Expires field value if set, zero value otherwise.
+// GetExpires returns the Expires field value
 func (o *SubmitOrderDtoOrder) GetExpires() string {
-	if o == nil || IsNil(o.Expires) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.Expires
+
+	return o.Expires
 }
 
-// GetExpiresOk returns a tuple with the Expires field value if set, nil otherwise
+// GetExpiresOk returns a tuple with the Expires field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrder) GetExpiresOk() (*string, bool) {
-	if o == nil || IsNil(o.Expires) {
+	if o == nil {
 		return nil, false
 	}
-	return o.Expires, true
+	return &o.Expires, true
 }
 
-// HasExpires returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrder) HasExpires() bool {
-	if o != nil && !IsNil(o.Expires) {
-		return true
-	}
-
-	return false
-}
-
-// SetExpires gets a reference to the given string and assigns it to the Expires field.
+// SetExpires sets field value
 func (o *SubmitOrderDtoOrder) SetExpires(v string) {
-	o.Expires = &v
+	o.Expires = v
 }
 
 // GetInputOracle returns the InputOracle field value
@@ -239,9 +211,9 @@ func (o *SubmitOrderDtoOrder) SetInputOracle(v string) {
 }
 
 // GetInputs returns the Inputs field value
-func (o *SubmitOrderDtoOrder) GetInputs() [][]string {
+func (o *SubmitOrderDtoOrder) GetInputs() [][]interface{} {
 	if o == nil {
-		var ret [][]string
+		var ret [][]interface{}
 		return ret
 	}
 
@@ -250,7 +222,7 @@ func (o *SubmitOrderDtoOrder) GetInputs() [][]string {
 
 // GetInputsOk returns a tuple with the Inputs field value
 // and a boolean to check if the value has been set.
-func (o *SubmitOrderDtoOrder) GetInputsOk() ([][]string, bool) {
+func (o *SubmitOrderDtoOrder) GetInputsOk() ([][]interface{}, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -258,7 +230,7 @@ func (o *SubmitOrderDtoOrder) GetInputsOk() ([][]string, bool) {
 }
 
 // SetInputs sets field value
-func (o *SubmitOrderDtoOrder) SetInputs(v [][]string) {
+func (o *SubmitOrderDtoOrder) SetInputs(v [][]interface{}) {
 	o.Inputs = v
 }
 
@@ -297,18 +269,10 @@ func (o SubmitOrderDtoOrder) MarshalJSON() ([]byte, error) {
 func (o SubmitOrderDtoOrder) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["user"] = o.User
-	if !IsNil(o.Nonce) {
-		toSerialize["nonce"] = o.Nonce
-	}
-	if !IsNil(o.OriginChainId) {
-		toSerialize["originChainId"] = o.OriginChainId
-	}
-	if !IsNil(o.FillDeadline) {
-		toSerialize["fillDeadline"] = o.FillDeadline
-	}
-	if !IsNil(o.Expires) {
-		toSerialize["expires"] = o.Expires
-	}
+	toSerialize["nonce"] = o.Nonce
+	toSerialize["originChainId"] = o.OriginChainId
+	toSerialize["fillDeadline"] = o.FillDeadline
+	toSerialize["expires"] = o.Expires
 	toSerialize["inputOracle"] = o.InputOracle
 	toSerialize["inputs"] = o.Inputs
 	toSerialize["outputs"] = o.Outputs
@@ -321,6 +285,10 @@ func (o *SubmitOrderDtoOrder) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"user",
+		"nonce",
+		"originChainId",
+		"fillDeadline",
+		"expires",
 		"inputOracle",
 		"inputs",
 		"outputs",

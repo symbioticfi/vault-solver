@@ -32,31 +32,31 @@ type OrderMetaDto struct {
 	// Parsed destination address of the order
 	DestinationAddress string `json:"destinationAddress"`
 	// Transaction hash when order was initiated (on-chain order) [eg: Open escrow event]
-	OrderInitiatedTxHash map[string]interface{} `json:"orderInitiatedTxHash"`
+	OrderInitiatedTxHash NullableString `json:"orderInitiatedTxHash"`
 	// Transaction hash of the OutputFilled event
-	OrderDeliveredTxHash map[string]interface{} `json:"orderDeliveredTxHash"`
+	OrderDeliveredTxHash NullableString `json:"orderDeliveredTxHash"`
 	// Transaction hash of the OutputProven event
-	OrderVerifiedTxHash map[string]interface{} `json:"orderVerifiedTxHash"`
+	OrderVerifiedTxHash NullableString `json:"orderVerifiedTxHash"`
 	// Transaction hash of the Finalised event
-	OrderSettledTxHash map[string]interface{} `json:"orderSettledTxHash"`
+	OrderSettledTxHash NullableString `json:"orderSettledTxHash"`
 	// Transaction hash of the Refunded event
-	RefundTxHash map[string]interface{} `json:"refundTxHash"`
+	RefundTxHash NullableString `json:"refundTxHash"`
 	// Date when the order was signed
-	SignedAt map[string]interface{} `json:"signedAt"`
+	SignedAt NullableString `json:"signedAt"`
 	// Date when the order expires
-	ExpiredAt map[string]interface{} `json:"expiredAt"`
+	ExpiredAt NullableString `json:"expiredAt"`
 	// Date when the order was delivered
-	DeliveredAt map[string]interface{} `json:"deliveredAt"`
+	DeliveredAt NullableString `json:"deliveredAt"`
 	// Date when the order was settled
-	SettledAt map[string]interface{} `json:"settledAt"`
+	SettledAt NullableString `json:"settledAt"`
 	// Date when the order was refunded
-	RefundedAt map[string]interface{} `json:"refundedAt"`
+	RefundedAt NullableString `json:"refundedAt"`
 	// Last compact deposit block number
-	LastCompactDepositBlockNumber map[string]interface{} `json:"lastCompactDepositBlockNumber"`
+	LastCompactDepositBlockNumber NullableString `json:"lastCompactDepositBlockNumber"`
 	// Quote ID associated with the order
-	QuoteId map[string]interface{} `json:"quoteId"`
+	QuoteId NullableString `json:"quoteId"`
 	// Solver address that filled the order
-	SolverAddress map[string]interface{} `json:"solverAddress,omitempty"`
+	SolverAddress NullableString `json:"solverAddress,omitempty"`
 	// Integrator key hash identifying the integrator this order belongs to
 	IntegratorKeyHash *string `json:"integratorKeyHash,omitempty"`
 }
@@ -67,7 +67,7 @@ type _OrderMetaDto OrderMetaDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrderMetaDto(submitTime float32, orderStatus string, orderIdentifier string, onChainOrderId string, destinationAddress string, orderInitiatedTxHash map[string]interface{}, orderDeliveredTxHash map[string]interface{}, orderVerifiedTxHash map[string]interface{}, orderSettledTxHash map[string]interface{}, refundTxHash map[string]interface{}, signedAt map[string]interface{}, expiredAt map[string]interface{}, deliveredAt map[string]interface{}, settledAt map[string]interface{}, refundedAt map[string]interface{}, lastCompactDepositBlockNumber map[string]interface{}, quoteId map[string]interface{}) *OrderMetaDto {
+func NewOrderMetaDto(submitTime float32, orderStatus string, orderIdentifier string, onChainOrderId string, destinationAddress string, orderInitiatedTxHash NullableString, orderDeliveredTxHash NullableString, orderVerifiedTxHash NullableString, orderSettledTxHash NullableString, refundTxHash NullableString, signedAt NullableString, expiredAt NullableString, deliveredAt NullableString, settledAt NullableString, refundedAt NullableString, lastCompactDepositBlockNumber NullableString, quoteId NullableString) *OrderMetaDto {
 	this := OrderMetaDto{}
 	this.SubmitTime = submitTime
 	this.OrderStatus = orderStatus
@@ -218,348 +218,358 @@ func (o *OrderMetaDto) SetDestinationAddress(v string) {
 }
 
 // GetOrderInitiatedTxHash returns the OrderInitiatedTxHash field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetOrderInitiatedTxHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetOrderInitiatedTxHash() string {
+	if o == nil || o.OrderInitiatedTxHash.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.OrderInitiatedTxHash
+	return *o.OrderInitiatedTxHash.Get()
 }
 
 // GetOrderInitiatedTxHashOk returns a tuple with the OrderInitiatedTxHash field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetOrderInitiatedTxHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.OrderInitiatedTxHash) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetOrderInitiatedTxHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.OrderInitiatedTxHash, true
+	return o.OrderInitiatedTxHash.Get(), o.OrderInitiatedTxHash.IsSet()
 }
 
 // SetOrderInitiatedTxHash sets field value
-func (o *OrderMetaDto) SetOrderInitiatedTxHash(v map[string]interface{}) {
-	o.OrderInitiatedTxHash = v
+func (o *OrderMetaDto) SetOrderInitiatedTxHash(v string) {
+	o.OrderInitiatedTxHash.Set(&v)
 }
 
 // GetOrderDeliveredTxHash returns the OrderDeliveredTxHash field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetOrderDeliveredTxHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetOrderDeliveredTxHash() string {
+	if o == nil || o.OrderDeliveredTxHash.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.OrderDeliveredTxHash
+	return *o.OrderDeliveredTxHash.Get()
 }
 
 // GetOrderDeliveredTxHashOk returns a tuple with the OrderDeliveredTxHash field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetOrderDeliveredTxHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.OrderDeliveredTxHash) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetOrderDeliveredTxHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.OrderDeliveredTxHash, true
+	return o.OrderDeliveredTxHash.Get(), o.OrderDeliveredTxHash.IsSet()
 }
 
 // SetOrderDeliveredTxHash sets field value
-func (o *OrderMetaDto) SetOrderDeliveredTxHash(v map[string]interface{}) {
-	o.OrderDeliveredTxHash = v
+func (o *OrderMetaDto) SetOrderDeliveredTxHash(v string) {
+	o.OrderDeliveredTxHash.Set(&v)
 }
 
 // GetOrderVerifiedTxHash returns the OrderVerifiedTxHash field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetOrderVerifiedTxHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetOrderVerifiedTxHash() string {
+	if o == nil || o.OrderVerifiedTxHash.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.OrderVerifiedTxHash
+	return *o.OrderVerifiedTxHash.Get()
 }
 
 // GetOrderVerifiedTxHashOk returns a tuple with the OrderVerifiedTxHash field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetOrderVerifiedTxHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.OrderVerifiedTxHash) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetOrderVerifiedTxHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.OrderVerifiedTxHash, true
+	return o.OrderVerifiedTxHash.Get(), o.OrderVerifiedTxHash.IsSet()
 }
 
 // SetOrderVerifiedTxHash sets field value
-func (o *OrderMetaDto) SetOrderVerifiedTxHash(v map[string]interface{}) {
-	o.OrderVerifiedTxHash = v
+func (o *OrderMetaDto) SetOrderVerifiedTxHash(v string) {
+	o.OrderVerifiedTxHash.Set(&v)
 }
 
 // GetOrderSettledTxHash returns the OrderSettledTxHash field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetOrderSettledTxHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetOrderSettledTxHash() string {
+	if o == nil || o.OrderSettledTxHash.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.OrderSettledTxHash
+	return *o.OrderSettledTxHash.Get()
 }
 
 // GetOrderSettledTxHashOk returns a tuple with the OrderSettledTxHash field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetOrderSettledTxHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.OrderSettledTxHash) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetOrderSettledTxHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.OrderSettledTxHash, true
+	return o.OrderSettledTxHash.Get(), o.OrderSettledTxHash.IsSet()
 }
 
 // SetOrderSettledTxHash sets field value
-func (o *OrderMetaDto) SetOrderSettledTxHash(v map[string]interface{}) {
-	o.OrderSettledTxHash = v
+func (o *OrderMetaDto) SetOrderSettledTxHash(v string) {
+	o.OrderSettledTxHash.Set(&v)
 }
 
 // GetRefundTxHash returns the RefundTxHash field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetRefundTxHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetRefundTxHash() string {
+	if o == nil || o.RefundTxHash.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.RefundTxHash
+	return *o.RefundTxHash.Get()
 }
 
 // GetRefundTxHashOk returns a tuple with the RefundTxHash field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetRefundTxHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.RefundTxHash) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetRefundTxHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.RefundTxHash, true
+	return o.RefundTxHash.Get(), o.RefundTxHash.IsSet()
 }
 
 // SetRefundTxHash sets field value
-func (o *OrderMetaDto) SetRefundTxHash(v map[string]interface{}) {
-	o.RefundTxHash = v
+func (o *OrderMetaDto) SetRefundTxHash(v string) {
+	o.RefundTxHash.Set(&v)
 }
 
 // GetSignedAt returns the SignedAt field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetSignedAt() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetSignedAt() string {
+	if o == nil || o.SignedAt.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.SignedAt
+	return *o.SignedAt.Get()
 }
 
 // GetSignedAtOk returns a tuple with the SignedAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetSignedAtOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.SignedAt) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetSignedAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.SignedAt, true
+	return o.SignedAt.Get(), o.SignedAt.IsSet()
 }
 
 // SetSignedAt sets field value
-func (o *OrderMetaDto) SetSignedAt(v map[string]interface{}) {
-	o.SignedAt = v
+func (o *OrderMetaDto) SetSignedAt(v string) {
+	o.SignedAt.Set(&v)
 }
 
 // GetExpiredAt returns the ExpiredAt field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetExpiredAt() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetExpiredAt() string {
+	if o == nil || o.ExpiredAt.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.ExpiredAt
+	return *o.ExpiredAt.Get()
 }
 
 // GetExpiredAtOk returns a tuple with the ExpiredAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetExpiredAtOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ExpiredAt) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetExpiredAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ExpiredAt, true
+	return o.ExpiredAt.Get(), o.ExpiredAt.IsSet()
 }
 
 // SetExpiredAt sets field value
-func (o *OrderMetaDto) SetExpiredAt(v map[string]interface{}) {
-	o.ExpiredAt = v
+func (o *OrderMetaDto) SetExpiredAt(v string) {
+	o.ExpiredAt.Set(&v)
 }
 
 // GetDeliveredAt returns the DeliveredAt field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetDeliveredAt() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetDeliveredAt() string {
+	if o == nil || o.DeliveredAt.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.DeliveredAt
+	return *o.DeliveredAt.Get()
 }
 
 // GetDeliveredAtOk returns a tuple with the DeliveredAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetDeliveredAtOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.DeliveredAt) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetDeliveredAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.DeliveredAt, true
+	return o.DeliveredAt.Get(), o.DeliveredAt.IsSet()
 }
 
 // SetDeliveredAt sets field value
-func (o *OrderMetaDto) SetDeliveredAt(v map[string]interface{}) {
-	o.DeliveredAt = v
+func (o *OrderMetaDto) SetDeliveredAt(v string) {
+	o.DeliveredAt.Set(&v)
 }
 
 // GetSettledAt returns the SettledAt field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetSettledAt() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetSettledAt() string {
+	if o == nil || o.SettledAt.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.SettledAt
+	return *o.SettledAt.Get()
 }
 
 // GetSettledAtOk returns a tuple with the SettledAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetSettledAtOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.SettledAt) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetSettledAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.SettledAt, true
+	return o.SettledAt.Get(), o.SettledAt.IsSet()
 }
 
 // SetSettledAt sets field value
-func (o *OrderMetaDto) SetSettledAt(v map[string]interface{}) {
-	o.SettledAt = v
+func (o *OrderMetaDto) SetSettledAt(v string) {
+	o.SettledAt.Set(&v)
 }
 
 // GetRefundedAt returns the RefundedAt field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetRefundedAt() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetRefundedAt() string {
+	if o == nil || o.RefundedAt.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.RefundedAt
+	return *o.RefundedAt.Get()
 }
 
 // GetRefundedAtOk returns a tuple with the RefundedAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetRefundedAtOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.RefundedAt) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetRefundedAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.RefundedAt, true
+	return o.RefundedAt.Get(), o.RefundedAt.IsSet()
 }
 
 // SetRefundedAt sets field value
-func (o *OrderMetaDto) SetRefundedAt(v map[string]interface{}) {
-	o.RefundedAt = v
+func (o *OrderMetaDto) SetRefundedAt(v string) {
+	o.RefundedAt.Set(&v)
 }
 
 // GetLastCompactDepositBlockNumber returns the LastCompactDepositBlockNumber field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetLastCompactDepositBlockNumber() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetLastCompactDepositBlockNumber() string {
+	if o == nil || o.LastCompactDepositBlockNumber.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.LastCompactDepositBlockNumber
+	return *o.LastCompactDepositBlockNumber.Get()
 }
 
 // GetLastCompactDepositBlockNumberOk returns a tuple with the LastCompactDepositBlockNumber field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetLastCompactDepositBlockNumberOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.LastCompactDepositBlockNumber) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetLastCompactDepositBlockNumberOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.LastCompactDepositBlockNumber, true
+	return o.LastCompactDepositBlockNumber.Get(), o.LastCompactDepositBlockNumber.IsSet()
 }
 
 // SetLastCompactDepositBlockNumber sets field value
-func (o *OrderMetaDto) SetLastCompactDepositBlockNumber(v map[string]interface{}) {
-	o.LastCompactDepositBlockNumber = v
+func (o *OrderMetaDto) SetLastCompactDepositBlockNumber(v string) {
+	o.LastCompactDepositBlockNumber.Set(&v)
 }
 
 // GetQuoteId returns the QuoteId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OrderMetaDto) GetQuoteId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OrderMetaDto) GetQuoteId() string {
+	if o == nil || o.QuoteId.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.QuoteId
+	return *o.QuoteId.Get()
 }
 
 // GetQuoteIdOk returns a tuple with the QuoteId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetQuoteIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.QuoteId) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetQuoteIdOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.QuoteId, true
+	return o.QuoteId.Get(), o.QuoteId.IsSet()
 }
 
 // SetQuoteId sets field value
-func (o *OrderMetaDto) SetQuoteId(v map[string]interface{}) {
-	o.QuoteId = v
+func (o *OrderMetaDto) SetQuoteId(v string) {
+	o.QuoteId.Set(&v)
 }
 
 // GetSolverAddress returns the SolverAddress field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *OrderMetaDto) GetSolverAddress() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+func (o *OrderMetaDto) GetSolverAddress() string {
+	if o == nil || IsNil(o.SolverAddress.Get()) {
+		var ret string
 		return ret
 	}
-	return o.SolverAddress
+	return *o.SolverAddress.Get()
 }
 
 // GetSolverAddressOk returns a tuple with the SolverAddress field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OrderMetaDto) GetSolverAddressOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.SolverAddress) {
-		return map[string]interface{}{}, false
+func (o *OrderMetaDto) GetSolverAddressOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.SolverAddress, true
+	return o.SolverAddress.Get(), o.SolverAddress.IsSet()
 }
 
 // HasSolverAddress returns a boolean if a field has been set.
 func (o *OrderMetaDto) HasSolverAddress() bool {
-	if o != nil && !IsNil(o.SolverAddress) {
+	if o != nil && o.SolverAddress.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetSolverAddress gets a reference to the given map[string]interface{} and assigns it to the SolverAddress field.
-func (o *OrderMetaDto) SetSolverAddress(v map[string]interface{}) {
-	o.SolverAddress = v
+// SetSolverAddress gets a reference to the given NullableString and assigns it to the SolverAddress field.
+func (o *OrderMetaDto) SetSolverAddress(v string) {
+	o.SolverAddress.Set(&v)
+}
+
+// SetSolverAddressNil sets the value for SolverAddress to be an explicit nil
+func (o *OrderMetaDto) SetSolverAddressNil() {
+	o.SolverAddress.Set(nil)
+}
+
+// UnsetSolverAddress ensures that no value is present for SolverAddress, not even an explicit nil
+func (o *OrderMetaDto) UnsetSolverAddress() {
+	o.SolverAddress.Unset()
 }
 
 // GetIntegratorKeyHash returns the IntegratorKeyHash field value if set, zero value otherwise.
@@ -609,44 +619,20 @@ func (o OrderMetaDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["orderIdentifier"] = o.OrderIdentifier
 	toSerialize["onChainOrderId"] = o.OnChainOrderId
 	toSerialize["destinationAddress"] = o.DestinationAddress
-	if o.OrderInitiatedTxHash != nil {
-		toSerialize["orderInitiatedTxHash"] = o.OrderInitiatedTxHash
-	}
-	if o.OrderDeliveredTxHash != nil {
-		toSerialize["orderDeliveredTxHash"] = o.OrderDeliveredTxHash
-	}
-	if o.OrderVerifiedTxHash != nil {
-		toSerialize["orderVerifiedTxHash"] = o.OrderVerifiedTxHash
-	}
-	if o.OrderSettledTxHash != nil {
-		toSerialize["orderSettledTxHash"] = o.OrderSettledTxHash
-	}
-	if o.RefundTxHash != nil {
-		toSerialize["refundTxHash"] = o.RefundTxHash
-	}
-	if o.SignedAt != nil {
-		toSerialize["signedAt"] = o.SignedAt
-	}
-	if o.ExpiredAt != nil {
-		toSerialize["expiredAt"] = o.ExpiredAt
-	}
-	if o.DeliveredAt != nil {
-		toSerialize["deliveredAt"] = o.DeliveredAt
-	}
-	if o.SettledAt != nil {
-		toSerialize["settledAt"] = o.SettledAt
-	}
-	if o.RefundedAt != nil {
-		toSerialize["refundedAt"] = o.RefundedAt
-	}
-	if o.LastCompactDepositBlockNumber != nil {
-		toSerialize["lastCompactDepositBlockNumber"] = o.LastCompactDepositBlockNumber
-	}
-	if o.QuoteId != nil {
-		toSerialize["quoteId"] = o.QuoteId
-	}
-	if o.SolverAddress != nil {
-		toSerialize["solverAddress"] = o.SolverAddress
+	toSerialize["orderInitiatedTxHash"] = o.OrderInitiatedTxHash.Get()
+	toSerialize["orderDeliveredTxHash"] = o.OrderDeliveredTxHash.Get()
+	toSerialize["orderVerifiedTxHash"] = o.OrderVerifiedTxHash.Get()
+	toSerialize["orderSettledTxHash"] = o.OrderSettledTxHash.Get()
+	toSerialize["refundTxHash"] = o.RefundTxHash.Get()
+	toSerialize["signedAt"] = o.SignedAt.Get()
+	toSerialize["expiredAt"] = o.ExpiredAt.Get()
+	toSerialize["deliveredAt"] = o.DeliveredAt.Get()
+	toSerialize["settledAt"] = o.SettledAt.Get()
+	toSerialize["refundedAt"] = o.RefundedAt.Get()
+	toSerialize["lastCompactDepositBlockNumber"] = o.LastCompactDepositBlockNumber.Get()
+	toSerialize["quoteId"] = o.QuoteId.Get()
+	if o.SolverAddress.IsSet() {
+		toSerialize["solverAddress"] = o.SolverAddress.Get()
 	}
 	if !IsNil(o.IntegratorKeyHash) {
 		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash

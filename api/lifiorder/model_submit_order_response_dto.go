@@ -22,13 +22,12 @@ var _ MappedNullable = &SubmitOrderResponseDto{}
 // SubmitOrderResponseDto struct for SubmitOrderResponseDto
 type SubmitOrderResponseDto struct {
 	// The order details
-	Order CompactOrderResponseDto `json:"order"`
-	// The quote details
-	Quote NullableQuoteResponseDto `json:"quote"`
+	Order CompactOrderResponseDto        `json:"order"`
+	Quote NullableSubmittedOrderQuoteDto `json:"quote"`
 	// Sponsor signature
-	SponsorSignature map[string]interface{} `json:"sponsorSignature,omitempty"`
+	SponsorSignature NullableString `json:"sponsorSignature,omitempty"`
 	// Allocator signature
-	AllocatorSignature map[string]interface{} `json:"allocatorSignature,omitempty"`
+	AllocatorSignature NullableString `json:"allocatorSignature,omitempty"`
 	// Input settler address
 	InputSettler string `json:"inputSettler"`
 	// Order metadata
@@ -41,7 +40,7 @@ type _SubmitOrderResponseDto SubmitOrderResponseDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSubmitOrderResponseDto(order CompactOrderResponseDto, quote NullableQuoteResponseDto, inputSettler string, meta OrderMetaDto) *SubmitOrderResponseDto {
+func NewSubmitOrderResponseDto(order CompactOrderResponseDto, quote NullableSubmittedOrderQuoteDto, inputSettler string, meta OrderMetaDto) *SubmitOrderResponseDto {
 	this := SubmitOrderResponseDto{}
 	this.Order = order
 	this.Quote = quote
@@ -83,10 +82,10 @@ func (o *SubmitOrderResponseDto) SetOrder(v CompactOrderResponseDto) {
 }
 
 // GetQuote returns the Quote field value
-// If the value is explicit nil, the zero value for QuoteResponseDto will be returned
-func (o *SubmitOrderResponseDto) GetQuote() QuoteResponseDto {
+// If the value is explicit nil, the zero value for SubmittedOrderQuoteDto will be returned
+func (o *SubmitOrderResponseDto) GetQuote() SubmittedOrderQuoteDto {
 	if o == nil || o.Quote.Get() == nil {
-		var ret QuoteResponseDto
+		var ret SubmittedOrderQuoteDto
 		return ret
 	}
 
@@ -96,7 +95,7 @@ func (o *SubmitOrderResponseDto) GetQuote() QuoteResponseDto {
 // GetQuoteOk returns a tuple with the Quote field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SubmitOrderResponseDto) GetQuoteOk() (*QuoteResponseDto, bool) {
+func (o *SubmitOrderResponseDto) GetQuoteOk() (*SubmittedOrderQuoteDto, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -104,74 +103,94 @@ func (o *SubmitOrderResponseDto) GetQuoteOk() (*QuoteResponseDto, bool) {
 }
 
 // SetQuote sets field value
-func (o *SubmitOrderResponseDto) SetQuote(v QuoteResponseDto) {
+func (o *SubmitOrderResponseDto) SetQuote(v SubmittedOrderQuoteDto) {
 	o.Quote.Set(&v)
 }
 
 // GetSponsorSignature returns the SponsorSignature field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *SubmitOrderResponseDto) GetSponsorSignature() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+func (o *SubmitOrderResponseDto) GetSponsorSignature() string {
+	if o == nil || IsNil(o.SponsorSignature.Get()) {
+		var ret string
 		return ret
 	}
-	return o.SponsorSignature
+	return *o.SponsorSignature.Get()
 }
 
 // GetSponsorSignatureOk returns a tuple with the SponsorSignature field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SubmitOrderResponseDto) GetSponsorSignatureOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.SponsorSignature) {
-		return map[string]interface{}{}, false
+func (o *SubmitOrderResponseDto) GetSponsorSignatureOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.SponsorSignature, true
+	return o.SponsorSignature.Get(), o.SponsorSignature.IsSet()
 }
 
 // HasSponsorSignature returns a boolean if a field has been set.
 func (o *SubmitOrderResponseDto) HasSponsorSignature() bool {
-	if o != nil && !IsNil(o.SponsorSignature) {
+	if o != nil && o.SponsorSignature.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetSponsorSignature gets a reference to the given map[string]interface{} and assigns it to the SponsorSignature field.
-func (o *SubmitOrderResponseDto) SetSponsorSignature(v map[string]interface{}) {
-	o.SponsorSignature = v
+// SetSponsorSignature gets a reference to the given NullableString and assigns it to the SponsorSignature field.
+func (o *SubmitOrderResponseDto) SetSponsorSignature(v string) {
+	o.SponsorSignature.Set(&v)
+}
+
+// SetSponsorSignatureNil sets the value for SponsorSignature to be an explicit nil
+func (o *SubmitOrderResponseDto) SetSponsorSignatureNil() {
+	o.SponsorSignature.Set(nil)
+}
+
+// UnsetSponsorSignature ensures that no value is present for SponsorSignature, not even an explicit nil
+func (o *SubmitOrderResponseDto) UnsetSponsorSignature() {
+	o.SponsorSignature.Unset()
 }
 
 // GetAllocatorSignature returns the AllocatorSignature field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *SubmitOrderResponseDto) GetAllocatorSignature() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+func (o *SubmitOrderResponseDto) GetAllocatorSignature() string {
+	if o == nil || IsNil(o.AllocatorSignature.Get()) {
+		var ret string
 		return ret
 	}
-	return o.AllocatorSignature
+	return *o.AllocatorSignature.Get()
 }
 
 // GetAllocatorSignatureOk returns a tuple with the AllocatorSignature field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SubmitOrderResponseDto) GetAllocatorSignatureOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.AllocatorSignature) {
-		return map[string]interface{}{}, false
+func (o *SubmitOrderResponseDto) GetAllocatorSignatureOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.AllocatorSignature, true
+	return o.AllocatorSignature.Get(), o.AllocatorSignature.IsSet()
 }
 
 // HasAllocatorSignature returns a boolean if a field has been set.
 func (o *SubmitOrderResponseDto) HasAllocatorSignature() bool {
-	if o != nil && !IsNil(o.AllocatorSignature) {
+	if o != nil && o.AllocatorSignature.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetAllocatorSignature gets a reference to the given map[string]interface{} and assigns it to the AllocatorSignature field.
-func (o *SubmitOrderResponseDto) SetAllocatorSignature(v map[string]interface{}) {
-	o.AllocatorSignature = v
+// SetAllocatorSignature gets a reference to the given NullableString and assigns it to the AllocatorSignature field.
+func (o *SubmitOrderResponseDto) SetAllocatorSignature(v string) {
+	o.AllocatorSignature.Set(&v)
+}
+
+// SetAllocatorSignatureNil sets the value for AllocatorSignature to be an explicit nil
+func (o *SubmitOrderResponseDto) SetAllocatorSignatureNil() {
+	o.AllocatorSignature.Set(nil)
+}
+
+// UnsetAllocatorSignature ensures that no value is present for AllocatorSignature, not even an explicit nil
+func (o *SubmitOrderResponseDto) UnsetAllocatorSignature() {
+	o.AllocatorSignature.Unset()
 }
 
 // GetInputSettler returns the InputSettler field value
@@ -234,11 +253,11 @@ func (o SubmitOrderResponseDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["order"] = o.Order
 	toSerialize["quote"] = o.Quote.Get()
-	if o.SponsorSignature != nil {
-		toSerialize["sponsorSignature"] = o.SponsorSignature
+	if o.SponsorSignature.IsSet() {
+		toSerialize["sponsorSignature"] = o.SponsorSignature.Get()
 	}
-	if o.AllocatorSignature != nil {
-		toSerialize["allocatorSignature"] = o.AllocatorSignature
+	if o.AllocatorSignature.IsSet() {
+		toSerialize["allocatorSignature"] = o.AllocatorSignature.Get()
 	}
 	toSerialize["inputSettler"] = o.InputSettler
 	toSerialize["meta"] = o.Meta

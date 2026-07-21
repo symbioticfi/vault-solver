@@ -28,15 +28,13 @@ type SubmitOrderDtoOrderOutputsInner struct {
 	// The token identifier
 	Token string `json:"token"`
 	// The amount of tokens
-	Amount *string `json:"amount,omitempty"`
+	Amount string `json:"amount"`
 	// The recipient address
 	Recipient string `json:"recipient"`
 	// The chain ID
-	ChainId *string `json:"chainId,omitempty"`
-	// The remote call data
+	ChainId      string         `json:"chainId"`
 	CallbackData NullableString `json:"callbackData,omitempty"`
-	// The fulfillment context
-	Context NullableString `json:"context,omitempty"`
+	Context      NullableString `json:"context,omitempty"`
 }
 
 type _SubmitOrderDtoOrderOutputsInner SubmitOrderDtoOrderOutputsInner
@@ -45,12 +43,14 @@ type _SubmitOrderDtoOrderOutputsInner SubmitOrderDtoOrderOutputsInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSubmitOrderDtoOrderOutputsInner(oracle string, settler string, token string, recipient string) *SubmitOrderDtoOrderOutputsInner {
+func NewSubmitOrderDtoOrderOutputsInner(oracle string, settler string, token string, amount string, recipient string, chainId string) *SubmitOrderDtoOrderOutputsInner {
 	this := SubmitOrderDtoOrderOutputsInner{}
 	this.Oracle = oracle
 	this.Settler = settler
 	this.Token = token
+	this.Amount = amount
 	this.Recipient = recipient
+	this.ChainId = chainId
 	return &this
 }
 
@@ -134,36 +134,28 @@ func (o *SubmitOrderDtoOrderOutputsInner) SetToken(v string) {
 	o.Token = v
 }
 
-// GetAmount returns the Amount field value if set, zero value otherwise.
+// GetAmount returns the Amount field value
 func (o *SubmitOrderDtoOrderOutputsInner) GetAmount() string {
-	if o == nil || IsNil(o.Amount) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.Amount
+
+	return o.Amount
 }
 
-// GetAmountOk returns a tuple with the Amount field value if set, nil otherwise
+// GetAmountOk returns a tuple with the Amount field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrderOutputsInner) GetAmountOk() (*string, bool) {
-	if o == nil || IsNil(o.Amount) {
+	if o == nil {
 		return nil, false
 	}
-	return o.Amount, true
+	return &o.Amount, true
 }
 
-// HasAmount returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrderOutputsInner) HasAmount() bool {
-	if o != nil && !IsNil(o.Amount) {
-		return true
-	}
-
-	return false
-}
-
-// SetAmount gets a reference to the given string and assigns it to the Amount field.
+// SetAmount sets field value
 func (o *SubmitOrderDtoOrderOutputsInner) SetAmount(v string) {
-	o.Amount = &v
+	o.Amount = v
 }
 
 // GetRecipient returns the Recipient field value
@@ -190,36 +182,28 @@ func (o *SubmitOrderDtoOrderOutputsInner) SetRecipient(v string) {
 	o.Recipient = v
 }
 
-// GetChainId returns the ChainId field value if set, zero value otherwise.
+// GetChainId returns the ChainId field value
 func (o *SubmitOrderDtoOrderOutputsInner) GetChainId() string {
-	if o == nil || IsNil(o.ChainId) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.ChainId
+
+	return o.ChainId
 }
 
-// GetChainIdOk returns a tuple with the ChainId field value if set, nil otherwise
+// GetChainIdOk returns a tuple with the ChainId field value
 // and a boolean to check if the value has been set.
 func (o *SubmitOrderDtoOrderOutputsInner) GetChainIdOk() (*string, bool) {
-	if o == nil || IsNil(o.ChainId) {
+	if o == nil {
 		return nil, false
 	}
-	return o.ChainId, true
+	return &o.ChainId, true
 }
 
-// HasChainId returns a boolean if a field has been set.
-func (o *SubmitOrderDtoOrderOutputsInner) HasChainId() bool {
-	if o != nil && !IsNil(o.ChainId) {
-		return true
-	}
-
-	return false
-}
-
-// SetChainId gets a reference to the given string and assigns it to the ChainId field.
+// SetChainId sets field value
 func (o *SubmitOrderDtoOrderOutputsInner) SetChainId(v string) {
-	o.ChainId = &v
+	o.ChainId = v
 }
 
 // GetCallbackData returns the CallbackData field value if set, zero value otherwise (both if not set or set to explicit null).
@@ -321,13 +305,9 @@ func (o SubmitOrderDtoOrderOutputsInner) ToMap() (map[string]interface{}, error)
 	toSerialize["oracle"] = o.Oracle
 	toSerialize["settler"] = o.Settler
 	toSerialize["token"] = o.Token
-	if !IsNil(o.Amount) {
-		toSerialize["amount"] = o.Amount
-	}
+	toSerialize["amount"] = o.Amount
 	toSerialize["recipient"] = o.Recipient
-	if !IsNil(o.ChainId) {
-		toSerialize["chainId"] = o.ChainId
-	}
+	toSerialize["chainId"] = o.ChainId
 	if o.CallbackData.IsSet() {
 		toSerialize["callbackData"] = o.CallbackData.Get()
 	}
@@ -345,7 +325,9 @@ func (o *SubmitOrderDtoOrderOutputsInner) UnmarshalJSON(data []byte) (err error)
 		"oracle",
 		"settler",
 		"token",
+		"amount",
 		"recipient",
+		"chainId",
 	}
 
 	allProperties := make(map[string]interface{})
