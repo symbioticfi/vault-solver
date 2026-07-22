@@ -31,7 +31,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 			OpenCount:     1,
 			MaxAssets:     mustBig(t, "500"),
 			MinAssets:     mustBig(t, "100"),
-			MinYieldBps:   mustBig(t, "100"),
+			MinYieldPpm:   mustBig(t, "190"),
 			MaxConcurrent: 3,
 		}},
 		Auctions: []AuctionSnapshot{{
@@ -54,6 +54,9 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	}
 	if strings.Contains(string(body), "Fundable") || !strings.Contains(string(body), `"fundable":"1000"`) {
 		t.Fatalf("JSON does not use lower-camel decimal-string amounts: %s", body)
+	}
+	if !strings.Contains(string(body), `"minYieldPpm":"190"`) {
+		t.Fatalf("wire must carry the exact minYieldPpm floor: %s", body)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {

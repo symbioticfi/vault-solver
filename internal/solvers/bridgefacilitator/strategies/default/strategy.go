@@ -77,12 +77,22 @@ func (s *Strategy) DecideOffers(
 			if st.belowMinAssets(principal) {
 				continue
 			}
+			// Price at the minYieldPerRequest floor (rounded up to clear it), or the auction max rate when
+			// there is no floor; ValidateYield drops the pair if the result isn't in [floor, maxRate]
+			// (including a 0 return).
+			expectedReturn := types.MinYieldReturn(principal, st.snapshot.MinYieldPpm)
+			if expectedReturn.Sign() <= 0 {
+				expectedReturn = types.ExpectedReturn(principal, auction.MaxRateBps)
+			}
+			if types.ValidateYield(expectedReturn, principal, st.snapshot.MinYieldPpm, auction.MaxRateBps) != nil {
+				continue
+			}
 			offers = append(offers, types.OfferExecution{
 				AuctionID:      auction.AuctionID,
 				Request:        auction.Request,
 				Maker:          st.snapshot.Adapter,
 				Principal:      principal,
-				ExpectedReturn: types.ExpectedReturn(principal, auction.MaxRateBps),
+				ExpectedReturn: expectedReturn,
 			})
 			st.committed.Add(st.committed, principal)
 			st.opened++
@@ -116,10 +126,6 @@ func rankEligibleAdapters(
 			continue
 		}
 		if auction.DepositAsset != st.snapshot.Collateral {
-			continue
-		}
-		if st.snapshot.MinYieldBps != nil && st.snapshot.MinYieldBps.Sign() > 0 &&
-			auction.MaxRateBps < types.BpsToFloat(st.snapshot.MinYieldBps) {
 			continue
 		}
 		eligible = append(eligible, scored{st, st.capacity()})

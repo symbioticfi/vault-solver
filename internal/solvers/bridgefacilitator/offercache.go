@@ -21,10 +21,10 @@ type offerState struct {
 	principal *big.Int
 }
 
-// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through
-// the same adapter while one is live, and so we can tell when an auction is fully covered. Hydrated
-// from the 3F API when an adapter becomes usable (restart-safe), updated in memory as offers are
-// submitted; Run goroutine only, no locking.
+// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through the
+// same adapter while one is live, and so we can tell when an auction is fully covered. It is a snapshot
+// of the 3F API's live offers, rebuilt from the API before every offer pass (reconcileAdapter); Run
+// goroutine only, no locking.
 type offerTracker struct {
 	offers map[offerKey]offerState
 }
@@ -45,9 +45,18 @@ func (t *offerTracker) liveEntries(now time.Time) []offerKey {
 	return keys
 }
 
-// record stores the expiration and principal of an offer we hold through adapter for auctionID.
-func (t *offerTracker) record(adapter common.Address, auctionID int64, expiration time.Time, principal *big.Int) {
-	t.offers[offerKey{adapter, auctionID}] = offerState{expiry: expiration, principal: new(big.Int).Set(principal)}
+// reconcileAdapter replaces all of this adapter's cached offers with the API's current live set. The
+// 1-2 minute poll is authoritative — it always reflects our own just-submitted offers as well as any
+// made out of band — so anything not in `live` is gone and dropped.
+func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]offerState) {
+	for k := range t.offers {
+		if k.adapter == adapter {
+			delete(t.offers, k)
+		}
+	}
+	for auctionID, st := range live {
+		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: new(big.Int).Set(st.principal)}
+	}
 }
 
 // retainAdapters drops cached offers made by adapters that are no longer usable. In particular,

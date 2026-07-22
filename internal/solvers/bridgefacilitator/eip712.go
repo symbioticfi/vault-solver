@@ -118,6 +118,17 @@ func GetOffersDigest(maker common.Address, deadline, chainID *big.Int) common.Ha
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
 }
 
+// cancelOfferTypeHash is the EIP-712 type the maker signs to cancel an unaccepted offer via
+// POST /v1/offer/cancel; the field set is checked against the live 3F API in the CancelOffer golden test.
+var cancelOfferTypeHash = crypto.Keccak256Hash([]byte("CancelOffer(address maker,uint256 offerId,uint256 deadline)"))
+
+// CancelOfferDigest computes the EIP-712 digest a maker signs to cancel offerID over the grunt-api
+// domain at chainID (the bot's operating chain, matching GetOffersDigest).
+func CancelOfferDigest(maker common.Address, offerID, deadline, chainID *big.Int) common.Hash {
+	sh := crypto.Keccak256Hash(cancelOfferTypeHash.Bytes(), word(maker.Bytes()), word(offerID.Bytes()), word(deadline.Bytes()))
+	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
+}
+
 // APIKeyDigest computes the EIP-712 digest a facilitator signs to generate a 3F API key (chainId 1).
 func APIKeyDigest(facilitator common.Address, deadline *big.Int) common.Hash {
 	sh := crypto.Keccak256Hash(apiKeyTypeHash.Bytes(), word(facilitator.Bytes()), word(deadline.Bytes()))
