@@ -1,7 +1,7 @@
 # vault-solver — LI.FI / Catalyst same-chain intent filler (plan)
 
-Adding a **`lifi`** solver to `vault-solver` that fills **same-chain on-chain** LI.FI Intents (Open
-Intents Framework / Catalyst). The executor contract is the registered LI.FI solver identity. Its owner
+The **`lifi-samechain`** solver fills **same-chain on-chain** LI.FI Intents (Open Intents Framework /
+Catalyst). The executor contract is the registered LI.FI solver identity. Its owner
 authorizes runtime callers; a caller submits the selected `FillRoute[]`, and the executor uses the input
 settler's direct finalise path,
 receives the claimed input RWA in the callback, redeems it through a Symbiotic
@@ -36,9 +36,10 @@ that already-opened order in **one atomic transaction**:
 3. inside the callback the executor redeems the received RWA through the LiquidLane adapter, then fills
    and attests the output.
 
-Because input redemption and output fill are in one transaction, the executor does **not** need output
-inventory for this path. Profit is the protected redemption surplus:
-`directExecutableAmountOut(RWA, X) - currentOrderAmount`, retained in the executor and swept by its owner.
+Because input redemption and output fill are in one transaction, the executor does **not** need prefunded
+output inventory for this path. The economic surplus is aggregate redeemed output minus the resolved order
+output after the strategy's gas-aware checks. It remains in the executor; the current ABI has no sweep
+entrypoint, so recovery requires the proxy administration path described in §7.
 
 This is the same-chain specialization of the cross-chain OIF flow. Same-chain is strictly simpler:
 `inputOracle == OutputSettler` (the settler is its own oracle — no cross-chain proof relay). The
@@ -263,7 +264,8 @@ correlation metadata only: it is not an authorization input, is not used by the 
 the WS event.
 
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
-`pong`). Each message is evaluated independently and never retained. It is a `SubmitOrderDto`:
+`pong`). Each accepted message is enqueued once in an in-memory FIFO and evaluated once; it is neither
+persisted nor retried. It is a `SubmitOrderDto`:
 ```
 { orderType?, quoteId,
   inputSettler,        // escrow-vs-Compact discriminator — must be the opened ESCROW settler
@@ -409,7 +411,9 @@ requests complete at inclusion/revert rather than waiting for the txmanager's ex
 planner then releases that fill's reservation. Every later fill decision subtracts aggregate pending
 capacity before route allocation. At inclusion, the LiquidLane adapter and OutputSettler enforce the requested
 swap and resolved output; stale state therefore reverts atomically rather than being repriced by the executor.
-There is no pending plan, timer, future-auction scheduling, or transaction retry.
+There is no solver-level pending plan, timer, future-auction scheduling, or new fill attempt. The txmanager
+may replace the same pending nonce as described above; that is fee management for one submission, not order
+retry.
 For a selected private candidate, the solver commits the fresh signed terms and both signatures inside
 the selected `FillRoute`; a missing or mismatched resolution aborts before submission. Those two signatures
 authorize the private LiquidLane route and are unrelated to LI.FI account or fill authorization.
@@ -460,7 +464,7 @@ solvers:
 
 ```
 LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
-  price: getAmountOut × (1-minDiscount) → target/floor ; getMaxAssets → reserved cap
+  price: fresh direct getAmountOut or signed-discount output; getMaxAssets → reserved cap
   decide: buffered target ≥ resolved output + gas, deadlines buffered ?  ── no ─▶ skip
      │ yes
   build FillRoute[]; require Σ amountIn == order input
@@ -510,8 +514,9 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` parsing. Advertised terms
   may shape standing quotes, but execution always resolves fresh signatures, recomputes output from the
   current adapter oracle, and commits the selected discount ID and typed payload in `FillRoute`.
-- **No inventory / callback-balance risk** (unlike OEV): nothing is fronted; the only capital at risk
-  per tx is gas, and reverts cost only gas.
+- **No prefunded working inventory is required** (unlike OEV): the opened input funds each atomic
+  redemption. A reverting fill spends gas only; accumulated executor surplus is a separate standing balance
+  governed by the deployment and zero-fee invariant.
 - **Executor surplus** may remain as a standing balance. The current PR #18 executor ABI has no sweep entrypoint;
   recovery therefore requires the deployment's proxy-upgrade administration rather than the runtime solver.
 
@@ -538,7 +543,7 @@ production.
 | Already-opened `InputSettlerEscrowLIFI` order delivered over the LI.FI WebSocket. | Compact, Permit2, ERC-3009, gasless submit, and `openForAndFinalise`. |
 | One ERC-20 input, one output, full fill. | Native input, multiple inputs/outputs, and partial fills. |
 | Configured OutputSettler as input oracle, output oracle, and output settler. | Unknown settlers/oracles and non-empty output callback data. |
-| The default strategy handles limit and exclusive-limit output contexts. | Dutch, exclusive Dutch, unknown, or malformed contexts. Dutch variants are ignored and logged before strategy dispatch. |
+| The default strategy handles limit and exclusive-limit output contexts. | Dutch and exclusive Dutch are ignored globally. The default strategy rejects unknown or malformed contexts; a webhook strategy must decline every non-Dutch context it cannot resolve. |
 | Immediate decide-and-send using current time and state. | Retaining or scheduling a future exclusive-limit order for later retry. |
 | WebSocket discovery with an on-chain `Deposited` check before send. | On-chain event discovery or trusting WS status without the chain check. |
 
@@ -628,8 +633,8 @@ Onboarding is complete only when all of the following are observed in the target
 4. Immediately before submission the canonical order ID matches and on-chain status is `Deposited`.
 5. The executor transaction succeeds atomically: input claim -> LiquidLane redemption -> OutputSettler
    fill/attestation. The user receives the required output and backend status becomes `Settled`.
-6. Receipt gas is below the configured tx cap and consistent with the settlement constants; any surplus is
-   held by the executor.
+6. Receipt gas is consistent with the conservative settlement constants and the submitted fee remains within
+   the decision and global fee caps; any surplus is held by the executor.
 
 ### 8.2 Testnet dev environment (primary loop)
 Target **Ethereum Sepolia** (chainId 11155111) — the intersection of LI.FI `order-dev` support, the
