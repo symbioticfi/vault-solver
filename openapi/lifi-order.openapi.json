@@ -1,5 +1,5 @@
 {
-  "openapi": "3.0.0",
+  "openapi": "3.1.0",
   "paths": {
     "/quote/request": {
       "post": {
@@ -7,9 +7,9 @@
         "parameters": [
           {
             "name": "X-Integrator-Key",
-            "in": "header",
-            "description": "Raw integrator API key (obtained from integrator onboarding). When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
             "required": false,
+            "in": "header",
+            "description": "Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
             "schema": {
               "type": "string"
             }
@@ -101,7 +101,7 @@
                   "quotes": [
                     {
                       "order": null,
-                      "validUntil": 1777941876,
+                      "validUntil": 1900000000,
                       "quoteId": "quote_yCyE5aWW4NILo2UdM-8ETpia05TCLv",
                       "preview": {
                         "inputs": [
@@ -153,9 +153,9 @@
         },
         "summary": "Request quote",
         "tags": [
-          "Quotes",
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/quotes/submit": {
@@ -183,7 +183,7 @@
                         "fromDecimals": 6,
                         "toDecimals": 6,
                         "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1777941876,
+                        "expiry": 1900000000,
                         "ranges": [
                           {
                             "minAmount": "300010",
@@ -212,7 +212,7 @@
                         "fromDecimals": 6,
                         "toDecimals": 6,
                         "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1777941876,
+                        "expiry": 1900000000,
                         "ranges": [
                           {
                             "minAmount": "300010",
@@ -297,7 +297,7 @@
                         "fromDecimals": 6,
                         "toDecimals": 6,
                         "exclusiveFor": "4Nd1mY9XzN6vfFh1Cm9wHQXgVxqQ8j8s8MoREvkLqJ7G",
-                        "expiry": 1777941876,
+                        "expiry": 1900000000,
                         "ranges": [
                           {
                             "minAmount": "1000000",
@@ -366,7 +366,6 @@
         ],
         "summary": "Submit quotes",
         "tags": [
-          "Quotes",
           "Solver API"
         ]
       }
@@ -413,7 +412,8 @@
         "summary": "Get supported chains",
         "tags": [
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/api/v1/integrator/quote/request": {
@@ -422,9 +422,9 @@
         "parameters": [
           {
             "name": "X-Integrator-Key",
-            "in": "header",
-            "description": "Raw integrator API key (obtained from integrator onboarding). When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
             "required": false,
+            "in": "header",
+            "description": "Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
             "schema": {
               "type": "string"
             }
@@ -558,7 +558,8 @@
         "summary": "Request quote",
         "tags": [
           "Bridge API v1"
-        ]
+        ],
+        "security": []
       }
     },
     "/orders/submit": {
@@ -580,11 +581,11 @@
                     "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
                     "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
                     "order": {
-                      "expires": 1942819670,
+                      "expires": "1942819670",
                       "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
                       "nonce": "1004",
                       "originChainId": "84532",
-                      "fillDeadline": 1942819670,
+                      "fillDeadline": "1942819670",
                       "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
                       "inputs": [
                         [
@@ -612,11 +613,11 @@
                     "orderType": "CatalystCompactOrder",
                     "inputSettler": "0x000001bf3F3175BD007f3889b50000c7006E72c0",
                     "order": {
-                      "expires": 1942819670,
+                      "expires": "1942819670",
                       "user": "0x9773DAcbc46CAFb4e055060565e319922B48607D",
                       "nonce": "1004",
                       "originChainId": "84532",
-                      "fillDeadline": 1942819670,
+                      "fillDeadline": "1942819670",
                       "inputOracle": "0xada1de62bE4F386346453A5b6F005BCdBE4515A1",
                       "inputs": [
                         [
@@ -749,7 +750,8 @@
         "summary": "Submit order",
         "tags": [
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/orders": {
@@ -1036,7 +1038,8 @@
         "summary": "Get orders",
         "tags": [
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/orders/status": {
@@ -1048,7 +1051,7 @@
             "name": "onChainOrderId",
             "required": false,
             "in": "query",
-            "description": "On chain order id propagated in the logs/events.",
+            "description": "On chain order id propagated in the logs/events. At least one of `onChainOrderId` or `catalystOrderId` must be provided.",
             "schema": {
               "example": "0xc7b44934463285434d1acc3405a6514e6677adfaae180ec042204d3cfc218d81",
               "type": "string"
@@ -1058,7 +1061,7 @@
             "name": "catalystOrderId",
             "required": false,
             "in": "query",
-            "description": "Internal order id returned by Lifi Intents API",
+            "description": "Internal order id returned by Lifi Intents API. At least one of `onChainOrderId` or `catalystOrderId` must be provided.",
             "schema": {
               "example": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE",
               "type": "string"
@@ -1171,7 +1174,8 @@
         "summary": "Get order status",
         "tags": [
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/solver-api/solver/identities": {
@@ -2691,7 +2695,8 @@
         "summary": "Get supported routes",
         "tags": [
           "Bridge API"
-        ]
+        ],
+        "security": []
       }
     },
     "/api/v1/integrator/routes": {
@@ -2821,7 +2826,8 @@
         "summary": "Get supported routes",
         "tags": [
           "Bridge API v1"
-        ]
+        ],
+        "security": []
       }
     }
   },
@@ -2832,7 +2838,16 @@
     "contact": {}
   },
   "tags": [],
-  "servers": [],
+  "servers": [
+    {
+      "url": "https://order.li.fi",
+      "description": "Production"
+    },
+    {
+      "url": "https://order-dev.li.fi",
+      "description": "Development"
+    }
+  ],
   "components": {
     "securitySchemes": {
       "api-key": {
@@ -2856,11 +2871,9 @@
             "properties": {
               "intentType": {
                 "type": "string",
+                "const": "oif-swap",
                 "description": "Intent type",
-                "example": "oif-swap",
-                "enum": [
-                  "oif-swap"
-                ]
+                "example": "oif-swap"
               },
               "inputs": {
                 "type": "array",
@@ -2965,7 +2978,7 @@
               },
               "minValidUntil": {
                 "description": "Minimum validity timestamp in seconds",
-                "example": 1700000000,
+                "example": 1785154905,
                 "type": "number"
               },
               "preference": {
@@ -3073,7 +3086,7 @@
           "supportedTypes"
         ]
       },
-      "QuotePreviewDto": {
+      "OifQuotePreviewDto": {
         "type": "object",
         "properties": {
           "inputs": {
@@ -3128,10 +3141,12 @@
         "type": "object",
         "properties": {
           "exclusiveFor": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Solver address with exclusivity on this quote, or null when no solver is exclusive",
-            "example": "0x1234567890123456789012345678901234567890",
-            "nullable": true
+            "example": "0x1234567890123456789012345678901234567890"
           }
         },
         "required": [
@@ -3142,15 +3157,17 @@
         "type": "object",
         "properties": {
           "order": {
-            "type": "object",
-            "description": "Order details (null for quote requests)",
-            "nullable": true,
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Order details; null for quote requests, provider-specific structure when populated",
             "example": null
           },
           "validUntil": {
             "type": "number",
             "description": "Quote validity timestamp in seconds",
-            "example": 1700000000
+            "example": 1900000000
           },
           "eta": {
             "type": "number",
@@ -3171,7 +3188,7 @@
             "description": "Informational amounts for UX/display",
             "allOf": [
               {
-                "$ref": "#/components/schemas/QuotePreviewDto"
+                "$ref": "#/components/schemas/OifQuotePreviewDto"
               }
             ]
           },
@@ -3300,6 +3317,7 @@
                   "example": 6
                 },
                 "ranges": {
+                  "maxItems": 1000,
                   "type": "array",
                   "items": {
                     "type": "object",
@@ -3339,14 +3357,14 @@
                       "quote"
                     ]
                   },
-                  "description": "Array of quote ranges with different price tiers"
+                  "description": "Array of quote ranges with different price tiers. At most 1000 ranges per quote."
                 },
                 "expiry": {
                   "type": "integer",
                   "minimum": 1000000000,
                   "maximum": 4102444800,
                   "description": "Expiry timestamp of the quote in seconds",
-                  "example": 1672531200
+                  "example": 1900000000
                 },
                 "exclusiveFor": {
                   "description": "Exclusive solver address allowed to fill this quote. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
@@ -3354,7 +3372,7 @@
                   "type": "string"
                 },
                 "integratorKeyHash": {
-                  "description": "Integrator key hash identifying the integrator this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote available to all integrators.",
+                  "description": "Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote available to all integrators.",
                   "example": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
@@ -3463,11 +3481,9 @@
             "properties": {
               "intentType": {
                 "type": "string",
+                "const": "oif-swap",
                 "description": "Intent type (otherwise return quotes: [])",
-                "example": "oif-swap",
-                "enum": [
-                  "oif-swap"
-                ]
+                "example": "oif-swap"
               },
               "inputs": {
                 "type": "array",
@@ -3493,13 +3509,20 @@
                       "example": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
                     },
                     "amount": {
-                      "type": "string",
                       "description": "Amount available. For exact-input: exact amount user will provide and is used for quoting. For exact-output: ignored by the quote decoder and not used for quoting",
                       "example": "4000000000",
-                      "nullable": true
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "lock": {
-                      "description": "Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder."
+                      "description": "Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder.",
+                      "type": "object"
                     }
                   },
                   "required": [
@@ -3534,10 +3557,16 @@
                       "example": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
                     },
                     "amount": {
-                      "type": "string",
                       "description": "For exact-input: ignored by the quote decoder and not used for quoting. For exact-output: exact amount user wants to receive and is used for quoting",
                       "example": "2000000000000000000",
-                      "nullable": true
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "calldata": {
                       "description": "Optional calldata describing how the receiver will consume the output. Enables composability with other protocols",
@@ -3565,7 +3594,7 @@
               },
               "minValidUntil": {
                 "description": "Minimum validity timestamp in unix timestamp (seconds). Only select solver quotes with longer TTL.",
-                "example": 1700000000,
+                "example": 1785154905,
                 "type": "number"
               },
               "preference": {
@@ -3618,6 +3647,102 @@
                         }
                       }
                     ]
+                  },
+                  "oracle": {
+                    "description": "Accepted cross-chain verifier (oracle) contracts, each a { chain, address } object. When provided, only solvers that support one of these oracles can answer, and the returned order is built to settle against an accepted oracle. Omitted or empty means any oracle is acceptable. Ignored for same-chain swaps.",
+                    "example": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000003E06000007A224AeE90052fA6bb46d43C9"
+                      }
+                    ],
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "chain": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                          "example": "eip155:1"
+                        },
+                        "address": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Native contract address for the chain",
+                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                        }
+                      },
+                      "required": [
+                        "chain",
+                        "address"
+                      ]
+                    }
+                  },
+                  "inputSettler": {
+                    "description": "Accepted input settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these input settlers and the winning solver supports it. Omitted or empty means any input settler is acceptable.",
+                    "example": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x000025c3226C00B2Cdc200005a1600509f4e00C0"
+                      }
+                    ],
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "chain": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                          "example": "eip155:1"
+                        },
+                        "address": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Native contract address for the chain",
+                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                        }
+                      },
+                      "required": [
+                        "chain",
+                        "address"
+                      ]
+                    }
+                  },
+                  "outputSettler": {
+                    "description": "Accepted output settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these output settlers and the winning solver supports it. Omitted or empty means any output settler is acceptable.",
+                    "example": [
+                      {
+                        "chain": "eip155:1",
+                        "address": "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"
+                      }
+                    ],
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "chain": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                          "example": "eip155:1"
+                        },
+                        "address": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Native contract address for the chain",
+                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                        }
+                      },
+                      "required": [
+                        "chain",
+                        "address"
+                      ]
+                    }
                   }
                 }
               }
@@ -3646,14 +3771,433 @@
           "supportedTypes"
         ]
       },
+      "OpenIntentEvmTxDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier for the destination contract",
+            "example": "eip155:1"
+          },
+          "to": {
+            "type": "string",
+            "description": "Destination contract address (checksummed hex)",
+            "example": "0x1234567890123456789012345678901234567890"
+          },
+          "data": {
+            "type": "string",
+            "description": "Transaction calldata as hex string",
+            "example": "0x095ea7b3000000000000000000000000..."
+          },
+          "gasRequired": {
+            "type": "string",
+            "description": "Gas required for execution as a decimal string",
+            "example": "120000"
+          }
+        },
+        "required": [
+          "chain",
+          "to",
+          "data",
+          "gasRequired"
+        ]
+      },
+      "OpenIntentSvmTxDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier (Solana namespace)",
+            "example": "solana:1151111081099710"
+          },
+          "to": {
+            "type": "string",
+            "description": "Input settler program ID (base58)",
+            "example": "Amx9xngT2J5156cf1iMdF1BfJFwoDu8Je6Qv2zH14V5c"
+          },
+          "data": {
+            "type": "string",
+            "description": "Base58-encoded serialized VersionedTransaction. The dummy all-zeros recentBlockhash must be replaced with a fresh blockhash before signing.",
+            "example": "Base58SerializedVersionedTx..."
+          },
+          "computeUnitsRequired": {
+            "type": "string",
+            "description": "Estimated compute units (decimal string)",
+            "example": "1200000"
+          }
+        },
+        "required": [
+          "chain",
+          "to",
+          "data",
+          "computeUnitsRequired"
+        ]
+      },
+      "OpenIntentTronTxDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier (Tron namespace)",
+            "example": "tron:728126428"
+          },
+          "to": {
+            "type": "string",
+            "description": "Input settler contract address (base58check)",
+            "example": "TXabfeeRfzpZiK6wABb2KDB3Rbzte87x3o"
+          },
+          "data": {
+            "type": "string",
+            "description": "Full ABI calldata (selector + args) as a 0x-prefixed hex string. Pass it as `data` (without the 0x prefix) to the fullnode HTTP endpoint wallet/triggersmartcontract, or with tronweb 6.x as `triggerSmartContract(to, \"\", { feeLimit, input: data }, [], owner)`.",
+            "example": "0x7515fd56000000000000000000000000..."
+          },
+          "feeLimit": {
+            "type": "string",
+            "description": "Suggested fee_limit in SUN as a decimal string. A cap on energy spend, not an estimate.",
+            "example": "150000000"
+          }
+        },
+        "required": [
+          "chain",
+          "to",
+          "data",
+          "feeLimit"
+        ]
+      },
+      "AllowanceCheckDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier for this allowance check (e.g., \"eip155:1\")",
+            "example": "eip155:1"
+          },
+          "token": {
+            "type": "string",
+            "description": "Native token address",
+            "example": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+          },
+          "user": {
+            "type": "string",
+            "description": "Native user address",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+          },
+          "spender": {
+            "type": "string",
+            "description": "Native spender address - InputSettlerEscrowLIFI",
+            "example": "0x1234567890123456789012345678901234567890"
+          },
+          "required": {
+            "type": "string",
+            "description": "Required allowance amount as string-encoded integer",
+            "example": "1000000000"
+          }
+        },
+        "required": [
+          "chain",
+          "token",
+          "user",
+          "spender",
+          "required"
+        ]
+      },
+      "ChecksDto": {
+        "type": "object",
+        "properties": {
+          "allowances": {
+            "description": "Required allowances and balances. Each item asserts that user has at least required balance and allowance for spender on token.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AllowanceCheckDto"
+            }
+          }
+        },
+        "required": [
+          "allowances"
+        ]
+      },
+      "OifUserOpenIntentOrderDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Order type identifier for user open intent execution",
+            "enum": [
+              "oif-user-open-v0"
+            ],
+            "example": "oif-user-open-v0"
+          },
+          "openIntentTx": {
+            "description": "Open intent transaction. EVM produces hex calldata; Solana produces a base58 serialized VersionedTransaction whose recentBlockhash must be overwritten before signing; Tron produces hex calldata the client wraps in a TriggerSmartContract envelope.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpenIntentEvmTxDto"
+              },
+              {
+                "$ref": "#/components/schemas/OpenIntentSvmTxDto"
+              },
+              {
+                "$ref": "#/components/schemas/OpenIntentTronTxDto"
+              }
+            ]
+          },
+          "checks": {
+            "description": "Allowance and balance checks that must hold prior to execution. For Solana origins this array is empty; SPL transfers happen inside the open instruction.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChecksDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "openIntentTx",
+          "checks"
+        ]
+      },
+      "Eip712PayloadDto": {
+        "type": "object",
+        "properties": {
+          "signatureType": {
+            "type": "string",
+            "description": "Signature type indicator",
+            "enum": [
+              "eip712"
+            ],
+            "example": "eip712"
+          },
+          "domain": {
+            "type": "object",
+            "description": "EIP-712 domain separator",
+            "example": {
+              "name": "Permit2",
+              "version": "1",
+              "chainId": 1,
+              "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+            }
+          },
+          "primaryType": {
+            "type": "string",
+            "description": "Primary type name",
+            "example": "PermitBatchWitnessTransferFrom"
+          },
+          "message": {
+            "type": "object",
+            "description": "The message object",
+            "example": {}
+          },
+          "types": {
+            "type": "object",
+            "description": "EIP-712 types used to construct the digest",
+            "example": {
+              "EIP712Domain": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "version",
+                  "type": "string"
+                },
+                {
+                  "name": "chainId",
+                  "type": "uint256"
+                },
+                {
+                  "name": "verifyingContract",
+                  "type": "address"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "signatureType",
+          "domain",
+          "primaryType",
+          "message",
+          "types"
+        ]
+      },
+      "OifEscrowOrderDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Order type identifier for escrow-based execution",
+            "enum": [
+              "oif-escrow-v0"
+            ],
+            "example": "oif-escrow-v0"
+          },
+          "payload": {
+            "description": "EIP-712 payload for escrow order",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Eip712PayloadDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "payload"
+        ]
+      },
+      "Oif3009OrderDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Order type identifier for EIP-3009 transfers",
+            "enum": [
+              "oif-3009-v0"
+            ],
+            "example": "oif-3009-v0"
+          },
+          "payload": {
+            "description": "EIP-3009 Transfer With Authorization typed data",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Eip712PayloadDto"
+              }
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Additional metadata for nonce verification and order tracking",
+            "example": {}
+          }
+        },
+        "required": [
+          "type",
+          "payload",
+          "metadata"
+        ]
+      },
+      "InputDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier for this input (e.g., \"eip155:1\"). Applies to both user and asset.",
+            "example": "eip155:1"
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native address of the user providing the input assets",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+          },
+          "asset": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native address of the token/asset being provided as input",
+            "example": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+          },
+          "amount": {
+            "description": "Amount available. For exact-input: exact amount user will provide and is used for quoting. For exact-output: ignored by the quote decoder and not used for quoting",
+            "example": "4000000000",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lock": {
+            "description": "Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "chain",
+          "user",
+          "asset"
+        ]
+      },
+      "OutputDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier for this output (e.g., \"eip155:1\"). Applies to both receiver and asset.",
+            "example": "eip155:1"
+          },
+          "receiver": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native address that will receive the output assets",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb8"
+          },
+          "asset": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native address of the token/asset to be received as output",
+            "example": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+          },
+          "amount": {
+            "description": "For exact-input: ignored by the quote decoder and not used for quoting. For exact-output: exact amount user wants to receive and is used for quoting",
+            "example": "2000000000000000000",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "calldata": {
+            "description": "Optional calldata describing how the receiver will consume the output. Enables composability with other protocols",
+            "example": "0x095ea7b3...",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain",
+          "receiver",
+          "asset"
+        ]
+      },
+      "QuotePreviewDto": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "description": "Inputs for the preview",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InputDto"
+            }
+          },
+          "outputs": {
+            "description": "Outputs for the preview",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputDto"
+            }
+          }
+        },
+        "required": [
+          "inputs",
+          "outputs"
+        ]
+      },
       "QuoteMetadataDto": {
         "type": "object",
         "properties": {
           "exclusiveFor": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Exclusive for address (hex32) - solver address that can fill this quote, or null",
-            "example": "0x1234567890123456789012345678901234567890",
-            "nullable": true
+            "example": "0x1234567890123456789012345678901234567890"
           }
         },
         "required": [
@@ -3680,7 +4224,7 @@
           "validUntil": {
             "type": "number",
             "description": "Quote validity timestamp in unix timestamp (seconds)",
-            "example": 1700000000
+            "example": 1900000000
           },
           "eta": {
             "type": "number",
@@ -3771,7 +4315,7 @@
             "properties": {
               "user": {
                 "description": "User address on source chain (initiator of the intent)",
-                "example": "0x",
+                "example": "0x742d35cc6634c0532925a3b8d0c0e1c4c5c5c5c5",
                 "type": "string"
               },
               "nonce": {
@@ -3841,21 +4385,35 @@
                       "type": "string"
                     },
                     "callbackData": {
-                      "type": "string",
                       "description": "The remote call data",
-                      "nullable": true
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "context": {
-                      "type": "string",
                       "description": "The fulfillment context",
-                      "nullable": true
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "oracle",
                     "settler",
                     "token",
-                    "recipient"
+                    "amount",
+                    "recipient",
+                    "chainId"
                   ]
                 },
                 "description": "Array of output objects"
@@ -3863,6 +4421,10 @@
             },
             "required": [
               "user",
+              "nonce",
+              "originChainId",
+              "fillDeadline",
+              "expires",
               "inputOracle",
               "inputs",
               "outputs"
@@ -3876,7 +4438,7 @@
           },
           "inputSettler": {
             "description": "Input settler address on source chain. Used to determine the type of order [escrow, compact] (mandatory for all orders)",
-            "example": "0x",
+            "example": "0x00000000000000447f2a2544c4c1d8c0e2a3b1c9",
             "type": "string"
           },
           "sponsorSignature": {
@@ -4002,6 +4564,127 @@
           "outputs"
         ]
       },
+      "SubmittedOrderQuoteDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Quote ID",
+            "example": "51"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Quote creation timestamp",
+            "example": "2025-10-16T11:51:59.426Z"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "Quote last update timestamp",
+            "example": "2025-10-16T11:57:14.716Z"
+          },
+          "quoteId": {
+            "type": "string",
+            "description": "Unique quote identifier",
+            "example": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n"
+          },
+          "fromChainNetworkId": {
+            "type": "string",
+            "description": "Source chain network ID",
+            "example": "84532"
+          },
+          "toChainNetworkId": {
+            "type": "string",
+            "description": "Destination chain network ID",
+            "example": "11155111"
+          },
+          "fromAssetAddress": {
+            "type": "string",
+            "description": "Source asset address",
+            "example": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+          },
+          "toAssetAddress": {
+            "type": "string",
+            "description": "Destination asset address",
+            "example": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+          },
+          "fromAssetDecimals": {
+            "type": "number",
+            "description": "Source asset decimals",
+            "example": 6
+          },
+          "toAssetDecimals": {
+            "type": "number",
+            "description": "Destination asset decimals",
+            "example": 6
+          },
+          "quote": {
+            "type": "string",
+            "description": "Quote rate",
+            "example": "0.98548764945417963"
+          },
+          "inputAmount": {
+            "type": "string",
+            "description": "Input amount",
+            "example": "30380900"
+          },
+          "outputAmount": {
+            "type": "string",
+            "description": "Output amount",
+            "example": "29940002"
+          },
+          "expiry": {
+            "type": "string",
+            "description": "Quote expiry timestamp",
+            "example": "2026-05-05T00:44:36.000Z"
+          },
+          "exclusiveFor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Exclusive for address",
+            "example": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
+          },
+          "user": {
+            "type": "string",
+            "description": "Quote owner address",
+            "example": "0x9773DAcbc46CAFb4e055060565e319922B48607D"
+          },
+          "orderId": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Associated order ID",
+            "example": 13
+          },
+          "solverId": {
+            "type": "number",
+            "description": "Solver ID",
+            "example": 1
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "updatedAt",
+          "quoteId",
+          "fromChainNetworkId",
+          "toChainNetworkId",
+          "fromAssetAddress",
+          "toAssetAddress",
+          "fromAssetDecimals",
+          "toAssetDecimals",
+          "quote",
+          "inputAmount",
+          "outputAmount",
+          "expiry",
+          "exclusiveFor",
+          "user",
+          "orderId",
+          "solverId"
+        ]
+      },
       "OrderMetaDto": {
         "type": "object",
         "properties": {
@@ -4039,82 +4722,108 @@
             "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5"
           },
           "orderInitiatedTxHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Transaction hash when order was initiated (on-chain order) [eg: Open escrow event]",
-            "example": "0x1234567890abcdef1234567890abcdef12345678",
-            "nullable": true
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
           "orderDeliveredTxHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Transaction hash of the OutputFilled event",
-            "example": "0x1234567890abcdef1234567890abcdef12345678",
-            "nullable": true
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
           "orderVerifiedTxHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Transaction hash of the OutputProven event",
-            "example": "0x1234567890abcdef1234567890abcdef12345678",
-            "nullable": true
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
           "orderSettledTxHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Transaction hash of the Finalised event",
-            "example": "0x1234567890abcdef1234567890abcdef12345678",
-            "nullable": true
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
           "refundTxHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Transaction hash of the Refunded event",
-            "example": "0x1234567890abcdef1234567890abcdef12345678",
-            "nullable": true
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
           "signedAt": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Date when the order was signed",
-            "example": "2024-01-01T00:00:00.000Z",
-            "nullable": true
+            "example": "2024-01-01T00:00:00.000Z"
           },
           "expiredAt": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Date when the order expires",
-            "example": "2024-01-02T00:00:00.000Z",
-            "nullable": true
+            "example": "2024-01-02T00:00:00.000Z"
           },
           "deliveredAt": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Date when the order was delivered",
-            "example": "2024-01-01T12:00:00.000Z",
-            "nullable": true
+            "example": "2024-01-01T12:00:00.000Z"
           },
           "settledAt": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Date when the order was settled",
-            "example": "2024-01-01T18:00:00.000Z",
-            "nullable": true
+            "example": "2024-01-01T18:00:00.000Z"
           },
           "refundedAt": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Date when the order was refunded",
-            "example": "2024-01-01T18:00:00.000Z",
-            "nullable": true
+            "example": "2024-01-01T18:00:00.000Z"
           },
           "lastCompactDepositBlockNumber": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Last compact deposit block number",
-            "example": "12345678",
-            "nullable": true
+            "example": "12345678"
           },
           "quoteId": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Quote ID associated with the order",
-            "example": "quote-123456",
-            "nullable": true
+            "example": "quote-123456"
           },
           "solverAddress": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Solver address that filled the order",
-            "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5",
-            "nullable": true
+            "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5"
           },
           "integratorKeyHash": {
             "type": "string",
@@ -4155,25 +4864,34 @@
           },
           "quote": {
             "description": "The quote details",
-            "nullable": true,
-            "type": "object",
-            "allOf": [
+            "anyOf": [
               {
-                "$ref": "#/components/schemas/QuoteResponseDto"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/SubmittedOrderQuoteDto"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "sponsorSignature": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Sponsor signature",
-            "example": null,
-            "nullable": true
+            "example": null
           },
           "allocatorSignature": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Allocator signature",
-            "example": null,
-            "nullable": true
+            "example": null
           },
           "inputSettler": {
             "type": "string",
@@ -4379,34 +5097,44 @@
             "example": "8965673"
           },
           "exclusiveFor": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Exclusive for address",
-            "example": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-            "nullable": true
+            "example": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f"
           },
           "fromAssetRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Source asset record ID",
-            "example": 7,
-            "nullable": true
+            "example": 7
           },
           "toAssetRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Destination asset record ID",
-            "example": 8,
-            "nullable": true
+            "example": 8
           },
           "fromChainRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Source chain record ID",
-            "example": 11,
-            "nullable": true
+            "example": 11
           },
           "toChainRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Destination chain record ID",
-            "example": 12,
-            "nullable": true
+            "example": 12
           },
           "solverId": {
             "type": "number",
@@ -4414,10 +5142,12 @@
             "example": 2
           },
           "integratorKeyHash": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Integrator key hash this quote is tagged for, or null for open-market quotes",
-            "example": "a1b2c3d4e5f6...",
-            "nullable": true
+            "example": "a1b2c3d4e5f6..."
           }
         },
         "required": [
@@ -4824,16 +5554,20 @@
         "type": "object",
         "properties": {
           "symbol": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Token symbol (null if token not registered in system)",
-            "example": "USDC",
-            "nullable": true
+            "example": "USDC"
           },
           "name": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Token name (null if token not registered in system)",
-            "example": "USDC",
-            "nullable": true
+            "example": "USDC"
           },
           "address": {
             "type": "string",
@@ -4892,28 +5626,36 @@
             "example": 0
           },
           "fromChainRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Source chain record ID",
-            "example": 3,
-            "nullable": true
+            "example": 3
           },
           "toChainRecordId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Destination chain record ID",
-            "example": 3,
-            "nullable": true
+            "example": 3
           },
           "fromTokenId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Source token record ID",
-            "example": 5,
-            "nullable": true
+            "example": 5
           },
           "toTokenId": {
-            "type": "object",
+            "type": [
+              "number",
+              "null"
+            ],
             "description": "Destination token record ID",
-            "example": 6,
-            "nullable": true
+            "example": 6
           },
           "isActive": {
             "type": "boolean",
@@ -4922,21 +5664,31 @@
           },
           "fromChain": {
             "description": "Source chain information",
-            "nullable": true,
-            "type": "object",
-            "allOf": [
+            "anyOf": [
               {
-                "$ref": "#/components/schemas/RouteChainInfoDto"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RouteChainInfoDto"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "toChain": {
             "description": "Destination chain information",
-            "nullable": true,
-            "type": "object",
-            "allOf": [
+            "anyOf": [
               {
-                "$ref": "#/components/schemas/RouteChainInfoDto"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RouteChainInfoDto"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5000,10 +5752,12 @@
             "example": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
           },
           "symbol": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Token symbol (null if token not registered in system)",
-            "example": "USDC",
-            "nullable": true
+            "example": "USDC"
           },
           "decimals": {
             "type": "number",
@@ -5011,10 +5765,12 @@
             "example": 6
           },
           "name": {
-            "type": "object",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Token name (null if token not registered in system)",
-            "example": "USDC",
-            "nullable": true
+            "example": "USDC"
           }
         },
         "required": [

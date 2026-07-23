@@ -1,0 +1,167 @@
+# LiquidLane conventions
+
+LiquidLane is shared liquidity infrastructure, not a solver. This document is the compact standard for
+RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
+
+## Ownership
+
+| Package | Owns |
+|---|---|
+| `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, and rate math |
+| `internal/liquidlane/gas` | neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault facts |
+| `internal/liquidlane/discounts` | signed-discount HTTP client, wire parsing, and validation |
+| `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
+
+The generic framework must not know about LiquidLane. Execution is never shared: RFQ, LI.FI, OEV, and
+UniswapX use different contracts, signatures, status models, and callbacks.
+
+## Canonical model
+
+Every route is one-way:
+
+```text
+tokenIn -> LiquidLaneAdapter -> tokenOut
+```
+
+`tokenIn` is a member of `tokensToRedeem`; `tokenOut` is `adapter.vault().asset()`. External APIs may
+use `asset`, `collateral`, or other names, but adapters must map them to `tokenIn`/`tokenOut` before the
+facts reach a strategy.
+
+| Type | Meaning |
+|---|---|
+| `Adapter` | stable adapter, vault, output token, and output decimals |
+| `Route` | stable adapter + `tokenIn` + `tokenOut` direction and decimals |
+| `Inventory` | latest executable capacity/rate for one route |
+| `FillQuote` | latest executable output for one concrete `amountIn` |
+| `Auth` | direct caller authorization facts |
+| `gas.Snapshot` | adapter-local owner/market-maker acquire balances plus vault-level shared free/withdrawable liquidity |
+
+Core field rules:
+
+- `MaxAssets` is the current output cap in `tokenOut` units.
+- Direct inventory `MaxRate` is `getMaxRate(tokenIn)` and already includes `minDiscount`. A `FillQuote`
+  derives the same conservative fixed-point fact from `MaxAmountOut / AmountIn`, so fill-time private
+  offers are bounded without another RPC call.
+- Discount `MaxRate` comes from the discounts backend and already includes its advertised discount.
+- `GrossAmountOut` is raw `getAmountOut`; `MaxAmountOut` is the executable amount after discount.
+- `MinDiscount` is the adapter's current lower bound for a fill.
+- `ValidUntil` is an external offer deadline. Inventory does not carry a duplicate read timestamp;
+  solvers pass current chain/server time separately with each strategy decision.
+- Shared values are copied at constructors and treated as immutable after entering a cache or strategy.
+
+Stable ids are lowercase and content-derived:
+
+```text
+route:<chainId>:<adapter>:<tokenIn>:<tokenOut>
+capacity:<chainId>:<vault>:<tokenOut>
+candidate:<routeId>
+candidate:<routeId>:discount:<discountId>
+```
+
+`CapacityID`, not `RouteID`, is the accounting boundary. Routes backed by the same vault/output pool are
+not independent liquidity.
+
+## Reads and freshness
+
+LiquidLane reads always target RPC `latest` through ordinary `chain.Multicall`.
+
+- Do not use historical block tags or require archive-capable RPCs.
+- Batch related calls once per logical read. A single Multicall is internally coherent enough for current
+  quoting; separate protocol reads may naturally observe adjacent heads.
+- Do not attach an exact block number to latest inventory. Use decision-time chain state, TTLs, and
+  protocol deadlines.
+- A latest snapshot is an estimate until transaction inclusion. Strategies apply reserve, two-sided price
+  movement, minimum profit, gas, and deadline padding. Execution contracts revalidate current rate and
+  capacity; where the protocol permits, they clamp to a signed economic floor before reverting atomically.
+- Stable metadata (`vault`, asset, decimals, redeemable tokens) may be cached. Mutable inventory is
+  refreshed according to solver cadence or immediately before a fill.
+
+The shared reader exposes facts:
+
+```go
+ResolveRoutes(ctx, adapters) ([]Route, error)
+ReadInventory(ctx, routes) ([]Inventory, error)
+ReadFillQuotes(ctx, routes, tokenIn, amountIn) ([]FillQuote, error)
+ReadGasSnapshot(ctx, routes) (*gas.Snapshot, error)
+ReadAdapterSnapshot(ctx, adapter, filler) (AdapterSnapshot, error)
+ReadAuth(ctx, adapters, filler) ([]Auth, error)
+FilterAuthorized(ctx, inventory, filler) ([]Inventory, error)
+FilterAuthorizedRoutes(ctx, routes, filler) ([]Route, error)
+```
+
+Implementation rules:
+
+- Use generated `PackXxx`/`UnpackXxx` helpers and Multicall batches.
+- Bound `tokensToRedeem`; reject invalid addresses, decimals, rates, caps, and discounts.
+- Fail startup when a configured adapter's stable `vault`, output asset, output decimals,
+  `tokensToRedeem` list, or input-token decimals cannot be resolved. Silently running with a partial
+  configured adapter or route set is not allowed.
+- Treat an unreadable `paused` or authorization result as unavailable.
+- Treat an unreadable adapter-local `acquireBalance` as zero for gas prediction. This deliberately
+  selects an allocate/deallocate/unknown route with an equal or higher gas budget.
+- Skip a bad route without hiding a batch transport error.
+- Direct authorization is `filler == marketMaker || filler == owner || isFiller(marketMaker, filler)`.
+
+Block polling is allowed as a refresh trigger. Receipt confirmations and protocol epochs may also use block
+numbers. The restriction is specifically against historical state calls and exact-block LiquidLane reads.
+
+## Strategy boundary
+
+The solver normally reads LiquidLane and passes immutable `Inventory` or `FillQuote` facts into the
+strategy. The solver owns refresh cadence, cache replacement, reservations, and transaction submission.
+Runtime values such as current block time, the txmanager fee cap, and `gas.Snapshot` are also facts. The
+shared predictor owns only adapter swap route units. Conversion into token-denominated gas cost,
+solver-specific settlement/private-payload units, margin, buffers, ranges, and route selection belong to
+the strategy. A transaction-level strategy calculation charges settlement gas once, consumes acquire
+balances per adapter, and consumes free/withdrawable liquidity once per shared vault. A strategy may reduce
+all three budgets by its existing inventory reserve before route classification so a near-boundary plan is
+priced as the next more expensive route. It must not add a standalone full-tx gas estimate for every route.
+
+If the set of reads is itself strategy-dependent, inject a narrow read-only capability such as `Pricing`
+or `LiquidLaneState`. Do not inject a signer, tx manager, or unrestricted chain client into the strategy.
+The capability must accept `context.Context`, batch calls, return typed facts, and be replaceable by a fake.
+
+Webhook strategies should receive the same facts in their request. A remote strategy may own its own RPC
+only when that deployment deliberately accepts different freshness and availability from the local path.
+
+## Discounts and capacity
+
+Direct and signed-discount inventory for the same route are alternative ways to use the same capacity.
+Never sum them. Pick one candidate per route, then reserve against the shared `CapacityID`.
+
+For signed discounts:
+
+1. List and validate advertised offers for quote construction.
+2. Never apply `discount` to backend `maxRate` a second time.
+3. Resolve signatures again immediately before fill.
+4. Recheck id, adapter, tokens, current discount bounds, and deadlines.
+5. Reserve capacity for upward price movement: discount swaps release their full computed output and
+   cannot be reduced to a requested amount.
+6. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
+
+Discount discovery is shared; discount-to-route matching and execution calldata remain solver-local.
+
+## Solver profiles
+
+| Solver | LiquidLane usage | Solver-local responsibility |
+|---|---|---|
+| RFQ | amount-specific pricing and recovery inventory; narrow pricing capability may read during strategy evaluation | quote cache, RFQ order lifecycle, Reactor/Executor calldata |
+| LI.FI | latest inventory on tick/block refresh; fresh `FillQuote` for each received order | range curves, gas/margin policy, OIF contexts, exclusivity, executor finalise, immediate fill |
+| OEV | background latest inventory stored by Morpho market id | Morpho discovery, auction pricing, safety haircut, liquidation sizing, bundle/gas/deposit accounting |
+| UniswapX | latest inventory either on request or from a short-lived background cache | Reactor orders, Permit2/cosigner rules, auction curve, order status and fill calldata |
+
+3F does not use LiquidLane and should not be forced through these types. Shared code is justified by the
+protocol dependency, not by making every solver look identical.
+
+## Adding another solver
+
+1. Resolve configured adapters into shared routes.
+2. Choose latest-state refresh cadence and a stale-data policy.
+3. Map shared facts into a small solver-specific strategy input.
+4. Account capacity by `CapacityID` and in-flight execution.
+5. Keep gas, margin, price movement, auctions, and exclusivity in the strategy.
+6. Re-read amount-specific state and protocol status before sending funds-moving calldata.
+7. Keep execution, signatures, wire DTOs, and failure state machines in the solver package.
+
+The shared package provides current LiquidLane facts. Solvers decide when those facts are sufficient and
+contracts enforce the final executable truth.

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
@@ -48,4 +49,9 @@ func (f *fakeStrategyPricing) AmountsOut(
 
 func newDefaultTestStrategy(decimals int, out map[common.Address]*big.Int) types.Strategy {
 	return defaultstrategy.New(&fakeStrategyPricing{decimals: decimals, out: out})
+}
+
+func testInventory(adapter, tokenIn, tokenOut common.Address, maxAssets, maxRate *big.Int) solverInventory {
+	route := liquidlane.NewRoute(1, adapter, common.Address{}, tokenIn, tokenOut, 18, 6)
+	return liquidlane.DirectInventory(route, maxAssets, maxRate)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
@@ -92,9 +93,11 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Shared, nonce-serialized transaction sender.
 	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations: cfg.TxManager.Confirmations,
-		MaxFeeGwei:    cfg.TxManager.MaxFeeGwei,
-		TipGwei:       cfg.TxManager.TipGwei,
+		Confirmations:       cfg.TxManager.Confirmations,
+		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
+		TipGwei:             cfg.TxManager.TipGwei,
+		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
+		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 	}, log)
 	go txm.Start(ctx)
 

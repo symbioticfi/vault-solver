@@ -41,7 +41,7 @@ almost wholesale, plus a UniswapX protocol adapter.
 | Order version | **V2 first (mainnet); codec abstracted for V3** | "Goal is mainnet" (V2). Tempo + most L2s are V3 — slots in behind the same interface later. |
 | Pricing v1 | **Redemption rate − fixed haircut**, gas-aware floor | Ship fast, tune later (matches how `3f`/`rfq` shipped). |
 | On-chain executor | **UniswapX-specific** `UniswapXExecutor.sol` | Smallest, auditable surface; no multi-venue abstraction yet. |
-| Code organization | **Sibling solver reusing rfq's `default` + `webhook` strategies** — the strategy layer (contract, registry, strategies) is promoted to a shared package on second use, alongside `internal/liquidlanemath` + `internal/webhook` | The strategies are protocol-neutral (verified, §2.1): selection/validation/caching/recovery all transfer; only candidate construction and pricing policy are solver-side. |
+| Code organization | **Sibling solver reusing rfq's `default` + `webhook` strategies** — the strategy layer (contract, registry, strategies) is promoted to a shared package on second use, alongside `internal/liquidlane` + `internal/webhook` | The strategies are protocol-neutral (verified, §2.1): selection/validation/caching/recovery all transfer; only candidate construction and pricing policy are solver-side. |
 
 **Directionality (structural constraint):** `LiquidLaneAdapter`s are one-way — they consume a
 token-to-redeem and pay out the vault asset. So the only fillable orders are **RWA-in → vault-asset-out**:
@@ -59,14 +59,15 @@ economics, and quoting any pair our vaults can't settle.
 
 A new self-contained `internal/solvers/uniswapx/` implementing `solver.Solver` — **no framework edits**
 (CLAUDE.md modularity rule). Code organization follows the repo's **solver-local strategy architecture**
-(see `docs/strategy-plan.md`). §2.5 is the consolidated reuse-vs-delta implementation checklist.
+(see `docs/strategy-plan.md`) and the shared LiquidLane read/type conventions
+(`docs/LIQUIDLANE-CONVENTIONS.md`). §2.5 is the consolidated reuse-vs-delta implementation checklist.
 
 ### 2.1 Shared strategy logic — reusing the rfq strategy layer
 
 > Supersedes this plan's earlier `internal/symbiotic/` shared-tier proposal, in favor of the repo's
 > **solver-local strategy architecture** (`docs/strategy-plan.md`): the framework never parses/routes
 > strategy configs; each solver defines its own **strategy contract and registry**; and the genuinely
-> cross-solver pieces live in **`internal/liquidlanemath/`** (the LiquidLane fixed-point rate math:
+> cross-solver pieces live in **`internal/liquidlane/`** (LiquidLane facts, reads, auth, ids, and fixed-point rate math:
 > `AmountOutForRate`, `MaxAmountInForRate`, `MinAmountInForAmountOut`, `RateForAmountOut`, `RATE_SCALE`
 > 1e18) and **`internal/webhook/`** (a neutral HTTP-decider transport client — timeouts, body caps,
 > env-backed headers, strict decode).
@@ -74,7 +75,7 @@ A new self-contained `internal/solvers/uniswapx/` implementing `solver.Solver` �
 **Verified against the rfq strategy implementation (2026-07-06): the `default` and `webhook` strategies
 are protocol-neutral and reusable by `uniswapx` as-is.** Everything the `default` strategy does —
 candidate matching by `tokenOut`, oracle pricing through the `Pricing` seam, greedy rate-sorted leg
-selection on `liquidlanemath`, the validation/replay rules (legs reference input candidates, no
+selection on `liquidlane`, the validation/replay rules (legs reference input candidates, no
 duplicates, ≤ `maxAssets`, achievable under `maxRate`, sums reconcile), the TTL fill-plan cache keyed by
 `quoteId`, and `BuildFillPlan` recovery with the `RequiredAmountOut` gate — operates purely on neutral
 types (addresses, big.Ints, candidates). The same holds for the `webhook` strategy and its JSON wire
@@ -91,7 +92,7 @@ the contract, registry, and the two strategy implementations.
 ```
 internal/
   {config,chain,signer,txmanager,solver,observability}/   # framework — unchanged, protocol-agnostic
-  liquidlanemath/    # SHARED: rate math, reused verbatim
+  liquidlane/        # SHARED: LiquidLane facts, reads, auth, ids, and rate math
   webhook/           # SHARED: remote-strategy transport, reused verbatim
   llstrategy/        # PROMOTED from internal/solvers/rfq/ when uniswapx lands (naming TBD)
     types/           #   Strategy{DecideQuote, BuildFillPlan}, Pricing seam, QuoteInput/FillPlan + wire JSON
@@ -102,7 +103,7 @@ internal/
     uniswapx/        # consumes the promoted layer; chain candidate construction + UniswapX plumbing here
 ```
 
-- **Reused as-is:** `internal/liquidlanemath/`, `internal/webhook/`, and the promoted strategy layer —
+- **Reused as-is:** `internal/liquidlane/`, `internal/webhook/`, and the promoted strategy layer —
   contract, registry, `default` + `webhook` strategies with their selection/validation/caching/recovery
   logic unchanged. The discount branch is simply never taken (uniswapx candidates carry no `DiscountID`).
 - **Two things that need no strategy changes at all** (they compose from outside):
@@ -214,7 +215,7 @@ code 2026-07-06 — see §2.1 for the extraction evidence.)
 
 **Reused as-is:**
 
-- `internal/liquidlanemath/` — the LiquidLane fixed-point rate math (`AmountOutForRate`,
+- `internal/liquidlane/` — LiquidLane facts plus fixed-point rate math (`AmountOutForRate`,
   `MaxAmountInForRate`, `MinAmountInForAmountOut`, `RateForAmountOut`, `RATE_SCALE` 1e18), verbatim.
 - `internal/webhook/` — the neutral remote-decider transport client, verbatim (backs the optional
   `webhook` strategy).
@@ -457,7 +458,7 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    reads + **one Multicall3 `getAmountOut`** across candidate adapters for the matching asset (served to
    the strategy through its `Pricing` seam).
 3. `Strategy.DecideQuote` (the shared `default` strategy): greedy direct-leg selection on
-   `internal/liquidlanemath`. Then the **solver-side policy** (§2.1): `quote = planOutput − haircutBps`,
+   `internal/liquidlane`. Then the **solver-side policy** (§2.1): `quote = planOutput − haircutBps`,
    then a **gas-aware min-profit floor** (est. fill gas × gas price, netted at the configured loan/ETH
    rate). Below floor ⇒ **decline**.
 4. Persist the strategy by `quoteId` (TTL-swept), return `200` with `amountOut` (or `amountIn` for
@@ -466,7 +467,7 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
 `EXACT_OUTPUT`: the shared `QuoteInput` contract is exact-input-only, so **v1 declines `EXACT_OUTPUT` by
 default** (§2.1). If flow data says it matters, the additive path is an optional trade-type/amount-out
 field on the shared contract plus an output-driven loop in `default` walking the same rate-sorted legs on
-`liquidlanemath.MinAmountInForAmountOut` — `rfq` is unaffected either way (it only ever sends
+`liquidlane.MinAmountInForAmountOut` — `rfq` is unaffected either way (it only ever sends
 exact-input). Pricing is intentionally naive for v1; a competitive/win-rate controller (modeling
 `exclusivityOverrideBps`, time-in-auction, competing fillers) is a later follow-up — the pricing policy
 function is the seam to extend.
@@ -693,7 +694,7 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 ### Internal (this monorepo)
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
 - Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
-  `internal/liquidlanemath` + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
+  `internal/liquidlane` + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - On-chain adapters/executor live in the sibling `rfq` repo (consumed via `api/bindings/`)
 

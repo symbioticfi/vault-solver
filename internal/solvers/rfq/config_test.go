@@ -186,7 +186,7 @@ func TestParseConfig_Adapters(t *testing.T) {
 	if v.Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") {
 		t.Fatalf("adapter entry not parsed: %+v", v)
 	}
-	if v.Vault != (common.Address{}) || v.Asset != (common.Address{}) {
+	if v.Vault != (common.Address{}) || v.TokenOut != (common.Address{}) {
 		t.Fatalf("vault/asset should be unresolved before startup: %+v", v)
 	}
 }

@@ -19,7 +19,8 @@ are listed under [Solvers](#solvers).
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
-  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction sender shared across solvers.
+  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster with independent
+  receipt waits, shared across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -39,8 +40,9 @@ and validated by its own solver. Adding a solver touches **no** framework code �
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | [plan](docs/3F-PLAN.md) | [yaml](config/3f.example.yaml) |
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
+| `lifi-samechain` | LI.FI same-chain intents over LiquidLane | [plan](docs/LIFI-PLAN.md) | [yaml](config/lifi.example.yaml) |
 
-The `3f-bridge-facilitator`, `rfq-filler`, and `redstone-oev` solvers expose a pluggable
+All solvers expose a pluggable
 **strategy** — the built-in `default` or an external `webhook` you run; see
 [Strategies](#strategies).
 
@@ -97,6 +99,47 @@ and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 
+### LI.FI Same-Chain Intents — `lifi-samechain`
+
+A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
+standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
+LI.FI WebSocket feed. Before each fill it rechecks the canonical order status, adapter state, gas cost, and
+strategy decision, then atomically claims the input, redeems it through LiquidLane, and fills the output via
+`LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
+decisions and standing quotes until those transactions complete.
+
+The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
+a caller signature bound to the executor's EIP-712 domain, appears as `exclusiveFor` in quotes, and calls the
+settler's direct finalise path. The framework signer is an authorized executor caller and transaction sender;
+fills do not carry a per-order `AllowOpen` signature.
+The owner manages callers, while ERC-1271 validates domain-separated registration signatures against the
+current callers.
+
+Our deployment convention is one LI.FI API key per registered executor contract. LI.FI can register
+multiple accounts under one key, but this deployment deliberately does not share a key across executors.
+All processes using one executor therefore share its API key and LI.FI reputation; active/active operation
+also requires external order coordination. The API key, executor owner key, and caller transaction key are
+distinct credentials.
+
+Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
+scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at WebSocket
+admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
+`solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
+`permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
+route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
+its own required max age. The default strategy evaluates quote ranges as exact input across every allocation
+transition; `rangeCount` sets the target number of ranges across available capacity. See the
+plan for settlement, pricing, concurrency, and onboarding details:
+[`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
+[`config/lifi.example.yaml`](config/lifi.example.yaml).
+
+The opened-order settler must report `governanceFee() == 0`. The solver checks this at startup and again for
+every admitted order. Startup fails closed; at runtime an unreadable or non-zero fee skips the order with an
+error log before planning or submission.
+
+The implementation is ready for the opened-order path. The next live E2E requires deploying the current
+executor build, registering it with LI.FI, and granting it filler authorization on the target adapter.
+
 ### Strategies
 
 The solvers split protocol plumbing (reads, signing, submission — fixed) from the
@@ -104,10 +147,17 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 
 - **`default`** — the built-in in-process strategy for that solver.
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
-  the raw facts as JSON and executes the plan it returns, so your service owns the logic.
+  the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
+  LI.FI also rejects returned fills that exceed current capacity or do not cover the order plus gas.
+  It uses `POST /decide-quotes` and `POST /decide-fill` under the configured webhook URL.
 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
+
+The shared `txManager` fee-bumps pending transactions on `replacementIntervalMs`. After
+`pendingTimeoutMs`, it cancels only the lowest unresolved nonce before allowing later queued nonces
+to proceed. The required `maxFeeGwei` is the absolute ceiling; normal sends reserve one fee bump
+inside that ceiling so cancellation still has headroom.
 
 ## Requirements
 
@@ -122,6 +172,7 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
+make test-txmanager-anvil # real pending replacement/cancellation against local Anvil
 make lint             # golangci-lint
 ./bin/vault-solver run --config config/3f.example.yaml
 ```
@@ -141,7 +192,8 @@ implementation and hands the opaque `solver.config` block to that solver to type
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
 including the shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order when the primary is unavailable. **Never commit a real key or live config** — keys are
+in order when the primary is unavailable. LiquidLane state reads always use RPC `latest`; an archive
+node is not required. **Never commit a real key or live config** — keys are
 supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
 
 ## Code generation

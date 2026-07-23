@@ -10,7 +10,7 @@ import (
 )
 
 // The generated rfqbackend client carries the spec's `/api/v1` prefix, so the backend client rooted at
-// the httptest server URL hits `/api/v1/orders`; the discount transport rewrite (internalDiscountTransport)
+// the httptest server URL hits `/api/v1/orders`; the shared private-discounts client transport rewrite
 // sends discount calls to `/api-internal/v1/discounts` instead (orders unchanged).
 
 func TestBackendClient_ListOpenOrders(t *testing.T) {

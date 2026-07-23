@@ -167,7 +167,7 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 | `strategies/default/monitor.go` | Morpho API snapshot, atomic hot-path state, and adapter-scoped market filtering |
 | `strategies/default/morphoapi.go` | OEV-local adapter over generated Morpho GraphQL operations: `markets` returns adapter-scoped market state (§3.4), `marketPositions` returns at-risk position state capped at `maxTrackedPositions` (§3.2) |
 | `api/morphographql` | generated Morpho GraphQL binding from vendored schema + explicit operation documents |
-| `chainreader.go` | solver-owned on-chain reads: Executor accounting and adapter snapshot |
+| `chainreader.go` | solver-owned Executor accounting plus mapping from the shared `liquidlane.Reader` snapshot into OEV strategy types |
 | `reservations.go` | in-flight auction reservation + pending-auction snapshot + auction-id de-dup (`seenAuctions`) |
 | `wsclient.go` | resilient WS client: reconnect/backoff/jitter, ~7 h rotation, heartbeat, subscribe replay |
 | `wsmessages.go` | wire types pinned to RedStone's zod + a captured auction frame, including auction identity/key hashing |

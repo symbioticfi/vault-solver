@@ -10,7 +10,10 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -45,21 +48,20 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID            int64
-	executor           common.Address
-	orderLimit         int
-	vaults             []recoveryVault
-	whitelist          adapterWhitelist // nil disables adapter filtering
-	tokensToQuote      string
-	permissionedTokens map[common.Address]bool
-	discountsEnabled   bool // false (external solver) skips the backend discounts API entirely
-	backend            orderBackend
-	store              *store
-	reader             recoveryReader
-	strategy           types.Strategy
-	txm                txSender
-	log                logr.Logger
-	now                func() time.Time
+	chainID          int64
+	executor         common.Address
+	orderLimit       int
+	vaults           []recoveryVault
+	whitelist        adapterWhitelist // nil disables adapter filtering
+	tokenPolicy      tokenpolicy.Policy
+	discountsEnabled bool // false (external solver) skips the backend discounts API entirely
+	backend          orderBackend
+	store            *store
+	reader           recoveryReader
+	strategy         types.Strategy
+	txm              txSender
+	log              logr.Logger
+	now              func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -281,7 +283,7 @@ func (e *executionService) buildFillPlan(
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
-	requireSingleRoute := requiresSingleRoute(e.tokensToQuote, e.permissionedTokens, req.TokenIn)
+	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	input := newFillInput(e.chainID, e.executor, req, inv, required, requireSingleRoute, e.now())
 	plan, err := e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
@@ -336,31 +338,30 @@ func (e *executionService) discountInventories(
 	for _, d := range direct {
 		seen[d.Adapter] = true
 	}
+	now := e.now()
 	var out []solverInventory
 	for _, d := range resp.Discounts {
-		if !common.IsHexAddress(d.Adapter) || !common.IsHexAddress(d.TokenToRedeem) || !common.IsHexAddress(d.Collateral) {
+		offer, parseErr := discounts.ParseOffer(d)
+		if parseErr != nil {
+			e.log.V(1).Info("recover: skip invalid discount", "discountId", d.DiscountID, "error", parseErr.Error())
 			continue
 		}
-		if common.HexToAddress(d.TokenToRedeem) != tokenIn {
+		if offer.Deadline <= now.Unix() || offer.TokenToRedeem != tokenIn {
 			continue
 		}
-		adapter := common.HexToAddress(d.Adapter)
+		adapter := offer.Adapter
 		if !e.whitelist.allows(adapter) {
 			continue
 		}
 		if seen[adapter] {
 			continue
 		}
-		maxOut, ok1 := new(big.Int).SetString(d.MaxAssets, 10)
-		maxRate, ok2 := new(big.Int).SetString(d.MaxRate, 10)
-		if !ok1 || !ok2 {
-			continue
-		}
-		h := common.HexToHash(d.DiscountID)
-		out = append(out, solverInventory{
-			Adapter: adapter, Asset: common.HexToAddress(d.Collateral), AssetDecimals: d.CollateralDecimals,
-			MaxAssets: maxOut, MaxRate: maxRate, DiscountID: &h,
-		})
+		route := liquidlane.NewRoute(
+			e.chainID, adapter, common.Address{}, tokenIn, offer.Collateral, 0, offer.CollateralDecimals,
+		)
+		out = append(out, liquidlane.DiscountInventory(
+			route, offer.MaxAssets, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0),
+		))
 	}
 	return out
 }
@@ -378,47 +379,29 @@ var errDiscountsDisabled = errors.New("discount leg present but discounts are di
 func toDiscountSwapInput(
 	r *resolveDiscountResponse, leg fillLeg, recipient common.Address,
 ) (executor.IReactorDiscountSwapInput, error) {
-	d := r.Discount
-	for _, a := range []string{d.Adapter, d.TokenToRedeem, d.Signer, d.Protocol} {
-		if !common.IsHexAddress(a) {
-			return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid address %q", a)
-		}
+	parsed, err := discounts.ParseSigned(r)
+	if err != nil {
+		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: %w", err)
 	}
-	if common.HexToAddress(d.Adapter) != leg.Adapter {
+	if parsed.Adapter != leg.Adapter {
 		return executor.IReactorDiscountSwapInput{}, errors.Errorf(
-			"%w: resolved %s, leg %s", errDiscountAdapterMismatch, d.Adapter, leg.Adapter.Hex())
-	}
-	discount, ok := new(big.Int).SetString(d.Discount, 10)
-	if !ok {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid amount %q", d.Discount)
-	}
-	nonce, err := hexutil.DecodeBig(d.Nonce)
-	if err != nil {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: invalid nonce %q: %w", d.Nonce, err)
-	}
-	signerSig, err := hexutil.Decode(r.SignerSignature)
-	if err != nil {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: signerSignature: %w", err)
-	}
-	protocolSig, err := hexutil.Decode(r.ProtocolSignature)
-	if err != nil {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: protocolSignature: %w", err)
+			"%w: resolved %s, leg %s", errDiscountAdapterMismatch, parsed.Adapter.Hex(), leg.Adapter.Hex())
 	}
 	// Mirrors buildDiscountSwapInputs in discounts.ts: the outer adapter comes from the resolved
 	// discount's adapter, the inner Discount no longer carries the vault field, and the input drops
 	// amountOut.
 	return executor.IReactorDiscountSwapInput{
-		Adapter: common.HexToAddress(d.Adapter),
+		Adapter: parsed.Adapter,
 		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
 			Discount: executor.ILiquidLaneAdapterDiscount{
-				TokenToRedeem: common.HexToAddress(d.TokenToRedeem),
-				Discount:      discount, Signer: common.HexToAddress(d.Signer), Protocol: common.HexToAddress(d.Protocol),
-				Nonce: nonce, Deadline: big.NewInt(d.Deadline),
+				TokenToRedeem: parsed.Terms.TokenToRedeem,
+				Discount:      parsed.Terms.Discount, Signer: parsed.Terms.Signer, Protocol: parsed.Terms.Protocol,
+				Nonce: parsed.Terms.Nonce, Deadline: parsed.Terms.Deadline,
 			},
-			SignerSignature:  signerSig,
-			ProtocolDeadline: big.NewInt(r.ProtocolDeadline),
+			SignerSignature:  parsed.SignerSignature,
+			ProtocolDeadline: parsed.ProtocolDeadline,
 		},
-		ProtocolSignature: protocolSig,
+		ProtocolSignature: parsed.ProtocolSignature,
 		Recipient:         recipient,
 		AmountIn:          new(big.Int).Set(leg.AmountIn),
 	}, nil

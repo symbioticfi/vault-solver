@@ -37,7 +37,7 @@ MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
-ABIS := IRequest IVaultController IWhitelist Executor Reactor
+ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
@@ -54,16 +54,19 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IER
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
+            LiquidLaneLifiExecutor:lifi/executor \
+            ILifiInputSettler:lifi/inputsettler \
             IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
             SymbioticOevSolver:oev/callback RedStoneExecutor:oev/executor Morpho:oev/morpho \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
-            AggregatorV3:oev/aggregator \
+            AggregatorV3:chainlink/aggregator \
             ERC20:erc20 Multicall3:multicall3
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
-# Executor, SymbioticOevSolver) plus a minimal ERC20 (decimals() only) aren't in our Foundry build, so their
-# ABIs are hand-vendored under api/abi/ (not in ABIS/CORE_MIRROR_ABIS/refresh-abi). RedStoneExecutor avoids
-# the rfq Executor name clash; solver ERC-20 reads (asset/balanceOf) reuse erc4626, the generic
-# chain.Decimals reader uses erc20.
+# Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
+# (decimals() only) aren't in our default Foundry build, so their ABIs are hand-vendored under
+# api/abi/ (not in ABIS/CORE_MIRROR_ABIS/refresh-abi). RedStoneExecutor avoids the rfq Executor
+# name clash; solver ERC-20 reads (asset/balanceOf) reuse erc4626, the generic chain.Decimals reader
+# uses erc20.
 # Multicall3 is v2 like everything else — api/abi/Multicall3.json is hand-vendored (not a Foundry contract),
 # so it's in BINDINGS_V2 but not ABIS. The chain.Multicall transport packs/unpacks aggregate3 and does its
 # own eth_call.
@@ -132,7 +135,7 @@ refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MO
 
 .PHONY: bindings
 bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; package = leaf dir)
-	@for pair in $(BINDINGS_V2); do \
+	@set -e; for pair in $(BINDINGS_V2); do \
 		c="$${pair%%:*}"; rel="$${pair##*:}"; pkg="$${rel##*/}"; \
 		abi="api/abi/$$c.json"; \
 		if [[ ! -f "$$abi" ]]; then echo "missing $$abi (run make refresh-abi)"; exit 1; fi; \
@@ -146,10 +149,7 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 # backend's OpenAPI 3.1 spec; we use it for the 3F (3.0) and LI.FI order-server specs too for one toolchain.
 # $(OPENAPI_GENERATOR_VERSION) is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is
 # stdlib-only (no go.mod change); the recipes strip the generator's non-package cruft, keeping just the Go
-# client. $(4) is optional extra generator flags — used only by the LI.FI recipe to pass
-# --skip-validate-spec (its spec is labelled OpenAPI 3.0.0 but uses 3.1 JSON-Schema constructs — prefixItems /
-# propertyNames — and has dangling oneOf $refs; the generator handles them fine but its strict validator
-# rejects them). 3f/rfq keep validation on.
+# client. $(4) is available for source-specific generator flags; current specs generate with validation on.
 define gen_openapi_client
 	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
 		generate --enable-post-process-file $(4) -i ./$(1) -g go -o ./$(2) --package-name $(3)
@@ -169,18 +169,7 @@ refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) f
 .PHONY: refresh-lifi-client
 refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generator, Go) from the vendored spec
 	@rm -f api/lifiorder/*.go
-	@# The raw vendored spec has two upstream defects that make the generated Go uncompilable (dangling
-	@# oneOf $refs in QuoteDto.order; multi-tag operations that duplicate request structs). We keep the
-	@# vendored file raw (contract of record) and generate from a normalized temp copy produced by
-	@# hack/lifi-openapi-normalize.py (see that script for the exact, documented fixes). Inlined rather than
-	@# using gen_openapi_client so the normalization + temp-file plumbing lives in one shell block;
-	@# --skip-validate-spec is still needed (the spec is labelled 3.0.0 but uses 3.1 JSON-Schema constructs).
-	tmp="$$(mktemp -p . --suffix=.lifi-normalized.json)"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		python3 hack/lifi-openapi-normalize.py < openapi/lifi-order.openapi.json > "$$tmp"; \
-		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
-			generate --enable-post-process-file --skip-validate-spec -i "$$tmp" -g go -o ./api/lifiorder --package-name lifiorder
-	cd api/lifiorder && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+	$(call gen_openapi_client,openapi/lifi-order.openapi.json,api/lifiorder,lifiorder)
 
 .PHONY: refresh-morpho-graphql-client
 refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient) from the vendored schema + operations
@@ -215,6 +204,10 @@ test: ## Run tests with race detector + coverage (hermetic only; fork/live suite
 .PHONY: test-oev-live
 test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia fork payload dump
 	go test -tags live -run TestLive -v ./internal/solvers/redstoneoev/...
+
+.PHONY: test-txmanager-anvil
+test-txmanager-anvil: ## Exercise replacement/cancellation against an Anvil mempool with automine disabled
+	go test -race -tags integration -run TestAnvilTxManagerPendingLifecycle -v ./internal/txmanager
 
 .PHONY: format
 format: ## Run golangci-lint with autofix
