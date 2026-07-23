@@ -190,7 +190,10 @@ instance, or a server-side cancellation — and it never double-offers an auctio
 the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and
 any pending sweep), so the bot reads no separate sleeve cap. Concurrency is the contract's
-`MAX_REQUESTS` constant (50), mirrored as a bot const.
+`MAX_REQUESTS` constant (50), mirrored as a bot const. A signed offer's `expiration` is anchored to the
+auction's `solve_start_time` plus a configurable `offerExpiryBuffer` (default 2h), never earlier than
+`now + buffer`, so the offer stays valid across the whole solve window regardless of when it is signed
+(not a fixed TTL from wall-clock).
 
 ### Per-auction adapter coverage and strategy split
 
