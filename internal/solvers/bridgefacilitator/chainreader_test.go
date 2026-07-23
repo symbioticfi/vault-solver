@@ -73,23 +73,6 @@ func TestDecodeAddr_RejectsZeroAddress(t *testing.T) {
 	}
 }
 
-// TestPpmToBps covers the ceil(ppm/100) conversion of minYieldPerRequest (ppm) to the bps the pre-screen
-// compares against the auction maxRate — rounded up so the bot never bids below the on-chain floor.
-func TestPpmToBps(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		ppm, want int64
-	}{
-		{0, 0}, {1, 1}, {99, 1}, {100, 1}, {150, 2}, {10_000, 100}, {1_000_000, 10_000},
-	}
-	for _, tc := range tests {
-		if got := ppmToBps(big.NewInt(tc.ppm)).Int64(); got != tc.want {
-			t.Errorf("ppmToBps(%d) = %d, want %d", tc.ppm, got, tc.want)
-		}
-	}
-}
-
 // newMulticallFakeClient returns a chain.Client backed by a minimal JSON-RPC httptest server.
 // The server responds to eth_chainId and eth_call; ethCallReplies are the hex-encoded bytes returned
 // by successive eth_call requests (i.e. each ABI-encoded Multicall3.aggregate3 Result[] array). With

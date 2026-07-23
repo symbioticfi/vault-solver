@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
@@ -54,6 +55,20 @@ func TestParseConfig_RedeemBatchSizeOverride(t *testing.T) {
 	cfg := mustParse(t, oneTarget+"redeemBatchSize: 3\n")
 	if cfg.RedeemBatchSize != 3 {
 		t.Fatalf("expected 3, got %d", cfg.RedeemBatchSize)
+	}
+}
+
+func TestParseConfig_OfferExpiryBufferDefaults(t *testing.T) {
+	cfg := mustParse(t, oneTarget)
+	if cfg.OfferExpiryBuffer != defaultOfferExpiryBuffer {
+		t.Fatalf("offerExpiryBuffer = %s, want default %s", cfg.OfferExpiryBuffer, defaultOfferExpiryBuffer)
+	}
+}
+
+func TestParseConfig_OfferExpiryBufferOverride(t *testing.T) {
+	cfg := mustParse(t, oneTarget+"offerExpiryBuffer: 6h\n")
+	if cfg.OfferExpiryBuffer != 6*time.Hour {
+		t.Fatalf("offerExpiryBuffer = %s, want 6h", cfg.OfferExpiryBuffer)
 	}
 }
 

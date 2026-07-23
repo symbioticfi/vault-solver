@@ -172,7 +172,8 @@ solvers:
 
 `apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each
 adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
-**per-request caps are read on-chain** (`minYieldPerRequest` — ppm, converted to bps by the reader;
+**per-request caps are read on-chain** (`minYieldPerRequest` — kept in exact ppm for the offer floor
+check and sent as ppm on the webhook wire (the webhook derives bps itself if it needs it);
 `minAssetsPerRequest`; `maxAssetsPerRequest` — set via `setLimitsPerRequest`) — config carries the
 adapter factory plus an optional exclusive adapter list. When `adapters` is present, the solver resolves
 only those entries and does not query the factory. When it is omitted, the solver reads
@@ -181,19 +182,27 @@ resolves every candidate. A reported count above the hard 2,000-entity limit ret
 factory-backed deployment may start with a successful empty snapshot and keep running; an
 explicit-list configuration still fails startup if none of its adapters validate. A later whole-refresh
 RPC failure preserves the last-known-good snapshot; a successful refresh replaces it, so signer changes
-remove and can later re-add an adapter. Newly usable adapters
-hydrate their live offer cache before quote decisions. Funding headroom is the adapter's own
+remove and can later re-add an adapter. Before every offer pass the solver reconciles its live-offer
+cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
+adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
+instance, or a server-side cancellation — and it never double-offers an auction it already covers. The
+1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
+the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and
 any pending sweep), so the bot reads no separate sleeve cap. Concurrency is the contract's
-`MAX_REQUESTS` constant (50), mirrored as a bot const.
+`MAX_REQUESTS` constant (50), mirrored as a bot const. A signed offer's `expiration` is anchored to the
+auction's `solve_start_time` plus a configurable `offerExpiryBuffer` (default 2h), never earlier than
+`now + buffer`, so the offer stays valid across the whole solve window regardless of when it is signed
+(not a fixed TTL from wall-clock).
 
 ### Per-auction adapter coverage and strategy split
 
 Each discover tick lists open auctions (public, unauthenticated), then for each auction covers its
 **full requested amount** with one or more single-adapter offers, in a single pass:
 
-1. **Solver-owned snapshot** — the solver lists auctions, reads each configured adapter's
-   liquidity/exposure in Multicall, prunes its live-offer cache, and builds a compact strategy input.
+1. **Solver-owned snapshot** — the solver lists auctions, reconciles its live-offer cache against the
+   API and reads each configured adapter's liquidity/exposure in Multicall, prunes the cache, and builds
+   a compact strategy input.
    The input contains only raw facts — adapter snapshots (liquidity and on-chain caps), normalized
    auction snapshots, and the live offers the solver already holds. It does not include raw generated
    API DTOs, and the solver computes no capacity, joins, or candidate scoring.
@@ -222,7 +231,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        OpenCount     int     // requestsLength()
        MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
        MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
-       MinYieldBps   uint256 // minYieldPerRequest converted from ppm to bps
+       MinYieldPpm   uint256 // minYieldPerRequest in ppm — exact on-chain floor (also sent on the webhook wire)
        MaxConcurrent int      // MAX_REQUESTS
    }
 
@@ -245,10 +254,15 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    }
    ```
 
-   The default local strategy preserves the current behavior: process auctions in API order, filter
-   adapter eligibility (collateral match, no live offer for the pair, rate clears `minYieldPerRequest`),
+   The default local strategy: process auctions in API order, filter adapter eligibility (collateral
+   match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
-   each offer to the still-uncovered remainder, and track local adapter commitments across the pass.
+   each offer to the still-uncovered remainder, and track local adapter commitments across the pass. Each
+   offer is **priced at the adapter's `minYieldPerRequest` floor** (the most competitive rate it allows),
+   rounded up so the realised yield always clears the on-chain floor, and skipped if that floor rate
+   exceeds the auction's max rate for the sized principal. The submission loop re-checks every strategy's
+   offers (default and webhook) against the exact `minYieldPerRequest` before signing, so no path posts a
+   sub-floor offer the fill would revert.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
@@ -302,12 +316,13 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      authorizes our key — our EOA *or* an EIP-1271 contract signer; the probe is reusable across ticks.
      Successful snapshots replace the active set, whole-refresh failures retain the last-known-good set,
      and a factory-backed deployment may validly idle with zero eligible adapters. Explicit-list startup
-     retains its fail-closed behavior. Newly usable adapters hydrate existing offers before the next
-     decision pass.
+     retains its fail-closed behavior. The live-offer cache is reconciled against the API before every
+     offer pass, so out-of-band offers (manual re-offer, another instance, server-side cancellation)
+     count toward coverage and are never double-offered.
    - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
      more single-adapter offers through the configured trusted strategy; uncovered remainder retries
      next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
+   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, `reconcileAdapter` wholesale replace (API-authoritative), signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
 

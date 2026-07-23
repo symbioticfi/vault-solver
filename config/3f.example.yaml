@@ -42,6 +42,7 @@ solvers:
     config:                        # opaque to the framework; typed by the 3F solver
       apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL (no API key — auth is by signature)
       # httpTimeout: 30s               # per-call timeout for 3F API requests (default 30s)
+      # offerExpiryBuffer: 2h          # signed-offer expiry = auction solve_start_time + this (default 2h)
       redeemBatchSize: 10              # max matured Requests redeemed per redeem() call (gas bound; default 10)
 
       strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md

@@ -250,7 +250,7 @@ type exposureState struct {
 	openCount   int      // active request count (requests[] length)
 	maxAssets   *big.Int // maxAssetsPerRequest — always-active ceiling (0 = reject-all)
 	minAssets   *big.Int // minAssetsPerRequest (0 = no floor)
-	minYieldBps *big.Int // minYieldPerRequest (ppm) → bps (0 = no floor)
+	minYieldPpm *big.Int // minYieldPerRequest (ppm) — exact on-chain floor (0 = no floor)
 }
 
 // liquidityAndExposure reads the adapter's JIT-funding headroom (getMaxAssets), its per-request caps, and
@@ -305,7 +305,7 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 		openCount:   clampCount(openCount),
 		maxAssets:   maxAssets,
 		minAssets:   minAssets,
-		minYieldBps: ppmToBps(minYield),
+		minYieldPpm: minYield,
 	}, nil
 }
 
@@ -318,12 +318,6 @@ func clampCount(n *big.Int) int {
 		}
 	}
 	return maxRequests
-}
-
-// ppmToBps converts minYieldPerRequest (ppm, YIELD_PRECISION=1e6) to bps, rounding up so the bot never
-// bids below the on-chain floor.
-func ppmToBps(ppm *big.Int) *big.Int {
-	return new(big.Int).Div(new(big.Int).Add(ppm, big.NewInt(99)), big.NewInt(100)) // ceil(ppm/100); 1 bps = 100 ppm
 }
 
 // requestSlotCalls builds the requests(i) reads for i in [0, n) — n from requestsLength(). AllowFailure:

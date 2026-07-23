@@ -15,13 +15,14 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
-	APIBaseURL      string            `yaml:"apiBaseUrl"`
-	RedeemBatchSize int               `yaml:"redeemBatchSize"`
-	Adapters        *[]string         `yaml:"adapters"`
-	AdapterFactory  string            `yaml:"adapterFactory"`
-	HTTPTimeout     string            `yaml:"httpTimeout"`
-	Intervals       rawIntervals      `yaml:"intervals"`
-	Strategy        rawStrategyConfig `yaml:"strategy"`
+	APIBaseURL        string            `yaml:"apiBaseUrl"`
+	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
+	Adapters          *[]string         `yaml:"adapters"`
+	AdapterFactory    string            `yaml:"adapterFactory"`
+	HTTPTimeout       string            `yaml:"httpTimeout"`
+	OfferExpiryBuffer string            `yaml:"offerExpiryBuffer"`
+	Intervals         rawIntervals      `yaml:"intervals"`
+	Strategy          rawStrategyConfig `yaml:"strategy"`
 }
 
 type rawStrategyConfig struct {
@@ -43,6 +44,9 @@ type Config struct {
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
 	// (including redemption scans). Applied as the 3F http.Client timeout.
 	HTTPTimeout time.Duration
+	// OfferExpiryBuffer is added to an auction's solve_start_time to set a signed offer's expiration, so
+	// the offer stays valid through the whole solve window regardless of when it is signed.
+	OfferExpiryBuffer time.Duration
 	// Targets is the configured static adapter set. Nil means adapters was omitted and the factory
 	// should be discovered; a non-nil slice is authoritative.
 	Targets        []Target
@@ -85,6 +89,10 @@ const defaultRedeemBatchSize = 10
 
 // defaultHTTPTimeout bounds each 3F API call when httpTimeout is unset.
 const defaultHTTPTimeout = 30 * time.Second
+
+// defaultOfferExpiryBuffer is the solve_start_time margin applied to a signed offer's expiration when
+// offerExpiryBuffer is unset — long enough to cover a full auction solve window plus slack.
+const defaultOfferExpiryBuffer = 2 * time.Hour
 
 const defaultStrategyName = "default"
 
@@ -136,19 +144,25 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	offerExpiryBuffer, err := cfgparse.Duration(raw.OfferExpiryBuffer, defaultOfferExpiryBuffer, "offerExpiryBuffer")
+	if err != nil {
+		return nil, err
+	}
+
 	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
 	if strategy.Name == "" {
 		strategy.Name = defaultStrategyName
 	}
 
 	return &Config{
-		APIBaseURL:      raw.APIBaseURL,
-		RedeemBatchSize: redeemBatch,
-		HTTPTimeout:     httpTimeout,
-		Targets:         targets,
-		AdapterFactory:  adapterFactory,
-		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:        strategy,
+		APIBaseURL:        raw.APIBaseURL,
+		RedeemBatchSize:   redeemBatch,
+		HTTPTimeout:       httpTimeout,
+		OfferExpiryBuffer: offerExpiryBuffer,
+		Targets:           targets,
+		AdapterFactory:    adapterFactory,
+		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
+		Strategy:          strategy,
 	}, nil
 }
 

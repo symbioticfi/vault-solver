@@ -20,11 +20,14 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-// offerStatusIgnored are 3F offer statuses that are not live coverage when hydrating the cache: a
-// FAILED consume or a NOT_ACCEPTED bid won't cover the auction, so discovery should re-offer.
+// offerStatusIgnored are 3F offer statuses that are not live coverage when reconciling the cache: a
+// FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so discovery should
+// re-offer.
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
+	"CANCELLED":    true,
+	"CANCELED":     true,
 }
 
 // Name is the registry key that selects this solver from config.
@@ -147,37 +150,39 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 }
 
-// hydrateOfferCache records each newly usable adapter's still-unexpired offers so discovery skips
-// auctions we already cover. Best-effort: one adapter's list failure cannot block the snapshot.
-func (s *Solver) hydrateOfferCache(ctx context.Context, targets []Target) {
+// reconcileOffers re-lists each target adapter's live offers from the 3F API and replaces that adapter's
+// offer cache with them, so coverage reflects our own offers and any made out of band. The poll is
+// authoritative. Best-effort: one adapter's list failure can't block the pass (its cache is left as-is).
+func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) {
 	now := time.Now()
-	live := 0
 	for _, t := range targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
-			s.log.Error(err, "hydrate offer cache: list offers", "adapter", t.Adapter.Hex())
+			s.log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
+		live := make(map[int64]offerState)
 		for _, o := range offers {
 			if offerStatusIgnored[strings.ToUpper(strings.TrimSpace(o.Status))] {
-				continue // failed/not-accepted offers aren't live coverage — let discovery re-offer
+				continue // failed/not-accepted/cancelled offers aren't live coverage
 			}
 			exp, perr := parseUnixTime(o.Expiration)
 			if perr != nil || !exp.After(now) {
-				continue // unparseable or already expired — we may freely re-offer
+				continue // unparseable or already expired
 			}
 			principal, ok := new(big.Int).SetString(o.Amount, 10)
 			if !ok {
-				s.log.V(1).Info("offer cache: unparseable amount; coverage may undercount",
+				s.log.V(1).Info("reconcile offers: unparseable amount; coverage may undercount",
 					"adapter", t.Adapter.Hex(), "amount", o.Amount)
 				principal = new(big.Int)
 			}
-			s.offers.record(t.Adapter, int64(o.AuctionId), exp, principal)
-			live++
+			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
+			auctionID := int64(o.AuctionId)
+			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
+				live[auctionID] = offerState{expiry: exp, principal: principal}
+			}
 		}
-	}
-	if len(targets) > 0 {
-		s.log.Info("loaded existing offers into dedup cache", "adapters", len(targets), "live", live)
+		s.offers.reconcileAdapter(t.Adapter, live)
 	}
 }
 
@@ -200,6 +205,9 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
+	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
+	s.reconcileOffers(ctx, s.targets)
+
 	offerings := make([]*adapterOffering, 0, len(s.targets))
 	for _, t := range s.targets {
 		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
@@ -210,7 +218,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
-			"minYieldBps", st.minYieldBps.String())
+			"minYieldPpm", st.minYieldPpm.String())
 		offerings = append(offerings, &adapterOffering{target: t, st: st})
 	}
 	if len(offerings) == 0 {
@@ -228,11 +236,37 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Error(err, "offer: strategy")
 		return
 	}
+	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
+	// not just the default strategy's pricing, against the adapter's exact on-chain minYieldPerRequest.
+	minYieldByAdapter := make(map[common.Address]*big.Int, len(offerings))
+	for _, o := range offerings {
+		minYieldByAdapter[o.target.Adapter] = o.st.minYieldPpm
+	}
+
 	auctionByID := auctionViewsByID(auctions)
 	for _, offer := range out.Offers {
 		av, ok := auctionByID[offer.AuctionID]
 		if !ok {
 			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
+			continue
+		}
+		floor, known := minYieldByAdapter[offer.Maker]
+		if !known {
+			s.log.Error(errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex()),
+				"offer: unknown maker; skipping", "auctionId", offer.AuctionID)
+			continue
+		}
+		maxRate, rateOk := av.maxRateBps()
+		if !rateOk {
+			s.log.Error(errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID),
+				"offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
+			continue
+		}
+		// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
+		// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
+		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
+			s.log.Error(err, "offer: yield out of bounds; skipping",
+				"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
 		dto, buildErr := s.buildSignedOffer(av, offer)
@@ -244,10 +278,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
-
-		if exp, perr := parseUnixTime(dto.Expiration); perr == nil {
-			s.offers.record(offer.Maker, offer.AuctionID, exp, offer.Principal)
-		}
+		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
@@ -280,6 +311,15 @@ func (s *Solver) nextNonce() uint64 {
 
 // refreshTargets builds and validates a complete adapter snapshot before installing it. A returned
 // error leaves the last-known-good snapshot untouched; a successful empty snapshot is authoritative.
+func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
+	added, err := s.refreshTargets(ctx)
+	if err != nil {
+		return err
+	}
+	s.reconcileOffers(ctx, added) // hydrate the newly-added adapters' live offers
+	return nil
+}
+
 func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 	var adapters []common.Address
 	if s.cfg.Targets != nil {
@@ -341,13 +381,4 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 	s.offers.retainAdapters(active)
 	s.targets = kept
 	return added, nil
-}
-
-func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
-	added, err := s.refreshTargets(ctx)
-	if err != nil {
-		return err
-	}
-	s.hydrateOfferCache(ctx, added)
-	return nil
 }

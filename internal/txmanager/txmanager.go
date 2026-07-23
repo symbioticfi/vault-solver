@@ -19,6 +19,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/signer"
+	"github.com/symbioticfi/vault-solver/internal/tenderly"
 )
 
 // Backend is the subset of an EVM client the manager needs. *ethclient.Client satisfies it.
@@ -360,6 +361,12 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		}
 		m.removeUnminedNonce(pending.nonce)
 		if receipt.Status == types.ReceiptStatusFailed {
+			m.log.Error(errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex()), "transaction reverted",
+				"label", pending.req.Label,
+				"hash", attempt.hash.Hex(),
+				"nonce", pending.nonce,
+				"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value),
+			)
 			return Result{
 				Hash:    attempt.hash,
 				Receipt: receipt,
@@ -555,6 +562,12 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		Data:  req.Data,
 	})
 	if err != nil {
+		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
+		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
+		m.log.Error(err, "gas estimation failed",
+			"label", req.Label,
+			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
+		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
 	// 20% headroom over the estimate.
