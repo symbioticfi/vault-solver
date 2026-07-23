@@ -13,7 +13,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlanemath"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
@@ -175,7 +175,7 @@ func evaluateGroup(
 		return nil
 	}
 
-	privateRate := liquidlanemath.RateForAmountOut(oracleAmountOut, input.AmountIn, tokenInDecimals, assetDecimals)
+	privateRate := liquidlane.RateForAmountOut(oracleAmountOut, input.AmountIn, tokenInDecimals, assetDecimals)
 
 	eligible := make([]eligibleLeg, 0, len(group))
 	for _, c := range group {
@@ -217,7 +217,7 @@ func evaluateGroup(
 			break
 		}
 		c := e.candidate
-		maxAmountIn := liquidlanemath.MaxAmountInForRate(c.MaxAssets, e.rate, tokenInDecimals, c.AssetDecimals)
+		maxAmountIn := liquidlane.MaxAmountInForRate(c.MaxAssets, e.rate, tokenInDecimals, c.AssetDecimals)
 		if maxAmountIn.Sign() == 0 {
 			continue
 		}
@@ -225,11 +225,11 @@ func evaluateGroup(
 
 		var amountIn, amountOut *big.Int
 		if saturated {
-			amountIn = liquidlanemath.MinAmountInForAmountOut(c.MaxAssets, e.rate, tokenInDecimals, c.AssetDecimals)
+			amountIn = liquidlane.MinAmountInForAmountOut(c.MaxAssets, e.rate, tokenInDecimals, c.AssetDecimals)
 			amountOut = new(big.Int).Set(c.MaxAssets)
 		} else {
 			amountIn = new(big.Int).Set(remainingIn)
-			amountOut = liquidlanemath.AmountOutForRate(amountIn, e.rate, tokenInDecimals, c.AssetDecimals)
+			amountOut = liquidlane.AmountOutForRate(amountIn, e.rate, tokenInDecimals, c.AssetDecimals)
 		}
 		if amountOut.Sign() == 0 {
 			continue
@@ -267,7 +267,7 @@ func evaluateSingleRoute(
 	var best *types.QuoteOutput
 	for _, e := range eligible {
 		c := e.candidate
-		amountOut := liquidlanemath.AmountOutForRate(input.AmountIn, e.rate, tokenInDecimals, c.AssetDecimals)
+		amountOut := liquidlane.AmountOutForRate(input.AmountIn, e.rate, tokenInDecimals, c.AssetDecimals)
 		if amountOut.Sign() <= 0 || amountOut.Cmp(c.MaxAssets) > 0 {
 			continue
 		}
@@ -361,7 +361,7 @@ func (s *Strategy) fillPlanFromQuote(
 		if c.MaxRate == nil || c.MaxRate.Sign() <= 0 {
 			return nil, errors.Errorf("candidate %q has invalid maxRate", leg.CandidateID)
 		}
-		maxAmountOut := liquidlanemath.AmountOutForRate(leg.AmountIn, c.MaxRate, tokenInDecimals, c.AssetDecimals)
+		maxAmountOut := liquidlane.AmountOutForRate(leg.AmountIn, c.MaxRate, tokenInDecimals, c.AssetDecimals)
 		if leg.AmountOut.Cmp(maxAmountOut) > 0 {
 			return nil, errors.Errorf("leg %d exceeds candidate maxRate", i)
 		}

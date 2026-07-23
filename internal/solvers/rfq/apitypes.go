@@ -3,10 +3,12 @@ package rfq
 import (
 	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -96,7 +98,7 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	}
 	inv := make([]solverInventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
-		entry, perr := q.Adapters[i].parse(i)
+		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn)
 		if perr != nil {
 			return nil, perr
 		}
@@ -119,7 +121,7 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	}, nil
 }
 
-func (v *quoteAdapter) parse(index int) (solverInventory, error) {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (solverInventory, error) {
 	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
 		return solverInventory{}, err
@@ -144,14 +146,11 @@ func (v *quoteAdapter) parse(index int) (solverInventory, error) {
 		h := common.HexToHash(*v.DiscountID)
 		discountID = &h
 	}
-	return solverInventory{
-		Adapter:       adapter,
-		Asset:         asset,
-		AssetDecimals: v.AssetDecimals,
-		MaxAssets:     maxAssets,
-		MaxRate:       maxRate,
-		DiscountID:    discountID,
-	}, nil
+	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
+	if discountID != nil {
+		return liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{}), nil
+	}
+	return liquidlane.DirectInventory(route, maxAssets, maxRate), nil
 }
 
 // parseUint256 parses a base-10 non-negative integer string into a big.Int.

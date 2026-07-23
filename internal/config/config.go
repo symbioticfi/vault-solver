@@ -7,6 +7,7 @@ package config
 
 import (
 	"bytes"
+	"math"
 	"os"
 
 	"github.com/go-errors/errors"
@@ -66,10 +67,14 @@ type SignerConfig struct {
 type TxManagerConfig struct {
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
-	// MaxFeeGwei caps the EIP-1559 max fee per gas; 0 means "derive from base fee".
+	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
 	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion".
 	TipGwei float64 `yaml:"tipGwei"`
+	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
+	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
+	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
+	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -81,6 +86,11 @@ type SolverConfig struct {
 
 // DefaultConfirmations is used when TxManager.Confirmations is unset.
 const DefaultConfirmations = 2
+
+const (
+	DefaultReplacementIntervalMs = 30_000
+	DefaultPendingTimeoutMs      = 300_000
+)
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
 const DefaultObservabilityAddr = ":9090"
@@ -121,6 +131,12 @@ func (c *Config) applyDefaults() {
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
 	}
+	if c.TxManager.ReplacementIntervalMs == 0 {
+		c.TxManager.ReplacementIntervalMs = DefaultReplacementIntervalMs
+	}
+	if c.TxManager.PendingTimeoutMs == 0 {
+		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
+	}
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
 	}
@@ -141,6 +157,22 @@ func (c *Config) Validate() error {
 	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")
+	}
+	if c.TxManager.MaxFeeGwei <= 0 ||
+		math.IsNaN(c.TxManager.MaxFeeGwei) ||
+		math.IsInf(c.TxManager.MaxFeeGwei, 0) {
+		return errors.New("txManager.maxFeeGwei must be finite and positive")
+	}
+	if c.TxManager.TipGwei < 0 ||
+		math.IsNaN(c.TxManager.TipGwei) ||
+		math.IsInf(c.TxManager.TipGwei, 0) {
+		return errors.New("txManager.tipGwei must be finite and non-negative")
+	}
+	if c.TxManager.ReplacementIntervalMs <= 0 {
+		return errors.New("txManager.replacementIntervalMs must be positive")
+	}
+	if c.TxManager.PendingTimeoutMs < c.TxManager.ReplacementIntervalMs {
+		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
 	}
 	if err := c.Signer.validate(); err != nil {
 		return err

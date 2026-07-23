@@ -21,8 +21,7 @@ var _ MappedNullable = &QuoteDto{}
 
 // QuoteDto struct for QuoteDto
 type QuoteDto struct {
-	// Order details
-	Order map[string]interface{} `json:"order"`
+	Order QuoteDtoOrder `json:"order"`
 	// Quote validity timestamp in unix timestamp (seconds)
 	ValidUntil *float32 `json:"validUntil,omitempty"`
 	// Estimated time of arrival in seconds
@@ -47,7 +46,7 @@ type _QuoteDto QuoteDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteDto(order map[string]interface{}, quoteId string, provider string, preview QuotePreviewDto, failureHandling string, partialFill bool, metadata QuoteMetadataDto) *QuoteDto {
+func NewQuoteDto(order QuoteDtoOrder, quoteId string, provider string, preview QuotePreviewDto, failureHandling string, partialFill bool, metadata QuoteMetadataDto) *QuoteDto {
 	this := QuoteDto{}
 	this.Order = order
 	this.QuoteId = quoteId
@@ -68,9 +67,9 @@ func NewQuoteDtoWithDefaults() *QuoteDto {
 }
 
 // GetOrder returns the Order field value
-func (o *QuoteDto) GetOrder() map[string]interface{} {
+func (o *QuoteDto) GetOrder() QuoteDtoOrder {
 	if o == nil {
-		var ret map[string]interface{}
+		var ret QuoteDtoOrder
 		return ret
 	}
 
@@ -79,15 +78,15 @@ func (o *QuoteDto) GetOrder() map[string]interface{} {
 
 // GetOrderOk returns a tuple with the Order field value
 // and a boolean to check if the value has been set.
-func (o *QuoteDto) GetOrderOk() (map[string]interface{}, bool) {
+func (o *QuoteDto) GetOrderOk() (*QuoteDtoOrder, bool) {
 	if o == nil {
-		return map[string]interface{}{}, false
+		return nil, false
 	}
-	return o.Order, true
+	return &o.Order, true
 }
 
 // SetOrder sets field value
-func (o *QuoteDto) SetOrder(v map[string]interface{}) {
+func (o *QuoteDto) SetOrder(v QuoteDtoOrder) {
 	o.Order = v
 }
 

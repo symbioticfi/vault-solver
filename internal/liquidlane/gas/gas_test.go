@@ -82,6 +82,66 @@ func TestPredictionConsumesSharedBudgets(t *testing.T) {
 	}
 }
 
+func TestPredictAdaptersSharesVaultStateAndKeepsFirstSwapTierPerAdapter(t *testing.T) {
+	adapterA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000b1")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000f1")
+	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
+	snapshot := &Snapshot{
+		Adapters: map[common.Address]*AdapterState{
+			adapterA: {Vault: vault, Acquire: map[common.Address]*big.Int{coll: big.NewInt(100)}},
+			adapterB: {Vault: vault, Acquire: map[common.Address]*big.Int{}},
+		},
+		Vaults: map[common.Address]*VaultState{
+			vault: {FreeAssets: big.NewInt(100), Withdrawable: big.NewInt(200)},
+		},
+	}
+	prediction := PredictAdapters([]AdapterDemand{
+		{Adapter: adapterA, Vault: vault, Demand: Demand{Collateral: coll, AmountOut: big.NewInt(60)}},
+		{Adapter: adapterB, Vault: vault, Demand: Demand{Collateral: coll, AmountOut: big.NewInt(60)}},
+		{Adapter: adapterA, Vault: vault, Demand: Demand{Collateral: coll, AmountOut: big.NewInt(110)}},
+	}, snapshot)
+	want := UnitsForRouteAt(RouteAcquire, true) +
+		UnitsForRouteAt(RouteAllocate, true) +
+		UnitsForRouteAt(RouteDeallocate, false)
+	if prediction.Units != want {
+		t.Fatalf("units = %d, want %d", prediction.Units, want)
+	}
+	if got := RoutesString(prediction.Routes); got != "acquire,allocate,deallocate" {
+		t.Fatalf("routes = %q", got)
+	}
+	if snapshot.Adapters[adapterA].Acquire[coll].String() != "100" || snapshot.Vaults[vault].FreeAssets.String() != "100" {
+		t.Fatalf("PredictAdapters mutated input snapshot: %+v", snapshot)
+	}
+}
+
+func TestWithReserveBpsPricesNextRouteNearBoundary(t *testing.T) {
+	adapter := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000f1")
+	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
+	snapshot := &Snapshot{
+		Adapters: map[common.Address]*AdapterState{
+			adapter: {Vault: vault, Acquire: map[common.Address]*big.Int{}},
+		},
+		Vaults: map[common.Address]*VaultState{
+			vault: {FreeAssets: big.NewInt(100), Withdrawable: big.NewInt(200)},
+		},
+	}
+	demands := []AdapterDemand{{
+		Adapter: adapter, Vault: vault, Demand: Demand{Collateral: coll, AmountOut: big.NewInt(95)},
+	}}
+	if got := RoutesString(PredictAdapters(demands, snapshot).Routes); got != "allocate" {
+		t.Fatalf("unreserved routes = %q", got)
+	}
+	reserved := WithReserveBps(snapshot, 1_000)
+	if got := RoutesString(PredictAdapters(demands, reserved).Routes); got != "deallocate" {
+		t.Fatalf("reserved routes = %q", got)
+	}
+	if snapshot.Vaults[vault].FreeAssets.String() != "100" {
+		t.Fatalf("WithReserveBps mutated input snapshot: %+v", snapshot)
+	}
+}
+
 func demandsFor(coll common.Address, outs ...int64) []Demand {
 	demands := make([]Demand, len(outs))
 	for i, out := range outs {

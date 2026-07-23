@@ -21,7 +21,7 @@ var _ MappedNullable = &OifQuoteDto{}
 
 // OifQuoteDto struct for OifQuoteDto
 type OifQuoteDto struct {
-	// Order details (null for quote requests)
+	// Order details; null for quote requests, provider-specific structure when populated
 	Order map[string]interface{} `json:"order,omitempty"`
 	// Quote validity timestamp in seconds
 	ValidUntil *float32 `json:"validUntil,omitempty"`
@@ -32,7 +32,7 @@ type OifQuoteDto struct {
 	// Provider identifier
 	Provider *string `json:"provider,omitempty"`
 	// Informational amounts for UX/display
-	Preview QuotePreviewDto `json:"preview"`
+	Preview OifQuotePreviewDto `json:"preview"`
 	// Failure handling policy for execution
 	FailureHandling string `json:"failureHandling"`
 	// Whether the quote supports partial fills
@@ -47,7 +47,7 @@ type _OifQuoteDto OifQuoteDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOifQuoteDto(preview QuotePreviewDto, failureHandling string, partialFill bool, metadata OifQuoteMetadataDto) *OifQuoteDto {
+func NewOifQuoteDto(preview OifQuotePreviewDto, failureHandling string, partialFill bool, metadata OifQuoteMetadataDto) *OifQuoteDto {
 	this := OifQuoteDto{}
 	this.Preview = preview
 	this.FailureHandling = failureHandling
@@ -226,9 +226,9 @@ func (o *OifQuoteDto) SetProvider(v string) {
 }
 
 // GetPreview returns the Preview field value
-func (o *OifQuoteDto) GetPreview() QuotePreviewDto {
+func (o *OifQuoteDto) GetPreview() OifQuotePreviewDto {
 	if o == nil {
-		var ret QuotePreviewDto
+		var ret OifQuotePreviewDto
 		return ret
 	}
 
@@ -237,7 +237,7 @@ func (o *OifQuoteDto) GetPreview() QuotePreviewDto {
 
 // GetPreviewOk returns a tuple with the Preview field value
 // and a boolean to check if the value has been set.
-func (o *OifQuoteDto) GetPreviewOk() (*QuotePreviewDto, bool) {
+func (o *OifQuoteDto) GetPreviewOk() (*OifQuotePreviewDto, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -245,7 +245,7 @@ func (o *OifQuoteDto) GetPreviewOk() (*QuotePreviewDto, bool) {
 }
 
 // SetPreview sets field value
-func (o *OifQuoteDto) SetPreview(v QuotePreviewDto) {
+func (o *OifQuoteDto) SetPreview(v OifQuotePreviewDto) {
 	o.Preview = v
 }
 

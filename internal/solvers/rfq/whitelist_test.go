@@ -38,8 +38,8 @@ func TestAdapterWhitelist_Filter(t *testing.T) {
 	listed := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	inv := []solverInventory{
-		{Adapter: listed, Asset: tOut, MaxAssets: big.NewInt(1), MaxRate: big.NewInt(1)},
-		{Adapter: rogue, Asset: tOut, MaxAssets: big.NewInt(1), MaxRate: big.NewInt(1)},
+		testInventory(listed, tIn, tOut, big.NewInt(1), big.NewInt(1)),
+		testInventory(rogue, tIn, tOut, big.NewInt(1), big.NewInt(1)),
 	}
 
 	wl := buildAdapterWhitelist(true, []recoveryVault{{Adapter: listed}})

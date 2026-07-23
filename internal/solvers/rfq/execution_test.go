@@ -184,6 +184,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -222,9 +223,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	be.discounts = &discountsResponse{Discounts: []discountListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
+		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -259,6 +262,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
 			TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -305,9 +309,11 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
-			CollateralDecimals: 6, MaxRate: "1000000000000000000", MaxAssets: "10000000"},
+			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
+			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
 		{DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
-			CollateralDecimals: 6, MaxRate: "2000000000000000000", MaxAssets: "10000000"},
+			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
+			MaxRate: "2000000000000000000", MaxAssets: "10000000"},
 	}}}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
@@ -323,6 +329,22 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	out = e.discountInventories(context.Background(), tIn, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
+	}
+}
+
+func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
+		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+		CollateralDecimals: 6, Discount: "500", Deadline: 1,
+		MaxRate: "1000000000000000000", MaxAssets: "10000000",
+	}}}}
+	st := newStore(func() time.Time { return time.Unix(2, 0) })
+	e := newExec(t, st, be, &fakeTxm{})
+	e.now = func() time.Time { return time.Unix(2, 0) }
+	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
+	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
+		t.Fatalf("expired discount inventories = %+v", out)
 	}
 }
 
@@ -347,8 +369,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	strategy := &inputRecordingStrategy{fillPlan: baseFillPlan()}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
-	e.tokensToQuote = tokensToQuotePermissioned
-	e.permissionedTokens = map[common.Address]bool{tIn: true}
+	e.tokenPolicy = testPermissionedPolicy(t, tIn)
 	e.strategy = strategy
 
 	plan, err := e.buildFillPlan(
@@ -378,8 +399,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
-	e.tokensToQuote = tokensToQuotePermissioned
-	e.permissionedTokens = map[common.Address]bool{tIn: true}
+	e.tokenPolicy = testPermissionedPolicy(t, tIn)
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(

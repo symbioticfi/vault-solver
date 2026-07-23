@@ -270,6 +270,46 @@ func TestDial_WriteRPCRoutesOnlyBroadcasts(t *testing.T) {
 	}
 }
 
+func TestMulticallUsesLatestBlockTag(t *testing.T) {
+	var callParams []json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage   `json:"id"`
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		result := `"0x7a69"`
+		if req.Method == "eth_call" {
+			callParams = req.Params
+			// ABI encoding of an empty aggregate3 Result[] return.
+			result = `"0x0000000000000000000000000000000000000000000000000000000000000020` +
+				`0000000000000000000000000000000000000000000000000000000000000000"`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+	}))
+	defer server.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{server.URL}, "", multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	if _, err = c.Multicall(t.Context(), nil); err != nil {
+		t.Fatalf("Multicall: %v", err)
+	}
+	if len(callParams) != 2 {
+		t.Fatalf("eth_call params = %s", callParams)
+	}
+	var blockTag string
+	if err = json.Unmarshal(callParams[1], &blockTag); err != nil || blockTag != "latest" {
+		t.Fatalf("eth_call block tag = %q, err=%v", blockTag, err)
+	}
+}
+
 // TestDial_NoWriteRPCReusesPrimary confirms that with no writeRpcUrl, broadcasts fall back to the
 // primary endpoint (unchanged behaviour).
 func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {

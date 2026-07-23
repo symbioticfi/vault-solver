@@ -150,8 +150,7 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	quoteServer := testServer()
-	quoteServer.quotes.tokensToQuote = tokensToQuotePermissioned
-	quoteServer.quotes.permissionedTokens = map[common.Address]bool{tIn: true}
+	quoteServer.quotes.tokenPolicy = testPermissionedPolicy(t, tIn)
 	quoteServer.quotes.strategy = webhookstrategy.New(client)
 	request := validQuoteBody()
 	request.Adapters = append(request.Adapters, quoteAdapter{

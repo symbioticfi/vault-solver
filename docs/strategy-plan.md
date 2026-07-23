@@ -60,6 +60,11 @@ exposes a quote decision and a fill decision; a bidding solver a single bid deci
 types are documented in each solver's plan (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`, …) and defined in
 its `strategies/types` package — this document intentionally does not restate them.
 
+Solvers that use LiquidLane liquidity also follow
+[`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): shared LiquidLane packages define
+read-side facts (`Route`, `Inventory`, `FillQuote`, authorization, ids, freshness), while each solver
+keeps its own strategy interface and execution plan.
+
 ## Selection and configuration
 
 Strategy selection is solver-local: the generic framework does not parse, validate, or route strategy
@@ -104,9 +109,9 @@ Two strategy kinds are conventional across solvers:
 
 Both plug into the same trusted boundary: the solver executes their output the same way, so a solver
 is never coupled to which strategy is loaded. A solver may still enforce solver-owned structural or
-safety constraints before publishing or executing a plan. For example, RFQ marks inputs as
-single-route when `tokensToQuote` is `permissioned` and rejects any strategy output that does not
-contain exactly one leg; route selection and economics remain strategy-owned.
+safety constraints before publishing or executing a plan. RFQ and LI.FI share `internal/tokenpolicy`
+for `tokensToQuote` admission. Both mark admitted inputs as single-route only in `permissioned` scope
+and reject strategy output that aggregates routes; route selection and economics remain strategy-owned.
 
 ## Adding your own strategy
 

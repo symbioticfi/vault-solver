@@ -20,6 +20,12 @@ var _ MappedNullable = &QuoteRequestDtoIntentMetadata{}
 // QuoteRequestDtoIntentMetadata Metadata for the order, never required, potentially contains provider specific data
 type QuoteRequestDtoIntentMetadata struct {
 	ExclusiveFor *QuoteRequestDtoIntentMetadataExclusiveFor `json:"exclusiveFor,omitempty"`
+	// Accepted cross-chain verifier (oracle) contracts, each a { chain, address } object. When provided, only solvers that support one of these oracles can answer, and the returned order is built to settle against an accepted oracle. Omitted or empty means any oracle is acceptable. Ignored for same-chain swaps.
+	Oracle []QuoteRequestDtoIntentMetadataOracleInner `json:"oracle,omitempty"`
+	// Accepted input settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these input settlers and the winning solver supports it. Omitted or empty means any input settler is acceptable.
+	InputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"inputSettler,omitempty"`
+	// Accepted output settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these output settlers and the winning solver supports it. Omitted or empty means any output settler is acceptable.
+	OutputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
 }
 
 // NewQuoteRequestDtoIntentMetadata instantiates a new QuoteRequestDtoIntentMetadata object
@@ -71,6 +77,102 @@ func (o *QuoteRequestDtoIntentMetadata) SetExclusiveFor(v QuoteRequestDtoIntentM
 	o.ExclusiveFor = &v
 }
 
+// GetOracle returns the Oracle field value if set, zero value otherwise.
+func (o *QuoteRequestDtoIntentMetadata) GetOracle() []QuoteRequestDtoIntentMetadataOracleInner {
+	if o == nil || IsNil(o.Oracle) {
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
+		return ret
+	}
+	return o.Oracle
+}
+
+// GetOracleOk returns a tuple with the Oracle field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *QuoteRequestDtoIntentMetadata) GetOracleOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
+	if o == nil || IsNil(o.Oracle) {
+		return nil, false
+	}
+	return o.Oracle, true
+}
+
+// HasOracle returns a boolean if a field has been set.
+func (o *QuoteRequestDtoIntentMetadata) HasOracle() bool {
+	if o != nil && !IsNil(o.Oracle) {
+		return true
+	}
+
+	return false
+}
+
+// SetOracle gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the Oracle field.
+func (o *QuoteRequestDtoIntentMetadata) SetOracle(v []QuoteRequestDtoIntentMetadataOracleInner) {
+	o.Oracle = v
+}
+
+// GetInputSettler returns the InputSettler field value if set, zero value otherwise.
+func (o *QuoteRequestDtoIntentMetadata) GetInputSettler() []QuoteRequestDtoIntentMetadataOracleInner {
+	if o == nil || IsNil(o.InputSettler) {
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
+		return ret
+	}
+	return o.InputSettler
+}
+
+// GetInputSettlerOk returns a tuple with the InputSettler field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *QuoteRequestDtoIntentMetadata) GetInputSettlerOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
+	if o == nil || IsNil(o.InputSettler) {
+		return nil, false
+	}
+	return o.InputSettler, true
+}
+
+// HasInputSettler returns a boolean if a field has been set.
+func (o *QuoteRequestDtoIntentMetadata) HasInputSettler() bool {
+	if o != nil && !IsNil(o.InputSettler) {
+		return true
+	}
+
+	return false
+}
+
+// SetInputSettler gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the InputSettler field.
+func (o *QuoteRequestDtoIntentMetadata) SetInputSettler(v []QuoteRequestDtoIntentMetadataOracleInner) {
+	o.InputSettler = v
+}
+
+// GetOutputSettler returns the OutputSettler field value if set, zero value otherwise.
+func (o *QuoteRequestDtoIntentMetadata) GetOutputSettler() []QuoteRequestDtoIntentMetadataOracleInner {
+	if o == nil || IsNil(o.OutputSettler) {
+		var ret []QuoteRequestDtoIntentMetadataOracleInner
+		return ret
+	}
+	return o.OutputSettler
+}
+
+// GetOutputSettlerOk returns a tuple with the OutputSettler field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *QuoteRequestDtoIntentMetadata) GetOutputSettlerOk() ([]QuoteRequestDtoIntentMetadataOracleInner, bool) {
+	if o == nil || IsNil(o.OutputSettler) {
+		return nil, false
+	}
+	return o.OutputSettler, true
+}
+
+// HasOutputSettler returns a boolean if a field has been set.
+func (o *QuoteRequestDtoIntentMetadata) HasOutputSettler() bool {
+	if o != nil && !IsNil(o.OutputSettler) {
+		return true
+	}
+
+	return false
+}
+
+// SetOutputSettler gets a reference to the given []QuoteRequestDtoIntentMetadataOracleInner and assigns it to the OutputSettler field.
+func (o *QuoteRequestDtoIntentMetadata) SetOutputSettler(v []QuoteRequestDtoIntentMetadataOracleInner) {
+	o.OutputSettler = v
+}
+
 func (o QuoteRequestDtoIntentMetadata) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -83,6 +185,15 @@ func (o QuoteRequestDtoIntentMetadata) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	if !IsNil(o.ExclusiveFor) {
 		toSerialize["exclusiveFor"] = o.ExclusiveFor
+	}
+	if !IsNil(o.Oracle) {
+		toSerialize["oracle"] = o.Oracle
+	}
+	if !IsNil(o.InputSettler) {
+		toSerialize["inputSettler"] = o.InputSettler
+	}
+	if !IsNil(o.OutputSettler) {
+		toSerialize["outputSettler"] = o.OutputSettler
 	}
 	return toSerialize, nil
 }

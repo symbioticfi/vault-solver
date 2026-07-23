@@ -14,35 +14,35 @@ import (
 	"encoding/json"
 )
 
-// checks if the QuotePreviewDtoInputsInner type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &QuotePreviewDtoInputsInner{}
+// checks if the OifQuotePreviewDtoInputsInner type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &OifQuotePreviewDtoInputsInner{}
 
-// QuotePreviewDtoInputsInner struct for QuotePreviewDtoInputsInner
-type QuotePreviewDtoInputsInner struct {
+// OifQuotePreviewDtoInputsInner struct for OifQuotePreviewDtoInputsInner
+type OifQuotePreviewDtoInputsInner struct {
 	User   *string `json:"user,omitempty"`
 	Asset  *string `json:"asset,omitempty"`
 	Amount *string `json:"amount,omitempty"`
 }
 
-// NewQuotePreviewDtoInputsInner instantiates a new QuotePreviewDtoInputsInner object
+// NewOifQuotePreviewDtoInputsInner instantiates a new OifQuotePreviewDtoInputsInner object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuotePreviewDtoInputsInner() *QuotePreviewDtoInputsInner {
-	this := QuotePreviewDtoInputsInner{}
+func NewOifQuotePreviewDtoInputsInner() *OifQuotePreviewDtoInputsInner {
+	this := OifQuotePreviewDtoInputsInner{}
 	return &this
 }
 
-// NewQuotePreviewDtoInputsInnerWithDefaults instantiates a new QuotePreviewDtoInputsInner object
+// NewOifQuotePreviewDtoInputsInnerWithDefaults instantiates a new OifQuotePreviewDtoInputsInner object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewQuotePreviewDtoInputsInnerWithDefaults() *QuotePreviewDtoInputsInner {
-	this := QuotePreviewDtoInputsInner{}
+func NewOifQuotePreviewDtoInputsInnerWithDefaults() *OifQuotePreviewDtoInputsInner {
+	this := OifQuotePreviewDtoInputsInner{}
 	return &this
 }
 
 // GetUser returns the User field value if set, zero value otherwise.
-func (o *QuotePreviewDtoInputsInner) GetUser() string {
+func (o *OifQuotePreviewDtoInputsInner) GetUser() string {
 	if o == nil || IsNil(o.User) {
 		var ret string
 		return ret
@@ -52,7 +52,7 @@ func (o *QuotePreviewDtoInputsInner) GetUser() string {
 
 // GetUserOk returns a tuple with the User field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *QuotePreviewDtoInputsInner) GetUserOk() (*string, bool) {
+func (o *OifQuotePreviewDtoInputsInner) GetUserOk() (*string, bool) {
 	if o == nil || IsNil(o.User) {
 		return nil, false
 	}
@@ -60,7 +60,7 @@ func (o *QuotePreviewDtoInputsInner) GetUserOk() (*string, bool) {
 }
 
 // HasUser returns a boolean if a field has been set.
-func (o *QuotePreviewDtoInputsInner) HasUser() bool {
+func (o *OifQuotePreviewDtoInputsInner) HasUser() bool {
 	if o != nil && !IsNil(o.User) {
 		return true
 	}
@@ -69,12 +69,12 @@ func (o *QuotePreviewDtoInputsInner) HasUser() bool {
 }
 
 // SetUser gets a reference to the given string and assigns it to the User field.
-func (o *QuotePreviewDtoInputsInner) SetUser(v string) {
+func (o *OifQuotePreviewDtoInputsInner) SetUser(v string) {
 	o.User = &v
 }
 
 // GetAsset returns the Asset field value if set, zero value otherwise.
-func (o *QuotePreviewDtoInputsInner) GetAsset() string {
+func (o *OifQuotePreviewDtoInputsInner) GetAsset() string {
 	if o == nil || IsNil(o.Asset) {
 		var ret string
 		return ret
@@ -84,7 +84,7 @@ func (o *QuotePreviewDtoInputsInner) GetAsset() string {
 
 // GetAssetOk returns a tuple with the Asset field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *QuotePreviewDtoInputsInner) GetAssetOk() (*string, bool) {
+func (o *OifQuotePreviewDtoInputsInner) GetAssetOk() (*string, bool) {
 	if o == nil || IsNil(o.Asset) {
 		return nil, false
 	}
@@ -92,7 +92,7 @@ func (o *QuotePreviewDtoInputsInner) GetAssetOk() (*string, bool) {
 }
 
 // HasAsset returns a boolean if a field has been set.
-func (o *QuotePreviewDtoInputsInner) HasAsset() bool {
+func (o *OifQuotePreviewDtoInputsInner) HasAsset() bool {
 	if o != nil && !IsNil(o.Asset) {
 		return true
 	}
@@ -101,12 +101,12 @@ func (o *QuotePreviewDtoInputsInner) HasAsset() bool {
 }
 
 // SetAsset gets a reference to the given string and assigns it to the Asset field.
-func (o *QuotePreviewDtoInputsInner) SetAsset(v string) {
+func (o *OifQuotePreviewDtoInputsInner) SetAsset(v string) {
 	o.Asset = &v
 }
 
 // GetAmount returns the Amount field value if set, zero value otherwise.
-func (o *QuotePreviewDtoInputsInner) GetAmount() string {
+func (o *OifQuotePreviewDtoInputsInner) GetAmount() string {
 	if o == nil || IsNil(o.Amount) {
 		var ret string
 		return ret
@@ -116,7 +116,7 @@ func (o *QuotePreviewDtoInputsInner) GetAmount() string {
 
 // GetAmountOk returns a tuple with the Amount field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *QuotePreviewDtoInputsInner) GetAmountOk() (*string, bool) {
+func (o *OifQuotePreviewDtoInputsInner) GetAmountOk() (*string, bool) {
 	if o == nil || IsNil(o.Amount) {
 		return nil, false
 	}
@@ -124,7 +124,7 @@ func (o *QuotePreviewDtoInputsInner) GetAmountOk() (*string, bool) {
 }
 
 // HasAmount returns a boolean if a field has been set.
-func (o *QuotePreviewDtoInputsInner) HasAmount() bool {
+func (o *OifQuotePreviewDtoInputsInner) HasAmount() bool {
 	if o != nil && !IsNil(o.Amount) {
 		return true
 	}
@@ -133,11 +133,11 @@ func (o *QuotePreviewDtoInputsInner) HasAmount() bool {
 }
 
 // SetAmount gets a reference to the given string and assigns it to the Amount field.
-func (o *QuotePreviewDtoInputsInner) SetAmount(v string) {
+func (o *OifQuotePreviewDtoInputsInner) SetAmount(v string) {
 	o.Amount = &v
 }
 
-func (o QuotePreviewDtoInputsInner) MarshalJSON() ([]byte, error) {
+func (o OifQuotePreviewDtoInputsInner) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -145,7 +145,7 @@ func (o QuotePreviewDtoInputsInner) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o QuotePreviewDtoInputsInner) ToMap() (map[string]interface{}, error) {
+func (o OifQuotePreviewDtoInputsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	if !IsNil(o.User) {
 		toSerialize["user"] = o.User
@@ -159,38 +159,38 @@ func (o QuotePreviewDtoInputsInner) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-type NullableQuotePreviewDtoInputsInner struct {
-	value *QuotePreviewDtoInputsInner
+type NullableOifQuotePreviewDtoInputsInner struct {
+	value *OifQuotePreviewDtoInputsInner
 	isSet bool
 }
 
-func (v NullableQuotePreviewDtoInputsInner) Get() *QuotePreviewDtoInputsInner {
+func (v NullableOifQuotePreviewDtoInputsInner) Get() *OifQuotePreviewDtoInputsInner {
 	return v.value
 }
 
-func (v *NullableQuotePreviewDtoInputsInner) Set(val *QuotePreviewDtoInputsInner) {
+func (v *NullableOifQuotePreviewDtoInputsInner) Set(val *OifQuotePreviewDtoInputsInner) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableQuotePreviewDtoInputsInner) IsSet() bool {
+func (v NullableOifQuotePreviewDtoInputsInner) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableQuotePreviewDtoInputsInner) Unset() {
+func (v *NullableOifQuotePreviewDtoInputsInner) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableQuotePreviewDtoInputsInner(val *QuotePreviewDtoInputsInner) *NullableQuotePreviewDtoInputsInner {
-	return &NullableQuotePreviewDtoInputsInner{value: val, isSet: true}
+func NewNullableOifQuotePreviewDtoInputsInner(val *OifQuotePreviewDtoInputsInner) *NullableOifQuotePreviewDtoInputsInner {
+	return &NullableOifQuotePreviewDtoInputsInner{value: val, isSet: true}
 }
 
-func (v NullableQuotePreviewDtoInputsInner) MarshalJSON() ([]byte, error) {
+func (v NullableOifQuotePreviewDtoInputsInner) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableQuotePreviewDtoInputsInner) UnmarshalJSON(src []byte) error {
+func (v *NullableOifQuotePreviewDtoInputsInner) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

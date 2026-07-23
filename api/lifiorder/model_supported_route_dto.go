@@ -36,19 +36,17 @@ type SupportedRouteDto struct {
 	// Gas fee for the route (in token units)
 	GasFee float32 `json:"gasFee"`
 	// Source chain record ID
-	FromChainRecordId map[string]interface{} `json:"fromChainRecordId"`
+	FromChainRecordId NullableFloat32 `json:"fromChainRecordId"`
 	// Destination chain record ID
-	ToChainRecordId map[string]interface{} `json:"toChainRecordId"`
+	ToChainRecordId NullableFloat32 `json:"toChainRecordId"`
 	// Source token record ID
-	FromTokenId map[string]interface{} `json:"fromTokenId"`
+	FromTokenId NullableFloat32 `json:"fromTokenId"`
 	// Destination token record ID
-	ToTokenId map[string]interface{} `json:"toTokenId"`
+	ToTokenId NullableFloat32 `json:"toTokenId"`
 	// Whether the route is currently active
-	IsActive bool `json:"isActive"`
-	// Source chain information
+	IsActive  bool                      `json:"isActive"`
 	FromChain NullableRouteChainInfoDto `json:"fromChain"`
-	// Destination chain information
-	ToChain NullableRouteChainInfoDto `json:"toChain"`
+	ToChain   NullableRouteChainInfoDto `json:"toChain"`
 	// Source token information for this route
 	FromToken TokenInfoDto `json:"fromToken"`
 	// Destination token information for this route
@@ -61,7 +59,7 @@ type _SupportedRouteDto SupportedRouteDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSupportedRouteDto(id string, createdAt string, updatedAt string, minAmount float32, maxAmount float32, fee float32, gasFee float32, fromChainRecordId map[string]interface{}, toChainRecordId map[string]interface{}, fromTokenId map[string]interface{}, toTokenId map[string]interface{}, isActive bool, fromChain NullableRouteChainInfoDto, toChain NullableRouteChainInfoDto, fromToken TokenInfoDto, toToken TokenInfoDto) *SupportedRouteDto {
+func NewSupportedRouteDto(id string, createdAt string, updatedAt string, minAmount float32, maxAmount float32, fee float32, gasFee float32, fromChainRecordId NullableFloat32, toChainRecordId NullableFloat32, fromTokenId NullableFloat32, toTokenId NullableFloat32, isActive bool, fromChain NullableRouteChainInfoDto, toChain NullableRouteChainInfoDto, fromToken TokenInfoDto, toToken TokenInfoDto) *SupportedRouteDto {
 	this := SupportedRouteDto{}
 	this.Id = id
 	this.CreatedAt = createdAt
@@ -259,107 +257,107 @@ func (o *SupportedRouteDto) SetGasFee(v float32) {
 }
 
 // GetFromChainRecordId returns the FromChainRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SupportedRouteDto) GetFromChainRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SupportedRouteDto) GetFromChainRecordId() float32 {
+	if o == nil || o.FromChainRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.FromChainRecordId
+	return *o.FromChainRecordId.Get()
 }
 
 // GetFromChainRecordIdOk returns a tuple with the FromChainRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SupportedRouteDto) GetFromChainRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.FromChainRecordId) {
-		return map[string]interface{}{}, false
+func (o *SupportedRouteDto) GetFromChainRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.FromChainRecordId, true
+	return o.FromChainRecordId.Get(), o.FromChainRecordId.IsSet()
 }
 
 // SetFromChainRecordId sets field value
-func (o *SupportedRouteDto) SetFromChainRecordId(v map[string]interface{}) {
-	o.FromChainRecordId = v
+func (o *SupportedRouteDto) SetFromChainRecordId(v float32) {
+	o.FromChainRecordId.Set(&v)
 }
 
 // GetToChainRecordId returns the ToChainRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SupportedRouteDto) GetToChainRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SupportedRouteDto) GetToChainRecordId() float32 {
+	if o == nil || o.ToChainRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.ToChainRecordId
+	return *o.ToChainRecordId.Get()
 }
 
 // GetToChainRecordIdOk returns a tuple with the ToChainRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SupportedRouteDto) GetToChainRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ToChainRecordId) {
-		return map[string]interface{}{}, false
+func (o *SupportedRouteDto) GetToChainRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ToChainRecordId, true
+	return o.ToChainRecordId.Get(), o.ToChainRecordId.IsSet()
 }
 
 // SetToChainRecordId sets field value
-func (o *SupportedRouteDto) SetToChainRecordId(v map[string]interface{}) {
-	o.ToChainRecordId = v
+func (o *SupportedRouteDto) SetToChainRecordId(v float32) {
+	o.ToChainRecordId.Set(&v)
 }
 
 // GetFromTokenId returns the FromTokenId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SupportedRouteDto) GetFromTokenId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SupportedRouteDto) GetFromTokenId() float32 {
+	if o == nil || o.FromTokenId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.FromTokenId
+	return *o.FromTokenId.Get()
 }
 
 // GetFromTokenIdOk returns a tuple with the FromTokenId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SupportedRouteDto) GetFromTokenIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.FromTokenId) {
-		return map[string]interface{}{}, false
+func (o *SupportedRouteDto) GetFromTokenIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.FromTokenId, true
+	return o.FromTokenId.Get(), o.FromTokenId.IsSet()
 }
 
 // SetFromTokenId sets field value
-func (o *SupportedRouteDto) SetFromTokenId(v map[string]interface{}) {
-	o.FromTokenId = v
+func (o *SupportedRouteDto) SetFromTokenId(v float32) {
+	o.FromTokenId.Set(&v)
 }
 
 // GetToTokenId returns the ToTokenId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SupportedRouteDto) GetToTokenId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SupportedRouteDto) GetToTokenId() float32 {
+	if o == nil || o.ToTokenId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.ToTokenId
+	return *o.ToTokenId.Get()
 }
 
 // GetToTokenIdOk returns a tuple with the ToTokenId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SupportedRouteDto) GetToTokenIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ToTokenId) {
-		return map[string]interface{}{}, false
+func (o *SupportedRouteDto) GetToTokenIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ToTokenId, true
+	return o.ToTokenId.Get(), o.ToTokenId.IsSet()
 }
 
 // SetToTokenId sets field value
-func (o *SupportedRouteDto) SetToTokenId(v map[string]interface{}) {
-	o.ToTokenId = v
+func (o *SupportedRouteDto) SetToTokenId(v float32) {
+	o.ToTokenId.Set(&v)
 }
 
 // GetIsActive returns the IsActive field value
@@ -503,18 +501,10 @@ func (o SupportedRouteDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["maxAmount"] = o.MaxAmount
 	toSerialize["fee"] = o.Fee
 	toSerialize["gasFee"] = o.GasFee
-	if o.FromChainRecordId != nil {
-		toSerialize["fromChainRecordId"] = o.FromChainRecordId
-	}
-	if o.ToChainRecordId != nil {
-		toSerialize["toChainRecordId"] = o.ToChainRecordId
-	}
-	if o.FromTokenId != nil {
-		toSerialize["fromTokenId"] = o.FromTokenId
-	}
-	if o.ToTokenId != nil {
-		toSerialize["toTokenId"] = o.ToTokenId
-	}
+	toSerialize["fromChainRecordId"] = o.FromChainRecordId.Get()
+	toSerialize["toChainRecordId"] = o.ToChainRecordId.Get()
+	toSerialize["fromTokenId"] = o.FromTokenId.Get()
+	toSerialize["toTokenId"] = o.ToTokenId.Get()
 	toSerialize["isActive"] = o.IsActive
 	toSerialize["fromChain"] = o.FromChain.Get()
 	toSerialize["toChain"] = o.ToChain.Get()
