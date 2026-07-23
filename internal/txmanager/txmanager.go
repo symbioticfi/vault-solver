@@ -562,6 +562,12 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		Data:  req.Data,
 	})
 	if err != nil {
+		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
+		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
+		m.log.Error(err, "gas estimation failed",
+			"label", req.Label,
+			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
+		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
 	// 20% headroom over the estimate.
