@@ -30,9 +30,9 @@ func TestOfferExpiration(t *testing.T) {
 			want: now.Add(time.Hour).Add(buffer).Unix(),
 		},
 		{
-			name: "past solve start falls back to the now+buffer floor",
+			name: "past solve start still anchors expiry to solveStart+buffer",
 			av:   withSolveStart(now.Add(-time.Hour).Format(time.RFC3339)),
-			want: now.Add(buffer).Unix(),
+			want: now.Add(-time.Hour).Add(buffer).Unix(),
 		},
 		{
 			name: "missing solve start falls back to now+buffer",
