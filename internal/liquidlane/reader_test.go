@@ -361,6 +361,32 @@ func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testin
 	}
 }
 
+func TestReaderReadGasSnapshotReadsZeroMarketMakerKey(t *testing.T) {
+	route := testReaderRoute(1)
+	owner := common.HexToAddress("0x0000000000000000000000000000000000000a11")
+	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
+		{
+			successOutput(t, "owner", owner),
+			successOutput(t, "marketMaker", common.Address{}),
+			successVaultOutput(t, "freeAssets", big.NewInt(200)),
+			successVaultOutput(t, "withdrawable", big.NewInt(150)),
+		},
+		{
+			successOutput(t, "acquireBalance", big.NewInt(30)),
+			successOutput(t, "acquireBalance", new(big.Int)),
+		},
+	}}
+	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
+
+	snapshot, err := r.ReadGasSnapshot(t.Context(), []Route{route})
+	if err != nil {
+		t.Fatalf("ReadGasSnapshot: %v", err)
+	}
+	if got := snapshot.Adapters[route.Adapter].Acquire[route.TokenIn]; got == nil || got.String() != "30" {
+		t.Fatalf("acquire balance = %v, want 30", got)
+	}
+}
+
 func TestReaderReadGasSnapshotTreatsInvalidAcquireBalanceAsUnavailable(t *testing.T) {
 	route := testReaderRoute(1)
 	owner := common.HexToAddress("0x0000000000000000000000000000000000000a11")
@@ -521,6 +547,26 @@ func TestReaderReadAuthUsesDirectRolesAndDelegatedFiller(t *testing.T) {
 		t.Fatalf("ReadAuth: %v", err)
 	}
 	if len(auth) != 3 || !auth[0].Authorized || !auth[1].Authorized || !auth[2].Authorized || !auth[2].IsFiller {
+		t.Fatalf("auth = %+v", auth)
+	}
+}
+
+func TestReaderReadAuthAcceptsDelegatedFillerForZeroMarketMaker(t *testing.T) {
+	filler := common.HexToAddress("0x0000000000000000000000000000000000000f11")
+	owner := common.HexToAddress("0x0000000000000000000000000000000000000b11")
+	adapterAddress := common.HexToAddress("0x0000000000000000000000000000000000000011")
+	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
+		{successOutput(t, "marketMaker", common.Address{}), successOutput(t, "owner", owner)},
+		{successOutput(t, "isFiller", true)},
+	}}
+	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
+
+	auth, err := r.ReadAuth(t.Context(), []common.Address{adapterAddress}, filler)
+	if err != nil {
+		t.Fatalf("ReadAuth: %v", err)
+	}
+	if len(auth) != 1 || auth[0].MarketMaker != (common.Address{}) || auth[0].Owner != owner ||
+		!auth[0].Authorized || !auth[0].IsFiller {
 		t.Fatalf("auth = %+v", auth)
 	}
 }

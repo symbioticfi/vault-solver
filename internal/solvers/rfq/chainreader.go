@@ -205,9 +205,9 @@ func (r *reader) validateDirectAuthorization(
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
 // authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
-// marketMaker has delegated via adapter.isFiller(marketMaker, executor). Used at fill time so we never
-// build inputs for an unauthorized adapter. Mirrors readPermissionedAdapterInventories in
-// inventories.ts (marketMaker / owner / isFiller).
+// current marketMaker value (including zero) has delegated via adapter.isFiller(marketMaker, executor).
+// Used at fill time so we never build inputs for an unauthorized adapter. Mirrors
+// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller).
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
