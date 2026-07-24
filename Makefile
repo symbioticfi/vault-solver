@@ -32,12 +32,13 @@ RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi
 # JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and
 # extracts it via hack/scalar-openapi-extract.py (see that target).
 LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
+UNISWAPX_OPENAPI_URL ?= https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
-ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor
+ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
@@ -54,7 +55,7 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IER
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
-            LiquidLaneLifiExecutor:lifi/executor \
+            LiquidLaneLifiExecutor:lifi/executor LiquidLaneUniswapXExecutor:uniswapx/executor \
             ILifiInputSettler:lifi/inputsettler \
             IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
             SymbioticOevSolver:oev/callback RedStoneExecutor:oev/executor Morpho:oev/morpho \
@@ -126,6 +127,12 @@ refresh-lifi-openapi: ## Re-pull the LI.FI order-server OpenAPI spec (LIFI_OPENA
 	curl -fsSL "$(LIFI_OPENAPI_URL)" | python3 hack/scalar-openapi-extract.py > openapi/lifi-order.openapi.json
 	@echo "vendored openapi/lifi-order.openapi.json (extracted from the Scalar /docs page)"
 
+.PHONY: refresh-uniswapx-openapi
+refresh-uniswapx-openapi: ## Re-pull the UniswapX order-pool OpenAPI spec
+	@mkdir -p openapi
+	curl -fsSL "$(UNISWAPX_OPENAPI_URL)" | jq . > openapi/uniswapx-service.openapi.json
+	@echo "vendored openapi/uniswapx-service.openapi.json"
+
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
 	@mkdir -p api/graphql/morpho
@@ -144,7 +151,7 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 		echo "generated api/bindings/$$rel/$$c.go (v2)"; \
 	done
 
-# All three OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,
+# All OpenAPI clients are generated with the Java openapi-generator (via hack/openapi-generator-cli.sh,
 # which downloads the pinned jar on demand — needs a JRE). It is the only generator that ingests the RFQ
 # backend's OpenAPI 3.1 spec; we use it for the 3F (3.0) and LI.FI order-server specs too for one toolchain.
 # $(OPENAPI_GENERATOR_VERSION) is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is
@@ -171,6 +178,18 @@ refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generato
 	@rm -f api/lifiorder/*.go
 	$(call gen_openapi_client,openapi/lifi-order.openapi.json,api/lifiorder,lifiorder)
 
+.PHONY: refresh-uniswapx-client
+refresh-uniswapx-client: ## Generate the UniswapX order-pool client from the vendored spec
+	@rm -f api/uniswapxservice/*.go
+	@tmpdir="$$(mktemp -d)"; \
+		trap 'rm -rf "$$tmpdir"' EXIT; \
+		tmp="$$tmpdir/uniswapx-normalized.json"; \
+		python3 hack/uniswapx-openapi-normalize.py < openapi/uniswapx-service.openapi.json > "$$tmp"; \
+		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
+			generate --enable-post-process-file -i "$$tmp" -g go -o ./api/uniswapxservice --package-name uniswapxservice \
+			--additional-properties=useOneOfDiscriminatorLookup=true
+	cd api/uniswapxservice && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+
 .PHONY: refresh-morpho-graphql-client
 refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient) from the vendored schema + operations
 	@mkdir -p api/morphographql
@@ -183,7 +202,7 @@ refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient)
 	@gofmt -w api/morphographql/generated.go
 
 .PHONY: openapi-client
-openapi-client: refresh-3f-client refresh-rfq-client refresh-lifi-client ## Generate all OpenAPI clients
+openapi-client: refresh-3f-client refresh-rfq-client refresh-lifi-client refresh-uniswapx-client ## Generate all OpenAPI clients
 
 .PHONY: graphql-client
 graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients
