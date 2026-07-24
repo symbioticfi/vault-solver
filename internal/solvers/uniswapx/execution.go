@@ -169,6 +169,15 @@ func (s *Solver) startFill(
 		return nil, err
 	}
 	if plan == nil || len(plan.Routes) == 0 {
+		s.log.V(1).Info(
+			"order fill strategy declined",
+			"source", order.Source,
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"fillQuotes", len(fillInput.Quotes),
+			"amountIn", order.AmountIn.String(),
+			"requiredAmountOut", order.AmountOut.String(),
+		)
 		return nil, errOrderNotFillable
 	}
 	validatedRoutes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{

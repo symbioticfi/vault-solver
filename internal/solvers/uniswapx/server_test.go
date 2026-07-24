@@ -23,13 +23,18 @@ func TestQuoteHTTPServerRoutesHealth(t *testing.T) {
 		log: logr.Discard(),
 	}
 	server := solver.newQuoteHTTPServer()
-	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
-	response := httptest.NewRecorder()
 
-	server.Handler.ServeHTTP(response, request)
+	for _, path := range []string{"/health", "/healthz"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+			response := httptest.NewRecorder()
 
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+			server.Handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+			}
+		})
 	}
 }
 

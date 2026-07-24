@@ -224,12 +224,17 @@ func (s *Solver) Run(ctx context.Context) error {
 		return startupErr
 	}
 	if _, err := s.orders.openOrders(ctx, s.chainID, &s.cfg.Executor); err != nil {
-		return errors.Errorf("validate exclusive order delivery: %w", err)
+		startupErr := errors.Errorf("validate exclusive order delivery: %w", err)
+		s.log.Error(startupErr, "exclusive order delivery validation failed",
+			"executor", s.cfg.Executor.Hex(), "orderApi", s.cfg.OrderServer.BaseURL)
+		return startupErr
 	}
 	s.recordExclusivePollSuccess(time.Now())
 	s.warmupUntil.Store(time.Now().Add(s.cfg.QuoteServer.QuoteTTL).Unix())
 	if err := s.refreshQuoteState(ctx, routes); err != nil {
-		return errors.Errorf("initial quote refresh: %w", err)
+		startupErr := errors.Errorf("initial quote refresh: %w", err)
+		s.log.Error(startupErr, "initial quote refresh failed", "routes", len(routes))
+		return startupErr
 	}
 	s.log.Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),

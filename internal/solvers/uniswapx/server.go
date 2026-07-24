@@ -24,8 +24,10 @@ const (
 
 func (s *Solver) newQuoteHTTPServer() *http.Server {
 	mux := http.NewServeMux()
+	healthHandler := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	mux.HandleFunc("POST /quote", s.quoteHandler)
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /ready", s.readyHandler)
 	return &http.Server{
 		Addr: s.cfg.QuoteServer.ListenAddress, Handler: recoverQuoteServer(mux, s.log),
@@ -42,7 +44,14 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteRequestBytes+1))
-	if err != nil || len(body) > maxQuoteRequestBytes {
+	if err != nil {
+		s.log.V(1).Info("quote request rejected", "reason", "read-body", "error", err.Error())
+		s.observeQuote("invalid")
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body) > maxQuoteRequestBytes {
+		s.log.V(1).Info("quote request rejected", "reason", "body-too-large", "bytes", len(body))
 		s.observeQuote("invalid")
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -51,17 +60,25 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
+		s.log.V(1).Info("quote request rejected", "reason", "invalid-json", "error", err.Error())
 		s.observeQuote("invalid")
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		s.log.V(1).Info(
+			"quote request rejected",
+			"reason", "trailing-json",
+			"requestId", request.RequestID,
+			"quoteId", request.QuoteID,
+		)
 		s.observeQuote("invalid")
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
+			s.log.V(1).Info("quote request rejected", "reason", "invalid-breaker-notification")
 			s.observeQuote("invalid")
 			http.Error(w, "invalid blockUntilTimestamp", http.StatusBadRequest)
 			return

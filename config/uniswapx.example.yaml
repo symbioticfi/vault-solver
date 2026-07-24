@@ -40,7 +40,7 @@ solvers:
         - ${TOKEN_TO_REDEEM}      # RWA input token accepted by this solver
 
       quoteServer:
-        listenAddress: ":42080"   # public POST /quote plus /health and /ready
+        listenAddress: ":42080"   # public POST /quote plus /healthz and /ready
         httpTimeout: 450ms        # quote request read/write deadline
         refreshInterval: 12s      # cadence for inventory, gas, and price snapshots
         quoteTtl: 30s             # quote-state lifetime; must be >= 2x refreshInterval

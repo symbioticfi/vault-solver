@@ -34,7 +34,8 @@ func (s *Solver) ready() bool {
 	epoch := s.quoteEpoch.Load()
 	state := s.quoteState.Load()
 	ready := lastPoll > 0 && !s.quoteBlocked(now.Unix()) &&
-		state != nil && state.epoch == epoch && state.expiresAt.After(now) &&
+		state != nil && len(state.inventory) > 0 &&
+		state.epoch == epoch && state.expiresAt.After(now) &&
 		s.quoteEpoch.Load() == epoch && s.quoteState.Load() == state
 	if s.metrics != nil {
 		if ready {

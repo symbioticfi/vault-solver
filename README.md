@@ -180,7 +180,8 @@ released, and that capacity is not advertised again until a fresh post-fill chai
 A quote is returned only if its snapshot epoch and every blocking condition are unchanged after the strategy
 finishes. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery, fill
 planning, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. `GET /ready`
-exposes that state while `GET /health` remains liveness-only.
+exposes that state and also returns not-ready when the latest snapshot has no quotable inventory;
+`GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that
 deadline, tracked hashes are reconciled in batches against the order API and canonical transaction receipts.

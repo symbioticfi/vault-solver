@@ -145,7 +145,7 @@ assertion because the PR19 ABI has no getter.
 |---|---|---|
 | `solver.go` | factory, dependency wiring, startup validation, and `Run` lifecycle | mirror `rfq` |
 | `config.go` | typed config: addresses, servers, gas feeds, breaker, adapters/token policy, strategy | mirror `rfq` |
-| `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/ready`; source-IP auth stays at ingress | net-new |
+| `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/healthz`, `/ready`; source-IP auth stays at ingress | net-new |
 | `quote_refresh.go` | background inventory/gas snapshots, epoch binding, and atomic publication | net-new |
 | `polling.go` | exclusive and public V2 polling; dedup/retry admission and exclusive reconciliation | net-new |
 | `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
@@ -515,7 +515,9 @@ is economic, not just gas:
   next epoch.
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
   attempts are classified only by their tracked terminal reconciliation. Successful settlement resets it.
-- **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state.
+- **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
+  readiness also fails when the latest published snapshot has no quotable inventory, while health remains
+  liveness-only.
 - **Track exclusive obligations locally:** every valid order assigned to our executor is tracked until
   `decayStartTime`, then reconciled in batches against terminal order state and the canonical fill receipt.
   Only a successful on-chain fill at or before the deadline clears the obligation; this makes another

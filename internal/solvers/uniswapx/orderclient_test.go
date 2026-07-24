@@ -226,9 +226,9 @@ func TestOrderClientLeavesFillerUnsetForPublicSources(t *testing.T) {
 }
 
 func TestOrderClientRateLimitsEveryPage(t *testing.T) {
-	var requestTimes []time.Time
+	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestTimes = append(requestTimes, time.Now())
+		requestCount++
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("cursor") == "" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{}, "cursor": "next"})
@@ -240,11 +240,16 @@ func TestOrderClientRateLimitsEveryPage(t *testing.T) {
 
 	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
 	client.requestGap = 20 * time.Millisecond
+	started := time.Now()
+	client.lastRequest = started
 	if _, err := client.openOrders(context.Background(), 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(requestTimes) != 2 || requestTimes[1].Sub(requestTimes[0]) < client.requestGap-5*time.Millisecond {
-		t.Fatalf("request times = %v, want at least %s between pages", requestTimes, client.requestGap)
+	if requestCount != 2 {
+		t.Fatalf("request count = %d, want 2", requestCount)
+	}
+	if elapsed := client.lastRequest.Sub(started); elapsed < 2*client.requestGap {
+		t.Fatalf("request slots elapsed = %s, want at least %s", elapsed, 2*client.requestGap)
 	}
 }
 

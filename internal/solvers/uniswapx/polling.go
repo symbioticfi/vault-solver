@@ -157,14 +157,25 @@ func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {
 	s.stateMu.Lock()
 	delete(s.inFlight, hash)
 	backoff := s.cfg.OrderServer.PollInterval
+	attempt := s.attempts[hash]
 	if failed {
-		s.attempts[hash]++
-		shift := min(s.attempts[hash]-1, 5)
+		attempt++
+		s.attempts[hash] = attempt
+		shift := min(attempt-1, 5)
 		backoff *= time.Duration(1 << shift)
 		backoff = min(backoff, 30*time.Second)
 	}
-	s.retryAt[hash] = now.Add(backoff)
+	retryAt := now.Add(backoff)
+	s.retryAt[hash] = retryAt
 	s.stateMu.Unlock()
+	s.log.V(1).Info(
+		"order retry scheduled",
+		"orderHash", hash.Hex(),
+		"failed", failed,
+		"attempt", attempt,
+		"backoff", backoff,
+		"retryAt", retryAt.Unix(),
+	)
 }
 
 func (s *Solver) complete(hash common.Hash, now time.Time) {

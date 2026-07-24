@@ -3,6 +3,7 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,7 +236,7 @@ func TestResolveAdvertisedRoutesIsolatesInvalidAdapter(t *testing.T) {
 	}
 }
 
-func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyState(t *testing.T) {
+func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyUnreadyState(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	reader := &quoteModeReader{now: now}
 	solver := quoteModeSolver(reader, &fakeDiscountProvider{list: &liquiddiscounts.List{}})
@@ -246,6 +247,10 @@ func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyState(t *testing.T)
 	state := solver.quoteState.Load()
 	if state == nil || len(state.inventory) != 0 {
 		t.Fatalf("empty quote state = %+v", state)
+	}
+	solver.lastExclusivePoll.Store(time.Now().Unix())
+	if solver.ready() {
+		t.Fatal("solver with empty quote inventory should not be ready")
 	}
 }
 
@@ -267,6 +272,37 @@ func TestRefreshQuoteStateSkipsDynamicRouteWithoutGasFeed(t *testing.T) {
 	state := solver.quoteState.Load()
 	if state == nil || len(state.inventory) != 0 || len(reader.snapshotRoutes) != 0 {
 		t.Fatalf("missing-feed quote state=%+v routes=%+v", state, reader.snapshotRoutes)
+	}
+}
+
+func TestPublishQuoteStateDoesNotRetainConcurrentlyInvalidatedState(t *testing.T) {
+	const iterations = 10_000
+
+	solver := &Solver{}
+	expiresAt := time.Now().Add(time.Minute)
+	for range iterations {
+		epoch := solver.quoteEpoch.Load()
+		candidate := &quoteState{
+			inventory: []liquidlane.Inventory{{}},
+			expiresAt: expiresAt,
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-start
+			solver.publishQuoteState(epoch, candidate)
+		})
+		wg.Go(func() {
+			<-start
+			solver.invalidateQuotes()
+		})
+		close(start)
+		wg.Wait()
+
+		currentEpoch := solver.quoteEpoch.Load()
+		if current := solver.quoteState.Load(); current != nil && current.epoch != currentEpoch {
+			t.Fatalf("published stale epoch %d while current epoch is %d", current.epoch, currentEpoch)
+		}
 	}
 }
 

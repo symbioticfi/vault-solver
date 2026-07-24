@@ -3,6 +3,8 @@ package uniswapx
 import (
 	"testing"
 	"time"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
 func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
@@ -16,6 +18,13 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 		t.Fatal("solver without a quote state should not be ready")
 	}
 	solver.quoteState.Store(&quoteState{epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second)})
+	if solver.ready() {
+		t.Fatal("solver without quote inventory should not be ready")
+	}
+	solver.quoteState.Store(&quoteState{
+		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second),
+		inventory: []liquidlane.Inventory{{}},
+	})
 	if !solver.ready() {
 		t.Fatal("fresh solver should be ready")
 	}
@@ -24,7 +33,10 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 		t.Fatal("solver planning a fill should not be ready")
 	}
 	solver.endFillPlanning()
-	solver.quoteState.Store(&quoteState{epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second)})
+	solver.quoteState.Store(&quoteState{
+		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second),
+		inventory: []liquidlane.Inventory{{}},
+	})
 	solver.warmupUntil.Store(now.Add(time.Minute).Unix())
 	if solver.ready() {
 		t.Fatal("warmup solver should not be ready")

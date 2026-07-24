@@ -54,6 +54,12 @@ func (s *Solver) setPendingReservations(hash common.Hash, reservations liquidlan
 	if s.metrics != nil {
 		s.metrics.pendingFills.Set(float64(s.capacity.Len()))
 	}
+	s.log.V(1).Info(
+		"fill capacity reserved",
+		"orderHash", hash.Hex(),
+		"capacityGroups", len(reservations),
+		"pendingFills", s.capacity.Len(),
+	)
 	s.invalidateQuotes()
 	s.requestQuoteRefresh()
 }
@@ -68,6 +74,11 @@ func (s *Solver) clearPendingReservations(hash common.Hash) {
 	if s.metrics != nil {
 		s.metrics.pendingFills.Set(float64(s.capacity.Len()))
 	}
+	s.log.V(1).Info(
+		"fill capacity released",
+		"orderHash", hash.Hex(),
+		"pendingFills", s.capacity.Len(),
+	)
 	s.requestQuoteRefresh()
 }
 
@@ -96,10 +107,18 @@ func (s *Solver) recordFillFailure(now time.Time) {
 
 func (s *Solver) recordFillSuccess() {
 	s.stateMu.Lock()
+	hadFailures := len(s.failureTimes) > 0
 	s.failureTimes = nil
 	s.stateMu.Unlock()
-	s.localBlockUntil.Store(0)
+	blockedUntil := s.localBlockUntil.Swap(0)
 	s.updateBlockUntilMetric()
+	if hadFailures || blockedUntil != 0 {
+		s.log.V(1).Info(
+			"local fill breaker cleared",
+			"hadFailures", hadFailures,
+			"previousBlockUntil", blockedUntil,
+		)
+	}
 }
 
 func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) {
@@ -108,13 +127,24 @@ func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) {
 	}
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
+	tracked := false
+	var deadline time.Time
 	if _, terminal := s.exclusiveTerminal[order.Hash]; !terminal {
-		deadline := time.Unix(int64(order.ExclusiveUntil), 0)
+		deadline = time.Unix(int64(order.ExclusiveUntil), 0)
 		if current, exists := s.exclusiveUntil[order.Hash]; !exists || deadline.Before(current) {
 			s.exclusiveUntil[order.Hash] = deadline
+			tracked = true
 		}
 	}
 	s.stateMu.Unlock()
+	if tracked {
+		s.log.V(1).Info(
+			"exclusive obligation tracked",
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"exclusiveUntil", deadline.Unix(),
+		)
+	}
 }
 
 func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
@@ -130,6 +160,11 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	if len(expired) == 0 {
 		return nil
 	}
+	s.log.V(1).Info(
+		"exclusive obligations reconciliation started",
+		"obligations", len(expired),
+		"chainTime", now.Unix(),
+	)
 
 	hashes := make([]common.Hash, len(expired))
 	for i := range expired {
