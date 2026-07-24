@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -50,8 +51,24 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	permInv []solverInventory
-	permErr error
+	permInv   []solverInventory
+	permErr   error
+	authErr   error
+	authCalls int
+	setCalls  int
+	quoteOut  map[common.Address]*big.Int
+}
+
+func (f *fakeRecoveryReader) readQuoteCandidates(
+	ctx context.Context,
+	inventory []solverInventory,
+	tokenIn common.Address,
+	tokenOut common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.QuoteCandidate, error) {
+	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
+		ctx, inventory, tokenIn, tokenOut, amountIn,
+	)
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
@@ -62,6 +79,15 @@ func (f *fakeRecoveryReader) readPermissionedVaultInventories(
 
 func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
 	return vaults, nil
+}
+
+func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault) { f.setCalls++ }
+
+func (f *fakeRecoveryReader) validateDirectAuthorization(
+	context.Context, common.Address, []recoveryVault,
+) error {
+	f.authCalls++
+	return f.authErr
 }
 
 type fakeTxm struct {
@@ -168,6 +194,22 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	}
 }
 
+func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
+	st, be := fillFixtures(t)
+	be.executable.Outputs[0].Amount = "899999"
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+		t.Fatalf("status = %v, want failed", rec)
+	}
+	if len(txm.lastData) != 0 {
+		t.Fatal("fill transaction was sent for inconsistent backend metadata")
+	}
+}
+
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
@@ -240,8 +282,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
-	e.reader = &fakeRecoveryReader{}
-	e.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(500000)})
+	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
+	e.strategy = newDefaultTestStrategy()
 
 	e.syncOnce(context.Background())
 
@@ -329,6 +371,9 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	out = e.discountInventories(context.Background(), tIn, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
+	}
+	if out[0].CapacityID == out[1].CapacityID {
+		t.Fatalf("unknown discount vaults share capacity id %q", out[0].CapacityID)
 	}
 }
 

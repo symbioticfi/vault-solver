@@ -53,8 +53,9 @@ func (in QuoteInput) MarshalJSON() ([]byte, error) {
 	candidates := make([]quoteCandidateJSON, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
 		candidates = append(candidates, quoteCandidateJSON{
-			ID: c.ID, Adapter: c.Adapter, Asset: c.Asset, AssetDecimals: c.AssetDecimals,
-			MaxAssets: bigString(c.MaxAssets), MaxRate: bigString(c.MaxRate), DiscountID: c.DiscountID,
+			ID: string(c.ID), Adapter: c.Route.Adapter, Asset: c.Route.TokenOut,
+			AssetDecimals: c.Route.TokenOutDecimals,
+			MaxAssets:     bigString(c.MaxAmountOut), MaxRate: bigString(c.Rate), DiscountID: c.DiscountID,
 		})
 	}
 	return json.Marshal(quoteInputJSON{

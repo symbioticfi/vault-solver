@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -73,11 +74,12 @@ func (s *inputRecordingStrategy) BuildFillPlan(
 }
 
 func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
+	route := liquidlane.NewRoute(1, vlt, common.Address{}, permissionedToken, tOut, 18, 6)
 	strategy := &inputRecordingStrategy{quoteOut: types.QuoteOutput{
 		Decision:        types.DecisionQuote,
 		QuotedAmountOut: big.NewInt(1_000000),
 		Legs: []types.QuoteLeg{{
-			CandidateID: "candidate-0",
+			CandidateID: string(liquidlane.NewCandidateID(route, nil)),
 			AmountIn:    big.NewInt(1_000000000000000000),
 			AmountOut:   big.NewInt(1_000000),
 		}},
@@ -97,6 +99,39 @@ func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	}
 	if !strategy.quoteInput.RequireSingleRoute {
 		t.Fatal("permissioned quote input did not require a single route")
+	}
+	if len(strategy.quoteInput.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want one normalized LiquidLane candidate", len(strategy.quoteInput.Candidates))
+	}
+	candidate := strategy.quoteInput.Candidates[0]
+	if candidate.Route.TokenIn != permissionedToken || candidate.Route.TokenOut != tOut ||
+		candidate.Route.TokenInDecimals != 18 ||
+		candidate.Rate.Cmp(big.NewInt(1_000_000_000_000_000_000)) != 0 ||
+		candidate.MaxAmountOut.Cmp(big.NewInt(10_000_000)) != 0 {
+		t.Fatalf("candidate = %+v, want typed current LiquidLane facts", candidate)
+	}
+}
+
+func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
+	strategy := &inputRecordingStrategy{quoteOut: types.QuoteOutput{Decision: types.DecisionDecline}}
+	srv := testServer()
+	srv.quotes.strategy = strategy
+	request := validQuoteBody()
+	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
+	request.Adapters[0].DiscountID = &discountID
+
+	response, err := srv.quotes.quote(t.Context(), &request)
+	if err != nil || response != nil {
+		t.Fatalf("quote = %+v, err %v; want strategy decline", response, err)
+	}
+	if len(strategy.quoteInput.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))
+	}
+	candidate := strategy.quoteInput.Candidates[0]
+	if candidate.Route.TokenInDecimals != 18 ||
+		candidate.Rate.Cmp(big.NewInt(1_000_000_000_000_000_000)) != 0 ||
+		candidate.MaxAmountIn.Cmp(mustBig(t, "10000000000000000000")) != 0 {
+		t.Fatalf("candidate = %+v, want 1:1 rate and 10-token capacity", candidate)
 	}
 }
 

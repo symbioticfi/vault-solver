@@ -32,53 +32,6 @@ func (f *fakeDiscountClient) Resolve(context.Context, string) (*discounts.Resolv
 	return f.resolved, nil
 }
 
-func TestMatchingDiscountInventoriesScopesAndCapsOffers(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	direct := testDirectDiscountInventory()
-	listed := &discounts.List{Discounts: []discounts.ListItem{
-		testDiscountListItem(direct, 2_000, now.Add(time.Minute)),
-		{
-			DiscountID: testDiscountID,
-			Adapter:    common.HexToAddress("0xdead").Hex(), TokenToRedeem: direct.TokenIn.Hex(),
-			Collateral: direct.TokenOut.Hex(), CollateralDecimals: direct.TokenOutDecimals,
-			Deadline: now.Add(time.Minute).Unix(), MaxRate: "2000000000000000000", MaxAssets: "2000",
-		},
-	}}
-
-	got := matchingDiscountInventories(listed, []liquidlane.Inventory{direct}, now, func(string, error) {})
-	if len(got) != 1 {
-		t.Fatalf("inventories = %+v", got)
-	}
-	if got[0].MaxAssets.String() != "1000" || got[0].MaxRate.Cmp(direct.MaxRate) != 0 {
-		t.Fatalf("capped inventory = %+v", got[0])
-	}
-	if got[0].DiscountID == nil || got[0].DiscountID.Hex() != testDiscountID {
-		t.Fatalf("discount id = %v", got[0].DiscountID)
-	}
-	if !got[0].ValidUntil.Equal(now.Add(time.Minute)) {
-		t.Fatalf("valid until = %s", got[0].ValidUntil)
-	}
-}
-
-func TestMatchingDiscountInventoriesUsesAdvertisedNetRate(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	direct := testDirectDiscountInventory()
-	netRate := big.NewInt(800_000_000_000_000_000)
-	item := testDiscountListItem(direct, 1_000, now.Add(time.Minute))
-	item.Discount = "200000"
-	item.MaxRate = netRate.String()
-
-	got := matchingDiscountInventories(
-		&discounts.List{Discounts: []discounts.ListItem{item}},
-		[]liquidlane.Inventory{direct},
-		now,
-		nil,
-	)
-	if len(got) != 1 || got[0].MaxRate.Cmp(netRate) != 0 {
-		t.Fatalf("discount rate = %+v, want backend net rate %s", got, netRate)
-	}
-}
-
 func TestFillDiscountQuotesUsesFreshSignedTerms(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	directInventory := testDirectDiscountInventory()
@@ -130,11 +83,13 @@ func TestRefreshResolvedDiscountQuotesUsesFreshAdapterState(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	direct := testDirectDiscountInventory()
 	id := common.HexToHash(testDiscountID)
+	candidateInventory := liquidlane.DiscountInventory(
+		direct.Route, big.NewInt(1_000), direct.MaxRate, id, now.Add(time.Minute),
+	)
+	candidateInventory.AdapterMinDiscount = big.NewInt(100_000)
 	candidate := liquidlane.FillQuote{
-		Inventory: liquidlane.DiscountInventory(
-			direct.Route, big.NewInt(1_000), direct.MaxRate, id, now.Add(time.Minute),
-		),
-		AmountIn: big.NewInt(1_000), GrossAmountOut: big.NewInt(1_000), MaxAmountOut: big.NewInt(900),
+		Inventory: candidateInventory,
+		AmountIn:  big.NewInt(1_000), GrossAmountOut: big.NewInt(1_000), MaxAmountOut: big.NewInt(900),
 		MinDiscount: big.NewInt(100_000),
 	}
 	fresh := liquidlane.FillQuote{
@@ -147,12 +102,12 @@ func TestRefreshResolvedDiscountQuotesUsesFreshAdapterState(t *testing.T) {
 		t.Fatalf("ParseSigned: %v", err)
 	}
 
-	got := refreshResolvedDiscountQuotes(
+	got, issues := discounts.RefreshFillQuotes(
 		[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},
-		[]liquidlane.FillQuote{fresh}, now, nil,
+		[]liquidlane.FillQuote{fresh}, now,
 	)
-	if len(got) != 1 {
-		t.Fatalf("quotes = %+v", got)
+	if len(issues) != 0 || len(got) != 1 {
+		t.Fatalf("quotes = %+v issues = %+v", got, issues)
 	}
 	if got[0].AmountIn.String() != "800" || got[0].GrossAmountOut.String() != "880" ||
 		got[0].MaxAmountOut.String() != "792" || got[0].MaxAssets.String() != "700" {
@@ -164,11 +119,13 @@ func TestRefreshResolvedDiscountQuotesRejectsRateAboveFreshAdapterLimit(t *testi
 	now := time.Unix(1_800_000_000, 0)
 	direct := testDirectDiscountInventory()
 	id := common.HexToHash(testDiscountID)
+	candidateInventory := liquidlane.DiscountInventory(
+		direct.Route, big.NewInt(1_000), direct.MaxRate, id, now.Add(time.Minute),
+	)
+	candidateInventory.AdapterMinDiscount = big.NewInt(100_000)
 	candidate := liquidlane.FillQuote{
-		Inventory: liquidlane.DiscountInventory(
-			direct.Route, big.NewInt(1_000), direct.MaxRate, id, now.Add(time.Minute),
-		),
-		AmountIn: big.NewInt(1_000), GrossAmountOut: big.NewInt(1_000), MaxAmountOut: big.NewInt(900),
+		Inventory: candidateInventory,
+		AmountIn:  big.NewInt(1_000), GrossAmountOut: big.NewInt(1_000), MaxAmountOut: big.NewInt(900),
 		MinDiscount: big.NewInt(100_000),
 	}
 	fresh := candidate
@@ -179,9 +136,9 @@ func TestRefreshResolvedDiscountQuotesRejectsRateAboveFreshAdapterLimit(t *testi
 		t.Fatalf("ParseSigned: %v", err)
 	}
 
-	got := refreshResolvedDiscountQuotes(
+	got, _ := discounts.RefreshFillQuotes(
 		[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},
-		[]liquidlane.FillQuote{fresh}, now, nil,
+		[]liquidlane.FillQuote{fresh}, now,
 	)
 	if len(got) != 0 {
 		t.Fatalf("unsafe quote survived: %+v", got)
@@ -198,7 +155,9 @@ func testDirectDiscountInventory() liquidlane.Inventory {
 		6,
 		6,
 	)
-	return liquidlane.DirectInventory(routeItem, big.NewInt(1_000), big.NewInt(900_000_000_000_000_000))
+	inventory := liquidlane.DirectInventory(routeItem, big.NewInt(1_000), big.NewInt(900_000_000_000_000_000))
+	inventory.AdapterMinDiscount = big.NewInt(100_000)
+	return inventory
 }
 
 func testDiscountListItem(

@@ -6,78 +6,203 @@ import (
 	"time"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
 func (s *Strategy) buildQuoteRanges(
-	ladder []quoteRoute,
-	pricing gasPricing,
-) ([]types.QuoteRange, map[liquidlane.CandidateID]quoteCandidate) {
-	used := make(map[liquidlane.CandidateID]quoteCandidate)
-	transitions := quoteTransitionPoints(ladder)
-	if len(transitions) == 0 {
-		return nil, used
+	candidates []liquidlane.QuoteCandidate,
+	maxRoutes int,
+	pricing liquidstrategies.GasPricing,
+) ([]types.QuoteRange, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
+	candidates = liquidgreedy.BestRouteCandidates(candidates, maxRoutes)
+	if len(candidates) == 0 {
+		return nil, nil, nil
 	}
-	breakpoints := quoteBreakpoints(transitions[len(transitions)-1], s.minAmount, s.rangeCount)
+	maximum, routeCount, privateRouteCount := quoteBounds(candidates)
+	if maximum.Sign() <= 0 {
+		return nil, nil, nil
+	}
+	maxGasCost := pricing.MaxCost(routeCount, privateRouteCount)
+	breakpoints := quoteBreakpoints(maximum, s.minAmount, s.rangeCount)
+	used := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate)
 	ranges := make([]types.QuoteRange, 0, len(breakpoints))
 	lower := new(big.Int).Set(s.minAmount)
 	for _, upper := range breakpoints {
 		if upper.Cmp(lower) < 0 {
 			continue
 		}
-		quoteRange, candidates, ok := s.priceQuoteRange(ladder, lower, upper, transitions, pricing)
-		if ok {
-			ranges = append(ranges, quoteRange)
-			for _, candidate := range candidates {
-				used[candidate.id()] = candidate
-			}
+		quoteRange, err := s.priceQuoteRange(
+			candidates, maxRoutes, lower, upper, maxGasCost, routeCount, pricing,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		if quoteRange != nil {
+			ranges = append(ranges, *quoteRange)
 		}
 		lower = new(big.Int).Add(upper, big.NewInt(1))
 	}
-	return ranges, used
+	if len(ranges) > 0 {
+		for _, candidate := range candidates {
+			used[candidate.ID] = candidate
+		}
+	}
+	return ranges, used, nil
 }
 
 func (s *Strategy) priceQuoteRange(
-	ladder []quoteRoute,
+	candidates []liquidlane.QuoteCandidate,
+	maxRoutes int,
 	lower *big.Int,
 	upper *big.Int,
-	transitions []*big.Int,
-	pricing gasPricing,
-) (types.QuoteRange, []quoteCandidate, bool) {
-	amounts := quoteRangePoints(lower, upper, transitions)
-	quotes := make([]exactInputQuote, len(amounts))
-	gasCost := new(big.Int)
-	for index, amount := range amounts {
-		quote, ok := solveExactInputQuote(ladder, amount, pricing)
-		if !ok {
-			return types.QuoteRange{}, nil, false
-		}
-		quotes[index] = quote
-		if quote.gasCost.Cmp(gasCost) > 0 {
-			gasCost.Set(quote.gasCost)
-		}
+	maxGasCost *big.Int,
+	routeCount int,
+	pricing liquidstrategies.GasPricing,
+) (*types.QuoteRange, error) {
+	quoteAt := func(amount *big.Int) (*liquidgreedy.QuoteSolution, error) {
+		return liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+			ExactInput:      amount,
+			Candidates:      candidates,
+			MaxRoutes:       maxRoutes,
+			MinInput:        s.minAmount,
+			OutputBufferBps: 2 * s.cfg.PriceBufferBps,
+			InputPolicy:     liquidgreedy.RejectUncoveredInput,
+			GasPricing:      &pricing,
+		})
+	}
+	lowerQuote, err := quoteAt(lower)
+	if err != nil || lowerQuote == nil {
+		return nil, err
+	}
+	upperQuote, err := quoteAt(upper)
+	if err != nil || upperQuote == nil {
+		return nil, err
 	}
 
-	var rate *big.Int
-	candidates := make([]quoteCandidate, 0, len(amounts)*len(ladder))
-	for index, quote := range quotes {
-		decimals := quote.candidates[0]
-		pointRate := s.guaranteedQuoteRate(
-			quote.grossAmountOut, amounts[index], gasCost,
-			decimals.TokenInDecimals, decimals.TokenOutDecimals,
-		)
-		if rate == nil || pointRate.Cmp(rate) < 0 {
-			rate = pointRate
+	inDecimals := candidates[0].Route.TokenInDecimals
+	outDecimals := candidates[0].Route.TokenOutDecimals
+	rate := liquidlane.RateForAmountOut(lowerQuote.AmountOut, lower, inDecimals, outDecimals)
+	upperRate := liquidlane.RateForAmountOut(upperQuote.AmountOut, upper, inDecimals, outDecimals)
+	if upperRate.Cmp(rate) < 0 {
+		rate = upperRate
+	}
+	floorRate := candidateFloorRate(
+		candidates,
+		lower,
+		upper,
+		maxGasCost,
+		routeCount,
+		2*s.cfg.PriceBufferBps,
+		inDecimals,
+		outDecimals,
+	)
+	if floorRate.Cmp(rate) < 0 {
+		rate = floorRate
+	}
+	if rate.Sign() <= 0 {
+		return nil, nil
+	}
+	return &types.QuoteRange{
+		MinAmount: new(big.Int).Set(lower),
+		MaxAmount: new(big.Int).Set(upper),
+		Quote:     fixedPointDecimal(rate, rateScaleDigits),
+	}, nil
+}
+
+func quoteBounds(
+	candidates []liquidlane.QuoteCandidate,
+) (maximum *big.Int, routeCount int, privateRouteCount int) {
+	type route struct {
+		maxInput *big.Int
+		private  bool
+	}
+	byRoute := make(map[liquidlane.RouteID]route)
+	for _, candidate := range candidates {
+		item := byRoute[candidate.Route.ID]
+		if item.maxInput == nil || candidate.MaxAmountIn.Cmp(item.maxInput) > 0 {
+			item.maxInput = candidate.MaxAmountIn
 		}
-		candidates = append(candidates, quote.candidates...)
+		item.private = item.private || candidate.DiscountID != nil
+		byRoute[candidate.Route.ID] = item
+	}
+	total := new(big.Int)
+	private := 0
+	for _, item := range byRoute {
+		total.Add(total, item.maxInput)
+		if item.private {
+			private++
+		}
+	}
+	return total, len(byRoute), private
+}
+
+func candidateFloorRate(
+	candidates []liquidlane.QuoteCandidate,
+	minimumInput *big.Int,
+	maximumInput *big.Int,
+	gasCost *big.Int,
+	routeCount int,
+	outputBufferBps int,
+	inDecimals int,
+	outDecimals int,
+) *big.Int {
+	if len(candidates) == 0 || routeCount <= 0 ||
+		minimumInput == nil || minimumInput.Sign() <= 0 ||
+		maximumInput == nil || maximumInput.Cmp(minimumInput) < 0 {
+		return new(big.Int)
+	}
+	byRoute := make(map[liquidlane.RouteID][]liquidlane.QuoteCandidate)
+	for _, candidate := range candidates {
+		byRoute[candidate.Route.ID] = append(byRoute[candidate.Route.ID], candidate)
+	}
+	var rate *big.Int
+	for _, alternatives := range byRoute {
+		maxInput := new(big.Int)
+		for _, candidate := range alternatives {
+			if candidate.MaxAmountIn.Cmp(maxInput) > 0 {
+				maxInput.Set(candidate.MaxAmountIn)
+			}
+		}
+		legLimit := minBig(maximumInput, maxInput)
+		var best *big.Int
+		for _, candidate := range alternatives {
+			if candidate.MaxAmountIn.Cmp(legLimit) >= 0 && (best == nil || candidate.Rate.Cmp(best) > 0) {
+				best = candidate.Rate
+			}
+		}
+		if best != nil && (rate == nil || best.Cmp(rate) < 0) {
+			rate = liquidlane.CloneBig(best)
+		}
 	}
 	if rate == nil || rate.Sign() <= 0 {
-		return types.QuoteRange{}, nil, false
+		return new(big.Int)
 	}
-	return types.QuoteRange{
-		MinAmount: new(big.Int).Set(lower), MaxAmount: new(big.Int).Set(upper),
-		Quote: fixedPointDecimal(rate, rateScaleDigits),
-	}, candidates, true
+	rate.Mul(rate, big.NewInt(int64(bpsDenominator-outputBufferBps)))
+	rate.Div(rate, big.NewInt(bpsDenominator))
+
+	// Every complete greedy plan uses at most routeCount candidates whose
+	// effective rates are no lower than rate. Summing their floors loses at
+	// most routeCount-1 output units; a non-zero output buffer can lose one more.
+	loss := new(big.Int)
+	if gasCost != nil {
+		loss.Set(gasCost)
+	}
+	loss.Add(loss, big.NewInt(int64(routeCount-1)))
+	if outputBufferBps > 0 {
+		loss.Add(loss, big.NewInt(1))
+	}
+	if loss.Sign() == 0 {
+		return rate
+	}
+	lossRate := liquidlane.RateForAmountOut(loss, minimumInput, inDecimals, outDecimals)
+	lossRate.Add(lossRate, big.NewInt(1))
+	rate.Sub(rate, lossRate)
+	if rate.Sign() <= 0 {
+		return new(big.Int)
+	}
+	return rate
 }
 
 func quoteBreakpoints(maximum, minimum *big.Int, targetCount int) []*big.Int {
@@ -105,49 +230,6 @@ func quoteBreakpoints(maximum, minimum *big.Int, targetCount int) []*big.Int {
 	return sortedAmounts(selected)
 }
 
-func quoteTransitionPoints(ladder []quoteRoute) []*big.Int {
-	selected := make(map[string]*big.Int)
-	// A candidate can become ineligible after any subset of other routes has filled to capacity.
-	for mask := 0; mask < 1<<len(ladder); mask++ {
-		prefix := new(big.Int)
-		for index, route := range ladder {
-			if mask&(1<<index) != 0 {
-				prefix.Add(prefix, route.maxInput)
-			}
-		}
-		for index, route := range ladder {
-			if mask&(1<<index) != 0 {
-				continue
-			}
-			for _, candidate := range route.alternatives {
-				point := new(big.Int).Add(prefix, candidate.maxInput)
-				selected[point.String()] = point
-			}
-		}
-		if mask == (1<<len(ladder))-1 && prefix.Sign() > 0 {
-			selected[prefix.String()] = prefix
-		}
-	}
-	return sortedAmounts(selected)
-}
-
-func quoteRangePoints(lower, upper *big.Int, transitions []*big.Int) []*big.Int {
-	selected := map[string]*big.Int{
-		lower.String(): new(big.Int).Set(lower),
-		upper.String(): new(big.Int).Set(upper),
-	}
-	for _, transition := range transitions {
-		if transition.Cmp(lower) >= 0 && transition.Cmp(upper) <= 0 {
-			selected[transition.String()] = new(big.Int).Set(transition)
-		}
-		after := new(big.Int).Add(transition, big.NewInt(1))
-		if after.Cmp(lower) >= 0 && after.Cmp(upper) <= 0 {
-			selected[after.String()] = after
-		}
-	}
-	return sortedAmounts(selected)
-}
-
 func sortedAmounts(amounts map[string]*big.Int) []*big.Int {
 	out := make([]*big.Int, 0, len(amounts))
 	for _, amount := range amounts {
@@ -171,22 +253,11 @@ func geometricMidpoint(lower, upper *big.Int) *big.Int {
 	return mid
 }
 
-func (s *Strategy) guaranteedQuoteRate(
-	grossAmountOut *big.Int,
-	amountIn *big.Int,
-	cost *big.Int,
-	inDecimals int,
-	outDecimals int,
-) *big.Int {
-	available := applyBpsDown(grossAmountOut, bpsDenominator-2*s.cfg.PriceBufferBps)
-	available.Sub(available, cost)
-	if available.Sign() <= 0 {
-		return new(big.Int)
-	}
-	return liquidlane.RateForAmountOut(available, amountIn, inDecimals, outDecimals)
-}
-
-func quoteExpiry(deadline time.Time, buffer time.Duration, used map[liquidlane.CandidateID]quoteCandidate) int64 {
+func quoteExpiry(
+	deadline time.Time,
+	buffer time.Duration,
+	used map[liquidlane.CandidateID]liquidlane.QuoteCandidate,
+) int64 {
 	expiry := deadline.Unix()
 	for _, candidate := range used {
 		if !candidate.ValidUntil.IsZero() {

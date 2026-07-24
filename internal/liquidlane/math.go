@@ -4,6 +4,20 @@ import "math/big"
 
 var rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
+// MulDivUp returns ceil(left * right / denominator), or zero for invalid input.
+func MulDivUp(left, right, denominator *big.Int) *big.Int {
+	if left == nil || right == nil || denominator == nil ||
+		left.Sign() <= 0 || right.Sign() <= 0 || denominator.Sign() <= 0 {
+		return new(big.Int)
+	}
+	numerator := new(big.Int).Mul(left, right)
+	quotient, remainder := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
+	if remainder.Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient
+}
+
 func pow10(n int) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }

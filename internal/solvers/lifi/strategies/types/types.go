@@ -10,14 +10,24 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 const (
 	// MaxRoutes bounds the physical LiquidLane routes used by one quote or fill.
 	MaxRoutes = 3
 	// MaxQuoteRanges bounds the amount ranges published for one token pair.
-	MaxQuoteRanges = 16
+	MaxQuoteRanges       = 16
+	settlementGasUnits   = 250_000
+	privateRouteGasUnits = 75_000
 )
+
+// LiquidLaneGasEnvelope returns the fixed LI.FI executor overhead around route execution.
+func LiquidLaneGasEnvelope() liquidstrategies.GasEnvelope {
+	return liquidstrategies.GasEnvelope{
+		SettlementUnits: settlementGasUnits, PrivateRouteUnits: privateRouteGasUnits,
+	}
+}
 
 type Strategy interface {
 	DecideQuotes(ctx context.Context, input QuoteInput) (QuoteOutput, error)
@@ -25,16 +35,16 @@ type Strategy interface {
 }
 
 type QuoteInput struct {
-	Solver            common.Address                     `json:"solver"`
-	Inventory         []liquidlane.Inventory             `json:"inventory"`
-	Reservations      map[liquidlane.CapacityID]*big.Int `json:"reservations"`
-	SingleRouteTokens map[common.Address]bool            `json:"singleRouteTokens"`
-	GasSnapshot       *liquidlanegas.Snapshot            `json:"gasSnapshot"`
-	GasPrices         *liquidlanegas.PriceSnapshot       `json:"gasPrices"`
-	MaxFeePerGas      *big.Int                           `json:"maxFeePerGas"`
-	ChainTime         time.Time                          `json:"chainTime"`
-	ServerTime        time.Time                          `json:"serverTime"`
-	QuoteExpiresAt    time.Time                          `json:"quoteExpiresAt"`
+	Solver            common.Address                  `json:"solver"`
+	Inventory         []liquidlane.Inventory          `json:"inventory"`
+	Reservations      liquidlane.CapacityReservations `json:"reservations"`
+	SingleRouteTokens map[common.Address]bool         `json:"singleRouteTokens"`
+	GasSnapshot       *liquidlanegas.Snapshot         `json:"gasSnapshot"`
+	GasPrices         *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
+	MaxFeePerGas      *big.Int                        `json:"maxFeePerGas"`
+	ChainTime         time.Time                       `json:"chainTime"`
+	ServerTime        time.Time                       `json:"serverTime"`
+	QuoteExpiresAt    time.Time                       `json:"quoteExpiresAt"`
 }
 
 type QuoteOutput struct {
@@ -73,25 +83,16 @@ type FillInput struct {
 	FillDeadline       uint32         `json:"fillDeadline"`
 	RequireSingleRoute bool           `json:"requireSingleRoute"`
 
-	Quotes       []liquidlane.FillQuote             `json:"quotes"`
-	Reservations map[liquidlane.CapacityID]*big.Int `json:"reservations"`
-	GasSnapshot  *liquidlanegas.Snapshot            `json:"gasSnapshot"`
-	GasPrices    *liquidlanegas.PriceSnapshot       `json:"gasPrices"`
-	MaxFeePerGas *big.Int                           `json:"maxFeePerGas"`
-	ChainTime    time.Time                          `json:"chainTime"`
+	Quotes       []liquidlane.FillQuote          `json:"quotes"`
+	Reservations liquidlane.CapacityReservations `json:"reservations"`
+	GasSnapshot  *liquidlanegas.Snapshot         `json:"gasSnapshot"`
+	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
+	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
+	ChainTime    time.Time                       `json:"chainTime"`
 }
 
 type FillPlan struct {
 	Routes []FillRoute `json:"routes"`
 }
 
-type FillRoute struct {
-	RouteID           liquidlane.RouteID    `json:"routeId"`
-	CapacityID        liquidlane.CapacityID `json:"capacityId"`
-	Adapter           common.Address        `json:"adapter"`
-	AmountIn          *big.Int              `json:"amountIn"`
-	ExpectedAmountOut *big.Int              `json:"expectedAmountOut"`
-	MinAmountOut      *big.Int              `json:"minAmountOut"`
-	ReservedAmountOut *big.Int              `json:"reservedAmountOut"`
-	DiscountID        *common.Hash          `json:"discountId"`
-}
+type FillRoute = liquidstrategies.FillRoute

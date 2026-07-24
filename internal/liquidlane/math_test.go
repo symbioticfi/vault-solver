@@ -41,6 +41,24 @@ func TestMinAmountInForAmountOutRoundsUp(t *testing.T) {
 	}
 }
 
+func TestMulDivUp(t *testing.T) {
+	tests := map[string]struct {
+		left, right, denominator *big.Int
+		want                     string
+	}{
+		"exact":    {left: big.NewInt(6), right: big.NewInt(2), denominator: big.NewInt(3), want: "4"},
+		"round up": {left: big.NewInt(5), right: big.NewInt(2), denominator: big.NewInt(3), want: "4"},
+		"invalid":  {left: nil, right: big.NewInt(1), denominator: big.NewInt(1), want: "0"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := MulDivUp(tt.left, tt.right, tt.denominator).String(); got != tt.want {
+				t.Fatalf("MulDivUp() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRateMathRejectsInvalidInput(t *testing.T) {
 	if AmountOutForRate(nil, big.NewInt(1), 18, 6).Sign() != 0 {
 		t.Fatal("nil amount must produce zero")

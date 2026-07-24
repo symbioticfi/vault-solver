@@ -46,10 +46,28 @@ type Inventory struct {
 
 	MaxAssets *big.Int `json:"maxAssets"`
 	MaxRate   *big.Int `json:"maxRate"`
+	// AdapterMinDiscount is the adapter's current minimum accepted discount in parts per million.
+	// It is a physical validation fact, not part of the strategy wire shape.
+	AdapterMinDiscount *big.Int `json:"-"`
 
 	DiscountID *common.Hash `json:"discountId"`
 
 	ValidUntil time.Time `json:"validUntil"`
+}
+
+// QuoteCandidate is one amount-normalized route alternative ready for a
+// LiquidLane quoting strategy. Candidates sharing Route.ID are mutually
+// exclusive direct/private alternatives for the same physical route.
+type QuoteCandidate struct {
+	ID    CandidateID `json:"id"`
+	Route Route       `json:"route"`
+
+	Rate         *big.Int `json:"rate"`
+	MaxAmountIn  *big.Int `json:"maxAmountIn"`
+	MaxAmountOut *big.Int `json:"maxAmountOut"`
+
+	DiscountID *common.Hash `json:"discountId"`
+	ValidUntil time.Time    `json:"validUntil"`
 }
 
 // FillQuote is a current adapter quote for one concrete amountIn.

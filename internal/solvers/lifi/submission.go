@@ -7,6 +7,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -46,16 +47,17 @@ func (s *Solver) submitFill(
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
 		return nil
 	}
+	s.reserve(reservationKey, reservations)
 	return &pendingFill{
 		order: order, orderID: calldata.OrderID, reservationKey: reservationKey,
-		reservations: reservations, result: result,
+		result: result,
 	}
 }
 
-func (s *Solver) completeFill(ctx context.Context, pending *pendingFillState, completion fillCompletion) {
+func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
-	s.releaseReservation(ctx, fill.reservationKey)
+	s.releaseReservation(fill.reservationKey)
 	if completion.result.Err == nil {
 		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
@@ -69,38 +71,31 @@ func (s *Solver) completeFill(ctx context.Context, pending *pendingFillState, co
 	)
 }
 
-func fillPlanReservations(plan *types.FillPlan) ([]quoteReservation, bool) {
+func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations, bool) {
 	if plan == nil || len(plan.Routes) == 0 {
 		return nil, false
 	}
-	reservations := make([]quoteReservation, 0, len(plan.Routes))
-	for _, route := range plan.Routes {
-		if route.CapacityID == "" || route.ReservedAmountOut == nil || route.ReservedAmountOut.Sign() <= 0 {
-			return nil, false
-		}
-		reservations = append(reservations, quoteReservation{
-			capacityID: route.CapacityID, amountOut: liquidlane.CloneBig(route.ReservedAmountOut),
-		})
-	}
-	return reservations, true
+	return liquidstrategies.FillRouteReservations(plan.Routes)
 }
 
-func (s *Solver) reserve(ctx context.Context, orderKey string, reservations []quoteReservation) {
-	if s.quoteEvents == nil || len(reservations) == 0 {
-		return
-	}
-	select {
-	case s.quoteEvents <- quoteEvent{orderKey: orderKey, reservations: reservations}:
-	case <-ctx.Done():
+func (s *Solver) reserve(orderKey string, reservations liquidlane.CapacityReservations) {
+	if s.capacity.Set(orderKey, reservations) {
+		s.requestQuoteRefresh()
 	}
 }
 
-func (s *Solver) releaseReservation(ctx context.Context, orderKey string) {
-	if s.quoteEvents == nil {
+func (s *Solver) releaseReservation(orderKey string) {
+	if s.capacity.Delete(orderKey) {
+		s.requestQuoteRefresh()
+	}
+}
+
+func (s *Solver) requestQuoteRefresh() {
+	if s.quoteRefresh == nil {
 		return
 	}
 	select {
-	case s.quoteEvents <- quoteEvent{orderKey: orderKey, release: true}:
-	case <-ctx.Done():
+	case s.quoteRefresh <- struct{}{}:
+	default:
 	}
 }

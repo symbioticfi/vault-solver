@@ -49,7 +49,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log)
-	quoteStrategy, err := newStrategy(cfg.Strategy, deps.Chain, log)
+	quoteStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,7 @@ func buildServices(
 		executor:    cfg.Executor,
 		whitelist:   quoteWhitelist,
 		tokenPolicy: cfg.TokenPolicy,
+		reader:      rdr,
 		strategy:    quoteStrategy,
 		log:         log,
 		now:         time.Now,
@@ -124,14 +125,6 @@ func (s *Solver) Name() string { return Name }
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
-	s.log.Info("starting",
-		"listenAddr", s.cfg.ListenAddr,
-		"executor", s.cfg.Executor.Hex(),
-		"solverMode", s.cfg.SolverMode,
-		"adapters", len(s.cfg.Adapters),
-		"backendUrl", s.cfg.BackendURL,
-	)
-
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
@@ -139,10 +132,30 @@ func (s *Solver) Run(ctx context.Context) error {
 	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
-			return errors.Errorf("rfq: resolve recovery vaults: %w", err)
+			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
+			s.log.Error(startupErr, "adapter resolution failed",
+				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
+			return startupErr
 		}
 		s.exec.vaults = resolved
+		s.exec.reader.setQuoteAdapters(resolved)
+		if s.cfg.restrictsToAdapters() {
+			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
+				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
+				s.log.Error(startupErr, "external adapter authorization failed",
+					"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
+				return startupErr
+			}
+		}
 	}
+
+	s.log.Info("starting",
+		"listenAddr", s.cfg.ListenAddr,
+		"executor", s.cfg.Executor.Hex(),
+		"solverMode", s.cfg.SolverMode,
+		"adapters", len(s.cfg.Adapters),
+		"backendUrl", s.cfg.BackendURL,
+	)
 
 	httpSrv := &http.Server{
 		Addr:              s.cfg.ListenAddr,

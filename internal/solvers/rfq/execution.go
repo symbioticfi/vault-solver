@@ -57,7 +57,7 @@ type executionService struct {
 	discountsEnabled bool // false (external solver) skips the backend discounts API entirely
 	backend          orderBackend
 	store            *store
-	reader           recoveryReader
+	reader           fillReader
 	strategy         types.Strategy
 	txm              txSender
 	log              logr.Logger
@@ -67,14 +67,17 @@ type executionService struct {
 	inflight   map[string]bool
 }
 
-// recoveryReader is the on-chain surface used to assemble fill-time strategy inputs.
-type recoveryReader interface {
+// fillReader is the on-chain surface used to assemble fill-time strategy inputs.
+type fillReader interface {
+	quoteCandidateReader
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
 	// resolveVaults returns the config entries with Vault/Asset resolved from the adapter at startup
 	// (config carries only adapter addresses).
 	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
+	setQuoteAdapters(resolved []recoveryVault)
+	validateDirectAuthorization(ctx context.Context, executor common.Address, vaults []recoveryVault) error
 }
 
 func (e *executionService) run(ctx context.Context, interval time.Duration) {
@@ -149,29 +152,19 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
-	if exec.filler != e.executor {
-		e.fail(orderID, "backend assigned a different filler")
-		return
-	}
-
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
 		e.fail(orderID, "decode order: "+err.Error())
 		return
 	}
+	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
+	if err != nil {
+		e.fail(orderID, "validate order: "+err.Error())
+		return
+	}
 	if dl := order.Request.Deadline; dl == nil || dl.Int64() <= e.now().Unix() {
 		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
 		e.fail(orderID, "order deadline has passed")
-		return
-	}
-	outputToken, ok := singleOutputToken(exec.outputs)
-	if !ok {
-		e.fail(orderID, "only single output-token orders are supported")
-		return
-	}
-	required, err := sumOutputs(exec.outputs)
-	if err != nil {
-		e.fail(orderID, "sum outputs: "+err.Error())
 		return
 	}
 
@@ -256,8 +249,8 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 }
 
 // buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
-// strategy owns cached quote lookup, recovery, and route economics; the solver assembles the snapshot
-// and enforces solver-owned structural constraints on the returned plan.
+// strategy owns route economics; the solver assembles the fresh snapshot and enforces solver-owned
+// structural constraints on the returned plan.
 func (e *executionService) buildFillPlan(
 	ctx context.Context,
 	exec *executable,
@@ -284,7 +277,15 @@ func (e *executionService) buildFillPlan(
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
 	}
 	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	input := newFillInput(e.chainID, e.executor, req, inv, required, requireSingleRoute, e.now())
+	var candidates []liquidlane.QuoteCandidate
+	if len(inv) > 0 {
+		var err error
+		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+		if err != nil {
+			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
+		}
+	}
+	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err := e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
 		return plan, err
@@ -313,7 +314,22 @@ func (e *executionService) buildDiscountSwapInputs(
 		if err != nil {
 			return nil, errors.Errorf("resolve discount %s: %w", leg.DiscountID.Hex(), err)
 		}
-		dsi, err := toDiscountSwapInput(resolved, leg, e.executor)
+		parsed, err := discounts.ParseSigned(resolved)
+		if err != nil {
+			return nil, errors.Errorf("discount: %w", err)
+		}
+		if parsed.Adapter != leg.Adapter {
+			return nil, errors.Errorf(
+				"%w: resolved %s, leg %s", errDiscountAdapterMismatch, parsed.Adapter.Hex(), leg.Adapter.Hex(),
+			)
+		}
+		if err := discounts.ValidateSelection(parsed, discounts.Selection{
+			DiscountID: *leg.DiscountID,
+			Adapter:    leg.Adapter, TokenIn: selected.TokenIn,
+		}, e.now()); err != nil {
+			return nil, errors.Errorf("discount: %w", err)
+		}
+		dsi, err := toDiscountSwapInput(parsed, leg, e.executor)
 		if err != nil {
 			return nil, err
 		}
@@ -322,16 +338,16 @@ func (e *executionService) buildDiscountSwapInputs(
 	return out, nil
 }
 
-// discountInventories fetches offered discounts and, for strategy recovery, turns those redeemable
+// discountInventories fetches offered discounts and turns those redeemable
 // against tokenIn into discount-leg candidates: keep discounts whose adapter is whitelisted, whose
-// tokenToRedeem == tokenIn, and whose adapter is not already permissioned (the asset==tokenOut check
-// is left to the evaluator).
+// tokenToRedeem == tokenIn, and whose adapter is not already permissioned. Solver-side candidate
+// normalization later filters collateral to the order's tokenOut.
 func (e *executionService) discountInventories(
 	ctx context.Context, tokenIn common.Address, direct []solverInventory,
 ) []solverInventory {
 	resp, err := e.backend.listDiscounts(ctx)
 	if err != nil {
-		e.log.Error(err, "recover: list discounts")
+		e.log.Error(err, "fill: list discounts")
 		return nil
 	}
 	seen := make(map[common.Address]bool, len(direct))
@@ -340,13 +356,14 @@ func (e *executionService) discountInventories(
 	}
 	now := e.now()
 	var out []solverInventory
-	for _, d := range resp.Discounts {
-		offer, parseErr := discounts.ParseOffer(d)
-		if parseErr != nil {
-			e.log.V(1).Info("recover: skip invalid discount", "discountId", d.DiscountID, "error", parseErr.Error())
-			continue
-		}
-		if offer.Deadline <= now.Unix() || offer.TokenToRedeem != tokenIn {
+	offers, issues := discounts.LiveOffers(resp, now)
+	for _, issue := range issues {
+		e.log.V(1).Info(
+			"recover: skip invalid discount", "discountId", issue.DiscountID, "error", issue.Err.Error(),
+		)
+	}
+	for _, offer := range offers {
+		if offer.TokenToRedeem != tokenIn {
 			continue
 		}
 		adapter := offer.Adapter
@@ -359,6 +376,9 @@ func (e *executionService) discountInventories(
 		route := liquidlane.NewRoute(
 			e.chainID, adapter, common.Address{}, tokenIn, offer.Collateral, 0, offer.CollateralDecimals,
 		)
+		// The discounts API does not expose the backing vault. Keep unknown adapters in independent
+		// capacity domains instead of making address(0) look like one shared vault.
+		route.CapacityID = liquidlane.CapacityID(route.ID)
 		out = append(out, liquidlane.DiscountInventory(
 			route, offer.MaxAssets, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0),
 		))
@@ -372,20 +392,15 @@ func (e *executionService) discountInventories(
 var errDiscountAdapterMismatch = errors.New("resolved discount adapter does not match the strategy leg adapter")
 
 // errDiscountsDisabled marks a discount leg seen while discounts are off (external solver). Terminal —
-// fail the order, no tx. Defensive: a restart (needed to change config) wipes the cache, so it's unreachable.
+// fail the order, no tx. Defensive: the external profile never advertises discount candidates.
 var errDiscountsDisabled = errors.New("discount leg present but discounts are disabled")
 
 // toDiscountSwapInput converts a resolved signed discount + its strategy leg into the Executor input.
 func toDiscountSwapInput(
-	r *resolveDiscountResponse, leg fillLeg, recipient common.Address,
+	parsed *discounts.Signed, leg fillLeg, recipient common.Address,
 ) (executor.IReactorDiscountSwapInput, error) {
-	parsed, err := discounts.ParseSigned(r)
-	if err != nil {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf("discount: %w", err)
-	}
-	if parsed.Adapter != leg.Adapter {
-		return executor.IReactorDiscountSwapInput{}, errors.Errorf(
-			"%w: resolved %s, leg %s", errDiscountAdapterMismatch, parsed.Adapter.Hex(), leg.Adapter.Hex())
+	if parsed == nil {
+		return executor.IReactorDiscountSwapInput{}, errors.New("discount: resolved discount is nil")
 	}
 	// Mirrors buildDiscountSwapInputs in discounts.ts: the outer adapter comes from the resolved
 	// discount's adapter, the inner Discount no longer carries the vault field, and the input drops
@@ -468,7 +483,42 @@ func isHash32(s string) bool {
 	return err == nil && len(b) == 32
 }
 
-func singleOutputToken(outputs []backendOut) (common.Address, bool) {
+func executableOrderTerms(
+	exec *executable,
+	order executor.IReactorOrder,
+	expectedFiller common.Address,
+) (common.Address, *big.Int, error) {
+	if order.Filler != expectedFiller {
+		return common.Address{}, nil, errors.New("signed order assigns a different filler")
+	}
+	if exec.filler != order.Filler {
+		return common.Address{}, nil, errors.New("backend filler does not match signed order")
+	}
+	if order.Request.TokenIn == (common.Address{}) || order.Request.AmountIn == nil || order.Request.AmountIn.Sign() <= 0 {
+		return common.Address{}, nil, errors.New("signed order has invalid input")
+	}
+	if order.Request.Deadline == nil || !order.Request.Deadline.IsInt64() ||
+		order.Request.Deadline.Sign() <= 0 {
+		return common.Address{}, nil, errors.New("signed order has invalid deadline")
+	}
+	if exec.deadline != order.Request.Deadline.Int64() {
+		return common.Address{}, nil, errors.New("backend deadline does not match signed order")
+	}
+	token, ok := singleOrderOutputToken(order.Outputs)
+	if !ok {
+		return common.Address{}, nil, errors.New("only single output-token orders are supported")
+	}
+	required, err := sumOrderOutputs(order.Outputs)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	if err := matchBackendOutputs(exec.outputs, order.Outputs); err != nil {
+		return common.Address{}, nil, err
+	}
+	return token, required, nil
+}
+
+func singleOrderOutputToken(outputs []executor.IReactorOutput) (common.Address, bool) {
 	if len(outputs) == 0 {
 		return common.Address{}, false
 	}
@@ -478,20 +528,43 @@ func singleOutputToken(outputs []backendOut) (common.Address, bool) {
 			return common.Address{}, false
 		}
 	}
-	if !common.IsHexAddress(token) {
+	if token == (common.Address{}) {
 		return common.Address{}, false
 	}
-	return common.HexToAddress(token), true
+	return token, true
 }
 
-func sumOutputs(outputs []backendOut) (*big.Int, error) {
+func sumOrderOutputs(outputs []executor.IReactorOutput) (*big.Int, error) {
 	total := new(big.Int)
-	for _, o := range outputs {
-		amt, ok := new(big.Int).SetString(o.Amount, 10)
-		if !ok {
-			return nil, errors.Errorf("invalid output amount %q", o.Amount)
+	for i, output := range outputs {
+		if output.Amount == nil || output.Amount.Sign() <= 0 {
+			return nil, errors.Errorf("signed order output %d has invalid amount", i)
 		}
-		total.Add(total, amt)
+		if output.Recipient == (common.Address{}) {
+			return nil, errors.Errorf("signed order output %d has invalid recipient", i)
+		}
+		total.Add(total, output.Amount)
 	}
 	return total, nil
+}
+
+func matchBackendOutputs(backend []backendOut, signed []executor.IReactorOutput) error {
+	if len(backend) != len(signed) {
+		return errors.New("backend outputs do not match signed order")
+	}
+	for i, output := range backend {
+		if !common.IsHexAddress(output.Token) || !common.IsHexAddress(output.Recipient) {
+			return errors.Errorf("backend output %d has invalid address", i)
+		}
+		amount, ok := new(big.Int).SetString(output.Amount, 10)
+		if !ok || amount.Sign() <= 0 {
+			return errors.Errorf("backend output %d has invalid amount", i)
+		}
+		if common.HexToAddress(output.Token) != signed[i].Token ||
+			common.HexToAddress(output.Recipient) != signed[i].Recipient ||
+			amount.Cmp(signed[i].Amount) != 0 {
+			return errors.Errorf("backend output %d does not match signed order", i)
+		}
+	}
+	return nil
 }

@@ -238,9 +238,11 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 			successOutput(t, "paused", false),
 			successOutput(t, "getMaxAssets", big.NewInt(100)),
 			successOutput(t, "getMaxRate", big.NewInt(1_000_000_000_000_000_000)),
+			successOutput(t, "minDiscount", big.NewInt(100_000)),
 			{Success: true, ReturnData: []byte{0xff}},
 			successOutput(t, "getMaxAssets", big.NewInt(200)),
 			successOutput(t, "getMaxRate", big.NewInt(1_000_000_000_000_000_000)),
+			successOutput(t, "minDiscount", big.NewInt(100_000)),
 		}},
 	}
 	r := &Reader{
@@ -256,8 +258,9 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 	if len(inventory) != 1 || inventory[0].ID != routes[0].ID {
 		t.Fatalf("inventory = %+v", inventory)
 	}
-	if inventory[0].MaxRate.String() != "1000000000000000000" {
-		t.Fatalf("executable max rate = %s", inventory[0].MaxRate)
+	if inventory[0].MaxRate.String() != "1000000000000000000" ||
+		inventory[0].AdapterMinDiscount.String() != "100000" {
+		t.Fatalf("executable inventory = %+v", inventory[0])
 	}
 }
 
@@ -409,6 +412,7 @@ func TestReaderReadAdapterSnapshotCombinesSharedFacts(t *testing.T) {
 			successOutput(t, "paused", false),
 			successOutput(t, "getMaxAssets", big.NewInt(120)),
 			successOutput(t, "getMaxRate", big.NewInt(900)),
+			successOutput(t, "minDiscount", big.NewInt(100_000)),
 		},
 	}}
 	r := &Reader{
@@ -461,9 +465,11 @@ func TestReaderReadAdapterSnapshotKeepsZeroCapacityRoutes(t *testing.T) {
 			successOutput(t, "paused", false),
 			successOutput(t, "getMaxAssets", big.NewInt(0)),
 			successOutput(t, "getMaxRate", big.NewInt(900)),
+			successOutput(t, "minDiscount", big.NewInt(100_000)),
 			successOutput(t, "paused", false),
 			successOutput(t, "getMaxAssets", big.NewInt(120)),
 			successOutput(t, "getMaxRate", big.NewInt(800)),
+			successOutput(t, "minDiscount", big.NewInt(100_000)),
 		},
 	}}
 	r := &Reader{

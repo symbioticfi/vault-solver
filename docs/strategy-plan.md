@@ -9,33 +9,37 @@ that solver's own plan under `docs/` and in its `strategies/types` package — n
 A solver splits into two parts:
 
 - **The solver skeleton** — everything that faces the outside world: discovering work, reading
-  chain/API state, assembling a snapshot of **raw facts**, then signing and submitting whatever the
-  strategy decides. It holds the key and moves funds, but it makes no economic decision.
+  chain/API state, validating untrusted protocol data, and normalizing it into the shared domain types
+  the strategy consumes, then signing and submitting whatever the strategy decides. It holds the key
+  and moves funds, but it makes no economic decision.
 - **The strategy** — the brain. Given the solver's input snapshot, it decides what to do and returns a
   concrete, ready-to-execute plan.
 
 The flow is one-directional and trusted:
 
 ```
-solver builds input (raw facts)  →  strategy decides  →  solver executes the output verbatim
+solver maps external state to typed facts  →  strategy decides  →  solver executes the output
 ```
 
-**The strategy is a trusted module, and it is the core of the solver.** The solver does not re-verify,
-re-price, clamp, re-rank, or otherwise modify the strategy's output — it executes it as given. Any
-validation, sizing bounds, eligibility filtering, replay, caching, or recovery that a decision needs
-lives *inside* the strategy implementation, not in the solver skeleton. This keeps the boundary crisp:
-swapping in a different strategy (including an external one) never requires the solver to grow — or
-second-guess — decision logic.
+**The strategy is trusted for economic decisions, and it is the core of the solver.** The solver does
+not re-price, clamp, re-rank, or replace the strategy's allocation. Pricing, sizing, ranking, and route
+selection live *inside* the strategy implementation. Before moving funds, the solver still verifies
+execution integrity against the fresh snapshot it supplied: route identity, token pair, exact input
+coverage, achievable output, shared capacity, gas floor, and protocol timing. Protocol parsing,
+token/address admission, freshness reads, replay, caching, and recovery also stay in the solver
+skeleton. This keeps the boundary crisp: swapping in a different strategy (including an external one)
+never adds economic decision logic to the solver, while malformed or stale calldata cannot cross the
+execution boundary.
 
 Concretely:
 
-- The solver provides **raw facts, not decisions** — available liquidity and caps, discovered work
-  items, current state, things it already holds. It never pre-computes a sizing, a ranking, or a
-  candidate selection for the strategy.
-- The strategy returns a **complete plan the solver runs as-is**. The solver's only remaining
-  responsibility is execution integrity — values that are properties of the transaction rather than
-  the decision (nonce, signature, EIP-712 domain). Those the solver sets itself, and the strategy can
-  never supply them.
+- The solver provides **typed facts, not decisions**. Protocol DTOs and contract return values are
+  converted once, at the solver boundary, into canonical entities such as `liquidlane.Route`,
+  `Inventory`, `QuoteCandidate`, and `FillQuote`. It does not rank routes or choose an allocation.
+- The strategy returns a **complete economic plan**. The solver canonicalizes it against the supplied
+  snapshot and rejects inconsistencies; it never changes which routes won or their economics. The
+  solver also owns transaction-only values such as nonce, signature, and EIP-712 domain, which the
+  strategy can never supply.
 
 ## The contract
 
@@ -43,7 +47,7 @@ Each solver defines its own decision interface — one method per decision point
 `strategies/types` package. **There is no single cross-solver `Strategy` type: each solver's interface
 is unique to its workflow** (a quote/fill solver's differs from an auction solver's, which differs from
 a bidding solver's). What every solver shares is the *pattern*, not the signature — a solver-built
-input of raw facts in, a strategy-decided output out.
+input of validated domain facts in, a strategy-decided output out.
 
 For direction, the 3F solver's interface looks like this:
 
@@ -62,8 +66,15 @@ its `strategies/types` package — this document intentionally does not restate 
 
 Solvers that use LiquidLane liquidity also follow
 [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): shared LiquidLane packages define
-read-side facts (`Route`, `Inventory`, `FillQuote`, authorization, ids, freshness), while each solver
-keeps its own strategy interface and execution plan.
+read-side facts (`Route`, `Inventory`, `QuoteCandidate`, `FillQuote`, authorization, ids, freshness). The shared snapshot
+reader composes direct and physical state plus gas facts for LI.FI and UniswapX. RFQ-like exact-input
+paths can normalize amount-independent inventory against current per-route oracle quotes. The RFQ solver
+performs that protocol-to-LiquidLane normalization before calling its strategy; UniswapX and LI.FI already
+enter their strategies as typed LiquidLane inventory. Their default strategies build the same `QuoteTask`; RFQ, LI.FI, and
+UniswapX normalize fresh execution facts into the same `FillTask`. The shared engine owns LiquidLane
+route selection, capacity, input coverage, buffer, minimum-output, and gas calculations. Each solver
+still owns candidate discovery, protocol input/output mapping, lifecycle, strategy interface, calldata,
+and the fixed gas envelope around its protocol-specific executor call.
 
 ## Selection and configuration
 
@@ -88,7 +99,7 @@ type StrategySpec struct {
     Config yaml.Node
 }
 
-type StrategyFactory func(raw yaml.Node, deps StrategyDeps) (types.Strategy, error)
+type StrategyFactory func(raw yaml.Node) (types.Strategy, error)
 ```
 
 Each solver keeps a local registry/factory. A strategy self-registers from its own package `init()`
@@ -107,9 +118,8 @@ Two strategy kinds are conventional across solvers:
   in-process handler is transport-only and adds no economic decision logic of its own.
   This is the seam for running custom decision logic out-of-process without forking the solver.
 
-Both plug into the same trusted boundary: the solver executes their output the same way, so a solver
-is never coupled to which strategy is loaded. A solver may still enforce solver-owned structural or
-safety constraints before publishing or executing a plan. RFQ and LI.FI share `internal/tokenpolicy`
+Both plug into the same decision boundary: the solver validates and executes their output the same
+way, so a solver is never coupled to which strategy is loaded. RFQ and LI.FI share `internal/tokenpolicy`
 for `tokensToQuote` admission. Both mark admitted inputs as single-route only in `permissioned` scope
 and reject strategy output that aggregates routes; route selection and economics remain strategy-owned.
 
@@ -129,7 +139,7 @@ that solver's interface (each is unique — you implement the one the target sol
 1. Create a package under the solver's `strategies/<name>/` and implement the solver's strategy
    interface (e.g. `DecideOffers` for 3F), consuming its `strategies/types` input and returning its
    output type.
-2. Add a `NewFromConfig(raw yaml.Node, deps) (types.Strategy, error)` constructor that parses your own
+2. Add a `NewFromConfig(raw yaml.Node) (types.Strategy, error)` constructor that parses your own
    `strategy.config` node — the framework hands it to you opaque, so you own its schema and validation.
 3. Self-register from your package `init()` via the solver's local
    `strategies.Register("<name>", NewFromConfig)`, under a name unique within that solver.
@@ -140,9 +150,52 @@ that solver's interface (each is unique — you implement the one the target sol
 Either way the solver skeleton is untouched: it provides the same input and executes whatever plan your
 strategy returns — so the correctness of the decision is entirely yours to own.
 
+LiquidLane quote/fill strategies intentionally receive no chain client or logger through their registry:
+all current reads are represented in the typed input. A different workflow may define explicit
+strategy-owned dependencies only when the strategy itself genuinely owns that I/O.
+
+## Shared LiquidLane strategy: `internal/liquidlane/strategies/greedy`
+
+The current shared LiquidLane algorithm is explicitly named `greedy`. Adding another algorithm means a
+sibling package under `internal/liquidlane/strategies`; it does not require a second runtime registry or
+solver config knob until a real deployment needs selectable behavior. Sharing this pure decision engine
+does not create a cross-solver `Strategy` facade. `QuoteTask` accepts
+normalized, already-priced candidates, an exact input or output, route limit, buffer, an optional gas
+pricing model, and an explicit input-coverage rule. `SolveQuote` owns deterministic ranking, direct/private
+alternative selection, route splitting, gas deduction, and fixed-point sizing. Exact input uses the RFQ-style
+forward allocator. Exact output uses the same one-pass greedy route selection in output units, adds buffer
+and gas, and converts each selected output leg directly to input with upward rounding. It neither binary
+searches input nor enumerates route combinations; harmless excess output is executor surplus. RFQ
+supplies the price-impact coverage rule without gas pricing; UniswapX supplies strict coverage plus its
+buffer and gas pricing.
+
+LI.FI adapts the same exact-input task to its standing range wire format. It solves each geometric range at
+both endpoints, then caps that endpoint price with a linear conservative floor over route alternatives,
+worst-case complete-plan gas, and rounding. This keeps every interior amount executable without binary
+search or route-combination enumeration.
+
+For fills, RFQ, LI.FI, and UniswapX pass current amount-specific `FillQuote`s to `SolveFill`. `FillTask`
+also carries pending `CapacityID` reservations, freshness, route limit, buffer, input coverage, and an
+optional gas pricing model. The engine selects routes, enforces shared capacity, charges complete-plan
+gas once when that model is present, and returns `FillSolution`, exposing `MaxAmountOut` followed by
+`Finalize(requiredAmountOut)`. RFQ maps it to Executor legs without introducing RFQ gas config; LI.FI
+resolves OIF `OutputContext`/`FillAfter`; UniswapX resolves signed-order output/deadline. LI.FI and
+UniswapX build the gas model from their existing runtime facts.
+The canonical `FillRoute` and webhook fill validator are shared one level above `greedy`; the solver-owned
+pending-capacity ledger lives in `internal/liquidlane`. Allocation policy remains replaceable, while local and remote strategies use the same
+route identity, capacity, amount, and gas-floor invariants.
+Public strategy interfaces, webhook DTOs, caches, protocol lifecycle, and calldata remain solver-local.
+
+The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and
+UniswapX: parse and filter live offers, bind offers to physical routes, cap advertised rate/capacity,
+derive amount-specific candidates, and revalidate resolved id/adapter/token/deadlines plus the current
+output floor. Resolution timing is deliberately not hidden behind a common strategy facade: LI.FI
+pre-resolves and refreshes state, while UniswapX and RFQ resolve selected routes. Each solver maps the
+validated `discounts.Signed` into its own generated executor binding.
+
 ## Shared transport: `internal/webhook`
 
-The only shared strategy-adjacent package is `internal/webhook`, a generic HTTP JSON client:
+`internal/webhook` is a generic HTTP JSON client:
 
 - HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
 - literal or env-backed headers (parsed config retains only the env-var name; `NewClient` resolves it)

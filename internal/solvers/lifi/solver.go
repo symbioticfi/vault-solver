@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -24,8 +25,6 @@ import (
 const Name = "lifi-samechain"
 
 const lifiOrderStatusDeposited uint8 = 1
-
-const quoteEventCapacity = 128
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
@@ -45,8 +44,9 @@ type Solver struct {
 	now          func(context.Context) (time.Time, error)
 	maxFeePerGas func(context.Context) (*big.Int, error)
 	wallNow      func() time.Time
-	quoteEvents  chan quoteEvent
-	discounts    discountClient
+	capacity     liquidlane.CapacityLedger
+	quoteRefresh chan struct{}
+	discounts    discounts.Provider
 }
 
 type chainReader interface {
@@ -84,7 +84,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 
 	log := deps.Log.WithName(Name)
 	chainID := deps.Chain.ChainID().Int64()
-	strategy, err := newStrategy(cfg.Strategy, deps.Chain, log)
+	strategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -117,10 +117,16 @@ func (s *Solver) Name() string { return Name }
 func (s *Solver) Run(ctx context.Context) error {
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
-		return errors.Errorf("lifi: resolve routes: %w", err)
+		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
+		s.log.Error(startupErr, "adapter resolution failed",
+			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
+		return startupErr
 	}
 	if len(routes) == 0 {
-		return errors.New("lifi: no quoteable routes resolved from configured adapters")
+		startupErr := errors.New("lifi: no quoteable routes resolved from configured adapters")
+		s.log.Error(startupErr, "adapter resolution failed",
+			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
+		return startupErr
 	}
 	if err := s.reader.validateGasTokens(routes); err != nil {
 		return errors.Errorf("lifi: validate gas oracles: %w", err)
@@ -128,7 +134,11 @@ func (s *Solver) Run(ctx context.Context) error {
 	if err := s.reader.validateExecutor(
 		ctx, s.cfg.Executor, s.cfg.InputSettler, s.cfg.OutputSettler, s.caller,
 	); err != nil {
-		return errors.Errorf("lifi: validate executor: %w", err)
+		startupErr := errors.Errorf("lifi: validate executor: %w", err)
+		s.log.Error(startupErr, "executor validation failed",
+			"executor", s.cfg.Executor.Hex(), "caller", s.caller.Hex(),
+			"inputSettler", s.cfg.InputSettler.Hex(), "outputSettler", s.cfg.OutputSettler.Hex())
+		return startupErr
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
 		return errors.Errorf("lifi: validate governance fee: %w", err)
@@ -164,9 +174,9 @@ func (s *Solver) Run(ctx context.Context) error {
 		"caller", s.caller.Hex(),
 	)
 
-	s.quoteEvents = make(chan quoteEvent, quoteEventCapacity)
+	s.quoteRefresh = make(chan struct{}, 1)
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return s.quoteLoop(gctx, routes, s.quoteEvents) })
+	g.Go(func() error { return s.quoteLoop(gctx, routes, s.quoteRefresh) })
 	g.Go(func() error { return s.runOrderFeed(gctx, routes) })
 	return g.Wait()
 }

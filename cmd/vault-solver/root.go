@@ -9,6 +9,7 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/lifi"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"
 )
 
 func newRootCmd() *cobra.Command {

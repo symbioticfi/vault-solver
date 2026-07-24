@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
@@ -23,10 +24,6 @@ type fillState struct {
 type preparedFill struct {
 	input           types.FillInput
 	signedDiscounts map[common.Hash]*discounts.Signed
-}
-
-func (s *Solver) processOrder(ctx context.Context, routes []route, order *submittedOrder) {
-	s.processOrderWithPending(ctx, routes, order, nil)
 }
 
 func (s *Solver) processOrderWithPending(
@@ -57,7 +54,7 @@ func (s *Solver) processOrderWithPending(
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return nil
 	}
-	prepared := s.prepareFill(ctx, routes, order, pending.reservedCapacity())
+	prepared := s.prepareFill(ctx, routes, order)
 	if prepared == nil {
 		return nil
 	}
@@ -71,10 +68,9 @@ func (s *Solver) processOrderWithPending(
 			"quoteId", order.QuoteID, "routes", len(prepared.input.Quotes))
 		return nil
 	}
-	if prepared.input.RequireSingleRoute && len(plan.Routes) != 1 {
-		s.log.Error(errors.New("strategy returned invalid multi-route fill for permissioned token"),
-			"order fill: reject strategy plan", "orderId", order.OrderID, "quoteId", order.QuoteID,
-			"tokenIn", order.TokenIn.Hex(), "routes", len(plan.Routes))
+	if err := validateFillPlan(prepared.input, plan); err != nil {
+		s.log.Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
+			"quoteId", order.QuoteID)
 		return nil
 	}
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
@@ -83,6 +79,21 @@ func (s *Solver) processOrderWithPending(
 		return nil
 	}
 	return s.submitFill(ctx, order, plan, calldata, prepared.input.MaxFeePerGas)
+}
+
+func validateFillPlan(input types.FillInput, plan *types.FillPlan) error {
+	routes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{
+		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
+		RequiredAmountOut: input.OutputAmount, RequireSingleRoute: input.RequireSingleRoute,
+		MaxRoutes: types.MaxRoutes, Quotes: input.Quotes, Reservations: input.Reservations,
+		GasSnapshot: input.GasSnapshot, GasPrices: input.GasPrices, MaxFeePerGas: input.MaxFeePerGas,
+		GasEnvelope: types.LiquidLaneGasEnvelope(),
+	}, plan.Routes)
+	if err != nil {
+		return errors.Errorf("strategy returned invalid fill plan: %w", err)
+	}
+	plan.Routes = routes
+	return nil
 }
 
 func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (common.Hash, bool) {
@@ -109,7 +120,6 @@ func (s *Solver) prepareFill(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-	reservations map[liquidlane.CapacityID]*big.Int,
 ) *preparedFill {
 	pairRoutes := routesForPair(routes, order.TokenIn, order.TokenOut)
 	if len(pairRoutes) == 0 {
@@ -146,7 +156,7 @@ func (s *Solver) prepareFill(
 			FillDeadline:       order.Order.FillDeadline,
 			RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn),
 			Quotes:             quotes,
-			Reservations:       reservations,
+			Reservations:       s.capacity.Snapshot(),
 			GasSnapshot:        state.snapshots.GasSnapshot,
 			GasPrices:          state.snapshots.GasPrices,
 			MaxFeePerGas:       maxFeePerGas,
@@ -169,13 +179,13 @@ func (s *Solver) loadFillState(
 		return nil, nil
 	}
 	state := &fillState{snapshots: snapshots, chainTime: chainTime}
-	if s.discounts == nil || len(snapshots.DiscountBases) == 0 {
+	if s.discounts == nil || len(snapshots.Physical) == 0 {
 		return state, nil
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, s.cfg.OrderServer.HTTPTimeout)
 	state.discountQuotes, state.signedDiscounts = s.fillDiscountQuotes(
-		resolveCtx, snapshots.DiscountBases, chainTime,
+		resolveCtx, snapshots.Physical, chainTime,
 	)
 	cancel()
 
@@ -186,13 +196,14 @@ func (s *Solver) loadFillState(
 	if s.skipExpiredOrder(order, state.chainTime) {
 		return nil, nil
 	}
-	state.discountQuotes = refreshResolvedDiscountQuotes(
+	refreshedDiscountQuotes, discountIssues := discounts.RefreshFillQuotes(
 		state.discountQuotes,
 		state.signedDiscounts,
-		state.snapshots.DiscountBases,
+		state.snapshots.Physical,
 		state.chainTime,
-		s.logInvalidDiscount,
 	)
+	state.discountQuotes = refreshedDiscountQuotes
+	s.logDiscountIssues(discountIssues)
 	return state, nil
 }
 

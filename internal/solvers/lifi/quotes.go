@@ -19,17 +19,6 @@ type quoteSubmitter interface {
 	submitQuotes(ctx context.Context, quotes []types.Quote) error
 }
 
-type quoteEvent struct {
-	orderKey     string
-	reservations []quoteReservation
-	release      bool
-}
-
-type quoteReservation struct {
-	capacityID liquidlane.CapacityID
-	amountOut  *big.Int
-}
-
 type quotePairKey struct {
 	fromAsset    common.Address
 	toAsset      common.Address
@@ -44,12 +33,11 @@ type quotePairState struct {
 }
 
 type quoteState struct {
-	active       map[quotePairKey]quotePairState
-	reservations map[string][]quoteReservation
-	renewBefore  time.Duration
+	active      map[quotePairKey]quotePairState
+	renewBefore time.Duration
 }
 
-func (s *Solver) quoteLoop(ctx context.Context, routes []route, events <-chan quoteEvent) error {
+func (s *Solver) quoteLoop(ctx context.Context, routes []route, refresh <-chan struct{}) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
 
@@ -60,10 +48,8 @@ func (s *Solver) quoteLoop(ctx context.Context, routes []route, events <-chan qu
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case event := <-events:
-			if state.apply(event) {
-				s.refreshQuotes(ctx, routes, state)
-			}
+		case <-refresh:
+			s.refreshQuotes(ctx, routes, state)
 		case <-ticker.C:
 			if s.shouldRefreshQuotes(ctx, state, &lastBlock) {
 				s.refreshQuotes(ctx, routes, state)
@@ -106,14 +92,14 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		return
 	}
 	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
-	discountBases := filterQuoteInventory(snapshotSet.DiscountBases, s.cfg.TokenPolicy)
+	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
 	inventory := append([]liquidlane.Inventory(nil), direct...)
 	inventory = append(inventory, s.quoteDiscountInventories(ctx, discountBases, chainTime)...)
 	serverTime := s.wallNow()
 	out, err := s.strategy.DecideQuotes(ctx, types.QuoteInput{
 		Solver:            s.cfg.Executor,
 		Inventory:         inventory,
-		Reservations:      state.reservedCapacity(),
+		Reservations:      s.capacity.Snapshot(),
 		SingleRouteTokens: s.cfg.TokenPolicy.SingleRouteTokens(),
 		GasSnapshot:       snapshotSet.GasSnapshot,
 		GasPrices:         snapshotSet.GasPrices,
@@ -149,8 +135,7 @@ func filterQuoteInventory(inventory []liquidlane.Inventory, policy tokenpolicy.P
 
 func newQuoteState(renewBefore time.Duration) *quoteState {
 	return &quoteState{
-		active: make(map[quotePairKey]quotePairState), reservations: make(map[string][]quoteReservation),
-		renewBefore: renewBefore,
+		active: make(map[quotePairKey]quotePairState), renewBefore: renewBefore,
 	}
 }
 
@@ -162,68 +147,6 @@ func (s *quoteState) needsRenewal(now time.Time) bool {
 		}
 	}
 	return false
-}
-
-func (s *quoteState) apply(event quoteEvent) bool {
-	if event.orderKey == "" {
-		return false
-	}
-	if event.release {
-		if _, ok := s.reservations[event.orderKey]; !ok {
-			return false
-		}
-		delete(s.reservations, event.orderKey)
-		return true
-	}
-	if len(event.reservations) == 0 {
-		return false
-	}
-	reservations := make([]quoteReservation, 0, len(event.reservations))
-	for _, reservation := range event.reservations {
-		if reservation.capacityID == "" || reservation.amountOut == nil || reservation.amountOut.Sign() <= 0 {
-			return false
-		}
-		reservations = append(reservations, quoteReservation{
-			capacityID: reservation.capacityID, amountOut: liquidlane.CloneBig(reservation.amountOut),
-		})
-	}
-	if current, ok := s.reservations[event.orderKey]; ok && equalReservations(current, reservations) {
-		return false
-	}
-	s.reservations[event.orderKey] = reservations
-	return true
-}
-
-func equalReservations(a, b []quoteReservation) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].capacityID != b[i].capacityID || a[i].amountOut.Cmp(b[i].amountOut) != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *quoteState) reservedCapacity() map[liquidlane.CapacityID]*big.Int {
-	reserved := make(map[liquidlane.CapacityID]*big.Int)
-	for _, orderReservations := range s.reservations {
-		addReservations(reserved, orderReservations)
-	}
-	return reserved
-}
-
-func addReservations(
-	total map[liquidlane.CapacityID]*big.Int,
-	reservations []quoteReservation,
-) {
-	for _, reservation := range reservations {
-		if total[reservation.capacityID] == nil {
-			total[reservation.capacityID] = new(big.Int)
-		}
-		total[reservation.capacityID].Add(total[reservation.capacityID], reservation.amountOut)
-	}
 }
 
 func (s *quoteState) reconcile(

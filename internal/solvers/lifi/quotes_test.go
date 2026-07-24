@@ -170,29 +170,6 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	}
 }
 
-func TestQuoteStateSubtractsAndReleasesReservations(t *testing.T) {
-	routeItem := testQuoteRoute()
-	state := newQuoteState(30 * time.Second)
-	reservation := quoteReservation{capacityID: routeItem.CapacityID, amountOut: big.NewInt(250)}
-
-	if !state.apply(quoteEvent{orderKey: "order-1", reservations: []quoteReservation{reservation}}) {
-		t.Fatal("expected reservation change")
-	}
-	reserved := state.reservedCapacity()
-	if reserved[routeItem.CapacityID].String() != "250" {
-		t.Fatalf("reserved = %#v", reserved)
-	}
-	if state.apply(quoteEvent{orderKey: "order-1", reservations: []quoteReservation{reservation}}) {
-		t.Fatal("identical reservation should not trigger refresh")
-	}
-	if !state.apply(quoteEvent{orderKey: "order-1", release: true}) {
-		t.Fatal("expected release change")
-	}
-	if len(state.reservedCapacity()) != 0 {
-		t.Fatalf("released reservations = %#v", state.reservedCapacity())
-	}
-}
-
 func testQuoteRoute() route {
 	return liquidlane.NewRoute(
 		11155111,

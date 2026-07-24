@@ -66,6 +66,10 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 - **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
   (`DecideQuotes` + `DecideFill`; `default` in-process or `webhook` external), per
   [`strategy-plan.md`](strategy-plan.md). See §5.2.
+- **Shared LiquidLane decision boundary** — direct/physical inventory, fill quotes, and gas state come
+  from the common snapshot reader. Default allocation and external webhook plans converge on the same
+  canonical fill routes, capacity reservations, gas floor, and fail-closed route validation before the
+  LI.FI-specific OIF calldata mapping.
 
 ### Component / repo map
 
@@ -264,8 +268,11 @@ correlation metadata only: it is not an authorization input, is not used by the 
 the WS event.
 
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
-`pong`). Each accepted message is enqueued once in an in-memory FIFO and evaluated once; it is neither
-persisted nor retried. It is a `SubmitOrderDto`:
+`pong`). The socket reader hands parsed orders to a bounded FIFO so slow chain reads do not block
+heartbeats; queued replays are coalesced by on-chain order ID, and a full queue logs and drops the
+newest message instead of growing memory without bound (the upstream replay can redeliver it). An
+accepted message is evaluated once; the solver does not persist or retry it locally. Each message is a
+`SubmitOrderDto`:
 ```
 { orderType?, quoteId,
   inputSettler,        // escrow-vs-Compact discriminator — must be the opened ESCROW settler
@@ -284,11 +291,15 @@ not require a gasless permit/3009 signature or backend `sponsorSignature`.
 ### 5.2 The strategy — owns both decisions
 
 All pricing lives in a pluggable strategy (per [`strategy-plan.md`](strategy-plan.md)): the solver
-supplies **raw facts** (adapter reads) and **executes** (publish quotes, send the tx); the strategy is
+maps adapter reads into typed LiquidLane facts and **executes** (publish quotes, send the tx); the strategy is
 the brain for **both** decision points — the standing-quote curve *and* the fill decision — mirroring
 rfq's `DecideQuote`/`BuildFillPlan`. LiquidLane route/inventory/fill-quote terminology follows
 [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md), so LIFI-specific route snapshots should map
 from shared `Route`, `Inventory`, and `FillQuote` facts rather than defining a third LiquidLane shape.
+LI.FI's standing range quote construction stays local. Its fill decision normalizes fresh facts into the
+neutral `FillTask` also used by RFQ and UniswapX for LiquidLane route selection, shared-capacity
+reservation, gas conversion, price buffering, and minimum-output distribution. LI.FI still resolves OIF
+output contexts locally.
 
 ```go
 type Strategy interface {
@@ -308,28 +319,24 @@ type Strategy interface {
   adapter `tokenOut` must have a configured feed; missing coverage fails startup and stale/invalid rounds
   fail closed for that decision. Gas units are code-owned conservative constants: 250k fixed LI.FI
   settlement, shared LiquidLane route units, and 75k for each private route.
-  `DecideQuotes` applies `inventoryReserveBps` to the gas snapshot before classifying each route, then
-  orders physical routes greedily by executable rate and capacity into one pair-level ladder capped at
-  three routes. For each route it keeps at most one best direct and one best private candidate; lower-rate
-  or wider private alternatives are deliberately ignored. One local `solveExactInputQuote(amount)` distributes
-  a concrete input greedily. A candidate must cover the whole leg assigned to its physical route, so a
-  narrow private candidate is used for small legs while a wider direct candidate handles larger legs.
-  The planner does not backtrack into another route ordering. The strategy targets `rangeCount`
-  geometrically distributed ranges (default eight, maximum sixteen); there is no profitability binary
-  search. Each range runs the same exact-input operation at its endpoints and immediately before and after
-  every possible route/alternative capacity transition inside it. The strategy converts the largest sampled
-  transaction gas cost into `tokenOut` and deducts two price-movement
-  stages (quote→decision and decision→inclusion). There is no minimum-profit setting. If the configured
-  `minAmount` boundary is not economically positive, that whole range is omitted. Every sampled amount uses
-  the largest sampled gas cost, so route and gas transitions inside the interval cannot overquote. Every range
-  uses a rate guaranteed across its full amount interval; lower-rate
-  later adapters cannot make a blended range overquote. Solver-level token admission uses the shared
+  `DecideQuotes` applies `inventoryReserveBps` before pricing, normalizes direct and private inventory into
+  shared greedy candidates, and keeps at most three physical routes (one for permissioned inputs). LI.FI
+  retains only the range-shaped protocol adapter: selected capacity is divided geometrically into at most
+  `rangeCount` contiguous ranges (default eight, hard protocol limit sixteen). For each
+  `[inputLow,inputHigh]` the strategy calls the same exact-input `greedy.SolveQuote` used by concrete
+  RFQ-style solvers at both endpoints. The lower endpoint rate is capped by a linear conservative floor
+  derived from the alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas, and
+  integer rounding. This covers interior route switches without enumerating route combinations. Two
+  price-movement stages are deducted (quote→decision and decision→inclusion). There is no separate LI.FI
+  quote planner, profitability binary search, or minimum-profit setting. If either endpoint is not
+  economically positive, that whole range is omitted. Solver-level token admission uses the shared
   `internal/tokenpolicy` policy also used by RFQ: `all` serves every input, `permissioned` serves only
   `permissionedTokens`, and `permissionless` serves only inputs outside that set. Only the
   `permissioned` scope is single-route: the solver passes that constraint into each strategy decision,
   the curve uses one physical route, and the solver rejects any fill plan that does not contain exactly
-  one route. Direct and private candidates for one route are alternatives, never additive, and may own different
-  non-overlapping ranges. Routes sharing a vault share one conservative `CapacityID`; reserve is applied
+  one route. All live direct and private candidates for one route remain alternatives, never additive; the
+  allocator chooses the best alternative able to cover each concrete leg. Routes sharing a vault share one
+  conservative `CapacityID`; reserve is applied
   before in-flight amounts are subtracted. In internal mode, advertised discount inventory is bounded
   by current on-chain `getMaxAssets`/`getMaxRate` and its deadline. The backend discount and its already-net
   `maxRate` are validated together; the strategy must not apply the ppm discount to that rate again.
@@ -363,13 +370,16 @@ type Strategy interface {
   reserved as each leg is selected. There is no capacity-first retry or plan comparison: once the complete
   allocation is built, full route-aware gas is charged and the plan is either executed or skipped.
   Routes sharing a vault consume one aggregate capacity and gas-liquidity budget. Direct and
-  private candidates for the same route remain mutually exclusive.
+  private candidates for the same route remain mutually exclusive. These route-planning mechanics live
+  in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
+  `FillPlan{Routes}`.
 
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
-and releases it when that send completes. The quote coordinator receives the same reservation changes
-and subtracts them from published capacity. On startup, when any economic payload changes, or when expiry enters the renewal
+and releases it when that send completes. A single shared `CapacityLedger` is the source for both fill
+planning and quote refresh; the quote coordinator receives only a coalesced refresh signal and does not
+keep a second copy of per-order reservations. On startup, when any economic payload changes, or when expiry enters the renewal
 window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
 stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
 the old server-side quote. An unchanged pair is not reposted on every calculation tick.
@@ -379,8 +389,9 @@ The solver then executes the result — publish the curve, or send one
 `FillPlan`. `default` is in-process. `webhook` posts the same raw snapshots to `/decide-quotes` and
 `/decide-fill`; its response is a `FillPlan` or `null`. The solver normalizes adapters/capacity IDs from
 trusted candidates and rejects unknown, oversized, duplicated, input-mismatched, capacity-conflicting,
-or gas-negative routes before calldata construction. LI.FI settlement and private-payload gas constants
-live in the strategy package and are shared by both validators.
+or gas-negative routes before calldata construction. LI.FI owns the fixed settlement and
+private-payload gas envelope; the shared gas calculator consumes it for both quote/fill decisions and
+solver-side validation.
 
 ### 5.3 Build & submit
 
@@ -430,7 +441,7 @@ solvers:
           priceBufferBps: 20
           inventoryReserveBps: 500
           minAmount: "1000000"          # tokenIn floor sized to cover gas and rounding
-          rangeCount: 8                  # target exact-input ranges across available capacity
+          rangeCount: 8                 # geometric ranges per pair; hard max is 16
           executionDeadlineBuffer: 12s
       gas:
         nativeUsdFeed: "0x…"
@@ -511,7 +522,8 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   read, so network latency cannot silently preserve the pre-resolution capacity snapshot.
 - **Competition** — same-chain fills are winner-take-all on-chain; `exclusiveFor` on our quotes routes
   matched orders to us, but a late/again-priced fill can still revert (already filled) → drop.
-- **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` parsing. Advertised terms
+- **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` discovery, physical-route
+  matching, cap/rate clipping, and fresh signed-term validation. Advertised terms
   may shape standing quotes, but execution always resolves fresh signatures, recomputes output from the
   current adapter oracle, and commits the selected discount ID and typed payload in `FillRoute`.
 - **No prefunded working inventory is required** (unlike OEV): the opened input funds each atomic
@@ -704,7 +716,7 @@ the redeploy in phase 0.
    and the real-settler Sepolia fork test pass. Deploy to Ethereum
    Sepolia, register it with LI.FI through EIP-1271, and register it as an adapter filler.
    The vendored ABI and Go binding are generated from the contract artifact at
-   [symbioticfi/rfq#18](https://github.com/symbioticfi/rfq/pull/18) head `53bf165`.
+   [symbioticfi/rfq#18](https://github.com/symbioticfi/rfq/pull/18) head `25b35af`.
 1. **Done locally** Order-server client — the vendored `openapi/lifi-order.openapi.json` + generated `api/lifiorder`
    client (register / `quotes/submit` / `orders`) plus a thin hand-written WS client for
    `user:vm-order-submit`, wired to the live `order-dev.li.fi`; register the executor account; config parsing
@@ -712,13 +724,16 @@ the redeploy in phase 0.
 2. **Done locally; previous ABI live Sepolia happy path proven** Pricing + decision + tx build — `default` strategy
    (direct executable getMaxRate for quotes; getAmountOut/minDiscount/getMaxAssets for fills;
    Chainlink gas conversion snapshots, code-owned settlement/private gas constants, pair-level route
-   ladders, one direct plus one private alternative per route, shared capacity,
+   ladders, all live direct/private alternatives per route, shared capacity and shared LI.FI/UniswapX
+   LiquidLane fill planning,
    asset match, immediate OutputSettlerSimple context resolution
    for limit and exclusive-limit outputs, with Dutch contexts rejected at WebSocket admission);
    executor-as-solver typed `FillRoute[]` direct-finalise calldata;
    early/final `orderStatus == Deposited` checks; latest-state snapshots; raw live txmanager fee input; dynamic
-   ranges; quote reconciliation; immediate unbounded fill handoff, sequential nonce broadcast,
+   ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
    pending-capacity-aware one-shot planning, inclusion-time reservation release, and fresh state for every admitted order.
+   The ladder is quote-only: an awarded order is greedily replanned from current amount-specific quotes,
+   and output above the resolved order amount remains in the executor; the current ABI has no sweep entrypoint.
    Unit-tested through the solver-level submit path and validated end-to-end on Sepolia with a
    WebSocket-delivered on-chain order matched to our exclusive quote: open tx
    `0xd3f619048a745fb896c2f6c8b4e3b42a65b104eb3035b2bb9c20cf9593623480`, fill tx
