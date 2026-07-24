@@ -131,6 +131,15 @@ func (r *reader) fillSnapshot(
 	return r.snapshots.Fill(ctx, routes, executor, tokenIn, amountIn, now)
 }
 
+func (r *reader) physicalFillQuotes(
+	ctx context.Context,
+	routes []liquidlane.Route,
+	tokenIn common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.FillQuote, error) {
+	return r.snapshots.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+}
+
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
 	header, err := r.chain.HeaderByNumber(ctx, nil)
 	if err != nil {

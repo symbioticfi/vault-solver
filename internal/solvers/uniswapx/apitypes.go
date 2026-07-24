@@ -25,6 +25,8 @@ type quoteResponse struct {
 	AmountOut string `json:"amountOut"`
 	Filler    string `json:"filler"`
 	QuoteID   string `json:"quoteId"`
+
+	declineReason string
 }
 
 type orderPage struct {

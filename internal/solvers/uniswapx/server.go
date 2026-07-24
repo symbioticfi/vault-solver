@@ -66,11 +66,25 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid blockUntilTimestamp", http.StatusBadRequest)
 			return
 		}
+		s.log.V(1).Info(
+			"quote breaker notification received",
+			"blockUntilTimestamp", *request.BlockUntilTimestamp,
+		)
 		s.setBlockUntil(*request.BlockUntilTimestamp)
 		s.observeQuote("breaker-notification")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.log.V(1).Info(
+		"quote request received",
+		"requestId", request.RequestID,
+		"quoteId", request.QuoteID,
+		"type", request.Type,
+		"protocol", request.Protocol,
+		"tokenIn", request.TokenIn,
+		"tokenOut", request.TokenOut,
+		"amount", request.Amount,
+	)
 	response, err := s.quote(r.Context(), request)
 	if err != nil {
 		s.observeQuote("error")
@@ -80,10 +94,30 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if response.AmountOut == "0" {
 		s.observeQuote("declined")
+		s.log.V(1).Info(
+			"quote declined",
+			"requestId", request.RequestID,
+			"quoteId", request.QuoteID,
+			"type", request.Type,
+			"reason", response.declineReason,
+			"blockUntil", s.blockUntil.Load(),
+			"localBlockUntil", s.localBlockUntil.Load(),
+			"exclusiveBlockUntil", s.exclusiveBlockUntil.Load(),
+			"warmupUntil", s.warmupUntil.Load(),
+			"planningFills", s.planningFills.Load(),
+		)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	s.observeQuote("quoted")
+	s.log.V(1).Info(
+		"quote returned",
+		"requestId", request.RequestID,
+		"quoteId", request.QuoteID,
+		"type", request.Type,
+		"amountIn", response.AmountIn,
+		"amountOut", response.AmountOut,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		s.log.Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
@@ -101,27 +135,27 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	}
 	now := s.currentTime()
 	if s.quoteBlocked(now) {
-		return response, nil
+		return declinedQuote(response, "blocked"), nil
 	}
 	if request.RequestID == "" || request.QuoteID == "" || !supportedQuoteType(request.Type) || request.NumOutputs < 1 ||
 		!supportedQuoteProtocol(request.Protocol) || request.TokenInChainID != s.chainID || request.TokenOutChainID != s.chainID ||
 		!common.IsHexAddress(request.Swapper) ||
 		!common.IsHexAddress(request.TokenIn) || !common.IsHexAddress(request.TokenOut) {
-		return response, nil
+		return declinedQuote(response, "invalid-request"), nil
 	}
 	tokenIn := common.HexToAddress(request.TokenIn)
 	tokenOut := common.HexToAddress(request.TokenOut)
 	if tokenIn == tokenOut || tokenOut == (common.Address{}) || !s.cfg.TokenPolicy.Allows(tokenIn) {
-		return response, nil
+		return declinedQuote(response, "pair-out-of-scope"), nil
 	}
 	requestAmount, amountOK := new(big.Int).SetString(request.Amount, 10)
 	if !amountOK || requestAmount.Sign() <= 0 {
-		return response, nil
+		return declinedQuote(response, "invalid-amount"), nil
 	}
 	epoch := s.quoteEpoch.Load()
 	state := s.quoteState.Load()
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
-		return response, nil
+		return declinedQuote(response, "quote-state-unavailable"), nil
 	}
 	input := strategytypes.QuoteInput{
 		RequestID: request.RequestID, QuoteID: request.QuoteID,
@@ -142,17 +176,22 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 		return response, err
 	}
 	if quote == nil {
-		return response, nil
+		return declinedQuote(response, "strategy-declined"), nil
 	}
 	if err := validateStrategyQuote(input, quote); err != nil {
 		return response, err
 	}
 	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.quoteBlocked(s.currentTime()) {
-		return response, nil
+		return declinedQuote(response, "state-changed"), nil
 	}
 	response.AmountIn = quote.AmountIn.String()
 	response.AmountOut = quote.AmountOut.String()
 	return response, nil
+}
+
+func declinedQuote(response quoteResponse, reason string) quoteResponse {
+	response.declineReason = reason
+	return response
 }
 
 func (s *Solver) quoteBlocked(now int64) bool {

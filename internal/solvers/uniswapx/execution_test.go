@@ -23,10 +23,14 @@ import (
 type executionTestReader struct {
 	chainReader
 
-	resolved   []liquidlane.Route
-	adapters   []common.Address
-	fillRoutes []liquidlane.Route
-	snapshot   fillSnapshot
+	resolved         []liquidlane.Route
+	adapters         []common.Address
+	fillRoutes       []liquidlane.Route
+	fillAmounts      []*big.Int
+	fillQuoteRoutes  [][]liquidlane.Route
+	fillQuoteAmounts []*big.Int
+	snapshot         fillSnapshot
+	fillSnapshotFn   func([]liquidlane.Route, *big.Int) fillSnapshot
 }
 
 func (r *executionTestReader) resolveRoutes(
@@ -142,6 +146,137 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	}
 }
 
+func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	discountRoute := testDiscountRoute()
+	directRoute := liquidlane.NewRoute(
+		1,
+		common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		discountRoute.TokenIn,
+		discountRoute.TokenOut,
+		discountRoute.TokenInDecimals,
+		discountRoute.TokenOutDecimals,
+	)
+	strategy := &executionTestStrategy{plan: &strategytypes.FillPlan{Routes: []strategytypes.FillRoute{
+		{
+			RouteID: directRoute.ID, CapacityID: directRoute.CapacityID, Adapter: directRoute.Adapter,
+			AmountIn: big.NewInt(60), ExpectedAmountOut: big.NewInt(60), MinAmountOut: big.NewInt(50),
+			ReservedAmountOut: big.NewInt(60),
+		},
+		{
+			RouteID: discountRoute.ID, CapacityID: discountRoute.CapacityID, Adapter: discountRoute.Adapter,
+			AmountIn: big.NewInt(40), ExpectedAmountOut: big.NewInt(40), MinAmountOut: big.NewInt(40),
+			ReservedAmountOut: big.NewInt(40), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+		},
+	}}}
+	fullDirect := liquidlane.FillQuote{
+		Inventory: liquidlane.DirectInventory(
+			directRoute, big.NewInt(100), big.NewInt(1_000_000_000_000_000_000),
+		),
+		AmountIn: big.NewInt(100), GrossAmountOut: big.NewInt(100), MaxAmountOut: big.NewInt(100),
+		MinDiscount: new(big.Int),
+	}
+	fullDiscount := liquidlane.FillQuote{
+		Inventory: testInventoryWithMinDiscount(
+			discountRoute, big.NewInt(100), big.NewInt(1_000_000_000_000_000_000), new(big.Int),
+		),
+		AmountIn: big.NewInt(100), GrossAmountOut: big.NewInt(100), MaxAmountOut: big.NewInt(100),
+		MinDiscount: new(big.Int),
+	}
+	partialDiscount := fullDiscount
+	partialDiscount.AmountIn = big.NewInt(40)
+	partialDiscount.GrossAmountOut = big.NewInt(41)
+	partialDiscount.MaxAmountOut = big.NewInt(41)
+
+	reader := &executionTestReader{resolved: []liquidlane.Route{discountRoute}}
+	reader.fillSnapshotFn = func(routes []liquidlane.Route, amountIn *big.Int) fillSnapshot {
+		if amountIn.Cmp(big.NewInt(100)) == 0 {
+			return fillSnapshot{
+				Direct: []liquidlane.FillQuote{fullDirect, fullDiscount},
+				Physical: []liquidlane.FillQuote{
+					fullDirect,
+					fullDiscount,
+				},
+			}
+		}
+		if len(routes) == 1 && routes[0].ID == discountRoute.ID && amountIn.Cmp(big.NewInt(40)) == 0 {
+			return fillSnapshot{Physical: []liquidlane.FillQuote{partialDiscount}}
+		}
+		t.Fatalf("unexpected fill snapshot request: routes=%+v amountIn=%s", routes, amountIn)
+		return fillSnapshot{}
+	}
+	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
+	deadline := now.Add(time.Minute).Unix()
+	provider := &fakeDiscountProvider{
+		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
+			testDiscountOffer(discountRoute, now.Add(time.Minute), "100", "1000000000000000000"),
+		}},
+		resolved: &liquiddiscounts.Resolved{
+			DiscountID: testDiscountID,
+			Discount: liquiddiscounts.Terms{
+				Adapter: discountRoute.Adapter.Hex(), TokenToRedeem: discountRoute.TokenIn.Hex(), Discount: "0",
+				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
+				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
+				Nonce:    "0x1", Deadline: deadline,
+			},
+			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
+		},
+	}
+	var packed uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	solver := &Solver{
+		cfg: &Config{
+			Executor: common.HexToAddress("0x7777777777777777777777777777777777777777"), TokenPolicy: policy,
+			Adapters:    []common.Address{directRoute.Adapter},
+			SolverMode:  solverModeInternal,
+			Discounts:   &DiscountConfig{HTTPTimeout: time.Second, MinimumValidity: 15 * time.Second},
+			OrderServer: OrderServerConfig{PollInterval: time.Second},
+		},
+		solverAddress: common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		chain: contractCallerFunc(func(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+			parsed, err := uxexecutor.LiquidLaneUniswapXExecutorMetaData.ParseABI()
+			if err != nil {
+				return nil, err
+			}
+			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
+			if err != nil {
+				return nil, err
+			}
+			packed = *abi.ConvertType(
+				values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall),
+			).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+			return nil, nil
+		}),
+		reader: reader, strategy: strategy,
+		txm:       &executionTestTxManager{result: make(chan txmanager.Result, 1)},
+		discounts: provider, log: logr.Discard(),
+		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
+		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+	}
+	order := &resolvedOrder{
+		Encoded: []byte{1}, Signature: []byte{2}, Hash: common.HexToHash("0x1"), Source: orderSourcePublicV2,
+		Executor: solver.cfg.Executor, TokenIn: discountRoute.TokenIn, TokenOut: discountRoute.TokenOut,
+		AmountIn: big.NewInt(100), AmountOut: big.NewInt(90), Deadline: uint32(now.Add(time.Minute).Unix()),
+	}
+
+	if _, err := solver.startFill(t.Context(), []liquidlane.Route{directRoute}, order, now); err != nil {
+		t.Fatalf("startFill: %v", err)
+	}
+	if len(reader.fillAmounts) != 1 || reader.fillAmounts[0].Cmp(big.NewInt(100)) != 0 ||
+		len(reader.fillQuoteAmounts) != 1 || reader.fillQuoteAmounts[0].Cmp(big.NewInt(40)) != 0 {
+		t.Fatalf("fill snapshot/quote amounts = %v/%v, want [100]/[40]",
+			reader.fillAmounts, reader.fillQuoteAmounts)
+	}
+	if len(reader.fillQuoteRoutes) != 1 || len(reader.fillQuoteRoutes[0]) != 1 ||
+		reader.fillQuoteRoutes[0][0].ID != discountRoute.ID {
+		t.Fatalf("repriced routes = %+v, want only %s", reader.fillQuoteRoutes, discountRoute.ID)
+	}
+	if len(packed.Routes) != 1 || len(packed.DiscountRoutes) != 1 ||
+		packed.DiscountRoutes[0].AmountIn.Cmp(big.NewInt(40)) != 0 {
+		t.Fatalf("packed split fill = %+v", packed)
+	}
+}
+
 func hashPointer(hash common.Hash) *common.Hash { return &hash }
 
 func (r *executionTestReader) fillSnapshot(
@@ -149,11 +284,29 @@ func (r *executionTestReader) fillSnapshot(
 	routes []liquidlane.Route,
 	_ common.Address,
 	_ common.Address,
-	_ *big.Int,
+	amountIn *big.Int,
 	_ time.Time,
 ) (fillSnapshot, error) {
 	r.fillRoutes = append([]liquidlane.Route(nil), routes...)
+	r.fillAmounts = append(r.fillAmounts, new(big.Int).Set(amountIn))
+	if r.fillSnapshotFn != nil {
+		return r.fillSnapshotFn(routes, amountIn), nil
+	}
 	return r.snapshot, nil
+}
+
+func (r *executionTestReader) physicalFillQuotes(
+	_ context.Context,
+	routes []liquidlane.Route,
+	_ common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.FillQuote, error) {
+	r.fillQuoteRoutes = append(r.fillQuoteRoutes, append([]liquidlane.Route(nil), routes...))
+	r.fillQuoteAmounts = append(r.fillQuoteAmounts, new(big.Int).Set(amountIn))
+	if r.fillSnapshotFn != nil {
+		return r.fillSnapshotFn(routes, amountIn).Physical, nil
+	}
+	return r.snapshot.Physical, nil
 }
 
 func TestStartFillRejectsExpiredOrderBeforeStrategy(t *testing.T) {

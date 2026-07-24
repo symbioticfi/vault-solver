@@ -62,6 +62,12 @@ func (s *Solver) pollSource(
 	if err != nil && len(entries) == 0 {
 		return time.Time{}, errors.Errorf("poll %s orders: %w", source, err)
 	}
+	s.log.V(1).Info(
+		"orders polled",
+		"source", source,
+		"orders", len(entries),
+		"partialError", err != nil,
+	)
 	now, nowErr := s.reader.latestBlockTime(ctx)
 	if nowErr != nil {
 		return time.Time{}, errors.Errorf("read chain time for %s orders: %w", source, nowErr)
@@ -75,8 +81,25 @@ func (s *Solver) pollSource(
 		}
 		s.trackExclusive(order, now)
 		if !s.claim(order.Hash, now) {
+			s.log.V(1).Info(
+				"order skipped: already handled or awaiting retry",
+				"source", source,
+				"orderHash", order.Hash.Hex(),
+				"quoteId", order.QuoteID,
+			)
 			continue
 		}
+		s.log.V(1).Info(
+			"order queued for fill",
+			"source", source,
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"tokenIn", order.TokenIn.Hex(),
+			"tokenOut", order.TokenOut.Hex(),
+			"amountIn", order.AmountIn.String(),
+			"amountOut", order.AmountOut.String(),
+			"deadline", order.Deadline,
+		)
 		select {
 		case out <- order:
 		case <-ctx.Done():

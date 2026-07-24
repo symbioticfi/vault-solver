@@ -90,6 +90,12 @@ type chainReader interface {
 		amountIn *big.Int,
 		now time.Time,
 	) (fillSnapshot, error)
+	physicalFillQuotes(
+		ctx context.Context,
+		routes []liquidlane.Route,
+		tokenIn common.Address,
+		amountIn *big.Int,
+	) ([]liquidlane.FillQuote, error)
 	latestBlockTime(ctx context.Context) (time.Time, error)
 	transactionBlockTime(ctx context.Context, txHash common.Hash) (time.Time, error)
 }

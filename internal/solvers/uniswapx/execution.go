@@ -51,6 +51,12 @@ func (s *Solver) fillLoop(
 				orders = nil
 				continue
 			}
+			s.log.V(1).Info(
+				"order fill planning started",
+				"source", order.Source,
+				"orderHash", order.Hash.Hex(),
+				"quoteId", order.QuoteID,
+			)
 			now, err := s.reader.latestBlockTime(ctx)
 			if err != nil {
 				s.retry(order.Hash, time.Now(), false)
@@ -137,6 +143,15 @@ func (s *Solver) startFill(
 			snapshot.Direct = append(snapshot.Direct, s.discountFillQuotes(listed, snapshot.Physical, now)...)
 		}
 	}
+	s.log.V(1).Info(
+		"order fill snapshot loaded",
+		"source", order.Source,
+		"orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(decisionRoutes),
+		"fillQuotes", len(snapshot.Direct),
+		"physicalQuotes", len(snapshot.Physical),
+	)
 	maxFee, err := s.txm.MaxFeePerGas(ctx)
 	if err != nil {
 		return nil, err
@@ -167,17 +182,24 @@ func (s *Solver) startFill(
 		return nil, errors.Errorf("strategy returned invalid fill plan: %w", err)
 	}
 	plan.Routes = validatedRoutes
+	s.logFillPlan(order, plan)
 	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
 	}
-	data, err := s.buildExecutorCalldata(ctx, order, plan, snapshot.Physical, now)
+	data, err := s.buildExecutorCalldata(ctx, order, plan, decisionRoutes, now)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data}, nil); err != nil {
 		return nil, errors.Errorf("%w: %v", errFillPreflight, err)
 	}
+	s.log.V(1).Info(
+		"order fill preflight succeeded",
+		"source", order.Source,
+		"orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID,
+	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
 		To: order.Executor, Data: data, MaxFeePerGas: new(big.Int).Set(maxFee),
 		Label: "uniswapx-fill",
@@ -189,6 +211,13 @@ func (s *Solver) startFill(
 		return nil, errors.New("transaction submission was not accepted")
 	}
 	s.setPendingReservations(order.Hash, reservations)
+	s.log.V(1).Info(
+		"order fill submitted",
+		"source", order.Source,
+		"orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(plan.Routes),
+	)
 	return &pendingUniswapFill{order: order, result: result}, nil
 }
 
@@ -196,7 +225,7 @@ func (s *Solver) buildExecutorCalldata(
 	ctx context.Context,
 	order *resolvedOrder,
 	plan *strategytypes.FillPlan,
-	physicalQuotes []liquidlane.FillQuote,
+	routes []liquidlane.Route,
 	now time.Time,
 ) ([]byte, error) {
 	fillRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorFillRoute, 0, len(plan.Routes))
@@ -207,6 +236,28 @@ func (s *Solver) buildExecutorCalldata(
 				Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.MinAmountOut,
 			})
 			continue
+		}
+		selectedRoute, ok := findRoute(routes, route.RouteID)
+		if !ok {
+			return nil, errors.Errorf("selected discount route %s is unavailable", route.RouteID)
+		}
+		s.log.V(1).Info(
+			"selected discount route repricing",
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"discountId", route.DiscountID.Hex(),
+			"routeId", route.RouteID,
+			"adapter", route.Adapter.Hex(),
+			"amountIn", route.AmountIn.String(),
+		)
+		physicalQuotes, err := s.reader.physicalFillQuotes(
+			ctx,
+			[]liquidlane.Route{selectedRoute},
+			order.TokenIn,
+			route.AmountIn,
+		)
+		if err != nil {
+			return nil, errors.Errorf("reprice selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
 		signed, err := s.resolveDiscount(ctx, liquiddiscounts.Selection{
 			DiscountID:   *route.DiscountID,
@@ -219,6 +270,17 @@ func (s *Solver) buildExecutorCalldata(
 		if err != nil {
 			return nil, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
+		s.log.V(1).Info(
+			"selected discount resolved",
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"discountId", route.DiscountID.Hex(),
+			"routeId", route.RouteID,
+			"adapter", route.Adapter.Hex(),
+			"amountIn", route.AmountIn.String(),
+			"discountDeadline", signed.Terms.Deadline,
+			"protocolDeadline", signed.ProtocolDeadline,
+		)
 		discountRoutes = append(discountRoutes, uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute{
 			Adapter: route.Adapter, AmountIn: route.AmountIn,
 			DiscountSwap: uxexecutor.ILiquidLaneAdapterDiscountSwap{
@@ -238,6 +300,46 @@ func (s *Solver) buildExecutorCalldata(
 	return uniswapXExecutor.TryPackExecute(
 		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},
 		uxexecutor.ILiquidLaneUniswapXExecutorFillCall{Routes: fillRoutes, DiscountRoutes: discountRoutes},
+	)
+}
+
+func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Route, bool) {
+	for _, route := range routes {
+		if route.ID == id {
+			return route, true
+		}
+	}
+	return liquidlane.Route{}, false
+}
+
+func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan) {
+	discountRoutes := 0
+	for index, route := range plan.Routes {
+		if route.DiscountID != nil {
+			discountRoutes++
+		}
+		fields := []any{
+			"source", order.Source,
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+			"route", index,
+			"routeId", route.RouteID,
+			"adapter", route.Adapter.Hex(),
+			"amountIn", route.AmountIn.String(),
+			"minAmountOut", route.MinAmountOut.String(),
+		}
+		if route.DiscountID != nil {
+			fields = append(fields, "discountId", route.DiscountID.Hex())
+		}
+		s.log.V(1).Info("order fill route selected", fields...)
+	}
+	s.log.V(1).Info(
+		"order fill plan selected",
+		"source", order.Source,
+		"orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(plan.Routes),
+		"discountRoutes", discountRoutes,
 	)
 }
 

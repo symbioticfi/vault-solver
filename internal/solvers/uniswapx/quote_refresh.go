@@ -79,6 +79,16 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		if s.metrics != nil {
 			s.metrics.quoteRefresh.Set(float64(time.Now().Unix()))
 		}
+		s.log.V(1).Info(
+			"quote state refreshed",
+			"epoch", epoch,
+			"routes", len(decisionRoutes),
+			"inventory", len(current.Direct),
+			"physicalInventory", len(current.Physical),
+			"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
+		)
+	} else {
+		s.log.V(1).Info("quote state refresh discarded", "epoch", epoch)
 	}
 	return nil
 }

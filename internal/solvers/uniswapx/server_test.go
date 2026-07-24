@@ -105,7 +105,8 @@ func TestQuoteDeclinesExpiredState(t *testing.T) {
 	state.expiresAt = time.Now().Add(-time.Second)
 
 	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
-	if err != nil || response.AmountOut != "0" || len(strategy.inputs) != 0 {
+	if err != nil || response.AmountOut != "0" || response.declineReason != "quote-state-unavailable" ||
+		len(strategy.inputs) != 0 {
 		t.Fatalf("expired response = %+v, inputs = %d, err %v", response, len(strategy.inputs), err)
 	}
 }

@@ -92,6 +92,16 @@ func (r *Reader) FilterAuthorizedRoutes(
 	return r.liquid.FilterAuthorizedRoutes(ctx, routes, executor)
 }
 
+// ReadFillQuotes reads amount-specific physical quotes without direct-route authorization or gas state.
+func (r *Reader) ReadFillQuotes(
+	ctx context.Context,
+	routes []liquidlane.Route,
+	tokenIn common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.FillQuote, error) {
+	return r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+}
+
 func (r *Reader) Quote(
 	ctx context.Context,
 	routes []liquidlane.Route,
