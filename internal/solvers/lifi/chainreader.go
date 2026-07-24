@@ -14,6 +14,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+	liquidsnapshot "github.com/symbioticfi/vault-solver/internal/liquidlane/snapshot"
 )
 
 var (
@@ -22,40 +23,28 @@ var (
 
 type reader struct {
 	chain     *chain.Client
-	ll        *liquidlane.Reader
-	gasOracle *liquidlanegas.OracleReader
+	snapshots *liquidsnapshot.Reader
 }
 
 type route = liquidlane.Route
 
-type quoteSnapshotSet struct {
-	Direct        []liquidlane.Inventory
-	DiscountBases []liquidlane.Inventory
-	GasSnapshot   *liquidlanegas.Snapshot
-	GasPrices     *liquidlanegas.PriceSnapshot
-}
-
-type fillSnapshotSet struct {
-	Direct        []liquidlane.FillQuote
-	DiscountBases []liquidlane.FillQuote
-	GasSnapshot   *liquidlanegas.Snapshot
-	GasPrices     *liquidlanegas.PriceSnapshot
-}
+type quoteSnapshotSet = liquidsnapshot.Quote
+type fillSnapshotSet = liquidsnapshot.Fill
 
 func newReader(c *chain.Client, log logr.Logger, gasCfg liquidlanegas.OracleConfig) (*reader, error) {
-	gasOracle, err := liquidlanegas.NewOracleReader(c, gasCfg)
+	snapshots, err := liquidsnapshot.New(c, log, gasCfg)
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, ll: liquidlane.NewReader(c, log), gasOracle: gasOracle}, nil
+	return &reader{chain: c, snapshots: snapshots}, nil
 }
 
 func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error) {
-	return r.ll.ResolveRoutes(ctx, adapters)
+	return r.snapshots.ResolveRoutes(ctx, adapters)
 }
 
 func (r *reader) validateGasTokens(routes []route) error {
-	return r.gasOracle.ValidateTokens(gasTokens(routes))
+	return r.snapshots.ValidateGasTokens(routes)
 }
 
 func (r *reader) quoteSnapshots(
@@ -64,23 +53,7 @@ func (r *reader) quoteSnapshots(
 	executorAddr common.Address,
 	chainTime time.Time,
 ) (quoteSnapshotSet, error) {
-	all, err := r.ll.ReadInventory(ctx, routes)
-	if err != nil {
-		return quoteSnapshotSet{}, err
-	}
-	direct, err := r.ll.FilterAuthorized(ctx, all, executorAddr)
-	if err != nil {
-		return quoteSnapshotSet{}, err
-	}
-	gasSnapshot, err := r.ll.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return quoteSnapshotSet{}, err
-	}
-	gasPrices, err := r.gasOracle.Read(ctx, gasTokens(routes), chainTime)
-	if err != nil {
-		return quoteSnapshotSet{}, err
-	}
-	return quoteSnapshotSet{Direct: direct, DiscountBases: all, GasSnapshot: gasSnapshot, GasPrices: gasPrices}, nil
+	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
 }
 
 func (r *reader) fillSnapshots(
@@ -91,41 +64,7 @@ func (r *reader) fillSnapshots(
 	amountIn *big.Int,
 	chainTime time.Time,
 ) (fillSnapshotSet, error) {
-	all, err := r.ll.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
-	if err != nil {
-		return fillSnapshotSet{}, err
-	}
-	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executorAddr)
-	if err != nil {
-		return fillSnapshotSet{}, err
-	}
-	directAdapters := make(map[common.Address]bool, len(authorized))
-	for _, item := range authorized {
-		directAdapters[item.Adapter] = true
-	}
-	direct := make([]liquidlane.FillQuote, 0, len(all))
-	for _, quote := range all {
-		if directAdapters[quote.Adapter] {
-			direct = append(direct, quote)
-		}
-	}
-	gasSnapshot, err := r.ll.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return fillSnapshotSet{}, err
-	}
-	gasPrices, err := r.gasOracle.Read(ctx, gasTokens(routes), chainTime)
-	if err != nil {
-		return fillSnapshotSet{}, err
-	}
-	return fillSnapshotSet{Direct: direct, DiscountBases: all, GasSnapshot: gasSnapshot, GasPrices: gasPrices}, nil
-}
-
-func gasTokens(routes []route) []liquidlanegas.Token {
-	tokens := make([]liquidlanegas.Token, 0, len(routes))
-	for _, route := range routes {
-		tokens = append(tokens, liquidlanegas.Token{Address: route.TokenOut, Decimals: route.TokenOutDecimals})
-	}
-	return tokens
+	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
 }
 
 func (r *reader) validateExecutor(
@@ -188,12 +127,15 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executorAddr)
+	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
 	if err != nil {
 		return err
 	}
-	if len(direct) != len(routes) {
-		return errors.Errorf("executor has direct filler authorization for %d of %d configured routes", len(direct), len(routes))
+	if missing := liquidlane.UnauthorizedAdapters(routes, direct); len(missing) > 0 {
+		return errors.Errorf(
+			"executor %s is not authorized as direct filler for configured adapters: %v",
+			executorAddr.Hex(), missing,
+		)
 	}
 	return nil
 }

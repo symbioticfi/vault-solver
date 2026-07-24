@@ -10,17 +10,23 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
+
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func TestOrderInboxDoesNotBlockAndPreservesOrder(t *testing.T) {
-	inbox := newOrderInbox()
 	const count = 5_000
+	inbox := newOrderInbox(count)
 
 	enqueued := make(chan struct{})
 	go func() {
 		for i := range count {
-			inbox.enqueue(&submittedOrder{OrderID: strconv.Itoa(i)})
+			if err := inbox.enqueue(&submittedOrder{OrderID: strconv.Itoa(i)}); err != nil {
+				t.Errorf("enqueue %d: %v", i, err)
+				return
+			}
 		}
 		close(enqueued)
 	}()
@@ -84,5 +90,42 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 				t.Fatalf("unsupported auction log = %s", logged)
 			}
 		})
+	}
+}
+
+func TestOrderInboxCoalescesQueuedReplay(t *testing.T) {
+	inbox := newOrderInbox(2)
+	first := &submittedOrder{OrderID: "api-1", OnChainOrderID: "chain-1"}
+	if err := inbox.enqueue(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.enqueue(&submittedOrder{OrderID: "api-2", OnChainOrderID: "chain-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.orders) != 1 {
+		t.Fatalf("queued orders = %d, want 1", len(inbox.orders))
+	}
+}
+
+func TestOrderInboxRejectsOverflow(t *testing.T) {
+	inbox := newOrderInbox(1)
+	if err := inbox.enqueue(&submittedOrder{OrderID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.enqueue(&submittedOrder{OrderID: "second"}); !errors.Is(err, errOrderInboxFull) {
+		t.Fatalf("enqueue error = %v, want %v", err, errOrderInboxFull)
+	}
+}
+
+func TestAwaitFillTreatsClosedResultChannelAsFailure(t *testing.T) {
+	results := make(chan txmanager.Result)
+	close(results)
+	fill := &pendingFill{result: results}
+	completions := make(chan fillCompletion, 1)
+
+	awaitFill(t.Context(), fill, completions)
+	completion := <-completions
+	if completion.result.Err == nil {
+		t.Fatal("closed transaction result channel was treated as a successful fill")
 	}
 }

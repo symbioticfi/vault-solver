@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"io"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
@@ -21,41 +20,36 @@ import (
 
 func baseQuoteInput(t *testing.T) types.QuoteInput {
 	t.Helper()
+	route := liquidlane.NewRoute(1, vlt, common.Address{}, tIn, tOut, 18, 6)
+	route.CapacityID = liquidlane.CapacityID(route.ID)
 	return types.QuoteInput{
 		RequestID: "r", QuoteID: "q", ChainID: 1,
 		Executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		TokenIn:  tIn, TokenOut: tOut, AmountIn: mustBig(t, "1000000000000000000"),
-		Candidates: []types.QuoteCandidate{{
-			ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-			MaxAssets: mustBig(t, "10000000"),
-			MaxRate:   mustBig(t, "1000000000000000000"),
+		Candidates: []liquidlane.QuoteCandidate{{
+			ID: liquidlane.NewCandidateID(route, nil), Route: route,
+			Rate:        mustBig(t, "1000000000000000000"),
+			MaxAmountIn: mustBig(t, "1000000000000000000"), MaxAmountOut: mustBig(t, "10000000"),
 		}},
 		Now: time.Unix(0, 0),
 	}
 }
 
 func TestDefaultStrategyDecideQuote(t *testing.T) {
-	pricing := &fakeStrategyPricing{
-		decimals: 18,
-		out:      map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
-	}
-	out, err := defaultstrategy.New(pricing).DecideQuote(t.Context(), baseQuoteInput(t))
+	out, err := defaultstrategy.New().DecideQuote(t.Context(), baseQuoteInput(t))
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
 	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" {
 		t.Fatalf("unexpected output: %+v", out)
 	}
-	if len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
-		t.Fatalf("legs = %+v, want candidate c0", out.Legs)
-	}
-	if len(pricing.queries) != 1 || len(pricing.queries[0]) != 1 || pricing.queries[0][0].Adapter != vlt {
-		t.Fatalf("pricing queries = %+v, want one batched query for %s", pricing.queries, vlt.Hex())
+	if len(out.Legs) != 1 || out.Legs[0].CandidateID != string(baseQuoteInput(t).Candidates[0].ID) {
+		t.Fatalf("legs = %+v, want normalized candidate", out.Legs)
 	}
 }
 
 func TestNewStrategyUsesRegistry(t *testing.T) {
-	got, err := newStrategy(StrategyConfig{Name: "default"}, nil, logr.Discard())
+	got, err := newStrategy(StrategyConfig{Name: "default"})
 	if err != nil {
 		t.Fatalf("newStrategy default: %v", err)
 	}
@@ -68,15 +62,15 @@ func TestNewStrategyUsesRegistry(t *testing.T) {
 	}
 }
 
-func TestDefaultStrategyBuildFillPlanUsesQuoteCache(t *testing.T) {
-	strategy := defaultstrategy.New(&fakeStrategyPricing{
-		decimals: 18,
-		out:      map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
-	})
+func TestDefaultStrategyBuildFillPlanUsesCurrentCandidates(t *testing.T) {
+	strategy := defaultstrategy.New()
 	input := baseQuoteInput(t)
 	if _, err := strategy.DecideQuote(t.Context(), input); err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
+	fillAdapter := common.HexToAddress("0x0000000000000000000000000000000000000004")
+	fillRoute := liquidlane.NewRoute(1, fillAdapter, common.Address{}, input.TokenIn, input.TokenOut, 18, 6)
+	fillRoute.CapacityID = liquidlane.CapacityID(fillRoute.ID)
 	plan, err := strategy.BuildFillPlan(t.Context(), types.FillInput{
 		RequestID: input.RequestID,
 		QuoteID:   input.QuoteID,
@@ -85,13 +79,18 @@ func TestDefaultStrategyBuildFillPlanUsesQuoteCache(t *testing.T) {
 		TokenIn:   input.TokenIn,
 		TokenOut:  input.TokenOut,
 		AmountIn:  input.AmountIn,
-		Now:       input.Now,
+		Candidates: []liquidlane.QuoteCandidate{{
+			ID: liquidlane.NewCandidateID(fillRoute, nil), Route: fillRoute,
+			Rate:        mustBig(t, "1000000000000000000"),
+			MaxAmountIn: mustBig(t, "1000000000000000000"), MaxAmountOut: mustBig(t, "10000000"),
+		}},
+		Now: input.Now,
 	})
 	if err != nil {
 		t.Fatalf("BuildFillPlan: %v", err)
 	}
-	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != vlt {
-		t.Fatalf("cached fill plan = %+v, want vlt leg", plan)
+	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != fillAdapter {
+		t.Fatalf("fill plan = %+v, want current adapter %s", plan, fillAdapter)
 	}
 }
 

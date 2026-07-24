@@ -5,6 +5,8 @@ import (
 
 	"github.com/go-errors/errors"
 
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
@@ -34,15 +36,32 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	solution, err := s.solveGreedyFill(input, validAfter, maxRoutes)
-	if err != nil || solution == nil {
+	gasPricing, err := liquidstrategies.NewGasPricing(
+		input.MaxFeePerGas,
+		input.TokenOut,
+		input.GasPrices,
+		input.GasSnapshot,
+		s.cfg.InventoryReserveBps,
+		types.LiquidLaneGasEnvelope(),
+	)
+	if err != nil {
 		return nil, err
 	}
-	requiredAmountOut, ok := output.fill(input.Solver, input.ChainTime, solution.maxAmountOut)
+	allocation, err := liquidgreedy.SolveFill(liquidgreedy.FillTask{
+		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
+		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
+		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
+		InventoryReserveBps: s.cfg.InventoryReserveBps,
+		GasPricing:          &gasPricing,
+	})
+	if err != nil || allocation == nil {
+		return nil, err
+	}
+	requiredAmountOut, ok := output.fill(input.Solver, input.ChainTime, allocation.MaxAmountOut())
 	if !ok {
 		return nil, nil
 	}
-	routes := solution.buildRoutes(requiredAmountOut)
+	routes := allocation.Finalize(requiredAmountOut)
 	if len(routes) == 0 {
 		return nil, nil
 	}

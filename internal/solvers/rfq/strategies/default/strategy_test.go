@@ -1,23 +1,15 @@
 package defaultstrategy
 
 import (
-	"context"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
-
-func mustBig(t *testing.T, s string) *big.Int {
-	t.Helper()
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		t.Fatalf("bad big.Int %q", s)
-	}
-	return n
-}
 
 var (
 	tIn  = common.HexToAddress("0x0000000000000000000000000000000000000001")
@@ -25,305 +17,101 @@ var (
 	vlt  = common.HexToAddress("0x0000000000000000000000000000000000000003")
 )
 
-type fakePricing struct {
-	out     map[common.Address]*big.Int
-	queries *[][]types.QuoteCandidate
-}
-
-func (f fakePricing) TokenDecimals(context.Context, common.Address) (int, error) {
-	return 18, nil
-}
-
-func (f fakePricing) AmountsOut(
-	_ context.Context,
-	_ common.Address,
-	candidates []types.QuoteCandidate,
-	_ *big.Int,
-) (map[common.Address]*big.Int, error) {
-	if f.queries != nil {
-		*f.queries = append(*f.queries, append([]types.QuoteCandidate(nil), candidates...))
+func quoteCandidate(
+	adapter common.Address,
+	rate int64,
+	maxInput int64,
+	maxOutput int64,
+	discountID *common.Hash,
+) liquidlane.QuoteCandidate {
+	route := liquidlane.NewRoute(1, adapter, common.HexToAddress("0x10"), tIn, tOut, 0, 0)
+	route.CapacityID = liquidlane.CapacityID(route.ID)
+	return liquidlane.QuoteCandidate{
+		ID:           liquidlane.NewCandidateID(route, discountID),
+		Route:        route,
+		Rate:         new(big.Int).Mul(big.NewInt(rate), big.NewInt(1_000_000_000_000_000_000)),
+		MaxAmountIn:  big.NewInt(maxInput),
+		MaxAmountOut: big.NewInt(maxOutput),
+		DiscountID:   liquidlane.CloneHash(discountID),
 	}
-	return f.out, nil
 }
 
-func baseInput(t *testing.T, candidates []types.QuoteCandidate) types.QuoteInput {
-	t.Helper()
+func baseInput(candidates ...liquidlane.QuoteCandidate) types.QuoteInput {
 	return types.QuoteInput{
-		RequestID:  "r",
-		QuoteID:    "q",
-		ChainID:    1,
-		Executor:   common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		TokenIn:    tIn,
-		TokenOut:   tOut,
-		AmountIn:   mustBig(t, "1000000000000000000"),
-		Candidates: candidates,
-		Now:        time.Unix(0, 0),
+		RequestID: "r", QuoteID: "q", ChainID: 1,
+		Executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		TokenIn:  tIn, TokenOut: tOut, AmountIn: big.NewInt(100),
+		Candidates: candidates, Now: time.Unix(0, 0),
 	}
 }
 
-func TestStrategyDirectFill(t *testing.T) {
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"),
-		MaxRate:   mustBig(t, "1000000000000000000"),
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).DecideQuote(t.Context(), input)
+func TestStrategyQuotesNormalizedLiquidLaneCandidates(t *testing.T) {
+	candidate := quoteCandidate(vlt, 2, 100, 200, nil)
+	got, err := New().DecideQuote(t.Context(), baseInput(candidate))
 	if err != nil {
 		t.Fatalf("DecideQuote: %v", err)
 	}
-	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
-		t.Fatalf("output = %+v, want 1.000000 quote", got)
-	}
-	if len(got.Legs) != 1 {
-		t.Fatalf("legs = %d, want 1", len(got.Legs))
-	}
-	if got.Legs[0].CandidateID != "c0" ||
-		got.Legs[0].AmountIn.String() != "1000000000000000000" ||
-		got.Legs[0].AmountOut.String() != "1000000" {
-		t.Fatalf("leg = %+v, want c0 with full input and 1000000 output", got.Legs[0])
+	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.Cmp(big.NewInt(200)) != 0 ||
+		len(got.Legs) != 1 || got.Legs[0].CandidateID != string(candidate.ID) {
+		t.Fatalf("output = %+v, want one 200-output leg", got)
 	}
 }
 
-func TestStrategyRejectsMaxRateBelowPrivateRate(t *testing.T) {
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"),
-		MaxRate:   mustBig(t, "800000000000000000"),
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
+func TestStrategyAggregatesRoutesButHonorsSingleRoute(t *testing.T) {
+	first := quoteCandidate(vlt, 2, 60, 120, nil)
+	second := quoteCandidate(common.HexToAddress("0x04"), 1, 100, 100, nil)
+
+	got, err := New().DecideQuote(t.Context(), baseInput(first, second))
+	if err != nil || got.Decision != types.DecisionQuote || len(got.Legs) != 2 ||
+		got.QuotedAmountOut.Cmp(big.NewInt(160)) != 0 {
+		t.Fatalf("aggregate quote = %+v, err %v", got, err)
 	}
-	if got.Decision != types.DecisionDecline {
-		t.Fatalf("decision = %q, want decline", got.Decision)
+
+	input := baseInput(first, second)
+	input.RequireSingleRoute = true
+	got, err = New().DecideQuote(t.Context(), input)
+	if err != nil || got.Decision != types.DecisionQuote || len(got.Legs) != 1 ||
+		got.Legs[0].CandidateID != string(second.ID) {
+		t.Fatalf("single-route quote = %+v, err %v", got, err)
 	}
 }
 
-func TestStrategyAssetMustEqualTokenOut(t *testing.T) {
-	other := common.HexToAddress("0x00000000000000000000000000000000000000ff")
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: other, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionDecline {
-		t.Fatalf("decision = %q, want decline", got.Decision)
-	}
-}
-
-func TestStrategyPricesAndSelectsOnlyMatchingCandidates(t *testing.T) {
-	other := common.HexToAddress("0x00000000000000000000000000000000000000ff")
-	input := baseInput(t, []types.QuoteCandidate{
-		{
-			ID: "wrong", Adapter: vlt, Asset: other, AssetDecimals: 6,
-			MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-		},
-		{
-			ID: "match", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-			MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-		},
-	})
-	var queries [][]types.QuoteCandidate
-	got, err := New(fakePricing{
-		out:     map[common.Address]*big.Int{tOut: mustBig(t, "1000000")},
-		queries: &queries,
-	}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionQuote || len(got.Legs) != 1 || got.Legs[0].CandidateID != "match" {
-		t.Fatalf("output = %+v, want quote through matching candidate", got)
-	}
-	if len(queries) != 1 || len(queries[0]) != 1 || queries[0][0].ID != "match" {
-		t.Fatalf("pricing candidates = %+v, want only matching candidate", queries)
-	}
-}
-
-func TestStrategyNoOraclePriceSkips(t *testing.T) {
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets: mustBig(t, "10000000"), MaxRate: mustBig(t, "1000000000000000000"),
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionDecline {
-		t.Fatalf("decision = %q, want decline", got.Decision)
-	}
-}
-
-func TestStrategyDiscountLegUsesMaxRate(t *testing.T) {
-	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets:  mustBig(t, "10000000"),
-		MaxRate:    mustBig(t, "1000000000000000000"),
-		DiscountID: &h,
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "500000")}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "1000000" {
-		t.Fatalf("output = %+v, want discount quote at maxRate", got)
-	}
-}
-
-func TestStrategySplitsAcrossDiscountsBestRateFirst(t *testing.T) {
-	betterDiscountID := common.HexToHash("0x01")
-	worseDiscountID := common.HexToHash("0x02")
-	input := baseInput(t, []types.QuoteCandidate{
-		{
-			ID: "worse", Adapter: common.HexToAddress("0x04"), Asset: tOut, AssetDecimals: 18,
-			MaxAssets:  mustBig(t, "2000000000000000000000"),
-			MaxRate:    mustBig(t, "880000000000000000"),
-			DiscountID: &worseDiscountID,
-		},
-		{
-			ID: "better", Adapter: vlt, Asset: tOut, AssetDecimals: 18,
-			MaxAssets:  mustBig(t, "1000000000000000000000"),
-			MaxRate:    mustBig(t, "990000000000000000"),
-			DiscountID: &betterDiscountID,
-		},
-	})
-	input.AmountIn = mustBig(t, "2000000000000000000000")
-
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{
-		tOut: mustBig(t, "2000000000000000000000"),
-	}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "1871111111111111111110" {
-		t.Fatalf("output = %+v, want best-rate-first split totaling 1871111111111111111110", got)
-	}
-	if len(got.Legs) != 2 {
-		t.Fatalf("legs = %d, want 2", len(got.Legs))
-	}
-	if got.Legs[0].CandidateID != "better" ||
-		got.Legs[0].AmountIn.String() != "1010101010101010101011" ||
-		got.Legs[0].AmountOut.String() != "1000000000000000000000" {
-		t.Fatalf("first leg = %+v, want better discount saturated at maxAssets", got.Legs[0])
-	}
-	if got.Legs[1].CandidateID != "worse" ||
-		got.Legs[1].AmountIn.String() != "989898989898989898989" ||
-		got.Legs[1].AmountOut.String() != "871111111111111111110" {
-		t.Fatalf("second leg = %+v, want worse discount to consume remaining input", got.Legs[1])
-	}
-}
-
-func TestStrategyCapsQuoteAtAvailableAssetsWhenCapacityCannotCoverInput(t *testing.T) {
+func TestStrategyTreatsDirectAndDiscountAsRouteAlternatives(t *testing.T) {
 	discountID := common.HexToHash("0x01")
-	input := baseInput(t, []types.QuoteCandidate{{
-		ID: "c0", Adapter: vlt, Asset: tOut, AssetDecimals: 6,
-		MaxAssets:  mustBig(t, "500000"),
-		MaxRate:    mustBig(t, "1000000000000000000"),
-		DiscountID: &discountID,
-	}})
-	got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).DecideQuote(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
-	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.String() != "500000" {
-		t.Fatalf("output = %+v, want quote capped at maxAssets 500000", got)
-	}
-	if len(got.Legs) != 1 ||
-		got.Legs[0].AmountIn.Cmp(input.AmountIn) != 0 ||
-		got.Legs[0].AmountOut.String() != "500000" {
-		t.Fatalf("legs = %+v, want full input quoted for capped output", got.Legs)
+	private := quoteCandidate(vlt, 3, 60, 180, &discountID)
+	direct := quoteCandidate(vlt, 2, 100, 200, nil)
+
+	got, err := New().DecideQuote(t.Context(), baseInput(private, direct))
+	if err != nil || got.Decision != types.DecisionQuote || len(got.Legs) != 1 ||
+		got.Legs[0].CandidateID != string(direct.ID) {
+		t.Fatalf("quote = %+v, err %v; want full direct alternative", got, err)
 	}
 }
 
-func TestStrategyRouteConstraints(t *testing.T) {
-	adapter2 := common.HexToAddress("0x0000000000000000000000000000000000000004")
+func TestBuildFillPlanUsesTypedCandidateWithoutRepricing(t *testing.T) {
 	discountID := common.HexToHash("0x01")
-	candidate := func(
-		id string,
-		adapter common.Address,
-		maxAssets string,
-		maxRate string,
-		discount *common.Hash,
-	) types.QuoteCandidate {
-		return types.QuoteCandidate{
-			ID: id, Adapter: adapter, Asset: tOut, AssetDecimals: 6,
-			MaxAssets: mustBig(t, maxAssets), MaxRate: mustBig(t, maxRate), DiscountID: discount,
-		}
+	candidate := quoteCandidate(vlt, 2, 50, 100, &discountID)
+	input := baseInput(candidate)
+	input.RequiredAmountOut = big.NewInt(100)
+
+	plan, err := New().BuildFillPlan(t.Context(), input)
+	if err != nil || plan == nil || len(plan.Legs) != 1 {
+		t.Fatalf("plan = %+v, err %v", plan, err)
 	}
-
-	tests := []struct {
-		name               string
-		requireSingleRoute bool
-		requiredAmountOut  *big.Int
-		candidates         []types.QuoteCandidate
-		wantDecision       types.Decision
-		wantLegs           int
-		wantCandidate      string
-		wantAmountOut      string
-	}{
-		{
-			name: "permissionless input aggregates candidates",
-			candidates: []types.QuoteCandidate{
-				candidate("c0", vlt, "600000", "1000000000000000000", nil),
-				candidate("c1", adapter2, "500000", "1000000000000000000", nil),
-			},
-			wantDecision: types.DecisionQuote, wantLegs: 2, wantAmountOut: "1000000",
-		},
-		{
-			name:               "permissioned input selects best full candidate",
-			requireSingleRoute: true,
-			requiredAmountOut:  mustBig(t, "1100000"),
-			candidates: []types.QuoteCandidate{
-				candidate("direct", vlt, "2000000", "1000000000000000000", nil),
-				candidate("discount", adapter2, "2000000", "1200000000000000000", &discountID),
-			},
-			wantDecision: types.DecisionQuote, wantLegs: 1,
-			wantCandidate: "discount", wantAmountOut: "1200000",
-		},
-		{
-			name:               "permissioned input declines partial candidates",
-			requireSingleRoute: true,
-			candidates: []types.QuoteCandidate{
-				candidate("c0", vlt, "600000", "1000000000000000000", nil),
-				candidate("c1", adapter2, "500000", "1000000000000000000", nil),
-			},
-			wantDecision: types.DecisionDecline,
-		},
-		{
-			name:               "permissioned input does not mix direct and discount candidates",
-			requireSingleRoute: true,
-			candidates: []types.QuoteCandidate{
-				candidate("direct", vlt, "600000", "1000000000000000000", nil),
-				candidate("discount", vlt, "600000", "1200000000000000000", &discountID),
-			},
-			wantDecision: types.DecisionDecline,
-		},
+	leg := plan.Legs[0]
+	if leg.Adapter != vlt || leg.AmountIn.Cmp(big.NewInt(100)) != 0 ||
+		leg.AmountOut.Cmp(big.NewInt(100)) != 0 ||
+		leg.MaxRate.Cmp(big.NewInt(2_000_000_000_000_000_000)) != 0 ||
+		leg.DiscountID == nil || *leg.DiscountID != discountID {
+		t.Fatalf("leg = %+v", leg)
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := baseInput(t, tt.candidates)
-			input.RequireSingleRoute = tt.requireSingleRoute
-			input.RequiredAmountOut = tt.requiredAmountOut
-
-			got, err := New(fakePricing{out: map[common.Address]*big.Int{tOut: mustBig(t, "1000000")}}).
-				DecideQuote(t.Context(), input)
-			if err != nil {
-				t.Fatalf("DecideQuote: %v", err)
-			}
-			if got.Decision != tt.wantDecision || len(got.Legs) != tt.wantLegs {
-				t.Fatalf("output = %+v, want decision %q with %d legs", got, tt.wantDecision, tt.wantLegs)
-			}
-			if tt.wantCandidate != "" && got.Legs[0].CandidateID != tt.wantCandidate {
-				t.Fatalf("candidate = %q, want %q", got.Legs[0].CandidateID, tt.wantCandidate)
-			}
-			if tt.wantAmountOut != "" &&
-				(got.QuotedAmountOut == nil || got.QuotedAmountOut.String() != tt.wantAmountOut) {
-				t.Fatalf("quotedAmountOut = %v, want %s", got.QuotedAmountOut, tt.wantAmountOut)
-			}
-		})
+func TestBuildFillPlanRejectsNonCanonicalCandidateID(t *testing.T) {
+	candidate := quoteCandidate(vlt, 2, 100, 200, nil)
+	candidate.ID = "wrong"
+	plan, err := New().BuildFillPlan(t.Context(), baseInput(candidate))
+	if err == nil || plan != nil {
+		t.Fatalf("plan = %+v, err %v; want invalid identity rejection", plan, err)
 	}
 }

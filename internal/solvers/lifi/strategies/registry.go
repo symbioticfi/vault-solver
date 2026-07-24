@@ -5,19 +5,12 @@ import (
 	"sync"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
-type Deps struct {
-	Chain *chain.Client
-	Log   logr.Logger
-}
-
-type Factory func(raw yaml.Node, deps Deps) (types.Strategy, error)
+type Factory func(raw yaml.Node) (types.Strategy, error)
 
 var (
 	mu       sync.RWMutex
@@ -39,14 +32,14 @@ func Register(name string, f Factory) {
 	registry[name] = f
 }
 
-func New(name string, raw yaml.Node, deps Deps) (types.Strategy, error) {
+func New(name string, raw yaml.Node) (types.Strategy, error) {
 	mu.RLock()
 	f, ok := registry[name]
 	mu.RUnlock()
 	if !ok {
 		return nil, errors.Errorf("unknown LI.FI strategy %q (registered: %v)", name, Registered())
 	}
-	return f(raw, deps)
+	return f(raw)
 }
 
 func Registered() []string {

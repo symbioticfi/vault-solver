@@ -2,12 +2,15 @@ package rfq
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -20,9 +23,20 @@ type quoteService struct {
 	executor    common.Address
 	whitelist   adapterWhitelist // nil disables adapter filtering
 	tokenPolicy tokenpolicy.Policy
+	reader      quoteCandidateReader
 	strategy    types.Strategy
 	log         logr.Logger
 	now         func() time.Time
+}
+
+type quoteCandidateReader interface {
+	readQuoteCandidates(
+		ctx context.Context,
+		inventory []solverInventory,
+		tokenIn common.Address,
+		tokenOut common.Address,
+		amountIn *big.Int,
+	) ([]liquidlane.QuoteCandidate, error)
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
@@ -49,7 +63,15 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, requireSingleRoute, qs.now())
+	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	if err != nil {
+		return nil, errors.Errorf("quote: read LiquidLane candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
+		return nil, nil
+	}
+	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
 	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
@@ -58,10 +80,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
 	}
-	if out.QuotedAmountOut == nil {
-		return nil, errors.New("quote: strategy returned quote without amountOut")
-	}
-	if err := validateSingleRoute(input.RequireSingleRoute, len(out.Legs)); err != nil {
+	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
 

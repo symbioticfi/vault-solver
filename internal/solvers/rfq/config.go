@@ -61,10 +61,9 @@ type Config struct {
 	// TokenPolicy scopes quoted input tokens and enforces single-route fills in permissioned mode.
 	TokenPolicy tokenpolicy.Policy
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
-	// scoped to, and the candidate universe used to rebuild a fill plan when the quote-time plan isn't
-	// cached (e.g. after a restart). Config carries only adapter addresses;
+	// scoped to, and the candidate universe used to build each fresh fill plan. Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
-	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables fill-plan recovery.
+	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables direct fill planning.
 	Adapters []recoveryVault
 	Strategy StrategyConfig
 }

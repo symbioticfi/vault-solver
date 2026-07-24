@@ -1,39 +1,67 @@
-package defaultstrategy
+package greedy
 
 import (
 	"math/big"
-	"sort"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
-type fillSolution struct {
-	allocations  []fillAllocation
+// FillTask contains the protocol-neutral facts needed to route an exact-input fill.
+type FillTask struct {
+	TokenIn  common.Address
+	TokenOut common.Address
+	AmountIn *big.Int
+
+	Quotes       []liquidlane.FillQuote
+	Reservations liquidlane.CapacityReservations
+	ValidAfter   time.Time
+
+	MaxRoutes           int
+	PriceBufferBps      int
+	InventoryReserveBps int
+	InputPolicy         UncoveredInputPolicy
+	GasPricing          *liquidstrategies.GasPricing
+}
+
+// FillSolution is a routed fill before protocol-specific output requirements are applied.
+type FillSolution struct {
+	routes       []fillAllocation
 	gasAmount    *big.Int
 	maxAmountOut *big.Int
 }
 
-func (solution *fillSolution) buildRoutes(requiredAmountOut *big.Int) []types.FillRoute {
-	if solution == nil || requiredAmountOut == nil || requiredAmountOut.Sign() <= 0 ||
-		requiredAmountOut.Cmp(solution.maxAmountOut) > 0 {
+// MaxAmountOut is the largest protocol output requirement this allocation can satisfy.
+func (a *FillSolution) MaxAmountOut() *big.Int {
+	if a == nil {
+		return new(big.Int)
+	}
+	return liquidlane.CloneBig(a.maxAmountOut)
+}
+
+// Finalize distributes the required protocol output and gas across the selected routes.
+func (a *FillSolution) Finalize(requiredAmountOut *big.Int) []liquidstrategies.FillRoute {
+	if a == nil || requiredAmountOut == nil || requiredAmountOut.Sign() <= 0 ||
+		requiredAmountOut.Cmp(a.maxAmountOut) > 0 {
 		return nil
 	}
-	minimumTotal := new(big.Int).Add(requiredAmountOut, solution.gasAmount)
-	targets := make([]*big.Int, len(solution.allocations))
-	for index := range solution.allocations {
-		targets[index] = solution.allocations[index].targetOutput
+	minimumTotal := new(big.Int).Add(requiredAmountOut, a.gasAmount)
+	targets := make([]*big.Int, len(a.routes))
+	for index := range a.routes {
+		targets[index] = a.routes[index].targetOutput
 	}
 	minimums := distributeMinimums(targets, minimumTotal)
 	if minimums == nil {
 		return nil
 	}
-	routes := make([]types.FillRoute, len(solution.allocations))
-	for index, leg := range solution.allocations {
-		routes[index] = types.FillRoute{
+	routes := make([]liquidstrategies.FillRoute, len(a.routes))
+	for index, leg := range a.routes {
+		routes[index] = liquidstrategies.FillRoute{
+			CandidateID:       leg.candidate.id(),
 			RouteID:           leg.candidate.quote.ID,
 			CapacityID:        liquidlane.RouteCapacityID(leg.candidate.quote.Route),
 			Adapter:           leg.candidate.quote.Adapter,
@@ -47,57 +75,64 @@ func (solution *fillSolution) buildRoutes(requiredAmountOut *big.Int) []types.Fi
 	return routes
 }
 
-func (s *Strategy) solveGreedyFill(
-	input types.FillInput,
-	validAfter time.Time,
-	maxRoutes int,
-) (*fillSolution, error) {
-	candidates, err := s.buildFillCandidates(input, validAfter)
+// SolveFill selects current LiquidLane quotes, enforces shared capacity, and optionally prices execution gas.
+func SolveFill(task FillTask) (*FillSolution, error) {
+	if task.AmountIn == nil || task.AmountIn.Sign() <= 0 {
+		return nil, errors.New("amountIn: must be positive")
+	}
+	if task.MaxRoutes <= 0 || len(task.Quotes) == 0 {
+		return nil, nil
+	}
+	if task.InputPolicy != RejectUncoveredInput && task.InputPolicy != AbsorbUncoveredInput {
+		return nil, errors.New("invalid uncovered input policy")
+	}
+	if task.PriceBufferBps < 0 || task.PriceBufferBps >= bpsDenominator {
+		return nil, errors.Errorf("priceBufferBps: must be in [0,%d)", bpsDenominator)
+	}
+	if task.InventoryReserveBps < 0 || task.InventoryReserveBps >= bpsDenominator {
+		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d)", bpsDenominator)
+	}
+	candidates, err := buildFillCandidates(task)
 	if err != nil || len(candidates) == 0 {
 		return nil, err
 	}
-	allocation := s.greedyFillAllocation(
+	allocation := greedyFillAllocation(
 		candidates,
-		input.AmountIn,
-		min(maxRoutes, len(candidates)),
+		task.AmountIn,
+		min(task.MaxRoutes, len(candidates)),
+		task.PriceBufferBps,
+		task.InputPolicy,
 	)
 	if len(allocation) == 0 {
 		return nil, nil
 	}
-	pricing, err := newGasPricing(
-		input.MaxFeePerGas,
-		input.TokenOut,
-		input.GasPrices,
-		input.GasSnapshot,
-		s.cfg.InventoryReserveBps,
-	)
-	if err != nil {
-		return nil, err
-	}
 	targetTotal := new(big.Int)
-	legs := make([]gasLeg, 0, len(allocation))
+	legs := make([]liquidstrategies.GasLeg, 0, len(allocation))
 	for index, leg := range allocation {
 		allocation[index].targetOutput = new(big.Int).Sub(
 			leg.executableOutput,
-			applyBpsUp(leg.executableOutput, s.cfg.PriceBufferBps),
+			applyBpsUp(leg.executableOutput, task.PriceBufferBps),
 		)
 		if allocation[index].targetOutput.Sign() <= 0 {
 			return nil, nil
 		}
 		targetTotal.Add(targetTotal, allocation[index].targetOutput)
-		legs = append(legs, gasLeg{
-			route:     leg.candidate.quote.Route,
-			amountOut: leg.executableOutput,
-			private:   leg.candidate.quote.DiscountID != nil,
+		legs = append(legs, liquidstrategies.GasLeg{
+			Route:     leg.candidate.quote.Route,
+			AmountOut: leg.executableOutput,
+			Private:   leg.candidate.quote.DiscountID != nil,
 		})
 	}
-	gasAmount := pricing.cost(legs)
+	gasAmount := new(big.Int)
+	if task.GasPricing != nil {
+		gasAmount = task.GasPricing.Cost(legs)
+	}
 	maxAmountOut := new(big.Int).Sub(targetTotal, gasAmount)
 	if maxAmountOut.Sign() <= 0 {
 		return nil, nil
 	}
-	return &fillSolution{
-		allocations: allocation, gasAmount: gasAmount, maxAmountOut: maxAmountOut,
+	return &FillSolution{
+		routes: allocation, gasAmount: gasAmount, maxAmountOut: maxAmountOut,
 	}, nil
 }
 
@@ -124,17 +159,17 @@ func (candidate fillCandidate) id() liquidlane.CandidateID {
 	return liquidlane.NewCandidateID(candidate.quote.Route, candidate.quote.DiscountID)
 }
 
-func (s *Strategy) buildFillCandidates(input types.FillInput, validAfter time.Time) ([]fillCandidate, error) {
-	seen := make(map[liquidlane.CandidateID]bool, len(input.Quotes))
-	candidates := make([]fillCandidate, 0, len(input.Quotes))
-	for _, quote := range input.Quotes {
-		if quote.TokenIn != input.TokenIn || quote.TokenOut != input.TokenOut {
+func buildFillCandidates(task FillTask) ([]fillCandidate, error) {
+	seen := make(map[liquidlane.CandidateID]bool, len(task.Quotes))
+	candidates := make([]fillCandidate, 0, len(task.Quotes))
+	for _, quote := range task.Quotes {
+		if quote.TokenIn != task.TokenIn || quote.TokenOut != task.TokenOut {
 			continue
 		}
-		if !quote.ValidUntil.IsZero() && !quote.ValidUntil.After(validAfter) {
+		if !quote.ValidUntil.IsZero() && !quote.ValidUntil.After(task.ValidAfter) {
 			continue
 		}
-		if quote.AmountIn == nil || quote.AmountIn.Cmp(input.AmountIn) != 0 {
+		if quote.AmountIn == nil || quote.AmountIn.Cmp(task.AmountIn) != 0 {
 			return nil, errors.Errorf("fill quote %s amountIn does not match order", quote.ID)
 		}
 		if quote.MaxAssets == nil || quote.MaxAssets.Sign() <= 0 ||
@@ -142,16 +177,16 @@ func (s *Strategy) buildFillCandidates(input types.FillInput, validAfter time.Ti
 			continue
 		}
 		capacityID := liquidlane.RouteCapacityID(quote.Route)
-		capacity := s.availableCapacity(quote.MaxAssets)
-		if reserved := input.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
+		capacity := AvailableCapacity(quote.MaxAssets, task.InventoryReserveBps)
+		if reserved := task.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
 			capacity.Sub(capacity, reserved)
 		}
 		if capacity.Sign() <= 0 {
 			continue
 		}
 		candidate := fillCandidate{quote: quote, capacity: capacity}
-		candidate.maxInput = s.maxInputWithinCapacity(
-			candidate, input.AmountIn, capacity,
+		candidate.maxInput = maxInputWithinCapacity(
+			candidate, task.AmountIn, capacity, task.PriceBufferBps,
 		)
 		candidateID := candidate.id()
 		if candidate.maxInput.Sign() <= 0 || seen[candidateID] {
@@ -163,10 +198,12 @@ func (s *Strategy) buildFillCandidates(input types.FillInput, validAfter time.Ti
 	return candidates, nil
 }
 
-func (s *Strategy) greedyFillAllocation(
+func greedyFillAllocation(
 	candidates []fillCandidate,
 	amountIn *big.Int,
 	maxRoutes int,
+	priceBufferBps int,
+	inputPolicy UncoveredInputPolicy,
 ) []fillAllocation {
 	routes := buildFillRoutes(candidates)
 	capacityLimits := fillCapacityLimits(candidates)
@@ -177,13 +214,13 @@ func (s *Strategy) greedyFillAllocation(
 
 	for remaining.Sign() > 0 && len(allocation) < maxRoutes {
 		var best *fillAllocation
-		lastRoute := len(allocation) == maxRoutes-1
+		lastRoute := inputPolicy == RejectUncoveredInput && len(allocation) == maxRoutes-1
 		for _, route := range routes {
 			if usedRoutes[route.id] {
 				continue
 			}
-			choice := s.fillRouteChoice(
-				route, remaining, capacityLimits, capacityUsed,
+			choice := fillRouteChoice(
+				route, remaining, capacityLimits, capacityUsed, priceBufferBps,
 			)
 			if choice != nil && lastRoute && choice.amountIn.Cmp(remaining) < 0 {
 				continue
@@ -205,7 +242,10 @@ func (s *Strategy) greedyFillAllocation(
 		remaining.Sub(remaining, best.amountIn)
 	}
 	if remaining.Sign() > 0 {
-		return nil
+		if inputPolicy == RejectUncoveredInput || len(allocation) == 0 {
+			return nil
+		}
+		allocation[len(allocation)-1].amountIn.Add(allocation[len(allocation)-1].amountIn, remaining)
 	}
 	return allocation
 }
@@ -217,32 +257,9 @@ func buildFillRoutes(candidates []fillCandidate) []fillRoute {
 	}
 	routes := make([]fillRoute, 0, len(byRoute))
 	for routeID, alternatives := range byRoute {
-		routes = append(routes, fillRoute{id: routeID, alternatives: bestFillAlternatives(alternatives)})
+		routes = append(routes, fillRoute{id: routeID, alternatives: alternatives})
 	}
-	sort.Slice(routes, func(i, j int) bool { return routes[i].id < routes[j].id })
 	return routes
-}
-
-func bestFillAlternatives(candidates []fillCandidate) []fillCandidate {
-	var direct, private fillCandidate
-	var hasDirect, hasPrivate bool
-	for _, candidate := range candidates {
-		if candidate.quote.DiscountID == nil {
-			if !hasDirect || fillCandidateBetter(candidate, direct) {
-				direct, hasDirect = candidate, true
-			}
-		} else if !hasPrivate || fillCandidateBetter(candidate, private) {
-			private, hasPrivate = candidate, true
-		}
-	}
-	alternatives := make([]fillCandidate, 0, 2)
-	if hasDirect {
-		alternatives = append(alternatives, direct)
-	}
-	if hasPrivate {
-		alternatives = append(alternatives, private)
-	}
-	return alternatives
 }
 
 func fillCandidateBetter(left, right fillCandidate) bool {
@@ -292,11 +309,12 @@ func fillCapacityLimits(candidates []fillCandidate) map[liquidlane.CapacityID]*b
 	return limits
 }
 
-func (s *Strategy) fillRouteChoice(
+func fillRouteChoice(
 	route fillRoute,
 	remaining *big.Int,
 	capacityLimits map[liquidlane.CapacityID]*big.Int,
 	capacityUsed map[liquidlane.CapacityID]*big.Int,
+	priceBufferBps int,
 ) *fillAllocation {
 	capacityID := liquidlane.RouteCapacityID(route.alternatives[0].quote.Route)
 	capacityLeft := liquidlane.CloneBig(capacityLimits[capacityID])
@@ -311,7 +329,7 @@ func (s *Strategy) fillRouteChoice(
 	legAmount := new(big.Int)
 	for index, candidate := range route.alternatives {
 		candidateCapacity := minBig(capacityLeft, candidate.capacity)
-		amount := s.maxInputWithinCapacity(candidate, remaining, candidateCapacity)
+		amount := maxInputWithinCapacity(candidate, remaining, candidateCapacity, priceBufferBps)
 		if amount.Cmp(candidate.maxInput) > 0 {
 			amount.Set(candidate.maxInput)
 		}
@@ -341,14 +359,15 @@ func (s *Strategy) fillRouteChoice(
 		candidate:        *best,
 		amountIn:         legAmount,
 		executableOutput: scaledFillOutput(best.quote, legAmount),
-		reservedOutput:   s.reservedCapacityOutput(*best, legAmount),
+		reservedOutput:   reservedCapacityOutput(*best, legAmount, priceBufferBps),
 	}
 }
 
-func (s *Strategy) maxInputWithinCapacity(
+func maxInputWithinCapacity(
 	candidate fillCandidate,
 	inputLimit *big.Int,
 	capacity *big.Int,
+	priceBufferBps int,
 ) *big.Int {
 	quote := candidate.quote
 	if inputLimit == nil || inputLimit.Sign() <= 0 || capacity == nil || capacity.Sign() <= 0 ||
@@ -357,13 +376,12 @@ func (s *Strategy) maxInputWithinCapacity(
 		return new(big.Int)
 	}
 	precision := big.NewInt(bpsDenominator)
-	buffer := big.NewInt(int64(s.cfg.PriceBufferBps))
+	buffer := big.NewInt(int64(priceBufferBps))
 	maxOutput := new(big.Int)
 	if quote.DiscountID != nil {
 		maxOutput.Mul(capacity, precision)
 		maxOutput.Div(maxOutput, new(big.Int).Add(precision, buffer))
 	} else {
-		// reserved = floor(output * (1 - buffer)); invert the floor exactly.
 		maxOutput.Add(capacity, big.NewInt(1))
 		maxOutput.Mul(maxOutput, precision)
 		maxOutput.Sub(maxOutput, big.NewInt(1))
@@ -379,9 +397,13 @@ func (s *Strategy) maxInputWithinCapacity(
 	return maxInput
 }
 
-func (s *Strategy) reservedCapacityOutput(candidate fillCandidate, amountIn *big.Int) *big.Int {
+func reservedCapacityOutput(
+	candidate fillCandidate,
+	amountIn *big.Int,
+	priceBufferBps int,
+) *big.Int {
 	amountOut := scaledFillOutput(candidate.quote, amountIn)
-	buffer := applyBpsUp(amountOut, s.cfg.PriceBufferBps)
+	buffer := applyBpsUp(amountOut, priceBufferBps)
 	if candidate.quote.DiscountID != nil {
 		return amountOut.Add(amountOut, buffer)
 	}

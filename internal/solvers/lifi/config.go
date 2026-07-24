@@ -15,32 +15,20 @@ import (
 )
 
 type rawConfig struct {
-	OrderServer        rawOrderServerConfig `yaml:"orderServer"`
-	InputSettler       string               `yaml:"inputSettler"`
-	OutputSettler      string               `yaml:"outputSettler"`
-	Executor           string               `yaml:"executor"`
-	Adapters           []string             `yaml:"adapters"`
-	TokensToQuote      string               `yaml:"tokensToQuote"`
-	PermissionedTokens []string             `yaml:"permissionedTokens"`
-	QuoteIntervalMs    int                  `yaml:"quoteIntervalMs"`
-	QuoteTTL           string               `yaml:"quoteTtl"`
-	QuoteRefreshMode   string               `yaml:"quoteRefreshMode"`
-	SolverMode         string               `yaml:"solverMode"`
-	DiscountsURL       string               `yaml:"privateDiscountsUrl"`
-	Gas                rawGasConfig         `yaml:"gas"`
-	Strategy           rawStrategyConfig    `yaml:"strategy"`
-}
-
-type rawGasConfig struct {
-	NativeUSDFeed string            `yaml:"nativeUsdFeed"`
-	NativeMaxAge  string            `yaml:"nativeMaxAge"`
-	TokenUSDFeeds []rawTokenUSDFeed `yaml:"tokenUsdFeeds"`
-}
-
-type rawTokenUSDFeed struct {
-	Token  string `yaml:"token"`
-	Feed   string `yaml:"feed"`
-	MaxAge string `yaml:"maxAge"`
+	OrderServer        rawOrderServerConfig    `yaml:"orderServer"`
+	InputSettler       string                  `yaml:"inputSettler"`
+	OutputSettler      string                  `yaml:"outputSettler"`
+	Executor           string                  `yaml:"executor"`
+	Adapters           []string                `yaml:"adapters"`
+	TokensToQuote      string                  `yaml:"tokensToQuote"`
+	PermissionedTokens []string                `yaml:"permissionedTokens"`
+	QuoteIntervalMs    int                     `yaml:"quoteIntervalMs"`
+	QuoteTTL           string                  `yaml:"quoteTtl"`
+	QuoteRefreshMode   string                  `yaml:"quoteRefreshMode"`
+	SolverMode         string                  `yaml:"solverMode"`
+	DiscountsURL       string                  `yaml:"privateDiscountsUrl"`
+	Gas                liquidlanegas.RawConfig `yaml:"gas"`
+	Strategy           rawStrategyConfig       `yaml:"strategy"`
 }
 
 type rawOrderServerConfig struct {
@@ -166,7 +154,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if solverMode == solverModeExternal && raw.DiscountsURL != "" {
 		return nil, errors.New("privateDiscountsUrl requires internal solverMode")
 	}
-	gas, err := parseGasConfig(raw.Gas)
+	gas, err := liquidlanegas.ParseConfig(raw.Gas)
 	if err != nil {
 		return nil, err
 	}
@@ -192,50 +180,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
 		},
-	}, nil
-}
-
-func parseGasConfig(raw rawGasConfig) (liquidlanegas.OracleConfig, error) {
-	nativeFeed, err := parse.NonZeroAddress(raw.NativeUSDFeed, "gas.nativeUsdFeed")
-	if err != nil {
-		return liquidlanegas.OracleConfig{}, err
-	}
-	nativeMaxAge, err := parse.Duration(raw.NativeMaxAge, 0, "gas.nativeMaxAge")
-	if err != nil {
-		return liquidlanegas.OracleConfig{}, err
-	}
-	if nativeMaxAge <= 0 {
-		return liquidlanegas.OracleConfig{}, errors.New("gas.nativeMaxAge is required")
-	}
-	feeds := make(map[common.Address]liquidlanegas.USDFeed, len(raw.TokenUSDFeeds))
-	for i, item := range raw.TokenUSDFeeds {
-		field := "gas.tokenUsdFeeds[" + strconv.Itoa(i) + "]"
-		token, tokenErr := parse.NonZeroAddress(item.Token, field+".token")
-		if tokenErr != nil {
-			return liquidlanegas.OracleConfig{}, tokenErr
-		}
-		feed, feedErr := parse.NonZeroAddress(item.Feed, field+".feed")
-		if feedErr != nil {
-			return liquidlanegas.OracleConfig{}, feedErr
-		}
-		maxAge, ageErr := parse.Duration(item.MaxAge, 0, field+".maxAge")
-		if ageErr != nil {
-			return liquidlanegas.OracleConfig{}, ageErr
-		}
-		if maxAge <= 0 {
-			return liquidlanegas.OracleConfig{}, errors.Errorf("%s.maxAge is required", field)
-		}
-		if _, duplicate := feeds[token]; duplicate {
-			return liquidlanegas.OracleConfig{}, errors.Errorf("%s.token: duplicate token %s", field, token.Hex())
-		}
-		feeds[token] = liquidlanegas.USDFeed{Address: feed, MaxAge: maxAge}
-	}
-	if len(feeds) == 0 {
-		return liquidlanegas.OracleConfig{}, errors.New("gas.tokenUsdFeeds must contain at least one token feed")
-	}
-	return liquidlanegas.OracleConfig{
-		NativeUSDFeed: liquidlanegas.USDFeed{Address: nativeFeed, MaxAge: nativeMaxAge},
-		TokenUSDFeeds: feeds,
 	}, nil
 }
 

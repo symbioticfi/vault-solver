@@ -23,7 +23,8 @@ func testServer() *server {
 	q := &quoteService{
 		chainID:  1,
 		executor: execAddr,
-		strategy: newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}),
+		reader:   &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
+		strategy: newDefaultTestStrategy(),
 		log:      logr.Discard(),
 		now:      clk,
 	}

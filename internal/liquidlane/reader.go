@@ -17,7 +17,7 @@ import (
 
 const (
 	DefaultMaxTokensPerAdapter = 64
-	inventoryReadsPerRoute     = 3
+	inventoryReadsPerRoute     = 4
 	fillReadsPerRoute          = 4
 )
 
@@ -59,6 +59,12 @@ func NewReader(c *chain.Client, log logr.Logger) *Reader {
 		chainID:             c.ChainID().Int64(),
 		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
+}
+
+// TokenDecimals returns the cached ERC-20 decimals used to build typed routes
+// when an upstream protocol omits input-token metadata.
+func (r *Reader) TokenDecimals(ctx context.Context, token common.Address) (int, error) {
+	return r.dec.Get(ctx, token)
 }
 
 func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
@@ -285,6 +291,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxAssets(route.TokenIn)},
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxRate(route.TokenIn)},
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -297,22 +304,26 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 	out := make([]Inventory, 0, len(routes))
 	for i, route := range routes {
 		base := i * inventoryReadsPerRoute
-		paused, maxAssetsRes, maxRateRes := res[base], res[base+1], res[base+2]
+		paused, maxAssetsRes, maxRateRes, minDiscountRes := res[base], res[base+1], res[base+2], res[base+3]
 		if !unpaused(paused) {
 			continue
 		}
-		if !maxAssetsRes.Success || !maxRateRes.Success {
+		if !maxAssetsRes.Success || !maxRateRes.Success || !minDiscountRes.Success {
 			continue
 		}
 		maxAssets, aerr := llAdapter.UnpackGetMaxAssets(maxAssetsRes.ReturnData)
 		maxRate, rerr := llAdapter.UnpackGetMaxRate(maxRateRes.ReturnData)
-		if aerr != nil || rerr != nil || maxAssets == nil || maxRate == nil {
+		minDiscount, derr := llAdapter.UnpackMinDiscount(minDiscountRes.ReturnData)
+		if aerr != nil || rerr != nil || derr != nil || maxAssets == nil || maxRate == nil || minDiscount == nil ||
+			minDiscount.Sign() < 0 || minDiscount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
 			continue
 		}
 		if !keepZero && (maxAssets.Sign() <= 0 || maxRate.Sign() <= 0) {
 			continue
 		}
-		out = append(out, DirectInventory(route, maxAssets, maxRate))
+		inventory := DirectInventory(route, maxAssets, maxRate)
+		inventory.AdapterMinDiscount = CloneBig(minDiscount)
+		out = append(out, inventory)
 	}
 	return out, nil
 }
@@ -613,8 +624,10 @@ func (r *Reader) ReadFillQuotes(
 			continue
 		}
 		maxRate := RateForAmountOut(maxAmountOut, amountIn, route.TokenInDecimals, route.TokenOutDecimals)
+		inventory := DirectInventory(route, maxAssets, maxRate)
+		inventory.AdapterMinDiscount = CloneBig(discount)
 		out = append(out, FillQuote{
-			Inventory:      DirectInventory(route, maxAssets, maxRate),
+			Inventory:      inventory,
 			AmountIn:       CloneBig(amountIn),
 			GrossAmountOut: CloneBig(grossAmountOut),
 			MaxAmountOut:   maxAmountOut,

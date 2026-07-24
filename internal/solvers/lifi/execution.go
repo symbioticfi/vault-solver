@@ -2,24 +2,27 @@ package lifi
 
 import (
 	"context"
-	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/go-errors/errors"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-const fillCompletionCapacity = 128
+const (
+	fillCompletionCapacity = 128
+	orderInboxCapacity     = 1_024
+)
+
+var errOrderInboxFull = errors.New("order inbox is full")
 
 type pendingFill struct {
 	order          *submittedOrder
 	orderID        common.Hash
 	reservationKey string
-	reservations   []quoteReservation
 	result         <-chan txmanager.Result
 }
 
@@ -35,26 +38,46 @@ type pendingFillState struct {
 // orderInbox keeps the WebSocket reader independent from slower on-chain planning.
 // The feed is the only producer and run is the only consumer.
 type orderInbox struct {
-	mu     sync.Mutex
-	orders []*submittedOrder
-	ready  chan struct{}
+	mu       sync.Mutex
+	orders   []*submittedOrder
+	queued   map[string]bool
+	capacity int
+	ready    chan struct{}
 }
 
-func newOrderInbox() *orderInbox {
-	return &orderInbox{ready: make(chan struct{}, 1)}
-}
-
-func (q *orderInbox) enqueue(order *submittedOrder) {
-	if order == nil {
-		return
+func newOrderInbox(capacity int) *orderInbox {
+	if capacity <= 0 {
+		panic("lifi: order inbox capacity must be positive")
 	}
+	return &orderInbox{
+		queued: make(map[string]bool), capacity: capacity, ready: make(chan struct{}, 1),
+	}
+}
+
+func (q *orderInbox) enqueue(order *submittedOrder) error {
+	if order == nil {
+		return nil
+	}
+	key := orderInboxKey(order)
 	q.mu.Lock()
+	if key != "" && q.queued[key] {
+		q.mu.Unlock()
+		return nil
+	}
+	if len(q.orders) >= q.capacity {
+		q.mu.Unlock()
+		return errOrderInboxFull
+	}
 	q.orders = append(q.orders, order)
+	if key != "" {
+		q.queued[key] = true
+	}
 	q.mu.Unlock()
 	select {
 	case q.ready <- struct{}{}:
 	default:
 	}
+	return nil
 }
 
 func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error {
@@ -82,17 +105,31 @@ func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error 
 			return ctx.Err()
 		case out <- order:
 		}
+		if key := orderInboxKey(order); key != "" {
+			q.mu.Lock()
+			delete(q.queued, key)
+			q.mu.Unlock()
+		}
 	}
 }
 
+func orderInboxKey(order *submittedOrder) string {
+	if order.OnChainOrderID != "" {
+		return order.OnChainOrderID
+	}
+	return order.OrderID
+}
+
 func (s *Solver) runOrderFeed(ctx context.Context, routes []route) error {
-	inbox := newOrderInbox()
+	inbox := newOrderInbox(orderInboxCapacity)
 	orders := make(chan *submittedOrder)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return s.feed.run(gctx, func(_ context.Context, msg orderMessage) {
 			order := s.parseOrderMessage(msg)
-			inbox.enqueue(order)
+			if err := inbox.enqueue(order); err != nil {
+				s.log.Error(err, "order feed: dropped order", "event", msg.Event)
+			}
 		})
 	})
 	g.Go(func() error { return inbox.run(gctx, orders) })
@@ -139,7 +176,7 @@ func (s *Solver) runOrderWorker(
 		case <-ctx.Done():
 			return ctx.Err()
 		case completion := <-completions:
-			s.completeFill(ctx, &pending, completion)
+			s.completeFill(&pending, completion)
 		case order, ok := <-orders:
 			if !ok {
 				orders = nil
@@ -150,7 +187,6 @@ func (s *Solver) runOrderWorker(
 				continue
 			}
 			pending.add(fill)
-			s.reserve(ctx, fill.reservationKey, fill.reservations)
 			go awaitFill(ctx, fill, completions)
 		}
 	}
@@ -159,7 +195,10 @@ func (s *Solver) runOrderWorker(
 
 func awaitFill(ctx context.Context, fill *pendingFill, completions chan<- fillCompletion) {
 	select {
-	case result := <-fill.result:
+	case result, ok := <-fill.result:
+		if !ok {
+			result.Err = errors.New("transaction result channel closed without a result")
+		}
 		select {
 		case completions <- fillCompletion{fill: fill, result: result}:
 		case <-ctx.Done():
@@ -181,17 +220,6 @@ func (s *pendingFillState) contains(key string) bool {
 	}
 	_, ok := s.byOrder[key]
 	return ok
-}
-
-func (s *pendingFillState) reservedCapacity() map[liquidlane.CapacityID]*big.Int {
-	reserved := make(map[liquidlane.CapacityID]*big.Int)
-	if s == nil {
-		return reserved
-	}
-	for _, fill := range s.byOrder {
-		addReservations(reserved, fill.reservations)
-	}
-	return reserved
 }
 
 func (s *pendingFillState) add(fill *pendingFill) {

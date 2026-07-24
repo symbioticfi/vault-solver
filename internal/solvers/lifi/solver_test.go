@@ -45,6 +45,7 @@ func TestRunLogsExternalAdapterAuthorizationFailure(t *testing.T) {
 	}
 	logged := strings.Join(logs, "\n")
 	if !strings.Contains(logged, "external adapter authorization failed") ||
+		!strings.Contains(logged, "executor is not an authorized filler") ||
 		!strings.Contains(logged, executor.Hex()) ||
 		!strings.Contains(logged, `"error"`) {
 		t.Fatalf("authorization failure was not logged as an error: %s", logged)
@@ -66,6 +67,39 @@ func TestRunRejectsNonZeroGovernanceFee(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "validate governance fee") {
 		t.Fatalf("Run() error = %v", err)
 	}
+}
+
+func TestRunLogsExecutorValidationFailure(t *testing.T) {
+	adapter := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	caller := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	var logs []string
+	s := &Solver{
+		cfg:    &Config{Adapters: []common.Address{adapter}, Executor: executor},
+		caller: caller,
+		reader: fakeLifiReader{
+			routes:      []route{{Adapter: adapter}},
+			executorErr: errors.New("caller is not authorized"),
+		},
+		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+
+	err := s.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "lifi: validate executor: caller is not authorized") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	logged := strings.Join(logs, "\n")
+	if !strings.Contains(logged, "executor validation failed") ||
+		!strings.Contains(logged, "caller is not authorized") ||
+		!strings.Contains(logged, executor.Hex()) ||
+		!strings.Contains(logged, caller.Hex()) ||
+		!strings.Contains(logged, `"error"`) {
+		t.Fatalf("executor failure was not logged with its reason: %s", logged)
+	}
+}
+
+func (s *Solver) processOrder(ctx context.Context, routes []route, order *submittedOrder) {
+	s.processOrderWithPending(ctx, routes, order, nil)
 }
 
 type fakeLifiTxSender struct {
@@ -225,9 +259,14 @@ func TestProcessOrderFillsThroughPrivateDiscountWithoutDirectAuthorization(t *te
 		t.Fatalf("New strategy: %v", err)
 	}
 	routeItem := testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter)[0]
+	baseInventory := liquidlane.DirectInventory(
+		routeItem,
+		big.NewInt(2_000_000),
+		big.NewInt(1_000_000_000_000_000_000),
+	)
+	baseInventory.AdapterMinDiscount = big.NewInt(100_000)
 	base := liquidlane.FillQuote{
-		Inventory: liquidlane.DirectInventory(routeItem, big.NewInt(2_000_000), big.NewInt(1_000_000_000_000_000_000)),
-		AmountIn:  big.NewInt(1_000_000), GrossAmountOut: big.NewInt(1_100_100),
+		Inventory: baseInventory, AmountIn: big.NewInt(1_000_000), GrossAmountOut: big.NewInt(1_100_100),
 		MaxAmountOut: big.NewInt(990_090), MinDiscount: big.NewInt(100_000),
 	}
 	discounts := &fakeDiscountClient{
@@ -248,7 +287,7 @@ func TestProcessOrderFillsThroughPrivateDiscountWithoutDirectAuthorization(t *te
 		status:  lifiOrderStatusDeposited,
 		fillSetFn: func() fillSnapshotSet {
 			fillReads++
-			return fillSnapshotSet{DiscountBases: []liquidlane.FillQuote{base}}
+			return fillSnapshotSet{Physical: []liquidlane.FillQuote{base}}
 		},
 	}
 	s.now = func(context.Context) (time.Time, error) { return now, nil }
@@ -508,7 +547,7 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 		Adapter:           fixture.adapter,
 		AmountIn:          big.NewInt(1_000_000),
 		ExpectedAmountOut: big.NewInt(1_000_000),
-		MinAmountOut:      big.NewInt(990_000),
+		MinAmountOut:      big.NewInt(990_001),
 		ReservedAmountOut: big.NewInt(1_000_000),
 	}}}
 	txm := &fakeLifiTxSender{hold: true}
@@ -637,7 +676,9 @@ func newProcessTestSolver(
 func profitableFillSnapshots(tokenIn, tokenOut, adapter common.Address, amountOut int64) []liquidlane.FillQuote {
 	return []liquidlane.FillQuote{{
 		Inventory: liquidlane.Inventory{
-			Route:     liquidlane.Route{ID: "route-1", Adapter: adapter, TokenIn: tokenIn, TokenOut: tokenOut},
+			Route: liquidlane.Route{
+				ID: "route-1", CapacityID: "capacity-1", Adapter: adapter, TokenIn: tokenIn, TokenOut: tokenOut,
+			},
 			MaxAssets: big.NewInt(2_000_000),
 		},
 		AmountIn:     big.NewInt(1_000_000),

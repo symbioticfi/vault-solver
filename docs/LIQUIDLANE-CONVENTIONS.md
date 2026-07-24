@@ -7,13 +7,18 @@ RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAd
 
 | Package | Owns |
 |---|---|
-| `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, and rate math |
-| `internal/liquidlane/gas` | neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault facts |
-| `internal/liquidlane/discounts` | signed-discount HTTP client, wire parsing, and validation |
+| `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
+| `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and gas snapshot composition |
+| `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
+| `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
+| `internal/liquidlane/gas` | shared YAML parsing and neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault facts |
+| `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
 
-The generic framework must not know about LiquidLane. Execution is never shared: RFQ, LI.FI, OEV, and
-UniswapX use different contracts, signatures, status models, and callbacks.
+The generic framework must not know about LiquidLane. Protocol execution is never shared: RFQ, LI.FI,
+OEV, and UniswapX use different contracts, signatures, status models, and callbacks. LI.FI and UniswapX
+do share the identical LiquidLane route-planning calculation before their local protocol adapters build
+those different executions.
 
 ## Canonical model
 
@@ -107,12 +112,26 @@ numbers. The restriction is specifically against historical state calls and exac
 
 ## Strategy boundary
 
-The solver normally reads LiquidLane and passes immutable `Inventory` or `FillQuote` facts into the
-strategy. The solver owns refresh cadence, cache replacement, reservations, and transaction submission.
+The solver normally reads LiquidLane through shared snapshot composition and passes immutable `Inventory` or `FillQuote` facts into the
+strategy. The solver owns refresh cadence, cache replacement, transaction submission, and one zero-value-ready
+`CapacityLedger` for accepted fills. Strategies receive only its aggregate reservation snapshot; they do not
+maintain a second per-order ledger.
 Runtime values such as current block time, the txmanager fee cap, and `gas.Snapshot` are also facts. The
-shared predictor owns only adapter swap route units. Conversion into token-denominated gas cost,
-solver-specific settlement/private-payload units, margin, buffers, ranges, and route selection belong to
-the strategy. A transaction-level strategy calculation charges settlement gas once, consumes acquire
+shared predictor owns adapter swap route units. Amount-specific RFQ-like protocols normalize inventory
+against current per-physical-route `FillQuote`s through `NormalizeOracleInventory`; they never group
+oracle prices by output token because the oracle, discount floor, and executable output belong to the
+adapter route. Protocol adapters then map those facts into
+`QuoteTask` or `FillTask`; the shared engine returns `QuoteSolution` or `FillSolution`. It ranks
+already-priced candidates, enforces one alternative per physical route, solves exact input/output,
+splits across route caps, allocates shared `CapacityID` budgets, applies explicit uncovered-input policy,
+and, when an optional gas pricing model is supplied, converts a complete LiquidLane settlement gas
+estimate into `tokenOut`. RFQ and UniswapX use the same quote engine. RFQ, LI.FI, and UniswapX use the
+same fill engine; each then maps the solution into its
+own wire response or executor plan. RFQ omits gas pricing, so its configuration and strategy payloads do
+not gain gas fields; LI.FI and UniswapX supply gas pricing from their existing runtime facts. Candidate
+discovery, protocol output resolution,
+webhook DTOs, lifecycle, and calldata remain solver-local. A transaction-level calculation charges
+settlement gas once, consumes acquire
 balances per adapter, and consumes free/withdrawable liquidity once per shared vault. A strategy may reduce
 all three budgets by its existing inventory reserve before route classification so a near-boundary plan is
 priced as the next more expensive route. It must not add a standalone full-tx gas estimate for every route.
@@ -121,13 +140,20 @@ If the set of reads is itself strategy-dependent, inject a narrow read-only capa
 or `LiquidLaneState`. Do not inject a signer, tx manager, or unrestricted chain client into the strategy.
 The capability must accept `context.Context`, batch calls, return typed facts, and be replaceable by a fake.
 
+Every fill plan crosses the same solver-owned execution boundary, whether it came from the built-in or
+webhook strategy. The shared validator resolves every route reference back to a supplied candidate,
+canonicalizes adapter/capacity/discount identity, checks amount totals, current output, gas floor, and
+pending `CapacityID` reservations, then returns a cloned plan. Protocol deadlines, the executor's fixed
+gas envelope, and wire semantics remain solver-local.
+
 Webhook strategies should receive the same facts in their request. A remote strategy may own its own RPC
 only when that deployment deliberately accepts different freshness and availability from the local path.
 
 ## Discounts and capacity
 
 Direct and signed-discount inventory for the same route are alternative ways to use the same capacity.
-Never sum them. Pick one candidate per route, then reserve against the shared `CapacityID`.
+Never sum them. `internal/liquidlane/strategies/greedy` encodes the one-candidate-per-route rule for quote and fill
+tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `CapacityID`.
 
 For signed discounts:
 
@@ -139,16 +165,20 @@ For signed discounts:
    cannot be reduced to a requested amount.
 6. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
 
-Discount discovery is shared; discount-to-route matching and execution calldata remain solver-local.
+Discount discovery, parsing, physical-route matching, cap/rate clipping, advertised fill-quote
+construction, and fresh signed-term binding/deadline/output validation are shared. Solvers still own when
+resolution happens: LI.FI pre-resolves a bounded candidate set and refreshes adapter state before deciding;
+UniswapX resolves only the selected route; RFQ receives backend candidates and resolves selected legs.
+Generated executor calldata and protocol lifecycle remain solver-local.
 
 ## Solver profiles
 
 | Solver | LiquidLane usage | Solver-local responsibility |
 |---|---|---|
-| RFQ | amount-specific pricing and recovery inventory; narrow pricing capability may read during strategy evaluation | quote cache, RFQ order lifecycle, Reactor/Executor calldata |
-| LI.FI | latest inventory on tick/block refresh; fresh `FillQuote` for each received order | range curves, gas/margin policy, OIF contexts, exclusivity, executor finalise, immediate fill |
+| RFQ | amount-specific quote and fresh fill inventory; narrow pricing capability may read during strategy evaluation | RFQ order lifecycle and Reactor/Executor calldata |
+| LI.FI | latest inventory on tick/block refresh; fresh `FillQuote` for each received order | range curves, OIF contexts, exclusivity, `AllowOpen`, and immediate-fill lifecycle |
 | OEV | background latest inventory stored by Morpho market id | Morpho discovery, auction pricing, safety haircut, liquidation sizing, bundle/gas/deposit accounting |
-| UniswapX | latest inventory either on request or from a short-lived background cache | Reactor orders, Permit2/cosigner rules, auction curve, order status and fill calldata |
+| UniswapX | latest inventory either on request or from a short-lived background cache | quote request policy, Reactor orders, Permit2/cosigner rules, auction curve, order status, and fill calldata |
 
 3F does not use LiquidLane and should not be forced through these types. Shared code is justified by the
 protocol dependency, not by making every solver look identical.

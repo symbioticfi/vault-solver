@@ -39,7 +39,7 @@ solvers:
           priceBufferBps: 20         # one rate-move buffer, also reserves upward private-discount output movement
           inventoryReserveBps: 500   # never advertise the final 5% of getMaxAssets
           minAmount: "1000000"       # tokenIn floor; choose it high enough to cover gas and rounding
-          rangeCount: 8              # target number of exact-input ranges across available capacity
+          rangeCount: 8              # geometric ranges per pair (default 8, max 16)
           executionDeadlineBuffer: 12s # one Ethereum block left for order and private signatures
 
       # Gas conversion is a solver fact shared by every strategy. Configure one Chainlink USD feed for

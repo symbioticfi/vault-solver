@@ -36,10 +36,6 @@ func RouteUnits(routes []Route) uint64 {
 	return total
 }
 
-func UnitsForRoute(route Route) uint64 {
-	return UnitsForRouteAt(route, false)
-}
-
 func UnitsForRouteAt(route Route, first bool) uint64 {
 	switch route {
 	case RouteAcquire:

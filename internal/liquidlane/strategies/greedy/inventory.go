@@ -1,26 +1,33 @@
-package defaultstrategy
+package greedy
 
 import (
 	"math/big"
 	"slices"
+	"time"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
-func (s *Strategy) availableCapacity(maxAssets *big.Int) *big.Int {
-	return applyBpsDown(maxAssets, bpsDenominator-s.cfg.InventoryReserveBps)
-}
-
-func (s *Strategy) quoteCapacity(route liquidlane.Inventory) *big.Int {
-	if route.DiscountID == nil {
-		return liquidlane.CloneBig(route.MaxAssets)
+// FilterLiveInventory removes expired and duplicate route alternatives.
+func FilterLiveInventory(inventory []liquidlane.Inventory, validAfter time.Time) []liquidlane.Inventory {
+	seen := make(map[liquidlane.CandidateID]bool, len(inventory))
+	out := make([]liquidlane.Inventory, 0, len(inventory))
+	for _, candidate := range inventory {
+		id := liquidlane.NewCandidateID(candidate.Route, candidate.DiscountID)
+		if (!candidate.ValidUntil.IsZero() && !candidate.ValidUntil.After(validAfter)) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, candidate)
 	}
-	return applyBpsDown(route.MaxAssets, bpsDenominator-s.cfg.PriceBufferBps)
+	return out
 }
 
-func (s *Strategy) allocateQuoteCapacity(
+// AllocateInventoryCapacity divides shared vault capacity between physical routes.
+func AllocateInventoryCapacity(
 	inventory []liquidlane.Inventory,
-	reservations map[liquidlane.CapacityID]*big.Int,
+	reservations liquidlane.CapacityReservations,
+	reserveBps int,
 ) []liquidlane.Inventory {
 	groups := make(map[liquidlane.CapacityID]map[liquidlane.RouteID][]liquidlane.Inventory)
 	for _, item := range inventory {
@@ -56,7 +63,7 @@ func (s *Strategy) allocateQuoteCapacity(
 				}
 			}
 		}
-		remaining := s.availableCapacity(domainMax)
+		remaining := AvailableCapacity(domainMax, reserveBps)
 		if reserved := reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
 			remaining.Sub(remaining, reserved)
 		}
@@ -64,13 +71,12 @@ func (s *Strategy) allocateQuoteCapacity(
 			continue
 		}
 
-		for i, routeID := range routeIDs {
+		for index, routeID := range routeIDs {
 			items := routes[routeID]
-			count := int64(len(routeIDs) - i)
-			share := mulDivUp(remaining, big.NewInt(1), big.NewInt(count))
+			share := liquidlane.MulDivUp(remaining, big.NewInt(1), big.NewInt(int64(len(routeIDs)-index)))
 			routeCap := new(big.Int)
 			for _, item := range items {
-				itemCap := s.availableCapacity(item.MaxAssets)
+				itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
 				if itemCap.Cmp(routeCap) > 0 {
 					routeCap.Set(itemCap)
 				}
@@ -82,7 +88,7 @@ func (s *Strategy) allocateQuoteCapacity(
 				continue
 			}
 			for _, item := range items {
-				itemCap := s.availableCapacity(item.MaxAssets)
+				itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
 				if itemCap.Cmp(share) > 0 {
 					itemCap.Set(share)
 				}
@@ -101,4 +107,15 @@ func (s *Strategy) allocateQuoteCapacity(
 		}
 	}
 	return out
+}
+
+func AvailableCapacity(maxAssets *big.Int, reserveBps int) *big.Int {
+	return applyBpsDown(maxAssets, bpsDenominator-reserveBps)
+}
+
+func QuoteCapacity(route liquidlane.Inventory, priceBufferBps int) *big.Int {
+	if route.DiscountID == nil {
+		return liquidlane.CloneBig(route.MaxAssets)
+	}
+	return applyBpsDown(route.MaxAssets, bpsDenominator-priceBufferBps)
 }

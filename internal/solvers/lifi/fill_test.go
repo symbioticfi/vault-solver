@@ -32,6 +32,7 @@ type fakeLifiReader struct {
 	fillSetFn        func() fillSnapshotSet
 	fillSnapshotsFn  func() []liquidlane.FillQuote
 	routes           []route
+	executorErr      error
 	directAuthErr    error
 	governanceFeeErr error
 }
@@ -43,7 +44,7 @@ func (f fakeLifiReader) resolveRoutes(context.Context, []common.Address) ([]rout
 func (f fakeLifiReader) validateExecutor(
 	context.Context, common.Address, common.Address, common.Address, common.Address,
 ) error {
-	return nil
+	return f.executorErr
 }
 
 func (f fakeLifiReader) validateZeroGovernanceFee(context.Context, common.Address) error {
@@ -71,14 +72,14 @@ func (f fakeLifiReader) fillSnapshots(
 	}
 	if f.fillSnapshotsFn != nil {
 		fill := f.fillSnapshotsFn()
-		return withFakeGasPrices(fillSnapshotSet{Direct: fill, DiscountBases: fill}), nil
+		return withFakeGasPrices(fillSnapshotSet{Direct: fill, Physical: fill}), nil
 	}
-	return withFakeGasPrices(fillSnapshotSet{Direct: f.fill, DiscountBases: f.fill}), nil
+	return withFakeGasPrices(fillSnapshotSet{Direct: f.fill, Physical: f.fill}), nil
 }
 
 func withFakeGasPrices(set fillSnapshotSet) fillSnapshotSet {
 	rates := make(map[common.Address]*big.Int)
-	for _, quote := range append(append([]liquidlane.FillQuote(nil), set.Direct...), set.DiscountBases...) {
+	for _, quote := range append(append([]liquidlane.FillQuote(nil), set.Direct...), set.Physical...) {
 		rates[quote.TokenOut] = big.NewInt(1)
 	}
 	set.GasPrices = liquidlanegas.NewPriceSnapshot(rates)

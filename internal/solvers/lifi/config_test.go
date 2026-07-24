@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
 )
@@ -71,7 +71,7 @@ quoteRefreshMode: block
 	if !cfg.TokenPolicy.RequiresSingleRoute(permissioned) {
 		t.Fatalf("token scope = %q", cfg.TokenPolicy.Scope())
 	}
-	if _, err := newStrategy(cfg.Strategy, nil, logr.Discard()); err != nil {
+	if _, err := newStrategy(cfg.Strategy); err != nil {
 		t.Fatalf("newStrategy: %v", err)
 	}
 }
@@ -215,29 +215,29 @@ func TestParseGasConfigRequiresPerFeedMaxAge(t *testing.T) {
 	const address = "0x7777777777777777777777777777777777777777"
 	for _, tc := range []struct {
 		name string
-		raw  rawGasConfig
+		raw  liquidlanegas.RawConfig
 		want string
 	}{
 		{
 			name: "native",
-			raw: rawGasConfig{
+			raw: liquidlanegas.RawConfig{
 				NativeUSDFeed: address,
-				TokenUSDFeeds: []rawTokenUSDFeed{{Token: address, Feed: address, MaxAge: "1h"}},
+				TokenUSDFeeds: []liquidlanegas.RawTokenFeed{{Token: address, Feed: address, MaxAge: "1h"}},
 			},
 			want: "gas.nativeMaxAge is required",
 		},
 		{
 			name: "token",
-			raw: rawGasConfig{
+			raw: liquidlanegas.RawConfig{
 				NativeUSDFeed: address,
 				NativeMaxAge:  "1h",
-				TokenUSDFeeds: []rawTokenUSDFeed{{Token: address, Feed: address}},
+				TokenUSDFeeds: []liquidlanegas.RawTokenFeed{{Token: address, Feed: address}},
 			},
 			want: "gas.tokenUsdFeeds[0].maxAge is required",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseGasConfig(tc.raw)
+			_, err := liquidlanegas.ParseConfig(tc.raw)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v", err)
 			}

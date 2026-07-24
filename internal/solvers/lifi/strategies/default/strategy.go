@@ -45,7 +45,7 @@ func init() {
 	strategies.Register(Name, NewFromConfig)
 }
 
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
+func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	var cfg Config
 	if err := decodeConfig(raw, &cfg); err != nil {
 		return nil, err

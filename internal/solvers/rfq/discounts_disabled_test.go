@@ -13,8 +13,8 @@ import (
 // External-solver path (discountsEnabled false, the default): the solver never touches the discounts API.
 // The internal path is covered by the TestExecution_Discount* tests via newExec.
 
-// External recovery never calls GET /discounts; with no vaults + discounts off there's no inventory to
-// rebuild from, so the order fails.
+// External fill planning never calls GET /discounts; with no vaults + discounts off there's no inventory,
+// so the order fails.
 func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store → forces recovery
@@ -44,7 +44,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	}
 }
 
-// A cached discount leg with discounts off fails closed (terminal, no tx) and never calls POST /discounts.
+// A discount leg with discounts off fails closed (terminal, no tx) and never calls POST /discounts.
 func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
