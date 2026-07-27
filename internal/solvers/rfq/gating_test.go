@@ -128,10 +128,13 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))
 	}
 	candidate := strategy.quoteInput.Candidates[0]
+	// The advertised 1:1 rate is normalized against the on-chain tokenIn decimals (18, not the
+	// backend's 0) and then shaved by one output unit — 1e12 rate units at 18→6 — so the candidate can
+	// never price above what the adapter pays for the same amountIn.
 	if candidate.Route.TokenInDecimals != 18 ||
-		candidate.Rate.Cmp(big.NewInt(1_000_000_000_000_000_000)) != 0 ||
-		candidate.MaxAmountIn.Cmp(mustBig(t, "10000000000000000000")) != 0 {
-		t.Fatalf("candidate = %+v, want 1:1 rate and 10-token capacity", candidate)
+		candidate.Rate.Cmp(mustBig(t, "999999000000000000")) != 0 ||
+		candidate.MaxAmountIn.Cmp(mustBig(t, "10000010000010000010")) != 0 {
+		t.Fatalf("candidate = %+v, want the conservative 18-decimal discount rate", candidate)
 	}
 }
 
