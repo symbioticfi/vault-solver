@@ -32,7 +32,7 @@ type quoteSnapshotSet = liquidsnapshot.Quote
 type fillSnapshotSet = liquidsnapshot.Fill
 
 func newReader(c *chain.Client, log logr.Logger, gasCfg liquidlanegas.OracleConfig) (*reader, error) {
-	snapshots, err := liquidsnapshot.New(c, log, gasCfg)
+	snapshots, err := liquidsnapshot.New(c, log, &gasCfg)
 	if err != nil {
 		return nil, err
 	}

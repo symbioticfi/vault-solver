@@ -61,8 +61,9 @@ solvers:
       #   httpTimeout: 2s             # timeout for discount list and resolve requests
       #   minimumValidity: 15s        # required remaining signature lifetime at resolution
 
-      # Chainlink USD feeds used to convert predicted gas cost into tokenOut. Dynamic internal
-      # discount routes without a configured feed for their collateral are skipped.
+      # Optional. Omit this entire block to exclude fill gas from quote/fill economics and skip
+      # gas-state and Chainlink reads. The tx manager still prices and pays actual transaction gas.
+      # When enabled, dynamic internal discount routes without a configured token feed are skipped.
       gas:
         nativeUsdFeed: ${ETH_USD_FEED} # native gas token / USD feed
         nativeMaxAge: 1h               # maximum accepted native feed staleness

@@ -65,9 +65,12 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 			current.Direct = append(current.Direct, s.discountInventories(listed, current.Physical, now)...)
 		}
 	}
-	maxFee, err := s.txm.MaxFeePerGas(ctx)
-	if err != nil {
-		return err
+	maxFee := new(big.Int)
+	if s.cfg.Gas != nil {
+		maxFee, err = s.txm.MaxFeePerGas(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	serverNow := time.Now()
 	if s.publishQuoteState(epoch, &quoteState{
@@ -85,6 +88,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 			"routes", len(decisionRoutes),
 			"inventory", len(current.Direct),
 			"physicalInventory", len(current.Physical),
+			"gasAccounting", s.cfg.Gas != nil,
 			"maxFeePerGas", maxFee.String(),
 			"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		)

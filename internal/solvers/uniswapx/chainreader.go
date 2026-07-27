@@ -29,7 +29,7 @@ type reader struct {
 type snapshot = liquidsnapshot.Quote
 type fillSnapshot = liquidsnapshot.Fill
 
-func newReader(c *chain.Client, log logr.Logger, cfg liquidlanegas.OracleConfig) (*reader, error) {
+func newReader(c *chain.Client, log logr.Logger, cfg *liquidlanegas.OracleConfig) (*reader, error) {
 	snapshots, err := liquidsnapshot.New(c, log, cfg)
 	if err != nil {
 		return nil, err
