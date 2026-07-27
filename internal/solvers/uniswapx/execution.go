@@ -156,13 +156,17 @@ func (s *Solver) startFill(
 	if err != nil {
 		return nil, err
 	}
+	pricingMaxFee := maxFee
+	if s.cfg.Gas == nil {
+		pricingMaxFee = new(big.Int)
+	}
 	fillInput := strategytypes.FillInput{
 		OrderID: order.Hash.Hex(), QuoteID: order.QuoteID,
 		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
 		Deadline:           order.Deadline,
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
-		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: maxFee, ChainTime: now,
+		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
 		Trace: s.decisionTrace(
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),

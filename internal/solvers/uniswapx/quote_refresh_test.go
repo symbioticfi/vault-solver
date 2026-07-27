@@ -101,6 +101,9 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			len(reader.snapshotRoutes) != 1 {
 			t.Fatalf("dynamic quote routes: adapters=%+v routes=%+v", reader.adapters, reader.snapshotRoutes)
 		}
+		if reads := solver.txm.(*executionTestTxManager).maxFeeReads; reads != 0 {
+			t.Fatalf("max fee reads = %d, want 0 with gas accounting disabled", reads)
+		}
 	})
 
 	t.Run("configured adapters scope quotes", func(t *testing.T) {

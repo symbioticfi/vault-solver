@@ -168,10 +168,13 @@ mode `adapters` is optional: a non-empty list scopes quotes and direct fills, wh
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
 discount-only. Every fill is simulated again immediately before submission.
 
-The quote path is stateless and uses a refreshed on-chain inventory and gas snapshot so it stays within
-Uniswap's response deadline. Each request is priced once for its concrete amount: the strategy returns one
-`amountIn`/`amountOut` pair after price buffer and estimated fill gas, with no precomputed ladders, amount
-ranges, or quote-time route reservation. Uniswap deliberately makes indicative and hard RFQ requests
+The quote path is stateless and uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
+response deadline. Each request is priced once for its concrete amount: the strategy returns one
+`amountIn`/`amountOut` pair after price buffer and, when configured, estimated fill gas, with no precomputed
+ladders, amount ranges, or quote-time route reservation. Omitting the entire `gas:` block disables gas
+accounting in both quote and fill decisions and skips gas-state and Chainlink reads. The tx manager still
+prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
+makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Capacity is reserved only
 after a fill transaction is accepted for submission; every posted order gets a fresh route plan from the
 current chain state and is simulated before sending. The reservation remains effective while txmanager waits

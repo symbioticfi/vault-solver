@@ -238,7 +238,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	s.log.Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),
-		"routes", len(routes), "listen", s.cfg.QuoteServer.ListenAddress, "orderApi", s.cfg.OrderServer.BaseURL)
+		"routes", len(routes), "gasAccounting", s.cfg.Gas != nil,
+		"listen", s.cfg.QuoteServer.ListenAddress, "orderApi", s.cfg.OrderServer.BaseURL)
 
 	server := s.newQuoteHTTPServer()
 	g, groupCtx := errgroup.WithContext(ctx)
