@@ -23,10 +23,13 @@ type quoteService struct {
 	executor    common.Address
 	whitelist   adapterWhitelist // nil disables adapter filtering
 	tokenPolicy tokenpolicy.Policy
-	reader      quoteCandidateReader
-	strategy    types.Strategy
-	log         logr.Logger
-	now         func() time.Time
+	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
+	// map (or a nil map) has no minimum.
+	minAmountsIn map[common.Address]*big.Int
+	reader       quoteCandidateReader
+	strategy     types.Strategy
+	log          logr.Logger
+	now          func() time.Time
 }
 
 type quoteCandidateReader interface {
@@ -40,8 +43,9 @@ type quoteCandidateReader interface {
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
-// can't quote it (wrong type/chain, no whitelisted adapter, no matching asset, or no viable
-// strategy). An error is returned only for malformed input or a failed chain read.
+// can't quote it (wrong type/chain, input token out of scope or below its configured minimum, no
+// whitelisted adapter, no matching asset, or no viable strategy). An error is returned only for
+// malformed input or a failed chain read.
 func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteResponse, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
@@ -54,6 +58,12 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
 		qs.log.V(1).Info("declining quote: input token out of scope",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
+		return nil, nil
+	}
+	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
+		qs.log.V(1).Info("declining quote: input amount below configured minimum",
+			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
+			"amount", parsed.req.Amount.String(), "min", minIn.String())
 		return nil, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
