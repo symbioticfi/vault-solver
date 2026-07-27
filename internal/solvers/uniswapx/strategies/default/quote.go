@@ -27,8 +27,11 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	}
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
+	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter)
 	inventory := liquidgreedy.AllocateInventoryCapacity(
-		liquidgreedy.FilterLiveInventory(input.Inventory, validAfter), input.Reservations, s.cfg.InventoryReserveBps,
+		liveInventory,
+		input.Reservations,
+		s.cfg.InventoryReserveBps,
 	)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 	for _, item := range inventory {
@@ -44,6 +47,15 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 		}
 	}
 	if len(candidates) == 0 {
+		input.Trace.Decline(
+			"quote", "no-matching-routes",
+			"tokenIn", input.TokenIn.Hex(),
+			"tokenOut", input.TokenOut.Hex(),
+			"inventory", len(input.Inventory),
+			"liveInventory", len(liveInventory),
+			"allocatedInventory", len(inventory),
+			"reservations", len(input.Reservations),
+		)
 		return nil, nil
 	}
 
@@ -67,6 +79,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 		Candidates: candidates, MaxRoutes: maxRoutes, MinInput: s.minAmount,
 		OutputBufferBps: 2 * s.cfg.PriceBufferBps,
 		GasPricing:      &pricing,
+		Trace:           input.Trace,
 	})
 	if err != nil || solution == nil {
 		return nil, err

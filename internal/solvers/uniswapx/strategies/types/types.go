@@ -49,6 +49,7 @@ type QuoteInput struct {
 	MaxFeePerGas   *big.Int                        `json:"maxFeePerGas"`
 	ChainTime      time.Time                       `json:"chainTime"`
 	QuoteExpiresAt time.Time                       `json:"quoteExpiresAt"`
+	Trace          liquidstrategies.DecisionTrace  `json:"-"`
 }
 
 type Quote struct {
@@ -73,6 +74,7 @@ type FillInput struct {
 	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
 	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
 	ChainTime    time.Time                       `json:"chainTime"`
+	Trace        liquidstrategies.DecisionTrace  `json:"-"`
 }
 
 type FillPlan struct {

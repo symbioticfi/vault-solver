@@ -26,6 +26,7 @@ type FillTask struct {
 	InventoryReserveBps int
 	InputPolicy         UncoveredInputPolicy
 	GasPricing          *liquidstrategies.GasPricing
+	Trace               liquidstrategies.DecisionTrace
 }
 
 // FillSolution is a routed fill before protocol-specific output requirements are applied.
@@ -81,6 +82,11 @@ func SolveFill(task FillTask) (*FillSolution, error) {
 		return nil, errors.New("amountIn: must be positive")
 	}
 	if task.MaxRoutes <= 0 || len(task.Quotes) == 0 {
+		task.Trace.Decline(
+			"fill", "no-quotes",
+			"quotes", len(task.Quotes),
+			"maxRoutes", task.MaxRoutes,
+		)
 		return nil, nil
 	}
 	if task.InputPolicy != RejectUncoveredInput && task.InputPolicy != AbsorbUncoveredInput {
@@ -94,6 +100,14 @@ func SolveFill(task FillTask) (*FillSolution, error) {
 	}
 	candidates, err := buildFillCandidates(task)
 	if err != nil || len(candidates) == 0 {
+		if err == nil {
+			task.Trace.Decline(
+				"fill", "no-candidates",
+				"quotes", len(task.Quotes),
+				"reservations", len(task.Reservations),
+				"validAfter", task.ValidAfter,
+			)
+		}
 		return nil, err
 	}
 	allocation := greedyFillAllocation(
@@ -104,6 +118,12 @@ func SolveFill(task FillTask) (*FillSolution, error) {
 		task.InputPolicy,
 	)
 	if len(allocation) == 0 {
+		task.Trace.Decline(
+			"fill", insufficientCapacityReason,
+			"amountIn", task.AmountIn.String(),
+			"candidates", len(candidates),
+			"maxRoutes", task.MaxRoutes,
+		)
 		return nil, nil
 	}
 	targetTotal := new(big.Int)
@@ -114,6 +134,13 @@ func SolveFill(task FillTask) (*FillSolution, error) {
 			applyBpsUp(leg.executableOutput, task.PriceBufferBps),
 		)
 		if allocation[index].targetOutput.Sign() <= 0 {
+			task.Trace.Decline(
+				"fill", "buffer-exceeds-output",
+				"leg", index,
+				"routeId", leg.candidate.quote.ID,
+				"executableAmountOut", leg.executableOutput.String(),
+				"targetAmountOut", allocation[index].targetOutput.String(),
+			)
 			return nil, nil
 		}
 		targetTotal.Add(targetTotal, allocation[index].targetOutput)
@@ -129,8 +156,22 @@ func SolveFill(task FillTask) (*FillSolution, error) {
 	}
 	maxAmountOut := new(big.Int).Sub(targetTotal, gasAmount)
 	if maxAmountOut.Sign() <= 0 {
+		task.Trace.Decline(
+			"fill", "gas-exceeds-output",
+			"targetAmountOut", targetTotal.String(),
+			"gasCost", gasAmount.String(),
+			"maxAmountOut", maxAmountOut.String(),
+		)
 		return nil, nil
 	}
+	task.Trace.Log(
+		"liquidlane fill selected",
+		"amountIn", task.AmountIn.String(),
+		"targetAmountOut", targetTotal.String(),
+		"gasCost", gasAmount.String(),
+		"maxAmountOut", maxAmountOut.String(),
+		"routes", len(allocation),
+	)
 	return &FillSolution{
 		routes: allocation, gasAmount: gasAmount, maxAmountOut: maxAmountOut,
 	}, nil
