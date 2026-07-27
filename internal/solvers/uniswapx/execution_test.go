@@ -347,12 +347,18 @@ func (s *executionTestStrategy) DecideFill(
 }
 
 type executionTestTxManager struct {
-	result chan txmanager.Result
-	sent   int
-	reqs   []txmanager.Request
+	result      chan txmanager.Result
+	maxFee      *big.Int
+	maxFeeReads int
+	sent        int
+	reqs        []txmanager.Request
 }
 
 func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error) {
+	m.maxFeeReads++
+	if m.maxFee != nil {
+		return new(big.Int).Set(m.maxFee), nil
+	}
 	return new(big.Int), nil
 }
 
@@ -390,7 +396,7 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 		AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100), MinAmountOut: big.NewInt(90),
 		ReservedAmountOut: big.NewInt(100),
 	}}}}
-	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1)}
+	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1), maxFee: big.NewInt(123)}
 	var packed uxexecutor.ILiquidLaneUniswapXExecutorFillCall
 	solver := &Solver{
 		cfg:           &Config{Executor: executor, OrderServer: OrderServerConfig{PollInterval: time.Second}},
@@ -429,6 +435,12 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	}
 	if pending == nil || txm.sent != 1 {
 		t.Fatalf("pending/sent = %v/%d", pending, txm.sent)
+	}
+	if strategy.input.MaxFeePerGas.Sign() != 0 {
+		t.Fatalf("strategy max fee = %v, want zero with gas accounting disabled", strategy.input.MaxFeePerGas)
+	}
+	if txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(123)) != 0 {
+		t.Fatalf("transaction max fee = %s, want 123", txm.reqs[0].MaxFeePerGas)
 	}
 	if txm.reqs[0].Confirmations != nil {
 		t.Fatalf("fill confirmations override = %d, want global txmanager configuration", *txm.reqs[0].Confirmations)

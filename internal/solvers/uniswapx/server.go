@@ -182,6 +182,11 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
+		Trace: s.decisionTrace(
+			"requestId", request.RequestID,
+			"quoteId", request.QuoteID,
+			"quoteType", request.Type,
+		),
 	}
 	if request.Type == quoteTypeExactInput {
 		input.AmountIn = requestAmount

@@ -31,19 +31,19 @@ const (
 )
 
 type rawConfig struct {
-	Reactor       string                  `yaml:"reactor"`
-	Executor      string                  `yaml:"executor"`
-	LiquidityLens string                  `yaml:"liquidityLens"`
-	Adapters      []string                `yaml:"adapters"`
-	SolverMode    string                  `yaml:"solverMode"`
-	TokensToQuote string                  `yaml:"tokensToQuote"`
-	Permissioned  []string                `yaml:"permissionedTokens"`
-	QuoteServer   rawQuoteServerConfig    `yaml:"quoteServer"`
-	OrderServer   rawOrderServerConfig    `yaml:"orderServer"`
-	Discounts     *rawDiscountConfig      `yaml:"discounts"`
-	Gas           liquidlanegas.RawConfig `yaml:"gas"`
-	Breaker       rawBreakerConfig        `yaml:"breaker"`
-	Strategy      rawStrategyConfig       `yaml:"strategy"`
+	Reactor       string                   `yaml:"reactor"`
+	Executor      string                   `yaml:"executor"`
+	LiquidityLens string                   `yaml:"liquidityLens"`
+	Adapters      []string                 `yaml:"adapters"`
+	SolverMode    string                   `yaml:"solverMode"`
+	TokensToQuote string                   `yaml:"tokensToQuote"`
+	Permissioned  []string                 `yaml:"permissionedTokens"`
+	QuoteServer   rawQuoteServerConfig     `yaml:"quoteServer"`
+	OrderServer   rawOrderServerConfig     `yaml:"orderServer"`
+	Discounts     *rawDiscountConfig       `yaml:"discounts"`
+	Gas           *liquidlanegas.RawConfig `yaml:"gas"`
+	Breaker       rawBreakerConfig         `yaml:"breaker"`
+	Strategy      rawStrategyConfig        `yaml:"strategy"`
 }
 
 type rawDiscountConfig struct {
@@ -96,7 +96,7 @@ type Config struct {
 	QuoteServer   QuoteServerConfig
 	OrderServer   OrderServerConfig
 	Discounts     *DiscountConfig
-	Gas           liquidlanegas.OracleConfig
+	Gas           *liquidlanegas.OracleConfig
 	Breaker       BreakerConfig
 	Strategy      StrategyConfig
 }
@@ -238,9 +238,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	gas, err := liquidlanegas.ParseConfig(raw.Gas)
-	if err != nil {
-		return nil, err
+	var gas *liquidlanegas.OracleConfig
+	if raw.Gas != nil {
+		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
+		if gasErr != nil {
+			return nil, gasErr
+		}
+		gas = &parsed
 	}
 	breaker, err := parseBreakerConfig(raw.Breaker)
 	if err != nil {

@@ -453,7 +453,7 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 				Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackAcquireBalance(route.TokenIn, state.owner),
 			})
 			reads = append(reads, acquireRead{adapter: entry.adapter, token: route.TokenIn, holder: state.owner})
-			if state.marketMaker != (common.Address{}) && state.marketMaker != state.owner {
+			if state.marketMaker != state.owner {
 				acquireCalls = append(acquireCalls, chain.Call{
 					Target: entry.adapter, AllowFailure: true,
 					Data: llAdapter.PackAcquireBalance(route.TokenIn, state.marketMaker),
@@ -737,7 +737,7 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 
 	auths := make([]Auth, len(adapters))
 	resolved := make([]bool, len(adapters))
-	var fillerChecks []int
+	var delegatedChecks []int
 	for i := range adapters {
 		mm, ow := res[i*2], res[i*2+1]
 		if !mm.Success || !ow.Success {
@@ -750,28 +750,35 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 		}
 		auths[i] = Auth{Adapter: adapters[i], MarketMaker: marketMaker, Owner: owner}
 		resolved[i] = true
-		if marketMaker == filler || owner == filler {
-			auths[i].Authorized = true
-		} else if marketMaker != (common.Address{}) {
-			fillerChecks = append(fillerChecks, i)
+		auths[i].Authorized = marketMaker == filler || owner == filler
+		if !auths[i].Authorized {
+			delegatedChecks = append(delegatedChecks, i)
 		}
 	}
 
-	if len(fillerChecks) > 0 {
-		fcalls := make([]chain.Call, len(fillerChecks))
-		for j, i := range fillerChecks {
-			fcalls[j] = chain.Call{Target: adapters[i], AllowFailure: true, Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler)}
+	if len(delegatedChecks) > 0 {
+		delegationCalls := make([]chain.Call, len(delegatedChecks))
+		for j, i := range delegatedChecks {
+			// Delegation is keyed by the adapter's exact current marketMaker value; zero is valid.
+			delegationCalls[j] = chain.Call{
+				Target: adapters[i], AllowFailure: true,
+				Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler),
+			}
 		}
-		fres, ferr := r.chain.Multicall(ctx, fcalls)
-		if ferr != nil {
-			return nil, ferr
+		delegationResults, err := r.chain.Multicall(ctx, delegationCalls)
+		if err != nil {
+			return nil, err
 		}
-		if len(fres) != len(fcalls) {
-			return nil, errors.Errorf("liquidlane: filler authorization multicall: got %d results, want %d", len(fres), len(fcalls))
+		if len(delegationResults) != len(delegationCalls) {
+			return nil, errors.Errorf(
+				"liquidlane: filler authorization multicall: got %d results, want %d",
+				len(delegationResults),
+				len(delegationCalls),
+			)
 		}
-		for j, i := range fillerChecks {
-			if fres[j].Success {
-				if ok, derr := llAdapter.UnpackIsFiller(fres[j].ReturnData); derr == nil {
+		for j, i := range delegatedChecks {
+			if delegationResults[j].Success {
+				if ok, derr := llAdapter.UnpackIsFiller(delegationResults[j].ReturnData); derr == nil {
 					auths[i].IsFiller = ok
 					auths[i].Authorized = ok
 				}

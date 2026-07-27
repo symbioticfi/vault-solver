@@ -15,7 +15,7 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
-// Quote contains the direct and physical inventory plus the gas state read at the same decision boundary.
+// Quote contains direct and physical inventory plus optional gas state from the same decision boundary.
 type Quote struct {
 	Direct      []liquidlane.Inventory
 	Physical    []liquidlane.Inventory
@@ -23,7 +23,7 @@ type Quote struct {
 	GasPrices   *liquidlanegas.PriceSnapshot
 }
 
-// Fill contains amount-specific direct and physical quotes plus the current gas state.
+// Fill contains amount-specific direct and physical quotes plus optional current gas state.
 type Fill struct {
 	Direct      []liquidlane.FillQuote
 	Physical    []liquidlane.FillQuote
@@ -65,11 +65,15 @@ type Reader struct {
 }
 
 func New(
-	c *chain.Client, log logr.Logger, gasCfg liquidlanegas.OracleConfig, liquidityLens common.Address,
+	c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig, liquidityLens common.Address,
 ) (*Reader, error) {
-	gas, err := liquidlanegas.NewOracleReader(c, gasCfg)
-	if err != nil {
-		return nil, err
+	var gas gasReader
+	if gasCfg != nil {
+		reader, err := liquidlanegas.NewOracleReader(c, *gasCfg)
+		if err != nil {
+			return nil, err
+		}
+		gas = reader
 	}
 	return newReader(liquidlane.NewReader(c, log, liquidityLens), gas), nil
 }
@@ -83,6 +87,9 @@ func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) (
 }
 
 func (r *Reader) ValidateGasTokens(routes []liquidlane.Route) error {
+	if r.gas == nil {
+		return nil
+	}
 	return r.gas.ValidateTokens(routeTokens(routes))
 }
 
@@ -118,11 +125,7 @@ func (r *Reader) Quote(
 	if err != nil {
 		return Quote{}, err
 	}
-	gasSnapshot, err := r.liquid.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return Quote{}, err
-	}
-	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
+	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
 	if err != nil {
 		return Quote{}, err
 	}
@@ -154,15 +157,30 @@ func (r *Reader) Fill(
 			direct = append(direct, quote)
 		}
 	}
-	gasSnapshot, err := r.liquid.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return Fill{}, err
-	}
-	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
+	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
 	if err != nil {
 		return Fill{}, err
 	}
 	return Fill{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices}, nil
+}
+
+func (r *Reader) readGas(
+	ctx context.Context,
+	routes []liquidlane.Route,
+	now time.Time,
+) (*liquidlanegas.Snapshot, *liquidlanegas.PriceSnapshot, error) {
+	if r.gas == nil {
+		return nil, nil, nil
+	}
+	snapshot, err := r.liquid.ReadGasSnapshot(ctx, routes)
+	if err != nil {
+		return nil, nil, err
+	}
+	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return snapshot, prices, nil
 }
 
 func routeTokens(routes []liquidlane.Route) []liquidlanegas.Token {

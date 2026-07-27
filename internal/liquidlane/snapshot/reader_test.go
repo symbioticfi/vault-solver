@@ -18,6 +18,7 @@ type fakeLiquidReader struct {
 	quotes     []liquidlane.FillQuote
 	authorized []liquidlane.Route
 	gas        *liquidlanegas.Snapshot
+	gasReads   int
 }
 
 func (f *fakeLiquidReader) ResolveRoutes(context.Context, []common.Address) ([]liquidlane.Route, error) {
@@ -64,6 +65,7 @@ func (f *fakeLiquidReader) FilterAuthorizedRoutes(
 }
 
 func (f *fakeLiquidReader) ReadGasSnapshot(context.Context, []liquidlane.Route) (*liquidlanegas.Snapshot, error) {
+	f.gasReads++
 	return f.gas, nil
 }
 
@@ -120,5 +122,31 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	}
 	if len(gas.tokens) != 2 || gas.tokens[0].Address != routeA.TokenOut || gas.tokens[1].Decimals != 18 {
 		t.Fatalf("gas tokens = %#v", gas.tokens)
+	}
+
+	withoutGas := newReader(liquid, nil)
+	if err := withoutGas.ValidateGasTokens(liquid.routes); err != nil {
+		t.Fatalf("validate gas tokens: %v", err)
+	}
+	quote, err = withoutGas.Quote(t.Context(), liquid.routes, common.Address{}, time.Now())
+	if err != nil {
+		t.Fatalf("quote without gas: %v", err)
+	}
+	fill, err = withoutGas.Fill(
+		t.Context(),
+		liquid.routes,
+		common.Address{},
+		common.Address{},
+		big.NewInt(1),
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("fill without gas: %v", err)
+	}
+	if quote.GasSnapshot != nil || quote.GasPrices != nil || fill.GasSnapshot != nil || fill.GasPrices != nil {
+		t.Fatalf("gas data populated while disabled: quote=%#v fill=%#v", quote, fill)
+	}
+	if liquid.gasReads != 2 {
+		t.Fatalf("gas reads = %d, want 2 from enabled reader only", liquid.gasReads)
 	}
 }

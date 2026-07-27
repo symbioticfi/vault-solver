@@ -85,15 +85,22 @@ func TestSolveFillDoesNotOverbookSharedCapacity(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	high := testFillQuote("high", "shared", tokenIn, tokenOut, 75, 150, 100, nil)
 	wide := testFillQuote("wide", "shared", tokenIn, tokenOut, 75, 75, 60, nil)
+	var declineReason string
 	allocation, err := SolveFill(FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(75),
 		Quotes: []liquidlane.FillQuote{high, wide}, MaxRoutes: 2,
+		Trace: func(_ string, fields ...any) {
+			declineReason, _ = fields[1].(string)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if allocation != nil {
 		t.Fatalf("allocation = %+v, want shared-capacity rejection", allocation)
+	}
+	if declineReason != insufficientCapacityReason {
+		t.Fatalf("decline reason = %q", declineReason)
 	}
 }
 

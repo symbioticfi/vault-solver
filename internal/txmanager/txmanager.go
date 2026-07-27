@@ -259,6 +259,18 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	if value == nil {
 		value = new(big.Int)
 	}
+	m.log.V(1).Info(
+		"transaction prepared",
+		"label", req.Label,
+		"to", req.To.Hex(),
+		"value", value.String(),
+		"calldataBytes", len(req.Data),
+		"gasLimit", gas,
+		"baseFeePerGas", fees.baseFee.String(),
+		"maxPriorityFeePerGas", fees.tip.String(),
+		"maxFeePerGas", fees.maxFee.String(),
+		"requestMaxFeePerGas", optionalBigString(req.MaxFeePerGas),
+	)
 
 	var lastErr error
 	for attempt := 0; attempt <= maxNonceResyncs; attempt++ {
@@ -386,6 +398,16 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 				),
 			}, true
 		}
+		m.log.V(1).Info(
+			"transaction confirmed",
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+			"blockNumber", optionalBigString(receipt.BlockNumber),
+			"gasUsed", receipt.GasUsed,
+			"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice),
+			"confirmations", m.confirmations(pending.req),
+		)
 		return Result{Hash: attempt.hash, Receipt: receipt}, true
 	}
 	return Result{}, false
@@ -572,6 +594,13 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 	}
 	// 20% headroom over the estimate.
 	return gas + gas/5, nil
+}
+
+func optionalBigString(value *big.Int) string {
+	if value == nil {
+		return "0"
+	}
+	return value.String()
 }
 
 func (m *Manager) signAndSend(

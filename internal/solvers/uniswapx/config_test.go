@@ -9,6 +9,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const validUniswapXGasConfig = `gas:
+  nativeUsdFeed: "0x5555555555555555555555555555555555555555"
+  nativeMaxAge: 1h
+  tokenUsdFeeds:
+    - token: "0x6666666666666666666666666666666666666666"
+      feed: "0x7777777777777777777777777777777777777777"
+      maxAge: 2h
+`
+
 const validUniswapXConfig = `
 reactor: "0x1111111111111111111111111111111111111111"
 executor: "0x2222222222222222222222222222222222222222"
@@ -22,14 +31,7 @@ orderServer:
   sources:
     exclusiveV2: true
     publicV2: true
-gas:
-  nativeUsdFeed: "0x5555555555555555555555555555555555555555"
-  nativeMaxAge: 1h
-  tokenUsdFeeds:
-    - token: "0x6666666666666666666666666666666666666666"
-      feed: "0x7777777777777777777777777777777777777777"
-      maxAge: 2h
-strategy: {}
+` + validUniswapXGasConfig + `strategy: {}
 `
 
 func TestParseConfigDefaultsAndSources(t *testing.T) {
@@ -50,9 +52,23 @@ func TestParseConfigDefaultsAndSources(t *testing.T) {
 	if !cfg.OrderServer.Sources.ExclusiveV2 || !cfg.OrderServer.Sources.PublicV2 {
 		t.Fatalf("sources = %+v", cfg.OrderServer.Sources)
 	}
+	if cfg.Gas == nil {
+		t.Fatal("gas config = nil")
+	}
 	feed := cfg.Gas.TokenUSDFeeds[common.HexToAddress("0x6666666666666666666666666666666666666666")]
 	if feed.MaxAge != 2*time.Hour {
 		t.Fatalf("token feed max age = %s, want 2h", feed.MaxAge)
+	}
+}
+
+func TestParseConfigAllowsMissingGas(t *testing.T) {
+	raw := strings.Replace(validUniswapXConfig, validUniswapXGasConfig, "", 1)
+	cfg, err := parseConfig(uniswapXConfigNode(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Gas != nil {
+		t.Fatalf("gas config = %#v, want nil", cfg.Gas)
 	}
 }
 

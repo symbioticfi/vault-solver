@@ -156,13 +156,22 @@ func (s *Solver) startFill(
 	if err != nil {
 		return nil, err
 	}
+	pricingMaxFee := maxFee
+	if s.cfg.Gas == nil {
+		pricingMaxFee = new(big.Int)
+	}
 	fillInput := strategytypes.FillInput{
 		OrderID: order.Hash.Hex(), QuoteID: order.QuoteID,
 		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
 		Deadline:           order.Deadline,
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
-		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: maxFee, ChainTime: now,
+		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
+		Trace: s.decisionTrace(
+			"source", order.Source,
+			"orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID,
+		),
 	}
 	plan, err := s.strategy.DecideFill(ctx, fillInput)
 	if err != nil {
@@ -208,6 +217,12 @@ func (s *Solver) startFill(
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
+		"executor", order.Executor.Hex(),
+		"caller", s.solverAddress.Hex(),
+		"calldataBytes", len(data),
+		"maxFeePerGas", maxFee.String(),
+		"deadline", order.Deadline,
+		"deadlineRemaining", time.Unix(int64(order.Deadline), 0).Sub(now),
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
 		To: order.Executor, Data: data, MaxFeePerGas: new(big.Int).Set(maxFee),
@@ -226,6 +241,8 @@ func (s *Solver) startFill(
 		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"routes", len(plan.Routes),
+		"reservationDomains", len(reservations),
+		"maxFeePerGas", maxFee.String(),
 	)
 	return &pendingUniswapFill{order: order, result: result}, nil
 }
@@ -335,7 +352,11 @@ func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan)
 			"routeId", route.RouteID,
 			"adapter", route.Adapter.Hex(),
 			"amountIn", route.AmountIn.String(),
+			"expectedAmountOut", route.ExpectedAmountOut.String(),
 			"minAmountOut", route.MinAmountOut.String(),
+			"reservedAmountOut", route.ReservedAmountOut.String(),
+			"capacityId", route.CapacityID,
+			"private", route.DiscountID != nil,
 		}
 		if route.DiscountID != nil {
 			fields = append(fields, "discountId", route.DiscountID.Hex())
