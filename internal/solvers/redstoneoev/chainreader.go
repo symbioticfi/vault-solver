@@ -22,8 +22,8 @@ type reader struct {
 	ll    *liquidlane.Reader
 }
 
-func newReader(c *chain.Client, log logr.Logger) *reader {
-	return &reader{chain: c, ll: liquidlane.NewReader(c, log)}
+func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
+	return &reader{chain: c, ll: liquidlane.NewReader(c, log, liquidityLens)}
 }
 
 // ExecutorState is the signer's accounting on the RedStone Executor.

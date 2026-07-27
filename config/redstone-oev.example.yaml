@@ -31,6 +31,8 @@ solvers:
 
       executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"   # RedStone Atom Executor (proxy) — verifies our bid signature
       adapter:  "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # LiquidLane adapter served by this solver (TLOAN vault / TCOL collateral)
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
       callback: "0x065B612a182f360D4428cD00a8094049B3c92168"   # SymbioticOevSolver — receives Executor callback and pays the bid
 
       strategy:

@@ -33,6 +33,7 @@ const (
 type rawConfig struct {
 	Reactor       string                   `yaml:"reactor"`
 	Executor      string                   `yaml:"executor"`
+	LiquidityLens string                   `yaml:"liquidityLens"`
 	Adapters      []string                 `yaml:"adapters"`
 	SolverMode    string                   `yaml:"solverMode"`
 	TokensToQuote string                   `yaml:"tokensToQuote"`
@@ -83,17 +84,21 @@ type rawBreakerConfig struct {
 }
 
 type Config struct {
-	Reactor     common.Address
-	Executor    common.Address
-	Adapters    []common.Address
-	SolverMode  string
-	TokenPolicy tokenpolicy.Policy
-	QuoteServer QuoteServerConfig
-	OrderServer OrderServerConfig
-	Discounts   *DiscountConfig
-	Gas         *liquidlanegas.OracleConfig
-	Breaker     BreakerConfig
-	Strategy    StrategyConfig
+	Reactor  common.Address
+	Executor common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
+	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
+	LiquidityLens common.Address
+	Adapters      []common.Address
+	SolverMode    string
+	TokenPolicy   tokenpolicy.Policy
+	QuoteServer   QuoteServerConfig
+	OrderServer   OrderServerConfig
+	Discounts     *DiscountConfig
+	Gas           *liquidlanegas.OracleConfig
+	Breaker       BreakerConfig
+	Strategy      StrategyConfig
 }
 
 type DiscountConfig struct {
@@ -145,6 +150,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
+	}
+	var liquidityLens common.Address
+	if raw.LiquidityLens != "" {
+		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
 	}
 	adapters, err := parseAddressList(raw.Adapters, "adapters")
 	if err != nil {
@@ -240,7 +251,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		Reactor: reactor, Executor: executor,
+		Reactor: reactor, Executor: executor, LiquidityLens: liquidityLens,
 		Adapters: adapters, SolverMode: solverMode, TokenPolicy: policy,
 		QuoteServer: QuoteServerConfig{
 			ListenAddress:   parse.OrDefault(raw.QuoteServer.ListenAddress, defaultListenAddress),

@@ -20,6 +20,7 @@ type rawConfig struct {
 	ListenAddr             string            `yaml:"listenAddr"`
 	Executor               string            `yaml:"executor"`
 	Reactor                string            `yaml:"reactor"`
+	LiquidityLens          string            `yaml:"liquidityLens"`
 	PollIntervalMs         int               `yaml:"pollIntervalMs"`
 	OrderLimit             int               `yaml:"orderLimit"`
 	SolverMode             string            `yaml:"solverMode"`
@@ -48,6 +49,10 @@ type Config struct {
 	Executor common.Address
 	// Reactor is the RFQ Reactor (used at execution time); optional.
 	Reactor common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
+	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
+	LiquidityLens common.Address
 	// PollInterval is how often the backend is polled for open orders.
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
@@ -135,6 +140,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.Reactor != "" {
 		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
+			return nil, err
+		}
+	}
+	if raw.LiquidityLens != "" {
+		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
 			return nil, err
 		}
 	}

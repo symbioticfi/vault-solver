@@ -87,7 +87,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		cfg:        cfg,
 		deps:       deps,
 		api:        api,
-		reader:     newReader(deps.Chain),
+		reader:     newReader(deps.Chain, cfg.LiquidityLens),
 		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),

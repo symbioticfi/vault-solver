@@ -1,0 +1,25 @@
+[
+  {
+    "type": "function",
+    "name": "getMaxAssets",
+    "inputs": [
+      { "internalType": "address", "name": "adapter", "type": "address" }
+    ],
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getMaxAssets",
+    "inputs": [
+      { "internalType": "address", "name": "adapter", "type": "address" },
+      { "internalType": "address", "name": "tokenToRedeem", "type": "address" }
+    ],
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
+    ],
+    "stateMutability": "nonpayable"
+  }
+]

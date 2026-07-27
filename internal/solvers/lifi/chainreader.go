@@ -31,8 +31,8 @@ type route = liquidlane.Route
 type quoteSnapshotSet = liquidsnapshot.Quote
 type fillSnapshotSet = liquidsnapshot.Fill
 
-func newReader(c *chain.Client, log logr.Logger, gasCfg liquidlanegas.OracleConfig) (*reader, error) {
-	snapshots, err := liquidsnapshot.New(c, log, &gasCfg)
+func newReader(c *chain.Client, log logr.Logger, gasCfg liquidlanegas.OracleConfig, liquidityLens common.Address) (*reader, error) {
+	snapshots, err := liquidsnapshot.New(c, log, &gasCfg, liquidityLens)
 	if err != nil {
 		return nil, err
 	}

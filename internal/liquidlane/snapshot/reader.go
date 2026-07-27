@@ -64,7 +64,9 @@ type Reader struct {
 	gas    gasReader
 }
 
-func New(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig) (*Reader, error) {
+func New(
+	c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig, liquidityLens common.Address,
+) (*Reader, error) {
 	var gas gasReader
 	if gasCfg != nil {
 		reader, err := liquidlanegas.NewOracleReader(c, *gasCfg)
@@ -73,7 +75,7 @@ func New(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig) (
 		}
 		gas = reader
 	}
-	return newReader(liquidlane.NewReader(c, log), gas), nil
+	return newReader(liquidlane.NewReader(c, log, liquidityLens), gas), nil
 }
 
 func newReader(liquid liquidReader, gas gasReader) *Reader {
