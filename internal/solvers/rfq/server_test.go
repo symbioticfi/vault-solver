@@ -139,6 +139,23 @@ func TestServer_QuoteWrongChainNoContent(t *testing.T) {
 	}
 }
 
+func TestServer_QuoteBelowMinAmountNoContent(t *testing.T) {
+	srv := testServer()
+	body := validQuoteBody() // 1e18 of tIn
+	srv.quotes.minAmountsIn = map[common.Address]*big.Int{
+		tIn: mustBig(t, "2000000000000000000"),
+	}
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusNoContent {
+		t.Fatalf("below-minimum quote = %d, want 204 (body %s)", rr.Code, rr.Body.String())
+	}
+
+	// The same request at exactly the minimum is still quoted.
+	srv.quotes.minAmountsIn = map[common.Address]*big.Int{tIn: mustBig(t, body.Amount)}
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("at-minimum quote = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+}
+
 func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{

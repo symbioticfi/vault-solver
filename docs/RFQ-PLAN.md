@@ -128,6 +128,18 @@ declines if none exists. The solver independently rejects any quoted or fill pla
 not exactly one, so webhook and fresh fill planning fail closed at the same boundary. The `all` and
 `permissionless` scopes retain greedy multi-candidate aggregation.
 
+`minAmountsIn` is a second solver-owned quote gate, independent of the token scope: an optional map of
+input-token address → minimum request size in that token's **base units** (decimal string). It is
+evaluated in `quoteService.quote` right after the token-scope check and before any adapter filtering or
+chain read, so a below-minimum request costs nothing and returns the usual no-quote (`nil, nil` ⇒ HTTP
+204). The comparison is strict: `amountIn == min` still quotes. Keys are parsed into `common.Address`,
+so configured checksum casing does not matter; values must parse as positive integers (zero, negative,
+non-numeric, or a zero/invalid address key is a startup error, as is the same token listed twice in
+different casing). Tokens absent from the map have no floor. This is how RWA inputs (HYBOND, deJAAA,
+deJTRSY) enforce a redemption-sized minimum without a per-token code path. Covered by
+`gating_test.go` (`TestParseConfigMinAmountsIn`, `TestParseConfigMinAmountsInErrors`,
+`TestQuoteMinAmountIn`) and `server_test.go` (`TestServer_QuoteBelowMinAmountNoContent`).
+
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
 brain; the solver only enforces its own structural and safety constraints) are documented once in
 [`strategy-plan.md`](strategy-plan.md), shared with every solver. Shared LiquidLane fact conventions
@@ -180,6 +192,8 @@ solvers:
       pollIntervalMs: 3000
       orderLimit: 20
       solverMode: external                              # "external" (default) | "internal" — see below
+      minAmountsIn:                                     # optional per-input-token floor (base units)
+        "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
       adapters:                                         # LiquidLane adapter addresses (whitelist + fill planning)
         - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
 ```

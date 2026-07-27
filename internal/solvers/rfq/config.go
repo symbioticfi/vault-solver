@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"math/big"
 	"strconv"
 	"time"
 
@@ -26,6 +27,7 @@ type rawConfig struct {
 	SolverMode             string            `yaml:"solverMode"`
 	TokensToQuote          string            `yaml:"tokensToQuote"`
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
+	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
 	Strategy               rawStrategyConfig `yaml:"strategy"`
 }
@@ -65,6 +67,12 @@ type Config struct {
 	SolverMode string
 	// TokenPolicy scopes quoted input tokens and enforces single-route fills in permissioned mode.
 	TokenPolicy tokenpolicy.Policy
+	// MinAmountsIn is the per-input-token minimum request size, keyed by input-token address (config
+	// values are decimal strings in the token's BASE UNITS, e.g. "1000000000000000000" for 1e18).
+	// A request whose amount is strictly below its token's minimum gets no quote (HTTP 204); an amount
+	// equal to the minimum still quotes. A token absent from the map has no minimum. Address keys make
+	// the lookup checksum/case-insensitive.
+	MinAmountsIn map[common.Address]*big.Int
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
 	// scoped to, and the candidate universe used to build each fresh fill plan. Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
@@ -147,6 +155,29 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
 			return nil, err
 		}
+	}
+	for token, amount := range raw.MinAmountsIn {
+		field := `minAmountsIn["` + token + `"]`
+		addr, aerr := parse.NonZeroAddress(token, field)
+		if aerr != nil {
+			return nil, aerr
+		}
+		minIn, berr := parse.Big(amount, field)
+		if berr != nil {
+			return nil, berr
+		}
+		if minIn.Sign() <= 0 { // parse.Big accepts negatives; a non-positive floor is a misconfiguration
+			return nil, errors.Errorf("%s: must be > 0, got %q", field, amount)
+		}
+		if cfg.MinAmountsIn == nil {
+			cfg.MinAmountsIn = make(map[common.Address]*big.Int, len(raw.MinAmountsIn))
+		}
+		// Keys differing only in checksum case collide into one address; reject rather than silently
+		// letting map order pick a winner.
+		if _, dup := cfg.MinAmountsIn[addr]; dup {
+			return nil, errors.Errorf("%s: duplicate entry for token %s", field, addr.Hex())
+		}
+		cfg.MinAmountsIn[addr] = minIn
 	}
 	for i, a := range raw.Adapters {
 		adapter, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
