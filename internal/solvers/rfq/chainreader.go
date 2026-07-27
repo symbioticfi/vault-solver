@@ -21,8 +21,8 @@ type reader struct {
 	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
 }
 
-func newReader(c *chain.Client, log logr.Logger) *reader {
-	return &reader{ll: liquidlane.NewReader(c, log), chainID: c.ChainID().Int64()}
+func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
+	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chainID: c.ChainID().Int64()}
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config

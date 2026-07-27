@@ -19,6 +19,7 @@ type rawConfig struct {
 	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
 	Adapters          *[]string         `yaml:"adapters"`
 	AdapterFactory    string            `yaml:"adapterFactory"`
+	LiquidityLens     string            `yaml:"liquidityLens"`
 	HTTPTimeout       string            `yaml:"httpTimeout"`
 	OfferExpiryBuffer string            `yaml:"offerExpiryBuffer"`
 	Intervals         rawIntervals      `yaml:"intervals"`
@@ -51,8 +52,12 @@ type Config struct {
 	// should be discovered; a non-nil slice is authoritative.
 	Targets        []Target
 	AdapterFactory common.Address
-	Intervals      Intervals
-	Strategy       StrategyConfig
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, adapter funding headroom is
+	// read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(); zero-value falls back to the adapter getter.
+	LiquidityLens common.Address
+	Intervals     Intervals
+	Strategy      StrategyConfig
 }
 
 type StrategyConfig struct {
@@ -125,6 +130,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if len(targets) == 0 && adapterFactory == (common.Address{}) {
 		return nil, errors.New("at least one adapters entry or adapterFactory is required")
 	}
+	var liquidityLens common.Address
+	if raw.LiquidityLens != "" {
+		liquidityLens, err = cfgparse.NonZeroAddress(raw.LiquidityLens, "liquidityLens")
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	discover, err := cfgparse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
 	if err != nil {
@@ -161,6 +173,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		OfferExpiryBuffer: offerExpiryBuffer,
 		Targets:           targets,
 		AdapterFactory:    adapterFactory,
+		LiquidityLens:     liquidityLens,
 		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
 		Strategy:          strategy,
 	}, nil

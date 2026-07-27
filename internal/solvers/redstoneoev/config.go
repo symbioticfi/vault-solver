@@ -18,6 +18,7 @@ type rawConfig struct {
 	Executor         string            `yaml:"executor"`
 	Adapter          string            `yaml:"adapter"`
 	Callback         string            `yaml:"callback"`
+	LiquidityLens    string            `yaml:"liquidityLens"`
 	Strategy         rawStrategyConfig `yaml:"strategy"`
 	MaxTxGasPriceWei string            `yaml:"maxTxGasPriceWei"`
 	MaxBidWei        string            `yaml:"maxBidWei"`
@@ -55,6 +56,10 @@ type Config struct {
 	Executor common.Address
 	Adapter  common.Address
 	Callback common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
+	// is read from the lens's cross-adapter deallocation-cascade estimate instead of the adapter's own
+	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
+	LiquidityLens common.Address
 
 	Strategy StrategyConfig
 
@@ -108,6 +113,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	var liquidityLens common.Address
+	if raw.LiquidityLens != "" {
+		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
+	}
 
 	breakerWindow, err := parse.MsDuration(raw.Breaker.WindowMs, defaultBreakerWindow, "breaker.windowMs")
 	if err != nil {
@@ -126,11 +137,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 
 	cfg := &Config{
-		WSURL:     raw.WS.URL,
-		APIKeyEnv: raw.WS.APIKeyEnv,
-		Executor:  executor,
-		Adapter:   adapter,
-		Callback:  callback,
+		WSURL:         raw.WS.URL,
+		APIKeyEnv:     raw.WS.APIKeyEnv,
+		Executor:      executor,
+		Adapter:       adapter,
+		Callback:      callback,
+		LiquidityLens: liquidityLens,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,

@@ -204,7 +204,7 @@ func TestFactoryAdapters_EmptyRegistry(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, round)
 	defer stop()
 
-	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
 	if err != nil {
 		t.Fatalf("factoryAdapters: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestFactoryAdapters_EnumeratesEntitiesInRegistryOrder(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
 	defer stop()
 
-	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
 	if err != nil {
 		t.Fatalf("factoryAdapters: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestFactoryAdapters_AcceptsEntityCountAtLimit(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
 	defer stop()
 
-	got, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
 	if err != nil {
 		t.Fatalf("factoryAdapters: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestFactoryAdapters_RejectsEntityCountAboveLimit(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, countRound)
 	defer stop()
 
-	_, err := newReader(c).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
+	_, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
 	want := "adapter factory entity count 2001 exceeds safety limit 2000"
 	if err == nil || err.Error() != want {
 		t.Fatalf("factoryAdapters error = %v, want %q", err, want)
@@ -324,7 +324,7 @@ func TestResolveAdapters(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, round1, round2)
 	defer stop()
 
-	got, err := newReader(c).resolveAdapters(context.Background(), adapters, testProbe)
+	got, err := newReader(c, common.Address{}).resolveAdapters(context.Background(), adapters, testProbe)
 	if err != nil {
 		t.Fatalf("resolveAdapters: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestResolveAdapters_RejectsUnexpectedMulticallResultCounts(t *testing.T) {
 		c, stop := newMulticallFakeClient(t, shortRound)
 		defer stop()
 
-		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
+		if _, err := newReader(c, common.Address{}).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
 			t.Fatal("expected an error for an incomplete adapter-field response")
 		}
 	})
@@ -370,7 +370,7 @@ func TestResolveAdapters_RejectsUnexpectedMulticallResultCounts(t *testing.T) {
 		c, stop := newMulticallFakeClient(t, fieldsRound, emptyAssetRound)
 		defer stop()
 
-		if _, err := newReader(c).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
+		if _, err := newReader(c, common.Address{}).resolveAdapters(t.Context(), []common.Address{adapterAddr}, testProbe); err == nil {
 			t.Fatal("expected an error for an incomplete asset response")
 		}
 	})
@@ -401,7 +401,7 @@ func TestResolveAdaptersDropsUnauthorized(t *testing.T) {
 	c, stop := newMulticallFakeClient(t, round1, round2)
 	defer stop()
 
-	got, err := newReader(c).resolveAdapters(context.Background(), adapters, testProbe)
+	got, err := newReader(c, common.Address{}).resolveAdapters(context.Background(), adapters, testProbe)
 	if err != nil {
 		t.Fatalf("resolveAdapters: %v", err)
 	}

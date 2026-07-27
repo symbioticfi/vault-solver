@@ -88,7 +88,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader, err := newReader(deps.Chain, log, cfg.Gas)
+	reader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
 	if err != nil {
 		return nil, err
 	}

@@ -42,6 +42,9 @@ ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExec
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
+# api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
+# (getMaxAssets(adapter) for 3F, getMaxAssets(adapter,tokenToRedeem) for LiquidLane) — the core lens that
+# replaces each adapter's own getMaxAssets with a cross-adapter deallocation-cascade estimate.
 
 # Contract:relpath mapping for Go bindings. Each contract gets its own package (the leaf dir) so
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.
@@ -61,6 +64,7 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             SymbioticOevSolver:oev/callback RedStoneExecutor:oev/executor Morpho:oev/morpho \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
             AggregatorV3:chainlink/aggregator \
+            FrontendLiquidityLens:lens \
             ERC20:erc20 Multicall3:multicall3
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20

@@ -22,6 +22,8 @@ solvers:
       # Expected V2 Reactor; verify the executor immutable at deployment because the ABI has no getter.
       reactor: "0x00000011F84B9aa48e5f8aA8B9897600006289Be"
       executor: ${UNISWAPX_EXECUTOR} # advertised filler; bytecode and caller are checked at startup
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
 
       # Direct LiquidLane adapter scope. Required in external mode.
       # In internal mode this list is optional: when present it scopes quotes and direct fills,

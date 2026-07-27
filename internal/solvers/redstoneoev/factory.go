@@ -45,7 +45,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		chainID:        chainID,
 		dryRun:         dryRun,
 		strategyName:   cfg.Strategy.Name,
-		reader:         newReader(deps.Chain, log),
+		reader:         newReader(deps.Chain, log, cfg.LiquidityLens),
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
 		metrics:        mx,

@@ -74,6 +74,9 @@ solvers:
       inputSettler:  "0x000025c3226C00B2Cdc200005a1600509f4e00C0"   # LI.FI InputSettlerEscrowLIFI
       outputSettler: "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"   # LI.FI OutputSettler
       executor:      "0x0000000000000000000000000000000000000000"   # registered EIP-1271 LI.FI solver
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; when set, LiquidLane swappable
+                                        # headroom is read from its cross-adapter deallocation-cascade
+                                        # estimate instead of each adapter's getMaxAssets(). Omit to use the adapter getter.
 
       # LiquidLane adapter instances this solver serves. Each adapter's vault/asset and tokenToRedeem
       # list are resolved on-chain at startup; this config is the executor's route scope.

@@ -51,6 +51,8 @@ solvers:
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle
       reactor:  "0xC323B898d7E4105E3980082B74CC5D4602996B10"   # Reactor — invoked by the Executor at fill time
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
 
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
