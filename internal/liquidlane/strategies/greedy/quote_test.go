@@ -9,11 +9,18 @@ import (
 
 func TestSolveQuoteRejectsOrAbsorbsUncoveredInput(t *testing.T) {
 	candidates := []Candidate{candidate("only", "route", 100, 60)}
+	var declineReason string
 	strict, err := SolveQuote(QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: candidates, MaxRoutes: 1,
+		Trace: func(_ string, fields ...any) {
+			declineReason, _ = fields[1].(string)
+		},
 	})
 	if err != nil || strict != nil {
 		t.Fatalf("strict = %+v, err %v", strict, err)
+	}
+	if declineReason != insufficientCapacityReason {
+		t.Fatalf("decline reason = %q", declineReason)
 	}
 	absorbed, err := SolveQuote(QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: candidates, MaxRoutes: 1,

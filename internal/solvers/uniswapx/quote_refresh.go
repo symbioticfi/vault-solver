@@ -85,6 +85,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 			"routes", len(decisionRoutes),
 			"inventory", len(current.Direct),
 			"physicalInventory", len(current.Physical),
+			"maxFeePerGas", maxFee.String(),
 			"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		)
 	} else {

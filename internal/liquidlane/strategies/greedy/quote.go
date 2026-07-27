@@ -18,6 +18,8 @@ const (
 	AbsorbUncoveredInput
 )
 
+const insufficientCapacityReason = "insufficient-capacity"
+
 // QuoteTask is a protocol-neutral LiquidLane pricing problem. Exactly one of
 // ExactInput and ExactOutput must be set.
 type QuoteTask struct {
@@ -31,6 +33,7 @@ type QuoteTask struct {
 	OutputBufferBps int
 	InputPolicy     UncoveredInputPolicy
 	GasPricing      *liquidstrategies.GasPricing
+	Trace           liquidstrategies.DecisionTrace
 }
 
 // QuoteSolution is the priced amount pair and the LiquidLane allocation that
@@ -45,10 +48,19 @@ type QuoteSolution struct {
 
 // SolveQuote prices one exact-input or exact-output LiquidLane task.
 func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
+	mode := "exact-output"
+	if task.ExactInput != nil {
+		mode = "exact-input"
+	}
 	if (task.ExactInput == nil) == (task.ExactOutput == nil) {
 		return nil, errors.New("exactly one quote amount must be set")
 	}
 	if task.MaxRoutes <= 0 || len(task.Candidates) == 0 {
+		task.Trace.Decline(
+			"quote", "no-candidates",
+			"candidates", len(task.Candidates),
+			"maxRoutes", task.MaxRoutes,
+		)
 		return nil, nil
 	}
 	if task.OutputBufferBps < 0 || task.OutputBufferBps >= bpsDenominator {
@@ -64,10 +76,14 @@ func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
 		return nil, errors.New("minInput: must be non-negative")
 	}
 	routes := newAllocator(task.Candidates)
+	var solution *QuoteSolution
 	if task.ExactInput != nil {
-		return solveExactInputQuote(task, routes, task.ExactInput, task.MaxRoutes), nil
+		solution = solveExactInputQuote(task, routes, task.ExactInput, task.MaxRoutes)
+	} else {
+		solution = solveExactOutputQuote(task, routes)
 	}
-	return solveExactOutputQuote(task, routes), nil
+	traceQuoteSolution(task.Trace, mode, solution)
+	return solution, nil
 }
 
 func solveExactInputQuote(
@@ -78,6 +94,11 @@ func solveExactInputQuote(
 ) *QuoteSolution {
 	if amountIn == nil || amountIn.Sign() <= 0 ||
 		(task.MinInput != nil && amountIn.Cmp(task.MinInput) < 0) {
+		task.Trace.Decline(
+			"quote", "amount-below-minimum",
+			"amountIn", bigString(amountIn),
+			"minInput", bigString(task.MinInput),
+		)
 		return nil
 	}
 	allocation := allocator.allocateExactInputWithPolicy(
@@ -86,10 +107,26 @@ func solveExactInputQuote(
 		task.InputPolicy == RejectUncoveredInput,
 	)
 	if len(allocation.Allocations) == 0 {
+		reason := "no-allocation"
+		if len(allocator.sources) > 0 {
+			reason = insufficientCapacityReason
+		}
+		task.Trace.Decline(
+			"quote", reason,
+			"amountIn", amountIn.String(),
+			"routes", len(allocator.sources),
+		)
 		return nil
 	}
 	if allocation.Remaining.Sign() != 0 {
 		if task.InputPolicy == RejectUncoveredInput {
+			task.Trace.Decline(
+				"quote", insufficientCapacityReason,
+				"amountIn", amountIn.String(),
+				"allocatedAmountIn", allocation.TotalAmountIn.String(),
+				"remainingAmountIn", allocation.Remaining.String(),
+				"routes", len(allocation.Allocations),
+			)
 			return nil
 		}
 		last := &allocation.Allocations[len(allocation.Allocations)-1]
@@ -105,6 +142,14 @@ func solveExactInputQuote(
 		amountOut.Sub(amountOut, gasCost)
 	}
 	if amountOut.Sign() <= 0 {
+		task.Trace.Decline(
+			"quote", "gas-exceeds-output",
+			"amountIn", amountIn.String(),
+			"grossAmountOut", grossAmountOut.String(),
+			"bufferedAmountOut", applyBpsDown(grossAmountOut, bpsDenominator-task.OutputBufferBps).String(),
+			"gasCost", gasCost.String(),
+			"netAmountOut", amountOut.String(),
+		)
 		return nil
 	}
 	return &QuoteSolution{
@@ -116,6 +161,7 @@ func solveExactInputQuote(
 
 func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 	if task.ExactOutput == nil || task.ExactOutput.Sign() <= 0 {
+		task.Trace.Decline("quote", "invalid-exact-output")
 		return nil
 	}
 	solution := solveExactOutputQuoteGreedy(task, allocator)
@@ -123,8 +169,18 @@ func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 		return nil
 	}
 	if task.MinInput != nil && solution.AmountIn.Cmp(task.MinInput) < 0 {
+		task.Trace.Log(
+			"liquidlane exact-output minimum input applied",
+			"calculatedAmountIn", solution.AmountIn.String(),
+			"minInput", task.MinInput.String(),
+		)
 		minimumQuote := solveExactInputQuote(task, allocator, task.MinInput, task.MaxRoutes)
 		if minimumQuote == nil || minimumQuote.AmountOut.Cmp(task.ExactOutput) < 0 {
+			task.Trace.Decline(
+				"quote", "minimum-input-cannot-cover-output",
+				"exactOutput", task.ExactOutput.String(),
+				"minInput", task.MinInput.String(),
+			)
 			return nil
 		}
 		minimumQuote.AmountOut = liquidlane.CloneBig(task.ExactOutput)
@@ -138,6 +194,14 @@ func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolu
 	for targetGross.Sign() > 0 {
 		allocation := allocator.allocateExactOutput(targetGross, task.MaxRoutes)
 		if len(allocation.Allocations) == 0 || allocation.Remaining.Sign() != 0 {
+			task.Trace.Decline(
+				"quote", insufficientCapacityReason,
+				"mode", "exact-output",
+				"targetGrossAmountOut", targetGross.String(),
+				"allocatedAmountOut", allocation.TotalAmountOut.String(),
+				"remainingAmountOut", allocation.Remaining.String(),
+				"routes", len(allocation.Allocations),
+			)
 			return nil
 		}
 		gasCost := new(big.Int)
@@ -155,6 +219,14 @@ func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolu
 		}
 		requiredGross := grossOutputForNet(task.ExactOutput, gasCost, task.OutputBufferBps)
 		if requiredGross.Cmp(targetGross) <= 0 {
+			task.Trace.Decline(
+				"quote", "gas-exceeds-output",
+				"mode", "exact-output",
+				"exactOutput", task.ExactOutput.String(),
+				"grossAmountOut", allocation.TotalAmountOut.String(),
+				"gasCost", gasCost.String(),
+				"netAmountOut", netOutput.String(),
+			)
 			return nil
 		}
 		targetGross = requiredGross
@@ -192,4 +264,39 @@ func cloneAllocations(allocations []Allocation) []Allocation {
 		}
 	}
 	return out
+}
+
+func traceQuoteSolution(trace liquidstrategies.DecisionTrace, mode string, solution *QuoteSolution) {
+	if trace == nil || solution == nil {
+		return
+	}
+	trace.Log(
+		"liquidlane quote selected",
+		"mode", mode,
+		"amountIn", solution.AmountIn.String(),
+		"grossAmountOut", solution.GrossAmountOut.String(),
+		"gasCost", solution.GasCost.String(),
+		"amountOut", solution.AmountOut.String(),
+		"routes", len(solution.Allocations),
+	)
+	for index, allocation := range solution.Allocations {
+		trace.Log(
+			"liquidlane quote leg selected",
+			"leg", index,
+			"candidateId", allocation.Candidate.ID,
+			"routeId", allocation.Candidate.Route.ID,
+			"capacityId", liquidlane.RouteCapacityID(allocation.Candidate.Route),
+			"adapter", allocation.Candidate.Route.Adapter.Hex(),
+			"amountIn", bigString(allocation.AmountIn),
+			"amountOut", bigString(allocation.AmountOut),
+			"private", allocation.Candidate.DiscountID != nil,
+		)
+	}
+}
+
+func bigString(value *big.Int) string {
+	if value == nil {
+		return "0"
+	}
+	return value.String()
 }
