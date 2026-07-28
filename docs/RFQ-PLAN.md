@@ -274,10 +274,11 @@ dropping features.
    200/204 paths incl. disabled toggle, fill-time discount filter, mismatch → failed order with no
    tx).
 5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
-   quote and fill inputs require one fully covering candidate instead of aggregation, and the solver
-   rejects multi-leg strategy/webhook outputs before publication or calldata construction. Cold fill
-   fill planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
-   single-route selection/decline, webhook rejection, and fresh planning.
+   quote and fill inputs use one candidate instead of aggregation, and the solver rejects multi-leg
+   strategy/webhook outputs before publication or calldata construction. Input beyond that route's
+   output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
+   planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
+   single-route capped output, webhook rejection, and fresh planning.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
@@ -302,8 +303,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing follows the TS greedy port for permissionless inputs** — permissioned inputs deliberately
-  use the single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
+- **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
+  single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
   layer below).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
@@ -313,8 +314,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): functional parity for the
-permissionless path, plus the permissioned-scope single-route constraint described above.** The
+**Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
+permissioned-scope single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
 and the fill-time RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed

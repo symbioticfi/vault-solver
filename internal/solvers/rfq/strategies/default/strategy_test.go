@@ -71,8 +71,23 @@ func TestStrategyAggregatesRoutesButHonorsSingleRoute(t *testing.T) {
 	input.RequireSingleRoute = true
 	got, err = New().DecideQuote(t.Context(), input)
 	if err != nil || got.Decision != types.DecisionQuote || len(got.Legs) != 1 ||
-		got.Legs[0].CandidateID != string(second.ID) {
+		got.QuotedAmountOut.Cmp(big.NewInt(120)) != 0 ||
+		got.Legs[0].CandidateID != string(first.ID) {
 		t.Fatalf("single-route quote = %+v, err %v", got, err)
+	}
+}
+
+func TestStrategySingleRouteQuotesCappedOutputWhenInputExceedsCapacity(t *testing.T) {
+	candidate := quoteCandidate(vlt, 2, 60, 120, nil)
+	input := baseInput(candidate)
+	input.RequireSingleRoute = true
+
+	got, err := New().DecideQuote(t.Context(), input)
+	if err != nil || got.Decision != types.DecisionQuote ||
+		got.QuotedAmountOut.Cmp(big.NewInt(120)) != 0 || len(got.Legs) != 1 ||
+		got.Legs[0].AmountIn.Cmp(big.NewInt(100)) != 0 ||
+		got.Legs[0].AmountOut.Cmp(big.NewInt(120)) != 0 {
+		t.Fatalf("single-route capped quote = %+v, err %v", got, err)
 	}
 }
 
@@ -104,6 +119,20 @@ func TestBuildFillPlanUsesTypedCandidateWithoutRepricing(t *testing.T) {
 		leg.MaxRate.Cmp(big.NewInt(2_000_000_000_000_000_000)) != 0 ||
 		leg.DiscountID == nil || *leg.DiscountID != discountID {
 		t.Fatalf("leg = %+v", leg)
+	}
+}
+
+func TestBuildFillPlanSingleRouteKeepsCappedQuoteWhenInputExceedsCapacity(t *testing.T) {
+	candidate := quoteCandidate(vlt, 2, 60, 120, nil)
+	input := baseInput(candidate)
+	input.RequireSingleRoute = true
+	input.RequiredAmountOut = big.NewInt(120)
+
+	plan, err := New().BuildFillPlan(t.Context(), input)
+	if err != nil || plan == nil || plan.QuotedAmountOut.Cmp(big.NewInt(120)) != 0 ||
+		len(plan.Legs) != 1 || plan.Legs[0].AmountIn.Cmp(big.NewInt(100)) != 0 ||
+		plan.Legs[0].AmountOut.Cmp(big.NewInt(120)) != 0 {
+		t.Fatalf("single-route capped plan = %+v, err %v", plan, err)
 	}
 }
 
