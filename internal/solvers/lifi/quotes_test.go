@@ -150,6 +150,31 @@ func TestShouldRefreshQuotesInBlockMode(t *testing.T) {
 	}
 }
 
+func TestCapacityChangesRequestImmediateQuoteRefresh(t *testing.T) {
+	solver := &Solver{quoteRefresh: make(chan struct{}, 1)}
+	reservations := liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)}
+
+	solver.reserve("order-1", reservations)
+	select {
+	case <-solver.quoteRefresh:
+	default:
+		t.Fatal("reservation did not request quote refresh")
+	}
+	if got := solver.capacity.Snapshot()["capacity-1"]; got == nil || got.String() != "400" {
+		t.Fatalf("reserved capacity = %v, want 400", got)
+	}
+
+	solver.releaseReservation("order-1")
+	select {
+	case <-solver.quoteRefresh:
+	default:
+		t.Fatal("reservation release did not request quote refresh")
+	}
+	if got := solver.capacity.Snapshot()["capacity-1"]; got != nil {
+		t.Fatalf("released capacity = %v, want nil", got)
+	}
+}
+
 func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	routeItem := testQuoteRoute()
 	state := newQuoteState(30 * time.Second)

@@ -14,6 +14,7 @@ import (
 
 type stateTestOrderPoller struct {
 	terminals map[common.Hash]orderTerminal
+	recent    []orderEntry
 	err       error
 }
 
@@ -23,6 +24,15 @@ func (p *stateTestOrderPoller) openOrders(
 	*common.Address,
 ) ([]orderEntry, error) {
 	return nil, nil
+}
+
+func (p *stateTestOrderPoller) recentOrders(
+	context.Context,
+	int64,
+	common.Address,
+	time.Time,
+) ([]orderEntry, error) {
+	return p.recent, p.err
 }
 
 func (p *stateTestOrderPoller) ordersByHash(
@@ -37,13 +47,16 @@ type stateTestChainReader struct {
 	chainReader
 
 	transactionTimes map[common.Hash]time.Time
+	confirmations    uint64
 	err              error
 }
 
-func (r *stateTestChainReader) transactionBlockTime(
+func (r *stateTestChainReader) transactionBlockTimeConfirmed(
 	_ context.Context,
 	hash common.Hash,
+	confirmations uint64,
 ) (time.Time, error) {
+	r.confirmations = confirmations
 	return r.transactionTimes[hash], r.err
 }
 
@@ -107,8 +120,9 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	hash := common.HexToHash("0x1234")
 	txHash := common.HexToHash("0xabcd")
 	solver := &Solver{
-		cfg: &Config{Breaker: BreakerConfig{Window: time.Minute}},
-		log: logr.Discard(),
+		cfg:           &Config{Breaker: BreakerConfig{Window: time.Minute}},
+		log:           logr.Discard(),
+		confirmations: 2,
 		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
 			hash: {Status: orderStatusFilled, TxHash: txHash},
 		}},
@@ -129,6 +143,10 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	}
 	if _, pending := solver.exclusiveUntil[hash]; pending {
 		t.Fatal("settled obligation remained pending")
+	}
+	reader := solver.reader.(*stateTestChainReader)
+	if reader.confirmations != 2 {
+		t.Fatalf("confirmation depth = %d, want 2", reader.confirmations)
 	}
 }
 
@@ -253,11 +271,17 @@ func TestClaimTracksInflightAndBackoff(t *testing.T) {
 		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
 		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
 	}
+	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
 	if !solver.claim(hash, now) || solver.claim(hash, now) {
 		t.Fatal("claim did not enforce in-flight deduplication")
 	}
+	if solver.planningFills.Load() != 1 || solver.quoteState.Load() != nil {
+		t.Fatal("claimed order did not block quotes before fill planning")
+	}
+	solver.endFillPlanning()
 	solver.retry(hash, now, true)
 	if solver.claim(hash, now.Add(500*time.Millisecond)) || !solver.claim(hash, now.Add(time.Second)) {
 		t.Fatal("retry backoff was not enforced")
 	}
+	solver.endFillPlanning()
 }

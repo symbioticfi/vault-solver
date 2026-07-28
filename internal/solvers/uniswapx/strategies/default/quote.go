@@ -28,16 +28,19 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
 	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter)
+	pairInventory := make([]liquidlane.Inventory, 0, len(liveInventory))
+	for _, item := range liveInventory {
+		if item.TokenIn == input.TokenIn && item.TokenOut == input.TokenOut {
+			pairInventory = append(pairInventory, item)
+		}
+	}
 	inventory := liquidgreedy.AllocateInventoryCapacity(
-		liveInventory,
+		pairInventory,
 		input.Reservations,
 		s.cfg.InventoryReserveBps,
 	)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 	for _, item := range inventory {
-		if item.TokenIn != input.TokenIn || item.TokenOut != input.TokenOut {
-			continue
-		}
 		candidate := liquidgreedy.NewQuoteCandidate(
 			item,
 			liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
@@ -53,6 +56,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 			"tokenOut", input.TokenOut.Hex(),
 			"inventory", len(input.Inventory),
 			"liveInventory", len(liveInventory),
+			"pairInventory", len(pairInventory),
 			"allocatedInventory", len(inventory),
 			"reservations", len(input.Reservations),
 		)

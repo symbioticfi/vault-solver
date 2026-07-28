@@ -114,11 +114,15 @@ standing quotes from current adapter liquidity and receives matched, already-ope
 LI.FI WebSocket feed. Before each fill it rechecks the canonical order status, adapter state, gas cost, and
 strategy decision, then atomically claims the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
-decisions and standing quotes until those transactions complete. The published quote ladder is not replayed
-at fill time: the solver greedily rebuilds the best current route plan, and redeemed output above the order
-requirement remains executor surplus. The default strategy prices every standing range by running the shared
-LiquidLane exact-input quote solver at both endpoints. It publishes the lower endpoint rate capped by a
-linear conservative floor for interior route transitions, worst-case route gas, and rounding.
+decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
+available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
+and immediately refreshes every affected quote. A fill remains pending until the shared tx manager reaches
+the configured confirmation depth; only then is its reservation released and quote refresh requested.
+The published quote ladder is not replayed at fill time: the
+solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
+executor surplus. The default strategy prices every standing range by running the shared LiquidLane exact-input
+quote solver at both endpoints. It publishes the lower endpoint rate capped by a linear conservative floor for
+interior route transitions, worst-case route gas, and rounding.
 `strategy.config.rangeCount` sets the geometric curve resolution (default `8`, maximum `16`).
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
@@ -178,9 +182,10 @@ ladders, amount ranges, or quote-time route reservation. Omitting the entire `ga
 accounting in both quote and fill decisions and skips gas-state and Chainlink reads. The tx manager still
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
-indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Capacity is reserved only
-after a fill transaction is accepted for submission; every posted order gets a fresh route plan from the
-current chain state and is simulated before sending. The reservation remains effective while txmanager waits
+indistinguishable, so the solver echoes `quoteId` but does not guess the phase. As soon as a polled order is
+admitted to the fill queue, quote publication pauses until planning either rejects it or atomically hands
+capacity ownership to an accepted transaction reservation. Every posted order gets a fresh route plan from
+the current chain state and is simulated before sending. The reservation remains effective while txmanager waits
 for the configured confirmations. On completion the quote snapshot is invalidated before capacity is
 released, and that capacity is not advertised again until a fresh post-fill chain snapshot is published.
 A quote is returned only if its snapshot epoch and every blocking condition are unchanged after the strategy

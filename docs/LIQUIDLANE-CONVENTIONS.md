@@ -154,6 +154,9 @@ only when that deployment deliberately accepts different freshness and availabil
 Direct and signed-discount inventory for the same route are alternative ways to use the same capacity.
 Never sum them. `internal/liquidlane/strategies/greedy` encodes the one-candidate-per-route rule for quote and fill
 tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `CapacityID`.
+Concrete RFQ and UniswapX requests allocate capacity after filtering to their pair. LI.FI does the same for
+each standing pair curve, so multiple curves may advertise the same unreserved vault capacity; accepted-fill
+reservations are then subtracted from every curve sharing that `CapacityID`.
 
 For signed discounts:
 

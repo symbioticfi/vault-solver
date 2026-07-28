@@ -1254,7 +1254,7 @@ func TestDecideQuotesAppliesReserveBeforeInFlightReservations(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesSharesOneCapacityDomainAcrossRoutes(t *testing.T) {
+func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1278,6 +1278,65 @@ func TestDecideQuotesSharesOneCapacityDomainAcrossRoutes(t *testing.T) {
 			MaxAssets: big.NewInt(1_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
 		},
 	}
+	tests := []struct {
+		name         string
+		reservations liquidlane.CapacityReservations
+		want         string
+	}{
+		{name: "available", want: "1000"},
+		{
+			name:         "reserved",
+			reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)},
+			want:         "600",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
+				Inventory:      inventory,
+				Reservations:   tt.reservations,
+				MaxFeePerGas:   big.NewInt(0),
+				ChainTime:      time.Unix(1_800_000_000, 0),
+				QuoteExpiresAt: time.Unix(1_800_000_090, 0),
+			})
+			if err != nil {
+				t.Fatalf("DecideQuotes: %v", err)
+			}
+			if len(out.Quotes) != 2 {
+				t.Fatalf("quotes = %d", len(out.Quotes))
+			}
+			for _, quote := range out.Quotes {
+				if got := quote.Ranges[len(quote.Ranges)-1].MaxAmount.String(); got != tt.want {
+					t.Fatalf("pair %s/%s maxAmount = %s, want %s",
+						quote.FromAsset.Hex(), quote.ToAsset.Hex(), got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestDecideQuotesDoesNotDoubleCountSharedCapacityWithinPair(t *testing.T) {
+	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	inventory := make([]liquidlane.Inventory, 2)
+	for index := range inventory {
+		inventory[index] = liquidlane.Inventory{
+			Route: liquidlane.Route{
+				ID:              liquidlane.RouteID("route-" + strconv.Itoa(index+1)),
+				CapacityID:      "capacity-1",
+				Adapter:         common.BytesToAddress([]byte{byte(index + 1)}),
+				TokenIn:         tokenIn,
+				TokenOut:        tokenOut,
+				TokenInDecimals: 6, TokenOutDecimals: 6,
+			},
+			MaxAssets: big.NewInt(1_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
+		}
+	}
+
 	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
 		Inventory:      inventory,
 		MaxFeePerGas:   big.NewInt(0),
@@ -1287,15 +1346,11 @@ func TestDecideQuotesSharesOneCapacityDomainAcrossRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecideQuotes: %v", err)
 	}
-	if len(out.Quotes) != 2 {
+	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %d", len(out.Quotes))
 	}
-	total := new(big.Int)
-	for _, quote := range out.Quotes {
-		total.Add(total, quote.Ranges[len(quote.Ranges)-1].MaxAmount)
-	}
-	if total.String() != "1000" {
-		t.Fatalf("total quoted capacity = %s, want 1000", total)
+	if got := out.Quotes[0].Ranges[len(out.Quotes[0].Ranges)-1].MaxAmount.String(); got != "1000" {
+		t.Fatalf("maxAmount = %s, want 1000", got)
 	}
 }
 

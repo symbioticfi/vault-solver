@@ -475,7 +475,9 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    `tokenOut` that adapter's vault asset; native-ETH `tokenOut` is declined in v1 —
    this rule also auto-declines the opposing probe), or no viable inventory.
 2. Read the atomically published direct LiquidLane inventory/rate snapshot, its optional gas snapshot, and its valid advertised
-   signed-discount candidates. Direct and private candidates share physical-route capacity.
+   signed-discount candidates. Filter inventory to the requested token pair before allocating shared capacity, so unrelated
+   input-token routes backed by the same vault do not receive static shares. Matching routes and direct/private alternatives
+   still share `CapacityID`, including reservations from accepted fills.
 3. The UniswapX-local `Strategy.DecideQuote` selects a provisional route only to calculate the concrete
    request's executable output and, when gas accounting is configured, full estimated fill gas. It returns
    one `amountIn`/`amountOut` pair; below the enabled gas-aware floor or outside current capacity ⇒ decline.
@@ -513,6 +515,10 @@ is economic, not just gas:
   already-submitted fills. Quote requests themselves stay stateless because their phase is unknowable. This
   means simultaneous winning hard quotes can contend; current-chain replanning and simulation fail closed,
   while the cold-start window and fade breakers limit the operational risk.
+- **Block at order admission, not worker execution** — claiming an order invalidates quote state before it
+  enters the bounded worker queue. The blocker remains until planning rejects the order or an accepted
+  transaction installs its shared-capacity reservation, so queueing and the first chain-time read cannot
+  advertise the same capacity again.
 - **Invalidate quotes across state transitions** — a request may return only against the same snapshot epoch
   and blocker state it started with. A completed fill invalidates the snapshot before releasing its
   reservation, and the released capacity remains unavailable until a post-fill chain refresh publishes the
@@ -522,8 +528,12 @@ is economic, not just gas:
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
-- **Track exclusive obligations locally:** every valid order assigned to our executor is tracked until
-  `decayStartTime`, then reconciled in batches against terminal order state and the canonical fill receipt.
+- **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
+  `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
+  poll, the solver also reads recent filler history across all statuses so an order that became terminal while
+  absent is recovered. History/parse uncertainty stops quoting instead of silently clearing obligations.
+  Expired obligations are reconciled in batches against terminal order state and a canonical fill receipt at
+  the shared tx manager's configured confirmation depth.
   Only a successful on-chain fill at or before the deadline clears the obligation; this makes another
   filler's timely soft override non-fade. A fill only after the deadline—including one mined through our
   executor—or a final non-filled state opens an independent local fade breaker: Uniswap still counts the
@@ -657,7 +667,9 @@ in the owning repository and the integration harness pins the resulting revision
   async txmanager submission, receipts, pending-fill reservations, breaker, retries, and signed-discount
   discovery/resolution/calldata exist. Txmanager's configured confirmations are honored; released capacity
   stays unavailable until a post-fill snapshot. Exclusive obligations are tracked through `decayStartTime`
-  and batch-reconciled before either clearing them or opening the independent local fade breaker.
+  from admission (including execution-invalid awarded orders), recent terminal history is recovered after
+  startup/poll gaps, and confirmed terminal receipts are batch-reconciled before either clearing obligations
+  or opening the independent local fade breaker.
 - [ ] **P6 — Packaging + E2E.** The isolated local stack now passes quote → order → on-chain fill for
   exclusive V2 exact-input/exact-output/same-token multi-output, decaying public V2, public V2 with an
   exclusivity override, and a forced signed-discount-only route; the smoke test decodes executor calldata

@@ -28,25 +28,13 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 	if input.ServerTime.After(validAfter) {
 		validAfter = input.ServerTime
 	}
-	inventory := liquidgreedy.AllocateInventoryCapacity(
-		liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)),
-		input.Reservations,
-		s.cfg.InventoryReserveBps,
-	)
-	groups := make(map[strategyPairKey][]liquidlane.QuoteCandidate)
-	for _, item := range inventory {
-		candidate := liquidgreedy.NewQuoteCandidate(
-			item,
-			liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
-		)
-		if candidate == nil {
-			continue
-		}
+	groups := make(map[strategyPairKey][]liquidlane.Inventory)
+	for _, item := range liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)) {
 		key := strategyPairKey{
 			tokenIn: item.TokenIn, tokenOut: item.TokenOut,
 			inputDecimals: item.TokenInDecimals, outputDecimals: item.TokenOutDecimals,
 		}
-		groups[key] = append(groups[key], *candidate)
+		groups[key] = append(groups[key], item)
 	}
 
 	keys := make([]strategyPairKey, 0, len(groups))
@@ -56,6 +44,21 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 	sort.Slice(keys, func(i, j int) bool { return pairLess(keys[i], keys[j]) })
 	out := types.QuoteOutput{Quotes: make([]types.Quote, 0, len(keys))}
 	for _, key := range keys {
+		inventory := liquidgreedy.AllocateInventoryCapacity(
+			groups[key],
+			input.Reservations,
+			s.cfg.InventoryReserveBps,
+		)
+		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
+		for _, item := range inventory {
+			candidate := liquidgreedy.NewQuoteCandidate(
+				item,
+				liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
+			)
+			if candidate != nil {
+				candidates = append(candidates, *candidate)
+			}
+		}
 		pricing, err := liquidstrategies.NewGasPricing(
 			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.cfg.InventoryReserveBps,
 			types.LiquidLaneGasEnvelope(),
@@ -67,7 +70,7 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		if input.SingleRouteTokens[key.tokenIn] {
 			routeLimit = 1
 		}
-		ranges, used, err := s.buildQuoteRanges(groups[key], routeLimit, pricing)
+		ranges, used, err := s.buildQuoteRanges(candidates, routeLimit, pricing)
 		if err != nil {
 			return types.QuoteOutput{}, err
 		}

@@ -146,6 +146,58 @@ func TestDecideQuoteUsesCurrentCapacityAndReservations(t *testing.T) {
 	}
 }
 
+func TestDecideQuoteDoesNotSplitCapacityWithUnrelatedPairs(t *testing.T) {
+	strategy, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := directQuoteInput(100, 100, quoteRateScale)
+	for index, tokenIn := range []common.Address{
+		common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		common.HexToAddress("0x4444444444444444444444444444444444444444"),
+	} {
+		other := input.Inventory[0]
+		other.ID = liquidlane.RouteID("other-" + tokenIn.Hex())
+		other.Adapter = common.BytesToAddress([]byte{byte(index + 2)})
+		other.TokenIn = tokenIn
+		input.Inventory = append(input.Inventory, other)
+	}
+
+	quote, err := strategy.DecideQuote(context.Background(), input)
+	if err != nil || quote == nil || quote.AmountOut.String() != "100" {
+		t.Fatalf("quote = %+v, err %v", quote, err)
+	}
+
+	input.AmountOut = input.AmountIn
+	input.AmountIn = nil
+	quote, err = strategy.DecideQuote(context.Background(), input)
+	if err != nil || quote == nil || quote.AmountIn.String() != "100" {
+		t.Fatalf("exact-output quote = %+v, err %v", quote, err)
+	}
+}
+
+func TestDecideQuoteKeepsMatchingRoutesWithinSharedCapacity(t *testing.T) {
+	strategy, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := directQuoteInput(100, 100, quoteRateScale)
+	second := input.Inventory[0]
+	second.ID = "route-2"
+	second.Adapter = common.HexToAddress("0x00000000000000000000000000000000000000a2")
+	input.Inventory = append(input.Inventory, second)
+
+	quote, err := strategy.DecideQuote(context.Background(), input)
+	if err != nil || quote == nil || quote.AmountOut.String() != "100" {
+		t.Fatalf("quote = %+v, err %v", quote, err)
+	}
+	input.AmountIn = big.NewInt(101)
+	quote, err = strategy.DecideQuote(context.Background(), input)
+	if err != nil || quote != nil {
+		t.Fatalf("over-capacity quote = %+v, err %v", quote, err)
+	}
+}
+
 func TestDecideQuoteChoosesFreshPrivateAlternative(t *testing.T) {
 	strategy, err := New(Config{})
 	if err != nil {

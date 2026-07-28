@@ -532,8 +532,8 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 		t.Fatalf("fills=%d fees=%d submissions=%d, want 5/5/5", fillReads, feeReads, len(txm.reqs))
 	}
 	for i, req := range txm.reqs {
-		if req.Confirmations == nil || *req.Confirmations != 0 {
-			t.Fatalf("request %d confirmations = %v, want inclusion receipt", i, req.Confirmations)
+		if req.Confirmations != nil {
+			t.Fatalf("request %d confirmations = %v, want global txmanager configuration", i, req.Confirmations)
 		}
 	}
 }

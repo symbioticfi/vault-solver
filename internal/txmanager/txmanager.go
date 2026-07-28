@@ -138,6 +138,11 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	}
 }
 
+// Confirmations returns the configured finality depth used by requests without an override.
+func (m *Manager) Confirmations() uint64 {
+	return m.cfg.Confirmations
+}
+
 // Start runs the worker until ctx is cancelled. Run it in its own goroutine.
 func (m *Manager) Start(ctx context.Context) {
 	m.log.Info("started", "from", m.signer.Address().Hex())
