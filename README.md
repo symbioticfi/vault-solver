@@ -78,14 +78,14 @@ External mode also fails startup unless that executor has direct `owner`/`market
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
-cover the full order through one candidate route. Other scopes keep the existing multi-route behavior.
+use one candidate route. Other scopes keep the existing multi-route behavior.
 `minAmountsIn` adds an optional per-input-token floor on request size (base units, decimal strings):
 a request below its token's minimum is not quoted (HTTP 204), while an amount equal to the minimum
 still quotes; unlisted tokens have no floor.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
-quoted output at the available `maxAssets` instead of declining; the excess input is reflected as
-worse execution price and price impact. Awarded orders are planned again from current LiquidLane
-state at fill time; the solver does not retain quote-time route plans.
+quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
+is reflected as worse execution price and price impact. Awarded orders are planned again from current
+LiquidLane state at fill time; the solver does not retain quote-time route plans.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

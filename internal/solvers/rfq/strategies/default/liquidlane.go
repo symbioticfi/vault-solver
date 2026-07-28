@@ -77,7 +77,6 @@ func solveQuote(
 	inputPolicy := liquidgreedy.AbsorbUncoveredInput
 	if input.RequireSingleRoute {
 		maxRoutes = 1
-		inputPolicy = liquidgreedy.RejectUncoveredInput
 	}
 	solution, err := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
 		ExactInput: input.AmountIn, Candidates: candidates, MaxRoutes: maxRoutes,
@@ -131,7 +130,6 @@ func rfqFillTask(
 	inputPolicy := liquidgreedy.AbsorbUncoveredInput
 	if input.RequireSingleRoute {
 		maxRoutes = 1
-		inputPolicy = liquidgreedy.RejectUncoveredInput
 	}
 	return liquidgreedy.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
