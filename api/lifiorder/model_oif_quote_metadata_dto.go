@@ -22,7 +22,7 @@ var _ MappedNullable = &OifQuoteMetadataDto{}
 // OifQuoteMetadataDto struct for OifQuoteMetadataDto
 type OifQuoteMetadataDto struct {
 	// Solver address with exclusivity on this quote, or null when no solver is exclusive
-	ExclusiveFor map[string]interface{} `json:"exclusiveFor"`
+	ExclusiveFor NullableString `json:"exclusiveFor"`
 }
 
 type _OifQuoteMetadataDto OifQuoteMetadataDto
@@ -31,7 +31,7 @@ type _OifQuoteMetadataDto OifQuoteMetadataDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOifQuoteMetadataDto(exclusiveFor map[string]interface{}) *OifQuoteMetadataDto {
+func NewOifQuoteMetadataDto(exclusiveFor NullableString) *OifQuoteMetadataDto {
 	this := OifQuoteMetadataDto{}
 	this.ExclusiveFor = exclusiveFor
 	return &this
@@ -46,29 +46,29 @@ func NewOifQuoteMetadataDtoWithDefaults() *OifQuoteMetadataDto {
 }
 
 // GetExclusiveFor returns the ExclusiveFor field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *OifQuoteMetadataDto) GetExclusiveFor() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OifQuoteMetadataDto) GetExclusiveFor() string {
+	if o == nil || o.ExclusiveFor.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.ExclusiveFor
+	return *o.ExclusiveFor.Get()
 }
 
 // GetExclusiveForOk returns a tuple with the ExclusiveFor field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *OifQuoteMetadataDto) GetExclusiveForOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ExclusiveFor) {
-		return map[string]interface{}{}, false
+func (o *OifQuoteMetadataDto) GetExclusiveForOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ExclusiveFor, true
+	return o.ExclusiveFor.Get(), o.ExclusiveFor.IsSet()
 }
 
 // SetExclusiveFor sets field value
-func (o *OifQuoteMetadataDto) SetExclusiveFor(v map[string]interface{}) {
-	o.ExclusiveFor = v
+func (o *OifQuoteMetadataDto) SetExclusiveFor(v string) {
+	o.ExclusiveFor.Set(&v)
 }
 
 func (o OifQuoteMetadataDto) MarshalJSON() ([]byte, error) {
@@ -81,9 +81,7 @@ func (o OifQuoteMetadataDto) MarshalJSON() ([]byte, error) {
 
 func (o OifQuoteMetadataDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if o.ExclusiveFor != nil {
-		toSerialize["exclusiveFor"] = o.ExclusiveFor
-	}
+	toSerialize["exclusiveFor"] = o.ExclusiveFor.Get()
 	return toSerialize, nil
 }
 

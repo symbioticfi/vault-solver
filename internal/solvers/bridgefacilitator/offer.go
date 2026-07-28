@@ -12,9 +12,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-// offerTTL is how long a signed offer stays valid.
-const offerTTL = 30 * time.Minute
-
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
@@ -46,7 +43,7 @@ func (s *Solver) buildSignedOffer(
 	}
 
 	nonce := new(big.Int).SetUint64(s.nextNonce())
-	expiration := big.NewInt(time.Now().Add(offerTTL).Unix())
+	expiration := offerExpiration(av, s.cfg.OfferExpiryBuffer, time.Now())
 
 	signedOffer := Offer{
 		Maker:          offer.Maker,
@@ -74,4 +71,17 @@ func (s *Solver) buildSignedOffer(
 	dto.SetChainId(float32(chainID.Int64()))
 	dto.SetSignature(hexutil.Encode(sig))
 	return *dto, nil
+}
+
+// offerExpiration anchors a signed offer's expiration to the auction's solve_start_time plus buffer.
+// If the auction omits solve_start_time, the offer expires now+buffer.
+// The buffer is long enough to cover a full auction solve window plus slack.
+func offerExpiration(av auctionView, buffer time.Duration, now time.Time) *big.Int {
+	exp := now.Add(buffer)
+	if s, ok := av.dto.GetSolveStartTimeOk(); ok && s != nil && *s != "" {
+		if t, err := time.Parse(time.RFC3339, *s); err == nil {
+			exp = t.Add(buffer)
+		}
+	}
+	return big.NewInt(exp.Unix())
 }

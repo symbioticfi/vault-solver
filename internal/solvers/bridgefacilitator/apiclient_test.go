@@ -16,9 +16,9 @@ import (
 )
 
 // fakeSigner is a minimal signer.Signer test double that signs nothing meaningful (65 zero bytes).
-type fakeSigner struct{}
+type fakeSigner struct{ addr common.Address }
 
-func (fakeSigner) Address() common.Address { return common.Address{} }
+func (s fakeSigner) Address() common.Address { return s.addr }
 func (fakeSigner) SignHash(_ common.Hash) ([]byte, error) {
 	return make([]byte, 65), nil
 }

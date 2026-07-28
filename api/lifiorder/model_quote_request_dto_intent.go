@@ -32,8 +32,7 @@ type QuoteRequestDtoIntent struct {
 	// Minimum validity timestamp in unix timestamp (seconds). Only select solver quotes with longer TTL.
 	MinValidUntil *float32 `json:"minValidUntil,omitempty"`
 	// Quote preference (unsupported, ignored if provided)
-	Preference *string `json:"preference,omitempty"`
-	// Explicit preference for submission responsibility and acceptable auth schemes. Shape: { mode: \"user\" | \"protocol\", auth?: string[] }. Unsupported, ignored for now - needs gasless feature.
+	Preference       *string     `json:"preference,omitempty"`
 	OriginSubmission interface{} `json:"originSubmission,omitempty"`
 	// Failure handling policy for execution that the integrator supports (unsupported, ignored)
 	FailureHandling []string `json:"failureHandling,omitempty"`

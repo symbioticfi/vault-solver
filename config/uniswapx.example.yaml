@@ -1,0 +1,86 @@
+# UniswapX V2 quoter + filler for Ethereum mainnet.
+# Uniswap must allowlist the public quote endpoint and executor before beta traffic reaches this solver.
+# Secrets are referenced by env-var name; ${VAR} values are expanded when the config is loaded.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_MAINNET} # primary Ethereum RPC for reads, fills, and receipts
+  chainId: 1                     # must match the RPC chain ID
+
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY     # executor caller key; membership is checked at startup
+
+txManager:
+  confirmations: 2               # confirmations awaited before capacity is released
+
+observability:
+  addr: ":9090"                  # framework metrics and health endpoints
+  debug: false                   # enable debug-level logs
+
+solvers:
+  - name: uniswapx-filler
+    config:
+      # Expected V2 Reactor; verify the executor immutable at deployment because the ABI has no getter.
+      reactor: "0x00000011F84B9aa48e5f8aA8B9897600006289Be"
+      executor: ${UNISWAPX_EXECUTOR} # advertised filler; bytecode and caller are checked at startup
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
+
+      # Direct LiquidLane adapter scope. Required in external mode.
+      # In internal mode this list is optional: when present it scopes quotes and direct fills,
+      # while signed-discount fills may recover through any valid adapter advertised by the backend.
+      adapters:
+        - ${LIQUIDLANE_ADAPTER}
+
+      # external (default): direct filler-authorized routes only.
+      # internal: enables signed discounts and permits an empty adapters list.
+      solverMode: external
+      # solverMode: internal
+
+      # Input-token scope: all, permissioned (listed only), or permissionless (unlisted only).
+      tokensToQuote: permissioned
+      permissionedTokens:
+        - ${TOKEN_TO_REDEEM}      # RWA input token accepted by this solver
+
+      quoteServer:
+        listenAddress: ":42080"   # public POST /quote plus /healthz and /ready
+        httpTimeout: 450ms        # quote request read/write deadline
+        refreshInterval: 12s      # cadence for inventory, gas, and price snapshots
+        quoteTtl: 30s             # quote-state lifetime; must be >= 2x refreshInterval
+
+      orderServer:
+        baseUrl: https://api.uniswap.org/v2 # UniswapX order-service API root
+        apiKeyEnv: UNISWAPX_ORDER_API_KEY   # env var containing the Uniswap API key
+        pollInterval: 1s                    # order polling cadence; minimum 167ms
+        httpTimeout: 5s                     # timeout for each order API request
+        beta: true                          # send the x-beta-rfq header
+        sources:
+          exclusiveV2: true # awarded orders plus terminal reconciliation; required while quoting
+          publicV2: true    # also compete for permissionless public V2 orders
+
+      # Required only in internal solverMode; forbidden in external mode.
+      # discounts:
+      #   baseUrl: ${RFQ_BACKEND_URL} # signed-discount API root
+      #   httpTimeout: 2s             # timeout for discount list and resolve requests
+      #   minimumValidity: 15s        # required remaining signature lifetime at resolution
+
+      # Optional. Omit this entire block to exclude fill gas from quote/fill economics and skip
+      # gas-state and Chainlink reads. The tx manager still prices and pays actual transaction gas.
+      # When enabled, dynamic internal discount routes without a configured token feed are skipped.
+      gas:
+        nativeUsdFeed: ${ETH_USD_FEED} # native gas token / USD feed
+        nativeMaxAge: 1h               # maximum accepted native feed staleness
+        tokenUsdFeeds:
+          - token: ${VAULT_ASSET}              # adapter vault asset (tokenOut)
+            feed: ${VAULT_ASSET_USD_FEED}      # tokenOut / USD feed
+            maxAge: 1h                         # maximum accepted token feed staleness
+
+      breaker:
+        maxFailures: 3 # pause quotes after this many failed fills in the window
+        window: 5m     # failure-counting window and resulting pause duration
+
+      strategy:
+        name: default # in-process greedy LiquidLane pricing and fill selection
+        config:
+          priceBufferBps: 20          # rate/staleness safety margin in basis points
+          inventoryReserveBps: 500    # keep 5% of route capacity uncommitted
+          executionDeadlineBuffer: 12s # required lifetime remaining for a safe fill

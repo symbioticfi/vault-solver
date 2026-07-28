@@ -15,12 +15,15 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
-	APIBaseURL      string            `yaml:"apiBaseUrl"`
-	RedeemBatchSize int               `yaml:"redeemBatchSize"`
-	Adapters        []string          `yaml:"adapters"`
-	HTTPTimeout     string            `yaml:"httpTimeout"`
-	Intervals       rawIntervals      `yaml:"intervals"`
-	Strategy        rawStrategyConfig `yaml:"strategy"`
+	APIBaseURL        string            `yaml:"apiBaseUrl"`
+	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
+	Adapters          *[]string         `yaml:"adapters"`
+	AdapterFactory    string            `yaml:"adapterFactory"`
+	LiquidityLens     string            `yaml:"liquidityLens"`
+	HTTPTimeout       string            `yaml:"httpTimeout"`
+	OfferExpiryBuffer string            `yaml:"offerExpiryBuffer"`
+	Intervals         rawIntervals      `yaml:"intervals"`
+	Strategy          rawStrategyConfig `yaml:"strategy"`
 }
 
 type rawStrategyConfig struct {
@@ -42,10 +45,19 @@ type Config struct {
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
 	// (including redemption scans). Applied as the 3F http.Client timeout.
 	HTTPTimeout time.Duration
-	// Targets is the list of vault+adapter pairs this facilitator serves.
-	Targets   []Target
-	Intervals Intervals
-	Strategy  StrategyConfig
+	// OfferExpiryBuffer is added to an auction's solve_start_time to set a signed offer's expiration, so
+	// the offer stays valid through the whole solve window regardless of when it is signed.
+	OfferExpiryBuffer time.Duration
+	// Targets is the configured static adapter set. Nil means adapters was omitted and the factory
+	// should be discovered; a non-nil slice is authoritative.
+	Targets        []Target
+	AdapterFactory common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, adapter funding headroom is
+	// read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(); zero-value falls back to the adapter getter.
+	LiquidityLens common.Address
+	Intervals     Intervals
+	Strategy      StrategyConfig
 }
 
 type StrategyConfig struct {
@@ -53,9 +65,9 @@ type StrategyConfig struct {
 	Config yaml.Node
 }
 
-// Target is one adapter the bot facilitates. Only the adapter is config: Vault (adapter.vault()) and
-// Collateral (vault.asset()) are resolved on-chain at startup (resolveTargets); per-request caps also
-// live on-chain (setLimitsPerRequest), read each poll.
+// Target is one adapter the bot facilitates. Only static adapter addresses are config: Vault
+// (adapter.vault()) and Collateral (vault.asset()) are resolved on-chain on every adapter refresh;
+// per-request caps also live on-chain (setLimitsPerRequest), read each poll.
 type Target struct {
 	Adapter common.Address
 	// Auctions are matched to this target by their deposit asset equalling Collateral.
@@ -72,7 +84,7 @@ type Intervals struct {
 
 // Default loop cadences (used when a field is unset).
 const (
-	defaultDiscover   = time.Hour
+	defaultDiscover   = 5 * time.Minute
 	defaultRedeemPoll = 5 * time.Minute
 	defaultReconcile  = 15 * time.Minute
 )
@@ -82,6 +94,10 @@ const defaultRedeemBatchSize = 10
 
 // defaultHTTPTimeout bounds each 3F API call when httpTimeout is unset.
 const defaultHTTPTimeout = 30 * time.Second
+
+// defaultOfferExpiryBuffer is the solve_start_time margin applied to a signed offer's expiration when
+// offerExpiryBuffer is unset — long enough to cover a full auction solve window plus slack.
+const defaultOfferExpiryBuffer = 2 * time.Hour
 
 const defaultStrategyName = "default"
 
@@ -104,6 +120,23 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	var adapterFactory common.Address
+	if raw.AdapterFactory != "" {
+		adapterFactory, err = cfgparse.NonZeroAddress(raw.AdapterFactory, "adapterFactory")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(targets) == 0 && adapterFactory == (common.Address{}) {
+		return nil, errors.New("at least one adapters entry or adapterFactory is required")
+	}
+	var liquidityLens common.Address
+	if raw.LiquidityLens != "" {
+		liquidityLens, err = cfgparse.NonZeroAddress(raw.LiquidityLens, "liquidityLens")
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	discover, err := cfgparse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
 	if err != nil {
@@ -123,27 +156,35 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	offerExpiryBuffer, err := cfgparse.Duration(raw.OfferExpiryBuffer, defaultOfferExpiryBuffer, "offerExpiryBuffer")
+	if err != nil {
+		return nil, err
+	}
+
 	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
 	if strategy.Name == "" {
 		strategy.Name = defaultStrategyName
 	}
 
 	return &Config{
-		APIBaseURL:      raw.APIBaseURL,
-		RedeemBatchSize: redeemBatch,
-		HTTPTimeout:     httpTimeout,
-		Targets:         targets,
-		Intervals:       Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:        strategy,
+		APIBaseURL:        raw.APIBaseURL,
+		RedeemBatchSize:   redeemBatch,
+		HTTPTimeout:       httpTimeout,
+		OfferExpiryBuffer: offerExpiryBuffer,
+		Targets:           targets,
+		AdapterFactory:    adapterFactory,
+		LiquidityLens:     liquidityLens,
+		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
+		Strategy:          strategy,
 	}, nil
 }
 
 func parseTargets(raw rawConfig) ([]Target, error) {
-	if len(raw.Adapters) == 0 {
-		return nil, errors.New("at least one adapters entry is required")
+	if raw.Adapters == nil {
+		return nil, nil
 	}
-	targets := make([]Target, 0, len(raw.Adapters))
-	for i, a := range raw.Adapters {
+	targets := make([]Target, 0, len(*raw.Adapters))
+	for i, a := range *raw.Adapters {
 		adapter, err := cfgparse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
 		if err != nil {
 			return nil, err

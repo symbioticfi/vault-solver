@@ -93,8 +93,12 @@ func NewConfiguration() *Configuration {
 		Debug:         false,
 		Servers: ServerConfigurations{
 			{
-				URL:         "",
-				Description: "No description provided",
+				URL:         "https://order.li.fi",
+				Description: "Production",
+			},
+			{
+				URL:         "https://order-dev.li.fi",
+				Description: "Development",
 			},
 		},
 		OperationServers: map[string]ServerConfigurations{},

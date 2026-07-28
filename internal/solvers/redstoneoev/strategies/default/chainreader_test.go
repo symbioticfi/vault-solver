@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/oev/aggregator"
+	"github.com/symbioticfi/vault-solver/api/bindings/chainlink/aggregator"
 )
 
 func mustParseABI(j string) abi.ABI {

@@ -30,7 +30,7 @@ type adapterSnapshotJSON struct {
 	OpenCount     int    `json:"openCount"`
 	MaxAssets     string `json:"maxAssets"`
 	MinAssets     string `json:"minAssets"`
-	MinYieldBps   string `json:"minYieldBps"`
+	MinYieldPpm   string `json:"minYieldPpm"`
 	MaxConcurrent int    `json:"maxConcurrent"`
 }
 
@@ -75,7 +75,7 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 			OpenCount:     a.OpenCount,
 			MaxAssets:     bigString(a.MaxAssets),
 			MinAssets:     bigString(a.MinAssets),
-			MinYieldBps:   bigString(a.MinYieldBps),
+			MinYieldPpm:   bigString(a.MinYieldPpm),
 			MaxConcurrent: a.MaxConcurrent,
 		})
 	}

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
 type Decision string
@@ -21,17 +23,9 @@ type Strategy interface {
 	BuildFillPlan(ctx context.Context, input FillInput) (*FillPlan, error)
 }
 
-type Pricing interface {
-	TokenDecimals(ctx context.Context, token common.Address) (int, error)
-	AmountsOut(
-		ctx context.Context,
-		tokenIn common.Address,
-		candidates []QuoteCandidate,
-		amount *big.Int,
-	) (map[common.Address]*big.Int, error)
-}
-
-// QuoteInput is the RFQ strategy decision snapshot. It is intentionally solver-local.
+// QuoteInput is the RFQ strategy decision snapshot. The solver has already
+// normalized backend inventory and current adapter reads into LiquidLane
+// candidates; the strategy only decides how to allocate the request.
 type QuoteInput struct {
 	RequestID string
 	QuoteID   string
@@ -42,20 +36,10 @@ type QuoteInput struct {
 	TokenOut common.Address
 	AmountIn *big.Int
 
-	RequiredAmountOut *big.Int
-	Candidates        []QuoteCandidate
-	Now               time.Time
-}
-
-type QuoteCandidate struct {
-	ID string
-
-	Adapter       common.Address
-	Asset         common.Address
-	AssetDecimals int
-	MaxAssets     *big.Int
-	MaxRate       *big.Int
-	DiscountID    *common.Hash
+	RequiredAmountOut  *big.Int
+	RequireSingleRoute bool
+	Candidates         []liquidlane.QuoteCandidate
+	Now                time.Time
 }
 
 type QuoteOutput struct {
@@ -71,25 +55,13 @@ type QuoteLeg struct {
 	AmountOut   *big.Int
 }
 
-// FillInput is the fill-time snapshot the solver hands back to the strategy. The strategy may return
-// a cached quote-time plan or rebuild one from the provided candidates.
-type FillInput struct {
-	RequestID string
-	QuoteID   string
-	ChainID   int64
-	Executor  common.Address
+// FillInput has the same decision shape as QuoteInput; only the solver-owned
+// lifecycle stage differs. Fill-time callers populate fresh candidates and the
+// awarded RequiredAmountOut.
+type FillInput = QuoteInput
 
-	TokenIn           common.Address
-	TokenOut          common.Address
-	AmountIn          *big.Int
-	RequiredAmountOut *big.Int
-
-	Candidates []QuoteCandidate
-	Now        time.Time
-}
-
-// FillPlan is the execution output trusted strategies hand to the solver. The solver only translates
-// this plan into Executor calldata.
+// FillPlan is the execution output trusted strategies hand to the solver. The solver enforces its
+// structural constraints, then translates the plan into Executor calldata.
 type FillPlan struct {
 	QuoteID         string
 	RequestID       string

@@ -25,7 +25,9 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
-  # maxFeeGwei: 50                 # cap on max fee per gas; omit to derive from base fee
+  maxFeeGwei: 50                   # required absolute ceiling; normal sends reserve one bump for cancellation
+  replacementIntervalMs: 30000     # fee-bump pending transactions every 30s
+  pendingTimeoutMs: 300000         # cancel the lowest blocked nonce after 5m
   # tipGwei: 1                     # priority fee; omit to use the node's suggestion
 
 observability:
@@ -47,8 +49,10 @@ solvers:
       orderLimit: 20                   # max open orders fetched per poll
 
       # RFQ contract deployment (mainnet):
-      executor: "0xe60E84218BB81539cc599A1E213d6F67058C69Cf"   # Executor — the bot calls Executor.fill to settle
-      reactor:  "0xAE1c0995Daa1C0e56Df6c31207c69FBB5278A5B7"   # Reactor — invoked by the Executor at fill time
+      executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle
+      reactor:  "0xC323B898d7E4105E3980082B74CC5D4602996B10"   # Reactor — invoked by the Executor at fill time
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
 
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
@@ -58,11 +62,17 @@ solvers:
       solverMode: external
 
       # tokensToQuote scopes which input tokens the filler will quote, evaluated against
-      # permissionedTokens: "all" (default) | "permissioned" (only tokens in the list below) |
+      # permissionedTokens. Values: "all" (default) | "permissioned" (only tokens in the list below) |
       # "permissionless" (only tokens NOT in the list). Often set per instance via env.
       # tokensToQuote: all
-      # permissionedTokens:            # input-token addresses treated as permissioned for the scope above
+      # permissionedTokens:            # with tokensToQuote: permissioned, inputs must use one candidate route
       #   - "0x..."
+
+      # minAmountsIn sets a per-input-token floor on request size, in that token's BASE UNITS (decimal
+      # string). A request below its token's minimum gets no quote (HTTP 204); an amount equal to the
+      # minimum still quotes. Tokens not listed have no minimum.
+      # minAmountsIn:
+      #   "0x238a700eD6165261Cf8b2e544ba797BC11e466Ba": "1000000000000000000"  # 1 token (18 decimals)
 
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
       # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode

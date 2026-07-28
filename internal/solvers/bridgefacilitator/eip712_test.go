@@ -127,6 +127,63 @@ func TestGetOffersDigest_Golden(t *testing.T) {
 	}
 }
 
+func TestCancelOfferTypeHash_MatchesGolden(t *testing.T) {
+	// GOLDEN: keccak256 of the CancelOffer type string from the live 3F /v1/offer/cancel doc.
+	const want = "0xd7c02cd51344a443f4f661726f2b4637cebad4d56ac50cc0dc8ef4ed3cf684bb"
+	if got := cancelOfferTypeHash.Hex(); got != want {
+		t.Fatalf("cancelOffer typehash = %s, want %s", got, want)
+	}
+}
+
+// TestCancelOfferDigest_MatchesApitypes cross-checks the hand-rolled CancelOffer digest against
+// go-ethereum's independent EIP-712 implementation over the same grunt-api domain as GetOffers.
+func TestCancelOfferDigest_MatchesApitypes(t *testing.T) {
+	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	offerID := big.NewInt(192)
+	deadline := big.NewInt(4102444800)
+
+	got := CancelOfferDigest(maker, offerID, deadline, big.NewInt(apiKeyDomainChainID))
+
+	typed := apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+			},
+			"CancelOffer": {
+				{Name: "maker", Type: "address"},
+				{Name: "offerId", Type: "uint256"},
+				{Name: "deadline", Type: "uint256"},
+			},
+		},
+		PrimaryType: "CancelOffer",
+		Domain: apitypes.TypedDataDomain{
+			Name:    apiKeyDomainName,
+			Version: apiKeyDomainVersion,
+			ChainId: math.NewHexOrDecimal256(apiKeyDomainChainID),
+		},
+		Message: apitypes.TypedDataMessage{
+			"maker":    maker.Hex(),
+			"offerId":  offerID.String(),
+			"deadline": deadline.String(),
+		},
+	}
+	domainSep, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
+	if err != nil {
+		t.Fatalf("hash domain: %v", err)
+	}
+	msgHash, err := typed.HashStruct("CancelOffer", typed.Message)
+	if err != nil {
+		t.Fatalf("hash message: %v", err)
+	}
+	want := crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSep, msgHash)
+
+	if got != want {
+		t.Fatalf("digest mismatch:\n manual   %s\n apitypes %s", got.Hex(), want.Hex())
+	}
+}
+
 // TestGetOffersDigest_MatchesApitypes cross-checks our hand-rolled GetOffers digest against
 // go-ethereum's independent EIP-712 implementation. The grunt-api domain has no verifyingContract
 // (name/version/chainId=1 only), matching the same domain as APIKeyDigest.

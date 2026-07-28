@@ -23,7 +23,8 @@ func testServer() *server {
 	q := &quoteService{
 		chainID:  1,
 		executor: execAddr,
-		strategy: newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}),
+		reader:   &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
+		strategy: newDefaultTestStrategy(),
 		log:      logr.Discard(),
 		now:      clk,
 	}
@@ -135,6 +136,23 @@ func TestServer_QuoteWrongChainNoContent(t *testing.T) {
 	rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("wrong-chain quote = %d, want 204", rr.Code)
+	}
+}
+
+func TestServer_QuoteBelowMinAmountNoContent(t *testing.T) {
+	srv := testServer()
+	body := validQuoteBody() // 1e18 of tIn
+	srv.quotes.minAmountsIn = map[common.Address]*big.Int{
+		tIn: mustBig(t, "2000000000000000000"),
+	}
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusNoContent {
+		t.Fatalf("below-minimum quote = %d, want 204 (body %s)", rr.Code, rr.Body.String())
+	}
+
+	// The same request at exactly the minimum is still quoted.
+	srv.quotes.minAmountsIn = map[common.Address]*big.Int{tIn: mustBig(t, body.Amount)}
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("at-minimum quote = %d, want 200 (body %s)", rr.Code, rr.Body.String())
 	}
 }
 

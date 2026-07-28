@@ -2,110 +2,167 @@ package rfq
 
 import (
 	"context"
+	"maps"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
-// Contract bindings (abigen --v2): typed Pack/Unpack helpers for the Multicall3 sub-calls below, so an
-// ABI change fails at compile time (see CLAUDE.md "Code generation").
-var (
-	llAdapter = adapter.NewLiquidLaneAdapter()
-	// erc4626b serves the vault's asset(): a method's selector/return shape is fixed by the ABI
-	// regardless of target. (Token decimals go through the shared chain.Decimals helper.)
-	erc4626b = erc4626.NewIERC4626()
-)
-
-// readsPerAdapter is the number of Multicall3 sub-calls readVaultInventories issues per adapter
-// (paused, getMaxAssets, getMaxRate). vault() and the vault's asset() are resolved once at startup
-// (see resolveVaults), not re-read here.
-const readsPerAdapter = 3
-
-// reader performs the on-chain reads, batching via Multicall3. Token decimals are resolved + cached by
-// the shared chain.Decimals helper (its own mutex), so concurrent quote requests stay safe.
+// reader is the RFQ adapter over the shared LiquidLane read surface.
 type reader struct {
-	chain *chain.Client
-	log   logr.Logger
-	dec   *chain.Decimals
+	ll            *liquidlane.Reader
+	chainID       int64
+	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
 }
 
-func newReader(c *chain.Client, log logr.Logger) *reader {
-	return &reader{chain: c, log: log, dec: chain.NewDecimals(c)}
+func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
+	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chainID: c.ChainID().Int64()}
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
 // carries only Adapter; Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at
 // startup (see resolveVaults) and are fixed for the adapter's lifetime. The entries double as the
 // adapter whitelist source (see buildAdapterWhitelist) and the fill-plan recovery candidate universe.
-type recoveryVault struct {
-	Adapter common.Address
-	Vault   common.Address
-	Asset   common.Address
-}
-
-// tokenDecimals returns the ERC-20 decimals for token (cached). Delegates to the shared chain.Decimals.
-func (r *reader) tokenDecimals(ctx context.Context, token common.Address) (int, error) {
-	return r.dec.Get(ctx, token)
-}
+type recoveryVault = liquidlane.Adapter
 
 // readVaultInventories reads each adapter's fill-time views (paused, getMaxAssets(tokenIn),
 // getMaxRate(tokenIn)) in one multicall, using the startup-resolved Vault/Asset (decimals cached). Used
-// to rebuild a fill plan when the quote-time one isn't cached (e.g. after a restart). Paused / failing /
-// zero-liquidity adapters are dropped; direct legs only. Mirrors readAdapterInventories in inventories.ts.
+// to build each fill plan from current state. Paused / failing / zero-liquidity adapters are dropped;
+// direct legs only. Mirrors readAdapterInventories in inventories.ts.
 func (r *reader) readVaultInventories(
 	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
-	vaults = dedupeVaultsByAdapter(vaults)
 	if len(vaults) == 0 {
 		return nil, nil
 	}
-	calls := make([]chain.Call, 0, len(vaults)*readsPerAdapter)
-	for _, v := range vaults {
-		calls = append(calls,
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxAssets(tokenIn)},
-			chain.Call{Target: v.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxRate(tokenIn)},
-		)
+	return r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
+}
+
+// readQuoteCandidates turns amount-independent inventory into current,
+// amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
+// belongs to the solver; strategies receive only the completed decision input.
+func (r *reader) readQuoteCandidates(
+	ctx context.Context,
+	inventory []solverInventory,
+	tokenIn common.Address,
+	tokenOut common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.QuoteCandidate, error) {
+	matching := make([]liquidlane.Inventory, 0, len(inventory))
+	for _, item := range inventory {
+		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
+			matching = append(matching, item)
+		}
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	if len(matching) == 0 {
+		return nil, nil
+	}
+	metadata := r.quoteAdapters
+	unknown := unresolvedQuoteAdapters(matching, metadata)
+	if len(unknown) > 0 {
+		resolved, err := r.ll.ResolveAdapters(ctx, unknown)
+		if err != nil {
+			return nil, errors.Errorf("resolve quote adapters: %w", err)
+		}
+		metadata = make(map[common.Address]recoveryVault, len(r.quoteAdapters)+len(resolved))
+		maps.Copy(metadata, r.quoteAdapters)
+		for _, adapter := range resolved {
+			metadata[adapter.Adapter] = adapter
+		}
+	}
+	matching, err := applyResolvedQuoteAdapters(r.chainID, matching, metadata)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("inventory multicall: got %d results, want %d", len(res), len(calls))
+	inputDecimals, err := r.ll.TokenDecimals(ctx, tokenIn)
+	if err != nil {
+		return nil, errors.Errorf("tokenIn decimals: %w", err)
 	}
+	for index := range matching {
+		matching[index].TokenInDecimals = inputDecimals
+	}
+	allocated := liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	if len(allocated) == 0 {
+		return nil, nil
+	}
+	routes := make([]liquidlane.Route, 0, len(allocated))
+	seen := make(map[liquidlane.RouteID]bool, len(allocated))
+	for _, item := range allocated {
+		if !seen[item.ID] {
+			routes = append(routes, item.Route)
+			seen[item.ID] = true
+		}
+	}
+	quotes, err := r.ll.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+	if err != nil {
+		return nil, err
+	}
+	return liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), nil
+}
 
-	out := make([]solverInventory, 0, len(vaults))
-	for i, v := range vaults {
-		base := i * readsPerAdapter
-		paused, maxA, mr := res[base], res[base+1], res[base+2]
-		if !maxA.Success || !mr.Success {
+func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
+	r.quoteAdapters = resolvedQuoteAdapters(resolved)
+}
+
+func unresolvedQuoteAdapters(
+	inventory []solverInventory,
+	resolved map[common.Address]recoveryVault,
+) []common.Address {
+	seen := make(map[common.Address]bool, len(inventory))
+	out := make([]common.Address, 0, len(inventory))
+	for _, item := range inventory {
+		if _, ok := resolved[item.Adapter]; ok || seen[item.Adapter] {
 			continue
 		}
-		if p, perr := llAdapter.UnpackPaused(paused.ReturnData); paused.Success && perr == nil && p {
-			continue
+		seen[item.Adapter] = true
+		out = append(out, item.Adapter)
+	}
+	return out
+}
+
+func resolvedQuoteAdapters(resolved []recoveryVault) map[common.Address]recoveryVault {
+	out := make(map[common.Address]recoveryVault, len(resolved))
+	for _, adapter := range resolved {
+		if adapter.Adapter != (common.Address{}) && adapter.Vault != (common.Address{}) &&
+			adapter.TokenOut != (common.Address{}) {
+			out[adapter.Adapter] = adapter
 		}
-		maxAssets, e1 := llAdapter.UnpackGetMaxAssets(maxA.ReturnData)
-		maxRate, e2 := llAdapter.UnpackGetMaxRate(mr.ReturnData)
-		if e1 != nil || e2 != nil {
-			continue
+	}
+	return out
+}
+
+func applyResolvedQuoteAdapters(
+	chainID int64,
+	inventory []solverInventory,
+	byAdapter map[common.Address]recoveryVault,
+) ([]solverInventory, error) {
+	out := make([]solverInventory, len(inventory))
+	for index, item := range inventory {
+		adapter, ok := byAdapter[item.Adapter]
+		if !ok {
+			return nil, errors.Errorf("resolve quote adapter %s: metadata unavailable", item.Adapter.Hex())
 		}
-		if maxAssets.Sign() <= 0 || maxRate.Sign() <= 0 {
-			continue
+		if adapter.TokenOut != item.TokenOut {
+			return nil, errors.Errorf(
+				"resolve quote adapter %s: backend asset %s does not match on-chain asset %s",
+				item.Adapter.Hex(), item.TokenOut.Hex(), adapter.TokenOut.Hex(),
+			)
 		}
-		decimals, derr := r.tokenDecimals(ctx, v.Asset)
-		if derr != nil {
-			continue
+		if adapter.TokenOutDecimals != item.TokenOutDecimals {
+			return nil, errors.Errorf(
+				"resolve quote adapter %s: backend asset decimals %d do not match on-chain decimals %d",
+				item.Adapter.Hex(), item.TokenOutDecimals, adapter.TokenOutDecimals,
+			)
 		}
-		out = append(out, solverInventory{
-			Adapter: v.Adapter, Asset: v.Asset, AssetDecimals: decimals,
-			MaxAssets: maxAssets, MaxRate: maxRate, DiscountID: nil,
-		})
+		item.Vault = adapter.Vault
+		item.CapacityID = liquidlane.NewCapacityID(chainID, adapter.Vault, item.TokenOut)
+		out[index] = item
 	}
 	return out, nil
 }
@@ -117,54 +174,40 @@ func (r *reader) readVaultInventories(
 // vault(), then those vaults' asset()); an entry whose reads revert is left zero and skipped by
 // fill-time reads (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
 func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
-	out := make([]recoveryVault, len(vaults))
+	adapters := make([]common.Address, len(vaults))
 	for i := range vaults {
-		out[i].Adapter = vaults[i].Adapter
+		adapters[i] = vaults[i].Adapter
 	}
-	if len(out) == 0 {
-		return out, nil
+	return r.ll.ResolveAdapters(ctx, adapters)
+}
+
+func (r *reader) validateDirectAuthorization(
+	ctx context.Context,
+	executor common.Address,
+	vaults []recoveryVault,
+) error {
+	routes := make([]liquidlane.Route, len(vaults))
+	for i := range vaults {
+		routes[i].Adapter = vaults[i].Adapter
 	}
-	vcalls := make([]chain.Call, len(out))
-	for i := range out {
-		vcalls[i] = chain.Call{Target: out[i].Adapter, AllowFailure: true, Data: llAdapter.PackVault()}
-	}
-	vres, err := r.chain.Multicall(ctx, vcalls)
+	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executor)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	acalls := make([]chain.Call, len(out))
-	for i := range out {
-		if i < len(vres) && vres[i].Success {
-			if vault, verr := llAdapter.UnpackVault(vres[i].ReturnData); verr == nil {
-				out[i].Vault = vault
-			}
-		}
-		// asset() reads the resolved vault; a zero target reverts (AllowFailure) and is skipped.
-		acalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: erc4626b.PackAsset()}
+	if missing := liquidlane.UnauthorizedAdapters(routes, authorized); len(missing) > 0 {
+		return errors.Errorf(
+			"executor %s is not authorized as direct filler for configured adapters: %v",
+			executor.Hex(), missing,
+		)
 	}
-	ares, err := r.chain.Multicall(ctx, acalls)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		if i < len(ares) && ares[i].Success {
-			if asset, aerr := erc4626b.UnpackAsset(ares[i].ReturnData); aerr == nil {
-				out[i].Asset = asset
-			}
-		}
-		if out[i].Vault == (common.Address{}) || out[i].Asset == (common.Address{}) {
-			r.log.Error(errors.New("adapter vault/asset unresolved"), "recovery entry skipped until restart",
-				"adapter", out[i].Adapter.Hex())
-		}
-	}
-	return out, nil
+	return nil
 }
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
 // authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
-// marketMaker has delegated via adapter.isFiller(marketMaker, executor). Used at fill time so we never
-// build inputs for an unauthorized adapter. Mirrors readPermissionedAdapterInventories in
-// inventories.ts (marketMaker / owner / isFiller).
+// current marketMaker value (including zero) has delegated via adapter.isFiller(marketMaker, executor).
+// Used at fill time so we never build inputs for an unauthorized adapter. Mirrors
+// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller).
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
@@ -172,86 +215,5 @@ func (r *reader) readPermissionedVaultInventories(
 	if err != nil || len(base) == 0 {
 		return base, err
 	}
-
-	// 1) marketMaker() + owner() for each candidate adapter, in one multicall.
-	calls := make([]chain.Call, 0, len(base)*2)
-	for _, inv := range base {
-		calls = append(calls,
-			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
-			chain.Call{Target: inv.Adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
-		)
-	}
-	res, err := r.chain.Multicall(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("authorization multicall: got %d results, want %d", len(res), len(calls))
-	}
-
-	type authz struct {
-		marketMaker, owner common.Address
-		resolved           bool
-	}
-	auths := make([]authz, len(base))
-	var fillerChecks []int // base indices needing an isFiller delegation check
-	for i := range base {
-		mm, ow := res[i*2], res[i*2+1]
-		if !mm.Success || !ow.Success {
-			continue
-		}
-		marketMaker, e1 := llAdapter.UnpackMarketMaker(mm.ReturnData)
-		owner, e2 := llAdapter.UnpackOwner(ow.ReturnData)
-		if e1 != nil || e2 != nil {
-			continue
-		}
-		auths[i] = authz{marketMaker: marketMaker, owner: owner, resolved: true}
-		if marketMaker != executor && owner != executor {
-			fillerChecks = append(fillerChecks, i)
-		}
-	}
-
-	// 2) isFiller(marketMaker, executor) for the adapters not directly owned, in one multicall.
-	delegated := make(map[int]bool, len(fillerChecks))
-	if len(fillerChecks) > 0 {
-		fcalls := make([]chain.Call, len(fillerChecks))
-		for j, i := range fillerChecks {
-			fcalls[j] = chain.Call{Target: base[i].Adapter, AllowFailure: true, Data: llAdapter.PackIsFiller(auths[i].marketMaker, executor)}
-		}
-		fres, ferr := r.chain.Multicall(ctx, fcalls)
-		if ferr != nil {
-			return nil, ferr
-		}
-		for j, i := range fillerChecks {
-			if j < len(fres) && fres[j].Success {
-				if ok, derr := llAdapter.UnpackIsFiller(fres[j].ReturnData); derr == nil && ok {
-					delegated[i] = true
-				}
-			}
-		}
-	}
-
-	out := make([]solverInventory, 0, len(base))
-	for i, inv := range base {
-		a := auths[i]
-		if a.resolved && (a.marketMaker == executor || a.owner == executor || delegated[i]) {
-			out = append(out, inv)
-		}
-	}
-	return out, nil
-}
-
-// dedupeByAdapter keeps the first recovery vault per distinct adapter, matching the de-dup in
-// readAdapterInventories (keyed by adapter).
-func dedupeVaultsByAdapter(in []recoveryVault) []recoveryVault {
-	seen := make(map[common.Address]bool, len(in))
-	out := make([]recoveryVault, 0, len(in))
-	for _, v := range in {
-		if seen[v.Adapter] {
-			continue
-		}
-		seen[v.Adapter] = true
-		out = append(out, v)
-	}
-	return out
+	return r.ll.FilterAuthorized(ctx, base, executor)
 }

@@ -13,16 +13,17 @@ import (
 // RFQ webhook JSON wire contract: big integers are decimal strings, and strategy responses reject
 // unknown fields so remote deciders fail closed on schema drift.
 type quoteInputJSON struct {
-	RequestID         string               `json:"requestId"`
-	QuoteID           string               `json:"quoteId"`
-	ChainID           int64                `json:"chainId"`
-	Executor          common.Address       `json:"executor"`
-	TokenIn           common.Address       `json:"tokenIn"`
-	TokenOut          common.Address       `json:"tokenOut"`
-	AmountIn          string               `json:"amountIn"`
-	RequiredAmountOut string               `json:"requiredAmountOut,omitempty"`
-	Candidates        []quoteCandidateJSON `json:"candidates"`
-	Now               time.Time            `json:"now"`
+	RequestID          string               `json:"requestId"`
+	QuoteID            string               `json:"quoteId"`
+	ChainID            int64                `json:"chainId"`
+	Executor           common.Address       `json:"executor"`
+	TokenIn            common.Address       `json:"tokenIn"`
+	TokenOut           common.Address       `json:"tokenOut"`
+	AmountIn           string               `json:"amountIn"`
+	RequiredAmountOut  string               `json:"requiredAmountOut,omitempty"`
+	RequireSingleRoute bool                 `json:"requireSingleRoute"`
+	Candidates         []quoteCandidateJSON `json:"candidates"`
+	Now                time.Time            `json:"now"`
 }
 
 type quoteCandidateJSON struct {
@@ -52,14 +53,16 @@ func (in QuoteInput) MarshalJSON() ([]byte, error) {
 	candidates := make([]quoteCandidateJSON, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
 		candidates = append(candidates, quoteCandidateJSON{
-			ID: c.ID, Adapter: c.Adapter, Asset: c.Asset, AssetDecimals: c.AssetDecimals,
-			MaxAssets: bigString(c.MaxAssets), MaxRate: bigString(c.MaxRate), DiscountID: c.DiscountID,
+			ID: string(c.ID), Adapter: c.Route.Adapter, Asset: c.Route.TokenOut,
+			AssetDecimals: c.Route.TokenOutDecimals,
+			MaxAssets:     bigString(c.MaxAmountOut), MaxRate: bigString(c.Rate), DiscountID: c.DiscountID,
 		})
 	}
 	return json.Marshal(quoteInputJSON{
 		RequestID: in.RequestID, QuoteID: in.QuoteID, ChainID: in.ChainID,
 		Executor: in.Executor, TokenIn: in.TokenIn, TokenOut: in.TokenOut, AmountIn: bigString(in.AmountIn),
-		RequiredAmountOut: bigString(in.RequiredAmountOut), Candidates: candidates, Now: in.Now,
+		RequiredAmountOut: bigString(in.RequiredAmountOut), RequireSingleRoute: in.RequireSingleRoute,
+		Candidates: candidates, Now: in.Now,
 	})
 }
 

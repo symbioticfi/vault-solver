@@ -126,13 +126,13 @@ type ApiOrdersControllerGetOrderStatusRequest struct {
 	catalystOrderId *string
 }
 
-// On chain order id propagated in the logs/events.
+// On chain order id propagated in the logs/events. At least one of &#x60;onChainOrderId&#x60; or &#x60;catalystOrderId&#x60; must be provided.
 func (r ApiOrdersControllerGetOrderStatusRequest) OnChainOrderId(onChainOrderId string) ApiOrdersControllerGetOrderStatusRequest {
 	r.onChainOrderId = &onChainOrderId
 	return r
 }
 
-// Internal order id returned by Lifi Intents API
+// Internal order id returned by Lifi Intents API. At least one of &#x60;onChainOrderId&#x60; or &#x60;catalystOrderId&#x60; must be provided.
 func (r ApiOrdersControllerGetOrderStatusRequest) CatalystOrderId(catalystOrderId string) ApiOrdersControllerGetOrderStatusRequest {
 	r.catalystOrderId = &catalystOrderId
 	return r
@@ -628,7 +628,7 @@ func (r ApiQuotesControllerRequestQuoteRequest) OifQuoteRequestDto(oifQuoteReque
 	return r
 }
 
-// Raw integrator API key (obtained from integrator onboarding). When provided, integrator-specific quotes become eligible in addition to open-market quotes.
+// Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.
 func (r ApiQuotesControllerRequestQuoteRequest) XIntegratorKey(xIntegratorKey string) ApiQuotesControllerRequestQuoteRequest {
 	r.xIntegratorKey = &xIntegratorKey
 	return r

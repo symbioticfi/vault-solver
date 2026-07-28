@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -21,22 +23,25 @@ func mustBig(t *testing.T, s string) *big.Int {
 
 func TestQuoteInputMarshalJSONWireShape(t *testing.T) {
 	discountID := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
+	route := liquidlane.Route{
+		ID: "internal-only", Adapter: common.HexToAddress("0x0000000000000000000000000000000000000003"),
+		TokenOut: common.HexToAddress("0x0000000000000000000000000000000000000002"), TokenOutDecimals: 6,
+	}
 	input := QuoteInput{
-		RequestID: "request-1",
-		QuoteID:   "quote-1",
-		ChainID:   1,
-		Executor:  common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		TokenIn:   common.HexToAddress("0x0000000000000000000000000000000000000001"),
-		TokenOut:  common.HexToAddress("0x0000000000000000000000000000000000000002"),
-		AmountIn:  mustBig(t, "1000000000000000000"),
-		Candidates: []QuoteCandidate{{
-			ID:            "candidate-1",
-			Adapter:       common.HexToAddress("0x0000000000000000000000000000000000000003"),
-			Asset:         common.HexToAddress("0x0000000000000000000000000000000000000002"),
-			AssetDecimals: 6,
-			MaxAssets:     mustBig(t, "1000000"),
-			MaxRate:       mustBig(t, "1000000000000000000"),
-			DiscountID:    &discountID,
+		RequestID:          "request-1",
+		QuoteID:            "quote-1",
+		ChainID:            1,
+		Executor:           common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		TokenIn:            common.HexToAddress("0x0000000000000000000000000000000000000001"),
+		TokenOut:           common.HexToAddress("0x0000000000000000000000000000000000000002"),
+		AmountIn:           mustBig(t, "1000000000000000000"),
+		RequireSingleRoute: true,
+		Candidates: []liquidlane.QuoteCandidate{{
+			ID:           "candidate-1",
+			Route:        route,
+			MaxAmountOut: mustBig(t, "1000000"),
+			Rate:         mustBig(t, "1000000000000000000"),
+			DiscountID:   &discountID,
 		}},
 		Now: time.Unix(1, 0).UTC(),
 	}
@@ -58,6 +63,10 @@ func TestQuoteInputMarshalJSONWireShape(t *testing.T) {
 	if _, ok := raw["mode"]; ok {
 		t.Fatalf("mode should not be part of the RFQ strategy input: %s", body)
 	}
+	requireSingleRoute, ok := raw["requireSingleRoute"].(bool)
+	if !ok || !requireSingleRoute {
+		t.Fatalf("requireSingleRoute = %#v, want true", raw["requireSingleRoute"])
+	}
 	candidates, ok := raw["candidates"].([]any)
 	if !ok || len(candidates) != 1 {
 		t.Fatalf("candidates = %#v, want one candidate", raw["candidates"])
@@ -68,6 +77,9 @@ func TestQuoteInputMarshalJSONWireShape(t *testing.T) {
 	}
 	if candidate["maxAssets"] != "1000000" || candidate["maxRate"] != "1000000000000000000" {
 		t.Fatalf("candidate amounts not decimal strings: %#v", candidate)
+	}
+	if _, routeExists := candidate["route"]; routeExists {
+		t.Fatalf("internal route leaked into webhook JSON: %#v", candidate)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
 // backendOrder is one order row from the RFQ backend (GET /orders), projected from the generated
@@ -43,11 +44,11 @@ type backendOut struct {
 	Recipient string
 }
 
-// backendClient is a thin adapter over the generated rfqbackend client for the filler-facing order
-// and discount endpoints. It owns no transport state of its own beyond the generated APIClient, whose
-// HTTPClient carries the request timeout. Used from the single execution goroutine.
+// backendClient is a thin adapter over the generated rfqbackend client for filler-facing orders plus
+// the shared private-discounts client. Used from the single execution goroutine.
 type backendClient struct {
-	api *rfqbackend.APIClient
+	api       *rfqbackend.APIClient
+	discounts *discounts.Client
 }
 
 // newBackendClient builds a backend client rooted at baseURL. The generated client carries the
@@ -58,30 +59,9 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg := rfqbackend.NewConfiguration()
 	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
 	cfg.HTTPClient = &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: internalDiscountTransport{base: http.DefaultTransport},
+		Timeout: 10 * time.Second,
 	}
-	return &backendClient{api: rfqbackend.NewAPIClient(cfg)}
-}
-
-const (
-	publicAPIPrefix   = "/api/v1"          // the spec's prefix, baked into the generated client
-	internalAPIPrefix = "/api-internal/v1" // where the backend serves the internal-only discounts API
-)
-
-// internalDiscountTransport routes discount requests to the backend's internal API prefix. The discounts
-// API is internal-only, but the generated client emits the public /api/v1/discount(s) paths from the
-// spec; rather than regenerate the client for a deployment routing detail, we rewrite just those paths to
-// /api-internal/v1/... at the transport layer. Orders and everything else pass through unchanged.
-type internalDiscountTransport struct{ base http.RoundTripper }
-
-func (t internalDiscountTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if strings.HasPrefix(req.URL.Path, publicAPIPrefix+"/discount") {
-		req = req.Clone(req.Context()) // RoundTrippers must not mutate the caller's request
-		req.URL.Path = internalAPIPrefix + strings.TrimPrefix(req.URL.Path, publicAPIPrefix)
-		req.URL.RawPath = "" // drop any cached encoding so the URL re-encodes from Path
-	}
-	return t.base.RoundTrip(req)
+	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClient(baseURL)}
 }
 
 // closeResp drains and closes the HTTP response body. The generated client already reads the body
@@ -200,50 +180,10 @@ func first(orders []backendOrder) *backendOrder {
 	return &orders[0]
 }
 
-/* ───────── discounts (P3) ───────── */
-
-// discountTerms is the signed discount the adapter's discount-swap verifies. Amounts/nonce are
-// numeric/hex strings on the wire.
-type discountTerms struct {
-	Adapter       string
-	TokenToRedeem string
-	Discount      string
-	Signer        string
-	Protocol      string
-	Nonce         string
-	Deadline      int64
-}
-
-// resolveDiscountResponse is the fresh, signed discount the backend issues at fill time (the single
-// shape of the backend's ResolveDiscountResponse anyOf union; see resolveDiscount).
-type resolveDiscountResponse struct {
-	RequestID         string
-	DiscountID        string
-	Discount          discountTerms
-	SignerSignature   string
-	ProtocolDeadline  int64
-	ProtocolSignature string
-}
-
-// discountListItem is one offered discount (GET /discounts), used during strategy recovery.
-type discountListItem struct {
-	DiscountID         string
-	Adapter            string
-	TokenToRedeem      string
-	Collateral         string
-	CollateralDecimals int
-	Discount           string
-	Signer             string
-	Deadline           int64
-	MaxRate            string
-	MaxAssets          string
-}
-
-type discountsResponse struct {
-	RequestID string
-	Protocol  string
-	Discounts []discountListItem
-}
+type discountTerms = discounts.Terms
+type resolveDiscountResponse = discounts.Resolved
+type discountListItem = discounts.ListItem
+type discountsResponse = discounts.List
 
 // resolveDiscount fetches the fresh signed discount for a discountId (POST /discounts).
 //
@@ -253,92 +193,10 @@ type discountsResponse struct {
 // accepted (it carries the same signed fields); anything else (neither shape, or a batch with ≠1
 // entries) is rejected so we never fill on an ambiguous resolution.
 func (c *backendClient) resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error) {
-	body := rfqbackend.NewApiV1DiscountsPostRequest()
-	body.SetDiscountId(discountID)
-	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsPost(ctx).ApiV1DiscountsPostRequest(*body).Execute()
-	closeResp(httpResp)
-	if err != nil {
-		return nil, errors.Errorf("backend: resolve discount: %w", err)
-	}
-	if resp == nil {
-		return nil, errors.New("backend: resolve discount: empty response")
-	}
-	if single := resp.ResolveDiscountResponseAnyOf; single != nil {
-		return resolvedFromSingle(single), nil
-	}
-	if batch := resp.ResolveDiscountResponseAnyOf1; batch != nil {
-		items := batch.GetDiscounts()
-		if len(items) != 1 {
-			return nil, errors.Errorf("backend: resolve discount: expected a single discount, got %d", len(items))
-		}
-		return resolvedFromBatchItem(batch.GetRequestId(), &items[0]), nil
-	}
-	return nil, errors.New("backend: resolve discount: response matched neither discount shape")
-}
-
-func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *resolveDiscountResponse {
-	return &resolveDiscountResponse{
-		RequestID:         s.GetRequestId(),
-		DiscountID:        s.GetDiscountId(),
-		Discount:          termsFromModel(s.GetDiscount()),
-		SignerSignature:   s.GetSignerSignature(),
-		ProtocolDeadline:  int64(s.GetProtocolDeadline()),
-		ProtocolSignature: s.GetProtocolSignature(),
-	}
-}
-
-func resolvedFromBatchItem(requestID string, it *rfqbackend.ResolveDiscountResponseAnyOf1DiscountsInner) *resolveDiscountResponse {
-	return &resolveDiscountResponse{
-		RequestID:         requestID,
-		DiscountID:        it.GetDiscountId(),
-		Discount:          termsFromModel(it.GetDiscount()),
-		SignerSignature:   it.GetSignerSignature(),
-		ProtocolDeadline:  int64(it.GetProtocolDeadline()),
-		ProtocolSignature: it.GetProtocolSignature(),
-	}
-}
-
-func termsFromModel(d rfqbackend.PublishDiscountRequestDiscount) discountTerms {
-	return discountTerms{
-		Adapter:       d.GetAdapter(),
-		TokenToRedeem: d.GetTokenToRedeem(),
-		Discount:      d.GetDiscount(),
-		Signer:        d.GetSigner(),
-		Protocol:      d.GetProtocol(),
-		Nonce:         d.GetNonce(),
-		Deadline:      int64(d.GetDeadline()),
-	}
+	return c.discounts.Resolve(ctx, discountID)
 }
 
 // listDiscounts lists currently-offered discounts (GET /discounts).
 func (c *backendClient) listDiscounts(ctx context.Context) (*discountsResponse, error) {
-	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsGet(ctx).Execute()
-	closeResp(httpResp)
-	if err != nil {
-		return nil, errors.Errorf("backend: list discounts: %w", err)
-	}
-	out := &discountsResponse{}
-	if resp == nil {
-		return out, nil
-	}
-	out.RequestID = resp.GetRequestId()
-	out.Protocol = resp.GetProtocol()
-	gen := resp.GetDiscounts()
-	out.Discounts = make([]discountListItem, 0, len(gen))
-	for i := range gen {
-		d := &gen[i]
-		out.Discounts = append(out.Discounts, discountListItem{
-			DiscountID:         d.GetDiscountId(),
-			Adapter:            d.GetAdapter(),
-			TokenToRedeem:      d.GetTokenToRedeem(),
-			Collateral:         d.GetCollateral(),
-			CollateralDecimals: int(d.GetCollateralDecimals()),
-			Discount:           d.GetDiscount(),
-			Signer:             d.GetSigner(),
-			Deadline:           int64(d.GetDeadline()),
-			MaxRate:            d.GetMaxRate(),
-			MaxAssets:          d.GetMaxAssets(),
-		})
-	}
-	return out, nil
+	return c.discounts.ListDiscounts(ctx)
 }

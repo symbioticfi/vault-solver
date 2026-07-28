@@ -40,7 +40,6 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 			Fundable:      mustBig(t, "1000"),
 			MaxAssets:     mustBig(t, "800"),
 			MinAssets:     new(big.Int),
-			MinYieldBps:   new(big.Int),
 			MaxConcurrent: maxRequests,
 		}},
 		Auctions: []types.AuctionSnapshot{{
@@ -76,7 +75,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000001")
 	collateral := common.HexToAddress("0x0000000000000000000000000000000000000003")
 	offers := newOfferTracker()
-	offers.record(adapter, 10, now.Add(time.Minute), big.NewInt(100))
+	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
 	input := buildStrategyInput(
 		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
@@ -87,10 +86,9 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 				Collateral: collateral,
 			},
 			st: exposureState{
-				fundable:    big.NewInt(100),
-				maxAssets:   big.NewInt(100),
-				minAssets:   new(big.Int),
-				minYieldBps: new(big.Int),
+				fundable:  big.NewInt(100),
+				maxAssets: big.NewInt(100),
+				minAssets: new(big.Int),
 			},
 		}},
 		offers,

@@ -2,37 +2,22 @@ package rfq
 
 import (
 	"math/big"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
+	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
-
-	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-func newStrategy(spec StrategyConfig, chainClient *chain.Client, log logr.Logger) (types.Strategy, error) {
-	name := spec.Name
-	if name == "" {
-		name = defaultStrategyName
-	}
-	return strategies.New(name, spec.Config, strategies.Deps{Chain: chainClient, Log: log})
+func newStrategy(spec StrategyConfig) (types.Strategy, error) {
+	return strategies.New(spec.Name, spec.Config)
 }
 
-// solverInventory is one candidate adapter leg, taken from the backend quote request's snapshot
-// (the filler does not re-read maxAssets/maxRate/decimals on-chain in the quote path). "adapter" is
-// the address that fills (placed in the on-chain Swap's vault slot); "asset" is the output token.
-type solverInventory struct {
-	ID            string
-	Adapter       common.Address
-	Asset         common.Address
-	AssetDecimals int
-	MaxAssets     *big.Int
-	MaxRate       *big.Int
-	DiscountID    *common.Hash // nil for a direct leg; set for a discount leg
-}
+// solverInventory is one LiquidLane candidate leg; RFQ maps backend adapter snapshots and fill-time
+// recovery reads into the shared LiquidLane inventory shape.
+type solverInventory = liquidlane.Inventory
 
 type fillLeg = types.FillLeg
 type fillPlan = types.FillPlan
@@ -50,37 +35,23 @@ func newQuoteInput(
 	chainID int64,
 	executor common.Address,
 	req strategyRequest,
-	inv []solverInventory,
+	candidates []liquidlane.QuoteCandidate,
 	required *big.Int,
+	requireSingleRoute bool,
 	now time.Time,
 ) types.QuoteInput {
-	candidates := make([]types.QuoteCandidate, 0, len(inv))
-	for i, v := range inv {
-		id := v.ID
-		if id == "" {
-			id = "candidate-" + strconv.Itoa(i)
-		}
-		candidates = append(candidates, types.QuoteCandidate{
-			ID:            id,
-			Adapter:       v.Adapter,
-			Asset:         v.Asset,
-			AssetDecimals: v.AssetDecimals,
-			MaxAssets:     cloneBig(v.MaxAssets),
-			MaxRate:       cloneBig(v.MaxRate),
-			DiscountID:    cloneHash(v.DiscountID),
-		})
-	}
 	return types.QuoteInput{
-		RequestID:         req.RequestID,
-		QuoteID:           req.QuoteID,
-		ChainID:           chainID,
-		Executor:          executor,
-		TokenIn:           req.TokenIn,
-		TokenOut:          req.TokenOut,
-		AmountIn:          cloneBig(req.Amount),
-		RequiredAmountOut: cloneBig(required),
-		Candidates:        candidates,
-		Now:               now,
+		RequestID:          req.RequestID,
+		QuoteID:            req.QuoteID,
+		ChainID:            chainID,
+		Executor:           executor,
+		TokenIn:            req.TokenIn,
+		TokenOut:           req.TokenOut,
+		AmountIn:           liquidlane.CloneBig(req.Amount),
+		RequiredAmountOut:  liquidlane.CloneBig(required),
+		RequireSingleRoute: requireSingleRoute,
+		Candidates:         candidates,
+		Now:                now,
 	}
 }
 
@@ -88,25 +59,16 @@ func newFillInput(
 	chainID int64,
 	executor common.Address,
 	req strategyRequest,
-	inv []solverInventory,
+	candidates []liquidlane.QuoteCandidate,
 	required *big.Int,
+	requireSingleRoute bool,
 	now time.Time,
 ) types.FillInput {
-	q := newQuoteInput(chainID, executor, req, inv, required, now)
-	return types.FillInput(q)
+	return newQuoteInput(chainID, executor, req, candidates, required, requireSingleRoute, now)
 }
-
-func cloneBig(n *big.Int) *big.Int {
-	if n == nil {
-		return nil
+func validateSingleRoute(requireSingleRoute bool, legCount int) error {
+	if requireSingleRoute && legCount != 1 {
+		return errors.Errorf("single-route input requires exactly one leg, got %d", legCount)
 	}
-	return new(big.Int).Set(n)
-}
-
-func cloneHash(h *common.Hash) *common.Hash {
-	if h == nil {
-		return nil
-	}
-	out := *h
-	return &out
+	return nil
 }

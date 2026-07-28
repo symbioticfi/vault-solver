@@ -13,15 +13,15 @@ import (
 // External-solver path (discountsEnabled false, the default): the solver never touches the discounts API.
 // The internal path is covered by the TestExecution_Discount* tests via newExec.
 
-// External recovery never calls GET /discounts; with no vaults + discounts off there's no inventory to
-// rebuild from, so the order fails.
+// External fill planning never calls GET /discounts; with no vaults + discounts off there's no inventory,
+// so the order fails.
 func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store → forces recovery
 	be.discounts = &discountsResponse{Discounts: []discountListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
-		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		Discount: "500", MaxAssets: "10000000", MaxRate: "1000000000000000000",
 	}}}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
@@ -44,7 +44,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	}
 }
 
-// A cached discount leg with discounts off fails closed (terminal, no tx) and never calls POST /discounts.
+// A discount leg with discounts off fails closed (terminal, no tx) and never calls POST /discounts.
 func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")

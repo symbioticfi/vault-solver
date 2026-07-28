@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"math/big"
 	"strconv"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
@@ -19,11 +21,13 @@ type rawConfig struct {
 	ListenAddr             string            `yaml:"listenAddr"`
 	Executor               string            `yaml:"executor"`
 	Reactor                string            `yaml:"reactor"`
+	LiquidityLens          string            `yaml:"liquidityLens"`
 	PollIntervalMs         int               `yaml:"pollIntervalMs"`
 	OrderLimit             int               `yaml:"orderLimit"`
 	SolverMode             string            `yaml:"solverMode"`
 	TokensToQuote          string            `yaml:"tokensToQuote"`
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
+	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
 	Strategy               rawStrategyConfig `yaml:"strategy"`
 }
@@ -47,6 +51,10 @@ type Config struct {
 	Executor common.Address
 	// Reactor is the RFQ Reactor (used at execution time); optional.
 	Reactor common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
+	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
+	LiquidityLens common.Address
 	// PollInterval is how often the backend is polled for open orders.
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
@@ -57,18 +65,18 @@ type Config struct {
 	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
 	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
 	SolverMode string
-	// TokensToQuote scopes which input tokens this filler quotes by class: "all" (default) quotes any,
-	// "permissioned" quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens NOT in
-	// PermissionedTokens. Typically set per instance via env (e.g. tokensToQuote: ${TOKENS_TO_QUOTE}).
-	TokensToQuote string
-	// PermissionedTokens is the local set of input-token addresses treated as permissioned; the
-	// TokensToQuote scope is evaluated against it. Empty means no input token is permissioned.
-	PermissionedTokens map[common.Address]bool
+	// TokenPolicy scopes quoted input tokens and enforces single-route fills in permissioned mode.
+	TokenPolicy tokenpolicy.Policy
+	// MinAmountsIn is the per-input-token minimum request size, keyed by input-token address (config
+	// values are decimal strings in the token's BASE UNITS, e.g. "1000000000000000000" for 1e18).
+	// A request whose amount is strictly below its token's minimum gets no quote (HTTP 204); an amount
+	// equal to the minimum still quotes. A token absent from the map has no minimum. Address keys make
+	// the lookup checksum/case-insensitive.
+	MinAmountsIn map[common.Address]*big.Int
 	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
-	// scoped to, and the candidate universe used to rebuild a fill plan when the quote-time plan isn't
-	// cached (e.g. after a restart). Config carries only adapter addresses;
+	// scoped to, and the candidate universe used to build each fresh fill plan. Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
-	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables fill-plan recovery.
+	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables direct fill planning.
 	Adapters []recoveryVault
 	Strategy StrategyConfig
 }
@@ -82,14 +90,6 @@ type StrategyConfig struct {
 const (
 	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
 	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
-)
-
-// Input-token quote scopes (see Config.TokensToQuote): "all" quotes any input token, "permissioned"
-// quotes only tokens in PermissionedTokens, "permissionless" quotes only tokens not in it.
-const (
-	tokensToQuoteAll            = "all"
-	tokensToQuotePermissioned   = "permissioned"
-	tokensToQuotePermissionless = "permissionless"
 )
 
 // Defaults applied when a field is unset.
@@ -121,10 +121,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if mode != solverModeExternal && mode != solverModeInternal {
 		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
 	}
-	scope := parse.OrDefault(raw.TokensToQuote, tokensToQuoteAll)
-	if scope != tokensToQuoteAll && scope != tokensToQuotePermissioned && scope != tokensToQuotePermissionless {
-		return nil, errors.Errorf("tokensToQuote: must be %q, %q or %q, got %q",
-			tokensToQuoteAll, tokensToQuotePermissioned, tokensToQuotePermissionless, scope)
+	tokenPolicy, err := tokenpolicy.Parse(raw.TokensToQuote, raw.PermissionedTokens)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -135,21 +134,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
-		TokensToQuote:          scope,
+		TokenPolicy:            tokenPolicy,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
 		},
-	}
-	for i, t := range raw.PermissionedTokens {
-		addr, terr := parse.NonZeroAddress(t, "permissionedTokens["+strconv.Itoa(i)+"]")
-		if terr != nil {
-			return nil, terr
-		}
-		if cfg.PermissionedTokens == nil {
-			cfg.PermissionedTokens = make(map[common.Address]bool, len(raw.PermissionedTokens))
-		}
-		cfg.PermissionedTokens[addr] = true
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
@@ -161,6 +150,34 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
 			return nil, err
 		}
+	}
+	if raw.LiquidityLens != "" {
+		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
+	}
+	for token, amount := range raw.MinAmountsIn {
+		field := `minAmountsIn["` + token + `"]`
+		addr, aerr := parse.NonZeroAddress(token, field)
+		if aerr != nil {
+			return nil, aerr
+		}
+		minIn, berr := parse.Big(amount, field)
+		if berr != nil {
+			return nil, berr
+		}
+		if minIn.Sign() <= 0 { // parse.Big accepts negatives; a non-positive floor is a misconfiguration
+			return nil, errors.Errorf("%s: must be > 0, got %q", field, amount)
+		}
+		if cfg.MinAmountsIn == nil {
+			cfg.MinAmountsIn = make(map[common.Address]*big.Int, len(raw.MinAmountsIn))
+		}
+		// Keys differing only in checksum case collide into one address; reject rather than silently
+		// letting map order pick a winner.
+		if _, dup := cfg.MinAmountsIn[addr]; dup {
+			return nil, errors.Errorf("%s: duplicate entry for token %s", field, addr.Hex())
+		}
+		cfg.MinAmountsIn[addr] = minIn
 	}
 	for i, a := range raw.Adapters {
 		adapter, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")

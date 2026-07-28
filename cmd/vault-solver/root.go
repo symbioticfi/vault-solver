@@ -6,8 +6,10 @@ import (
 	// Solver implementations self-register via init(); these blank imports are the only references to
 	// concrete solvers. Adding another solver is an import here plus a config switch.
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/lifi"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"
 )
 
 func newRootCmd() *cobra.Command {

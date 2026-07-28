@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -50,8 +51,24 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	permInv []solverInventory
-	permErr error
+	permInv   []solverInventory
+	permErr   error
+	authErr   error
+	authCalls int
+	setCalls  int
+	quoteOut  map[common.Address]*big.Int
+}
+
+func (f *fakeRecoveryReader) readQuoteCandidates(
+	ctx context.Context,
+	inventory []solverInventory,
+	tokenIn common.Address,
+	tokenOut common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.QuoteCandidate, error) {
+	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
+		ctx, inventory, tokenIn, tokenOut, amountIn,
+	)
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
@@ -62,6 +79,15 @@ func (f *fakeRecoveryReader) readPermissionedVaultInventories(
 
 func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
 	return vaults, nil
+}
+
+func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault) { f.setCalls++ }
+
+func (f *fakeRecoveryReader) validateDirectAuthorization(
+	context.Context, common.Address, []recoveryVault,
+) error {
+	f.authCalls++
+	return f.authErr
 }
 
 type fakeTxm struct {
@@ -168,6 +194,22 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	}
 }
 
+func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
+	st, be := fillFixtures(t)
+	be.executable.Outputs[0].Amount = "899999"
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+		t.Fatalf("status = %v, want failed", rec)
+	}
+	if len(txm.lastData) != 0 {
+		t.Fatal("fill transaction was sent for inconsistent backend metadata")
+	}
+}
+
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
@@ -184,6 +226,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -222,9 +265,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	be.discounts = &discountsResponse{Discounts: []discountListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
+		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -237,8 +282,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
-	e.reader = &fakeRecoveryReader{}
-	e.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(500000)})
+	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
+	e.strategy = newDefaultTestStrategy()
 
 	e.syncOnce(context.Background())
 
@@ -259,6 +304,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
+		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
 			TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -305,9 +351,11 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
-			CollateralDecimals: 6, MaxRate: "1000000000000000000", MaxAssets: "10000000"},
+			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
+			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
 		{DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
-			CollateralDecimals: 6, MaxRate: "2000000000000000000", MaxAssets: "10000000"},
+			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
+			MaxRate: "2000000000000000000", MaxAssets: "10000000"},
 	}}}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
@@ -323,6 +371,25 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	out = e.discountInventories(context.Background(), tIn, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
+	}
+	if out[0].CapacityID == out[1].CapacityID {
+		t.Fatalf("unknown discount vaults share capacity id %q", out[0].CapacityID)
+	}
+}
+
+func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
+		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+		CollateralDecimals: 6, Discount: "500", Deadline: 1,
+		MaxRate: "1000000000000000000", MaxAssets: "10000000",
+	}}}}
+	st := newStore(func() time.Time { return time.Unix(2, 0) })
+	e := newExec(t, st, be, &fakeTxm{})
+	e.now = func() time.Time { return time.Unix(2, 0) }
+	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
+	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
+		t.Fatalf("expired discount inventories = %+v", out)
 	}
 }
 
@@ -340,5 +407,53 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	}
 	if txm.lastData != nil {
 		t.Fatalf("should not have sent a tx without a fill plan")
+	}
+}
+
+func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
+	strategy := &inputRecordingStrategy{fillPlan: baseFillPlan()}
+	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
+	e.discountsEnabled = false
+	e.tokenPolicy = testPermissionedPolicy(t, tIn)
+	e.strategy = strategy
+
+	plan, err := e.buildFillPlan(
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	)
+	if err != nil {
+		t.Fatalf("buildFillPlan: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("buildFillPlan returned nil")
+	}
+	if !strategy.fillInput.RequireSingleRoute {
+		t.Fatal("permissioned fill recovery input did not require a single route")
+	}
+}
+
+func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
+	plan := baseFillPlan()
+	plan.Legs = []types.FillLeg{
+		{
+			Adapter: vlt, AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+		},
+		{
+			Adapter:  common.HexToAddress("0x0000000000000000000000000000000000000004"),
+			AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+		},
+	}
+	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
+	e.discountsEnabled = false
+	e.tokenPolicy = testPermissionedPolicy(t, tIn)
+	e.strategy = fixedFillStrategy{plan: plan}
+
+	got, err := e.buildFillPlan(
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	)
+	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
+		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)
+	}
+	if got != nil {
+		t.Fatalf("buildFillPlan = %+v, want nil", got)
 	}
 }

@@ -22,9 +22,9 @@ var _ MappedNullable = &QuotePreviewDto{}
 // QuotePreviewDto struct for QuotePreviewDto
 type QuotePreviewDto struct {
 	// Inputs for the preview
-	Inputs []QuotePreviewDtoInputsInner `json:"inputs"`
+	Inputs []InputDto `json:"inputs"`
 	// Outputs for the preview
-	Outputs []QuotePreviewDtoOutputsInner `json:"outputs"`
+	Outputs []OutputDto `json:"outputs"`
 }
 
 type _QuotePreviewDto QuotePreviewDto
@@ -33,7 +33,7 @@ type _QuotePreviewDto QuotePreviewDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuotePreviewDto(inputs []QuotePreviewDtoInputsInner, outputs []QuotePreviewDtoOutputsInner) *QuotePreviewDto {
+func NewQuotePreviewDto(inputs []InputDto, outputs []OutputDto) *QuotePreviewDto {
 	this := QuotePreviewDto{}
 	this.Inputs = inputs
 	this.Outputs = outputs
@@ -49,9 +49,9 @@ func NewQuotePreviewDtoWithDefaults() *QuotePreviewDto {
 }
 
 // GetInputs returns the Inputs field value
-func (o *QuotePreviewDto) GetInputs() []QuotePreviewDtoInputsInner {
+func (o *QuotePreviewDto) GetInputs() []InputDto {
 	if o == nil {
-		var ret []QuotePreviewDtoInputsInner
+		var ret []InputDto
 		return ret
 	}
 
@@ -60,7 +60,7 @@ func (o *QuotePreviewDto) GetInputs() []QuotePreviewDtoInputsInner {
 
 // GetInputsOk returns a tuple with the Inputs field value
 // and a boolean to check if the value has been set.
-func (o *QuotePreviewDto) GetInputsOk() ([]QuotePreviewDtoInputsInner, bool) {
+func (o *QuotePreviewDto) GetInputsOk() ([]InputDto, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -68,14 +68,14 @@ func (o *QuotePreviewDto) GetInputsOk() ([]QuotePreviewDtoInputsInner, bool) {
 }
 
 // SetInputs sets field value
-func (o *QuotePreviewDto) SetInputs(v []QuotePreviewDtoInputsInner) {
+func (o *QuotePreviewDto) SetInputs(v []InputDto) {
 	o.Inputs = v
 }
 
 // GetOutputs returns the Outputs field value
-func (o *QuotePreviewDto) GetOutputs() []QuotePreviewDtoOutputsInner {
+func (o *QuotePreviewDto) GetOutputs() []OutputDto {
 	if o == nil {
-		var ret []QuotePreviewDtoOutputsInner
+		var ret []OutputDto
 		return ret
 	}
 
@@ -84,7 +84,7 @@ func (o *QuotePreviewDto) GetOutputs() []QuotePreviewDtoOutputsInner {
 
 // GetOutputsOk returns a tuple with the Outputs field value
 // and a boolean to check if the value has been set.
-func (o *QuotePreviewDto) GetOutputsOk() ([]QuotePreviewDtoOutputsInner, bool) {
+func (o *QuotePreviewDto) GetOutputsOk() ([]OutputDto, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -92,7 +92,7 @@ func (o *QuotePreviewDto) GetOutputsOk() ([]QuotePreviewDtoOutputsInner, bool) {
 }
 
 // SetOutputs sets field value
-func (o *QuotePreviewDto) SetOutputs(v []QuotePreviewDtoOutputsInner) {
+func (o *QuotePreviewDto) SetOutputs(v []OutputDto) {
 	o.Outputs = v
 }
 

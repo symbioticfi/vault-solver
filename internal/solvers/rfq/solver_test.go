@@ -2,12 +2,49 @@ package rfq
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 )
+
+func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
+	adapter := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	executor := common.HexToAddress("0x0000000000000000000000000000000000000010")
+	rdr := &fakeRecoveryReader{authErr: errors.New("adapter is not authorized")}
+	var logs []string
+	s := &Solver{
+		cfg: &Config{
+			Executor:   executor,
+			SolverMode: solverModeExternal,
+			Adapters:   []recoveryVault{{Adapter: adapter}},
+		},
+		exec: &executionService{reader: rdr},
+		log:  funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+
+	err := s.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "rfq: validate direct authorization: adapter is not authorized") {
+		t.Fatalf("Run() error = %v, want direct authorization startup failure", err)
+	}
+	if rdr.authCalls != 1 {
+		t.Fatalf("authorization checks = %d, want 1", rdr.authCalls)
+	}
+	if rdr.setCalls != 1 {
+		t.Fatalf("quote metadata assignments = %d, want 1 before server start", rdr.setCalls)
+	}
+	logged := strings.Join(logs, "\n")
+	if !strings.Contains(logged, "external adapter authorization failed") ||
+		!strings.Contains(logged, "adapter is not authorized") ||
+		!strings.Contains(logged, executor.Hex()) ||
+		!strings.Contains(logged, `"error"`) {
+		t.Fatalf("authorization failure was not logged with its reason: %s", logged)
+	}
+}
 
 // TestBuildServices_WhitelistWiring pins that solver mode actually reaches both services with the correct
 // per-path scoping: reverting the factory wiring (leaving a whitelist nil) would silently let a filler
@@ -18,9 +55,10 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	listed := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	cfg := &Config{
-		BackendURL: "https://rfq-backend.example",
-		Executor:   common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		Adapters:   []recoveryVault{{Adapter: listed}},
+		BackendURL:  "https://rfq-backend.example",
+		Executor:    common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		Adapters:    []recoveryVault{{Adapter: listed}},
+		TokenPolicy: testPermissionedPolicy(t, permissionedToken),
 	}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
@@ -40,6 +78,10 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	quotes, exec := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	scopedToConfigured(t, "execution", exec.whitelist)
+	if !quotes.tokenPolicy.RequiresSingleRoute(permissionedToken) ||
+		!exec.tokenPolicy.RequiresSingleRoute(permissionedToken) {
+		t.Fatal("token policy was not wired to both quote and execution services")
+	}
 
 	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution
 	// stays unrestricted (nil) so discount recovery can fill through any advertised adapter.
@@ -77,7 +119,8 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	quotes, _ := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
 	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
 	// asset-group at 1.000000 USDC.
-	quotes.strategy = newDefaultTestStrategy(18, map[common.Address]*big.Int{tOut: big.NewInt(1_000000)})
+	quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}
+	quotes.strategy = newDefaultTestStrategy()
 
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{

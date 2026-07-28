@@ -41,7 +41,7 @@ func buildStrategyInput(
 			OpenCount:     off.st.openCount,
 			MaxAssets:     cloneBig(off.st.maxAssets),
 			MinAssets:     cloneBig(off.st.minAssets),
-			MinYieldBps:   cloneBig(off.st.minYieldBps),
+			MinYieldPpm:   cloneBig(off.st.minYieldPpm),
 			MaxConcurrent: maxRequests,
 		})
 	}

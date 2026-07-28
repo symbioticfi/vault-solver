@@ -14,7 +14,7 @@ push path; orders are found exclusively by polling the backend.
 
 - **HTTP server** — `POST /quote` (backend fans out a swap request carrying the candidate per-adapter
   inventory snapshot in `adapters[]`; the filler prices it, applies a discount, selects the best
-  adapter legs, persists the strategy by `quoteId`, and returns an `amountOut`), `GET /health`, and
+  adapter legs, and returns an `amountOut`), `GET /health`, and
   the code-first OpenAPI surface (`/openapi.json`, `/openapi.yaml`, `/docs`). `/quote` is gated by an
   `x-rfq-shared-secret` header (the backend peer). There is **no `/notify` endpoint**.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
@@ -23,14 +23,16 @@ push path; orders are found exclusively by polling the backend.
   sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
   adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
   leg's **adapter** address.
-- **State** — in-memory only: `strategies` (by `quoteId`), `orders` (state machine), `attempts`.
+- **State** — in-memory only: `orders` (state machine) and `attempts`.
 
-The `/quote` request inventory (`adapters[]`) and the strategy use **adapter/asset** terminology
-(`adapter`, `asset`, `assetDecimals`, `maxAssets`, `maxRate`, `discountId`) — a 1:1 match for the TS
-`solverQuoteRequestSchema`. Pricing leg types: **direct** (`discountId == null`, public adapter rate)
-and **discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the
-backend `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4),
-after the direct path is solid; they are sequenced last, not dropped.
+The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
+solver maps that boundary shape into the shared LiquidLane terms from
+[`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): `Inventory` is
+`adapter + tokenIn + tokenOut + maxAssets + maxRate`, and RFQ's external `asset` field is the shared
+`tokenOut`. Pricing leg types are **direct** (`discountId == null`, public adapter rate) and
+**discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the backend
+`/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
+the direct path is solid; they are sequenced last, not dropped.
 
 ---
 
@@ -67,7 +69,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
   builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
-- **On-chain reads use `chain.Multicall`** (the adapter exposes many per-vault views per quote).
+- **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
+  route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
+  that produce the same output asset are never collapsed into one oracle observation.
 - **Addresses + backend URL come from `solver.config`** (config-is-king); secrets
   (`backendSharedSecret`, the caller key) via `*Env` indirection (`os.Getenv` at point of use).
 - **Bindings** for `Executor`/`Reactor` (from the `rfq` build) and `LiquidLaneAdapter`/`UniversalDelegator`/
@@ -83,14 +87,14 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 |---|---|
 | `index.ts` + `server.ts` (Hono) | `solver.go` (`Run`: HTTP server + poll loop) + `server.go` (Huma routes/auth) |
 | `api.ts` (Zod schemas) | `apitypes.go` (request/response structs + Huma validation tags) |
-| `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (quote-server wiring) + `strategies/` (the pluggable decision layer: `default` = pricing/discount/leg selection, `webhook` = external decider) |
-| `execution.ts` | `execution.go` (poll loop, order state machine, fill; fill-plan production/recovery lives in the strategy) |
+| `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (quote-server wiring and typed input assembly) + `strategies/` (the pluggable decision layer: `default` = allocation, `webhook` = external decider) |
+| `execution.ts` | `execution.go` (poll loop, order state machine, fill; fresh fill-plan production lives in the strategy) |
 | `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
-| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client: `/orders`, `/discounts`) |
+| `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client for `/orders`) + shared `internal/liquidlane/discounts` (`/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
-| `domain.ts` | `store.go` types + `strategies/types` (strategy input/output, fill plan, legs, candidates) |
+| `domain.ts` | `store.go` types + `strategies/types` (RFQ strategy input/output and fill plan) + shared `liquidlane.QuoteCandidate` |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
-| `db`/repositories | `store.go` (in-memory strategies/orders/attempts) |
+| `db`/repositories | `store.go` (in-memory orders/attempts) |
 | `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
 
 ### Pluggable strategy layer
@@ -98,24 +102,74 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 Pricing, discount, and leg-selection are not baked into the solver — they live behind a per-solver
 **strategy** interface (`DecideQuote` at quote time, `BuildFillPlan` at fill time), selected by a
 `strategy: { name, config }` block. The solver owns transport (HTTP, chain reads, signing,
-submission) and hands the strategy a snapshot of raw facts (the request, the per-adapter inventory
-candidates); the strategy owns the decision. Two ship in-tree:
+submission), validates protocol data, and normalizes backend inventory plus current adapter reads into
+`[]liquidlane.QuoteCandidate`; the strategy owns only the decision. Two ship in-tree:
 
-- **`default`** — the in-process faithful port (greedy discount + leg selection). It caches its
-  quote-time plan by `quoteId` and, on a cold cache, rebuilds from live on-chain state, re-binding the
-  plan to the awarded order (tokenIn/tokenOut/amountIn, `quotedAmountOut ≥ required`). When aggregate
+- **`default`** — the in-process greedy discount + leg selector. `BuildFillPlan` always decides again
+  from current LiquidLane candidates and re-binds the result to the awarded order
+  (`tokenIn`/`tokenOut`/`amountIn`, `quotedAmountOut ≥ required`). When aggregate
   adapter capacity cannot cover an exact-input request, it still returns the available `maxAssets` as
   output and assigns the residual input to the final leg, surfacing the shortfall as price impact
   instead of declining the quote.
-- **`webhook`** — a transport-only adapter that delegates to an external decider over JSON. It keeps
-  **no local cache**: `BuildFillPlan` re-calls the decider at fill time (carrying the order's
-  `amountIn`/`requiredAmountOut`), so the external implementer owns caching and fill-time validation.
+- **`webhook`** — a transport-only adapter that delegates to an external decider over JSON.
+  `BuildFillPlan` re-calls the decider with current candidates and the order's
+  `amountIn`/`requiredAmountOut`.
+
+Quote and fill use the same input shape; fill simply supplies freshly normalized candidates plus the
+awarded `requiredAmountOut`. Both strategies reuse one `FillPlanFromQuote` structural validation path.
+There is no quote-plan cache or default/webhook-specific Executor mapping.
+
+`permissionedTokens` is both the membership set for `tokensToQuote` and, only when that scope is
+`permissioned`, a solver-owned hard constraint. The solver sets `RequireSingleRoute` on both quote
+and fill snapshots for admitted tokens in that scope. A strategy must choose one candidate that
+covers the entire `amountIn`; partial candidates, including direct and discount variants of the same
+adapter, cannot be combined. The default strategy chooses the best fully viable candidate and
+declines if none exists. The solver independently rejects any quoted or fill plan whose leg count is
+not exactly one, so webhook and fresh fill planning fail closed at the same boundary. The `all` and
+`permissionless` scopes retain greedy multi-candidate aggregation.
+
+`minAmountsIn` is a second solver-owned quote gate, independent of the token scope: an optional map of
+input-token address → minimum request size in that token's **base units** (decimal string). It is
+evaluated in `quoteService.quote` right after the token-scope check and before any adapter filtering or
+chain read, so a below-minimum request costs nothing and returns the usual no-quote (`nil, nil` ⇒ HTTP
+204). The comparison is strict: `amountIn == min` still quotes. Keys are parsed into `common.Address`,
+so configured checksum casing does not matter; values must parse as positive integers (zero, negative,
+non-numeric, or a zero/invalid address key is a startup error, as is the same token listed twice in
+different casing). Tokens absent from the map have no floor. This is how RWA inputs (HYBOND, deJAAA,
+deJTRSY) enforce a redemption-sized minimum without a per-token code path. Covered by
+`gating_test.go` (`TestParseConfigMinAmountsIn`, `TestParseConfigMinAmountsInErrors`,
+`TestQuoteMinAmountIn`) and `server_test.go` (`TestServer_QuoteBelowMinAmountNoContent`).
 
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
-brain; the solver executes the output verbatim) are documented once in
-[`strategy-plan.md`](strategy-plan.md), shared with every solver. The concrete RFQ input/output types
-(`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`, `QuoteCandidate`) live in
-`internal/solvers/rfq/strategies/types`.
+brain; the solver only enforces its own structural and safety constraints) are documented once in
+[`strategy-plan.md`](strategy-plan.md), shared with every solver. Shared LiquidLane fact conventions
+are documented in [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md). The concrete RFQ
+input/output types (`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`) live in
+`internal/solvers/rfq/strategies/types`; the candidate itself is the shared
+`liquidlane.QuoteCandidate`.
+
+The RFQ solver is the protocol adapter around the shared LiquidLane reader. It obtains current
+amount-specific `FillQuote`s, and `NormalizeOracleInventory` binds each backend inventory entry to its
+physical route and derives direct rates from
+the executable `MaxAmountOut` (gross `getAmountOut` after current `minDiscount`), then submits normalized candidates to the same `QuoteTask` engine used by
+UniswapX. Because the RFQ request carries only output-asset decimals, the solver resolves and caches
+`tokenIn` decimals before interpreting either direct or signed-discount rates. It also binds each advertised
+adapter to its on-chain vault and asset (using startup-resolved metadata for configured adapters) and rejects
+asset or decimal mismatches. Before normalization, candidates sharing the resulting vault `CapacityID`
+receive one bounded allocation of that shared output capacity, so a multi-adapter quote cannot promise the
+same vault assets twice. At execution the solver repeats the read and normalization from fresh RFQ
+inventories. The default strategy
+converts those typed candidates into the same `FillTask` used by LI.FI and UniswapX. The tasks explicitly request RFQ's residual-input-as-price-impact
+semantics; deterministic splitting, direct/private alternatives, capacity, and output sizing stay inside
+the shared engine. RFQ omits its optional gas pricing model, so no RFQ gas configuration or strategy
+payload fields are required. The strategy has no chain/logger dependencies and only maps shared
+solutions to RFQ response/Executor legs.
+
+Signed-discount HTTP transport, live-offer filtering, and selected-term identity/route/deadline validation
+are shared through `internal/liquidlane/discounts`; RFQ keeps its backend candidate policy and executor ABI mapping.
+Advertised offers are parsed once into typed addresses, ids, amounts, decimals, and deadlines before
+they become `liquidlane.Inventory`; expired or malformed offers fail closed. RFQ keeps only its
+executor-specific `discountSwap` calldata mapping.
 
 ---
 
@@ -138,7 +192,9 @@ solvers:
       pollIntervalMs: 3000
       orderLimit: 20
       solverMode: external                              # "external" (default) | "internal" — see below
-      adapters:                                         # LiquidLane adapter addresses (whitelist + recovery)
+      minAmountsIn:                                     # optional per-input-token floor (base units)
+        "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
+      adapters:                                         # LiquidLane adapter addresses (whitelist + fill planning)
         - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
 ```
 
@@ -148,19 +204,22 @@ adapter whitelist (it replaces the earlier separate `adapterWhitelistEnabled` / 
 config still carrying either is rejected at startup so operators migrate):
 
 - **`external`** (default — the open-source filler external parties run): **never touches the discounts
-  API** — skips `GET /discounts` in recovery, never calls `POST /discounts` at fill (a surfacing discount
+  API** — skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
   leg is failed closed). It uses **only its own adapters**, which scope quoting/filling and are
-  **required** (no discounts fallback → an empty list is rejected at startup). The quote path is not
-  discount-filtered — the backend is trusted to send each solver the right adapters.
-- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`) and accepts **every adapter the backend
-  advertises** (no quote-time scoping). Its `adapters` are **optional extra permissioned inventory** used in
-  recovery alongside the discounts — **deduped** (`discountInventories` drops a discount whose adapter is
+  **required** (no discounts fallback → an empty list is rejected at startup). Before starting HTTP or
+  polling, every configured adapter must directly authorize the executor through `owner`, `marketMaker`,
+  or `isFiller`; startup fails otherwise and emits a structured error with mode, executor, configured
+  adapters, and the underlying authorization reason.
+- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`). Its optional `adapters` scope the quote
+  path and add permissioned inventory to fill planning; discount recovery during execution remains unrestricted.
+  Direct and signed-discount candidates are **deduped** (`discountInventories` drops a discount whose adapter is
   already in the configured/permissioned set).
 
 Both behaviours are **derived from `solverMode` on demand** — no redundant config fields. `Config` exposes
-`usesDiscounts()` (`mode == internal`) and `restrictsToAdapters()` (`mode == external && len(adapters) > 0`),
-which `buildServices` uses to wire the discount gate (into the execution service: recovery + fill) and the
-adapter scoping (into both services). Covered by `discounts_disabled_test.go`, `config_test.go`
+`usesDiscounts()` (`mode == internal`), `restrictsToAdapters()` (external execution with configured
+adapters), and `quoteScopesToAdapters()` (either mode with configured adapters). `buildServices` uses those
+facts to wire the discount gate and the two path-specific adapter scopes. Covered by
+`discounts_disabled_test.go`, `config_test.go`
 (`TestParseConfig_SolverMode`), and `solver_test.go` (`TestBuildServices_WhitelistWiring`).
 
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
@@ -172,51 +231,59 @@ list serves two purposes:
   non-configured adapters in a `/quote` request are dropped (none left ⇒ 204), so an `internal`-mode
   filler advertises quotes only for its own adapter universe (e.g. a per-solver adapter). The **execution**
   path scopes to the configured `adapters` only in `external` mode (`restrictsToAdapters`): there backend
-  discounts with a non-configured adapter are ignored during recovery. `internal` mode never restricts
-  filling — discount-driven recovery may legitimately route through any advertised adapter — so with no
+  discounts with a non-configured adapter are ignored during fill planning. `internal` mode never restricts
+  filling — discount-driven planning may legitimately route through any advertised adapter — so with no
   `adapters` configured an `internal` filler quotes and fills through every advertised adapter.
-- **Strategy recovery**: it bounds the candidate adapter universe the post-restart recovery
-  multicall scans (recovery's direct inventories are whitelisted by construction).
+- **Fill planning**: it bounds the candidate adapter universe the fill-time multicall scans
+  (direct inventories are whitelisted by construction).
 
 ---
 
 ## 4. Build phases
 
-All three phases are committed scope — the goal is full parity with the TS filler, including discount
-legs. Phasing is about sequencing and reviewable increments, not dropping features.
+All phases below are committed scope. Phasing is about sequencing and reviewable increments, not
+dropping features.
 
 0. **(done)** Vendor RFQ ABIs: `Executor`/`Reactor` from `../rfq/out`, and `LiquidLaneAdapter`/
    `UniversalDelegator`/`IVaultV2`/`IERC4626` from a standalone `core-mirror` build →
    `api/bindings/rfq/` + `api/bindings/{delegator,vaultv2,erc4626}`. CGO-free build holds.
-1. **(done) Quote path** — `config.go`, bindings, multicall reads (`getAmountOut` batched, decimals
-   cached), `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
+1. **(done) Quote path** — `config.go`, bindings, route-specific amount quote reads (`paused`,
+   `getMaxAssets`, `getAmountOut`, `minDiscount`; decimals cached), `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
    `/health`, `/openapi.json` + `/docs`, shared-secret auth), in-memory store. Unit-tested (pricing
    golden numbers, config, httptest server).
 2. **(done) Execution** — backend client (`/orders`), **poll-only** loop + order state machine
    (`queued→submitting→submitted→{filled|expired|failed}`), reactor-order decode + `Executor.fill`
    (mixed overload, golden selector test) via the shared txmanager (revert→failed), attempt tracking,
-   and on-chain **strategy recovery via a single multicall** over the configured per-vault adapters
+   signed-order filler/deadline/output terms as the execution source of truth with fail-closed backend
+   envelope consistency checks,
+   and on-chain **fresh fill planning via a single multicall** over the configured per-vault adapters
    (adapter views + `marketMaker`/`owner`/`isFiller` authorization filter). Direct legs only.
    Unit-tested (state machine with fakes, backend httptest).
 3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and
-   discount inventories in recovery. Direct + discount fills now match the TS filler. Unit-tested
+   discount inventories in fill planning. Direct + discount fills now match the TS filler. Unit-tested
    (discount-leg selection, discount fill resolves + encodes).
 4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
    configured `vaults[].adapter` set (originally `adapterWhitelistEnabled`; now auto-enabled by
    `solverMode: external` when `adapters` is non-empty — see §3),
-   recovery discounts filtered by the same set, and a fill-time guard that fails the order when a
+   fill-time discounts filtered by the same set, and a guard that fails the order when a
    backend-resolved discount's adapter differs from the quoted strategy leg's adapter (no tx is
    sent; a still-open order is re-armed and re-evaluated next poll, matching the TS lifecycle).
    Unit-tested (whitelist build/filter, config flag + zero-address rejection, factory wiring, quote
-   200/204 paths incl. disabled toggle, recovery discount filter, mismatch → failed order with no
+   200/204 paths incl. disabled toggle, fill-time discount filter, mismatch → failed order with no
    tx).
+5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
+   quote and fill inputs use one candidate instead of aggregation, and the solver rejects multi-leg
+   strategy/webhook outputs before publication or calldata construction. Input beyond that route's
+   output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
+   planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
+   single-route capped output, webhook rejection, and fresh planning.
 
-**Reads are multicall-batched** end to end: the quote path issues one `getAmountOut` aggregate3 (with
-cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`paused`, `getMaxAssets`,
-`getMaxRate`) — each adapter's `vault` and collateral `asset` are resolved once at startup (from
-`adapter.vault()` / `vault.asset()`), not re-read per recovery, so there are no per-read round-trips.
+**Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
+per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
+refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault` and collateral `asset` are resolved once at startup (from
+`adapter.vault()` / `vault.asset()`), not re-read per fill plan, so there are no per-read round-trips.
 
 ---
 
@@ -226,7 +293,7 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
 - **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
-  LiquidLane adapter address list (`vaults`; adapter whitelist + recovery — each adapter's vault and
+  LiquidLane adapter address list (`vaults`; adapter whitelist + fill planning — each adapter's vault and
   collateral are resolved on-chain at startup; with the whitelist enabled an empty list declines every
   quote), the backend shared secret, and the caller key (last two via env). Hoodi addresses are known
   from the TS deployment manifest; local from the rfq-integration local-stack deploy.
@@ -236,9 +303,10 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing is a faithful port for now** — the `default` strategy is a faithful port of the TS greedy
-  discount + leg selection; a richer quoting strategy is a later follow-up (mirrors the 3F pricing
-  TODO), or an operator can plug their own via the `webhook` strategy (see the strategy layer below).
+- **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
+  single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
+  3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
+  layer below).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
@@ -246,14 +314,15 @@ cached `decimals`), and recovery issues one 3-views-per-adapter aggregate3 (`pau
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): full functional parity.** The
+**Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
+permissioned-scope single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
-and the recovery RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed
+and the fill-time RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed
 hardenings the TS filler lacks** — an order-deadline check before fill, a strategy↔order
 `tokenIn`/`tokenOut`/`amountIn` binding, txHash validation on reconcile, a single-entry guard on the
-batch discount-resolve shape, and TTL eviction of stale strategy/order cache entries (TS maps grow
-unbounded). A few **intentional, non-fund-moving divergences** remain, by design:
+batch discount-resolve shape, and TTL eviction of stale terminal orders (TS maps grow unbounded).
+A few **intentional, non-fund-moving divergences** remain, by design:
 
 - **Quote-time oracle revert** — a reverting `getAmountOut` makes the Go quote *skip that asset and
   price the rest* (multicall `allowFailure`), whereas the TS filler throws and fails the whole quote.
@@ -265,9 +334,10 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   each deployment's `backendUrl` accordingly (mismatch ⇒ 404 on every backend call).
 - **Internal discounts path** — the discounts API is internal-only and served under `/api-internal/v1`
   (orders stay on `/api/v1`). Rather than regenerate the client for a routing detail,
-  `internalDiscountTransport` (`backend.go`) rewrites the generated `/api/v1/discount(s)` requests to
-  `/api-internal/v1/...` at the transport layer; orders pass through unchanged. Covered by the
-  `backend_test.go` httptest assertions.
+  the shared discounts client rewrites generated `/api/v1/discount(s)` requests to
+  `/api-internal/v1/...` at its transport boundary; orders pass through unchanged. RFQ uses it through
+  `internal/liquidlane/discounts`; LIFI reuses the same client and validation for its discount-backed
+  fills. Covered by httptest assertions.
 - The `{adapter, tokenToRedeem}` discount-resolve selector exists in TS types but is unused by
   execution (both sides resolve by `discountId`); Go omits it. Cosmetic.
 
@@ -278,7 +348,7 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   (not `vault`): `discountTerms`/`discountListItem` parse `json:"adapter"`; the on-chain
   `Discount.vault` slot is then filled from that adapter address (positional binding name unchanged).
   A wrong tag here silently zero-fills and breaks every fill, so these are pinned by tests.
-- **Discount-recovery filter** — matches TS exactly: keep discounts where the adapter is
+- **Fill-time discount filter** — matches TS exactly: keep discounts where the adapter is
   whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
   `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
 - **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
@@ -286,8 +356,8 @@ unbounded). A few **intentional, non-fund-moving divergences** remain, by design
   explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag
   has since been folded into **`solverMode`** (§3), and scoping is now per-path. The **quote** whitelist
   is enabled whenever `adapters` is non-empty in either mode (`quoteScopesToAdapters`); the **execution**
-  whitelist (recovery discount filtering) is `external`-only (`restrictsToAdapters`). Enforcement points:
-  `/quote` adapter filtering (none left ⇒ 204) — quote-scoped; recovery discount filtering — execution-scoped;
+  whitelist (fill-time discount filtering) is `external`-only (`restrictsToAdapters`). Enforcement points:
+  `/quote` adapter filtering (none left ⇒ 204) — quote-scoped; fill-time discount filtering — execution-scoped;
   and the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
   order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
   and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).

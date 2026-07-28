@@ -34,7 +34,7 @@ type AdapterSnapshot struct {
 	OpenCount     int
 	MaxAssets     *big.Int
 	MinAssets     *big.Int
-	MinYieldBps   *big.Int
+	MinYieldPpm   *big.Int // minYieldPerRequest in ppm — the exact on-chain floor (webhook derives bps if needed)
 	MaxConcurrent int
 }
 

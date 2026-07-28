@@ -52,19 +52,19 @@ type SolverQuoteDto struct {
 	// Maximum amount for this quote range
 	MaxAmount string `json:"maxAmount"`
 	// Exclusive for address
-	ExclusiveFor map[string]interface{} `json:"exclusiveFor"`
+	ExclusiveFor NullableString `json:"exclusiveFor"`
 	// Source asset record ID
-	FromAssetRecordId map[string]interface{} `json:"fromAssetRecordId"`
+	FromAssetRecordId NullableFloat32 `json:"fromAssetRecordId"`
 	// Destination asset record ID
-	ToAssetRecordId map[string]interface{} `json:"toAssetRecordId"`
+	ToAssetRecordId NullableFloat32 `json:"toAssetRecordId"`
 	// Source chain record ID
-	FromChainRecordId map[string]interface{} `json:"fromChainRecordId"`
+	FromChainRecordId NullableFloat32 `json:"fromChainRecordId"`
 	// Destination chain record ID
-	ToChainRecordId map[string]interface{} `json:"toChainRecordId"`
+	ToChainRecordId NullableFloat32 `json:"toChainRecordId"`
 	// Associated solver ID
 	SolverId float32 `json:"solverId"`
 	// Integrator key hash this quote is tagged for, or null for open-market quotes
-	IntegratorKeyHash map[string]interface{} `json:"integratorKeyHash,omitempty"`
+	IntegratorKeyHash NullableString `json:"integratorKeyHash,omitempty"`
 }
 
 type _SolverQuoteDto SolverQuoteDto
@@ -73,7 +73,7 @@ type _SolverQuoteDto SolverQuoteDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSolverQuoteDto(id string, createdAt string, updatedAt string, fromChainNetworkId string, toChainNetworkId string, fromAssetAddress string, toAssetAddress string, fromAssetDecimals float32, toAssetDecimals float32, fromDecimals float32, toDecimals float32, expiry string, quote string, minAmount string, maxAmount string, exclusiveFor map[string]interface{}, fromAssetRecordId map[string]interface{}, toAssetRecordId map[string]interface{}, fromChainRecordId map[string]interface{}, toChainRecordId map[string]interface{}, solverId float32) *SolverQuoteDto {
+func NewSolverQuoteDto(id string, createdAt string, updatedAt string, fromChainNetworkId string, toChainNetworkId string, fromAssetAddress string, toAssetAddress string, fromAssetDecimals float32, toAssetDecimals float32, fromDecimals float32, toDecimals float32, expiry string, quote string, minAmount string, maxAmount string, exclusiveFor NullableString, fromAssetRecordId NullableFloat32, toAssetRecordId NullableFloat32, fromChainRecordId NullableFloat32, toChainRecordId NullableFloat32, solverId float32) *SolverQuoteDto {
 	this := SolverQuoteDto{}
 	this.Id = id
 	this.CreatedAt = createdAt
@@ -468,133 +468,133 @@ func (o *SolverQuoteDto) SetMaxAmount(v string) {
 }
 
 // GetExclusiveFor returns the ExclusiveFor field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SolverQuoteDto) GetExclusiveFor() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for string will be returned
+func (o *SolverQuoteDto) GetExclusiveFor() string {
+	if o == nil || o.ExclusiveFor.Get() == nil {
+		var ret string
 		return ret
 	}
 
-	return o.ExclusiveFor
+	return *o.ExclusiveFor.Get()
 }
 
 // GetExclusiveForOk returns a tuple with the ExclusiveFor field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetExclusiveForOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ExclusiveFor) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetExclusiveForOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ExclusiveFor, true
+	return o.ExclusiveFor.Get(), o.ExclusiveFor.IsSet()
 }
 
 // SetExclusiveFor sets field value
-func (o *SolverQuoteDto) SetExclusiveFor(v map[string]interface{}) {
-	o.ExclusiveFor = v
+func (o *SolverQuoteDto) SetExclusiveFor(v string) {
+	o.ExclusiveFor.Set(&v)
 }
 
 // GetFromAssetRecordId returns the FromAssetRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SolverQuoteDto) GetFromAssetRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SolverQuoteDto) GetFromAssetRecordId() float32 {
+	if o == nil || o.FromAssetRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.FromAssetRecordId
+	return *o.FromAssetRecordId.Get()
 }
 
 // GetFromAssetRecordIdOk returns a tuple with the FromAssetRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetFromAssetRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.FromAssetRecordId) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetFromAssetRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.FromAssetRecordId, true
+	return o.FromAssetRecordId.Get(), o.FromAssetRecordId.IsSet()
 }
 
 // SetFromAssetRecordId sets field value
-func (o *SolverQuoteDto) SetFromAssetRecordId(v map[string]interface{}) {
-	o.FromAssetRecordId = v
+func (o *SolverQuoteDto) SetFromAssetRecordId(v float32) {
+	o.FromAssetRecordId.Set(&v)
 }
 
 // GetToAssetRecordId returns the ToAssetRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SolverQuoteDto) GetToAssetRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SolverQuoteDto) GetToAssetRecordId() float32 {
+	if o == nil || o.ToAssetRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.ToAssetRecordId
+	return *o.ToAssetRecordId.Get()
 }
 
 // GetToAssetRecordIdOk returns a tuple with the ToAssetRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetToAssetRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ToAssetRecordId) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetToAssetRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ToAssetRecordId, true
+	return o.ToAssetRecordId.Get(), o.ToAssetRecordId.IsSet()
 }
 
 // SetToAssetRecordId sets field value
-func (o *SolverQuoteDto) SetToAssetRecordId(v map[string]interface{}) {
-	o.ToAssetRecordId = v
+func (o *SolverQuoteDto) SetToAssetRecordId(v float32) {
+	o.ToAssetRecordId.Set(&v)
 }
 
 // GetFromChainRecordId returns the FromChainRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SolverQuoteDto) GetFromChainRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SolverQuoteDto) GetFromChainRecordId() float32 {
+	if o == nil || o.FromChainRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.FromChainRecordId
+	return *o.FromChainRecordId.Get()
 }
 
 // GetFromChainRecordIdOk returns a tuple with the FromChainRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetFromChainRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.FromChainRecordId) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetFromChainRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.FromChainRecordId, true
+	return o.FromChainRecordId.Get(), o.FromChainRecordId.IsSet()
 }
 
 // SetFromChainRecordId sets field value
-func (o *SolverQuoteDto) SetFromChainRecordId(v map[string]interface{}) {
-	o.FromChainRecordId = v
+func (o *SolverQuoteDto) SetFromChainRecordId(v float32) {
+	o.FromChainRecordId.Set(&v)
 }
 
 // GetToChainRecordId returns the ToChainRecordId field value
-// If the value is explicit nil, the zero value for map[string]interface{} will be returned
-func (o *SolverQuoteDto) GetToChainRecordId() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+// If the value is explicit nil, the zero value for float32 will be returned
+func (o *SolverQuoteDto) GetToChainRecordId() float32 {
+	if o == nil || o.ToChainRecordId.Get() == nil {
+		var ret float32
 		return ret
 	}
 
-	return o.ToChainRecordId
+	return *o.ToChainRecordId.Get()
 }
 
 // GetToChainRecordIdOk returns a tuple with the ToChainRecordId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetToChainRecordIdOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.ToChainRecordId) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetToChainRecordIdOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.ToChainRecordId, true
+	return o.ToChainRecordId.Get(), o.ToChainRecordId.IsSet()
 }
 
 // SetToChainRecordId sets field value
-func (o *SolverQuoteDto) SetToChainRecordId(v map[string]interface{}) {
-	o.ToChainRecordId = v
+func (o *SolverQuoteDto) SetToChainRecordId(v float32) {
+	o.ToChainRecordId.Set(&v)
 }
 
 // GetSolverId returns the SolverId field value
@@ -622,36 +622,46 @@ func (o *SolverQuoteDto) SetSolverId(v float32) {
 }
 
 // GetIntegratorKeyHash returns the IntegratorKeyHash field value if set, zero value otherwise (both if not set or set to explicit null).
-func (o *SolverQuoteDto) GetIntegratorKeyHash() map[string]interface{} {
-	if o == nil {
-		var ret map[string]interface{}
+func (o *SolverQuoteDto) GetIntegratorKeyHash() string {
+	if o == nil || IsNil(o.IntegratorKeyHash.Get()) {
+		var ret string
 		return ret
 	}
-	return o.IntegratorKeyHash
+	return *o.IntegratorKeyHash.Get()
 }
 
 // GetIntegratorKeyHashOk returns a tuple with the IntegratorKeyHash field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *SolverQuoteDto) GetIntegratorKeyHashOk() (map[string]interface{}, bool) {
-	if o == nil || IsNil(o.IntegratorKeyHash) {
-		return map[string]interface{}{}, false
+func (o *SolverQuoteDto) GetIntegratorKeyHashOk() (*string, bool) {
+	if o == nil {
+		return nil, false
 	}
-	return o.IntegratorKeyHash, true
+	return o.IntegratorKeyHash.Get(), o.IntegratorKeyHash.IsSet()
 }
 
 // HasIntegratorKeyHash returns a boolean if a field has been set.
 func (o *SolverQuoteDto) HasIntegratorKeyHash() bool {
-	if o != nil && !IsNil(o.IntegratorKeyHash) {
+	if o != nil && o.IntegratorKeyHash.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetIntegratorKeyHash gets a reference to the given map[string]interface{} and assigns it to the IntegratorKeyHash field.
-func (o *SolverQuoteDto) SetIntegratorKeyHash(v map[string]interface{}) {
-	o.IntegratorKeyHash = v
+// SetIntegratorKeyHash gets a reference to the given NullableString and assigns it to the IntegratorKeyHash field.
+func (o *SolverQuoteDto) SetIntegratorKeyHash(v string) {
+	o.IntegratorKeyHash.Set(&v)
+}
+
+// SetIntegratorKeyHashNil sets the value for IntegratorKeyHash to be an explicit nil
+func (o *SolverQuoteDto) SetIntegratorKeyHashNil() {
+	o.IntegratorKeyHash.Set(nil)
+}
+
+// UnsetIntegratorKeyHash ensures that no value is present for IntegratorKeyHash, not even an explicit nil
+func (o *SolverQuoteDto) UnsetIntegratorKeyHash() {
+	o.IntegratorKeyHash.Unset()
 }
 
 func (o SolverQuoteDto) MarshalJSON() ([]byte, error) {
@@ -679,24 +689,14 @@ func (o SolverQuoteDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["quote"] = o.Quote
 	toSerialize["minAmount"] = o.MinAmount
 	toSerialize["maxAmount"] = o.MaxAmount
-	if o.ExclusiveFor != nil {
-		toSerialize["exclusiveFor"] = o.ExclusiveFor
-	}
-	if o.FromAssetRecordId != nil {
-		toSerialize["fromAssetRecordId"] = o.FromAssetRecordId
-	}
-	if o.ToAssetRecordId != nil {
-		toSerialize["toAssetRecordId"] = o.ToAssetRecordId
-	}
-	if o.FromChainRecordId != nil {
-		toSerialize["fromChainRecordId"] = o.FromChainRecordId
-	}
-	if o.ToChainRecordId != nil {
-		toSerialize["toChainRecordId"] = o.ToChainRecordId
-	}
+	toSerialize["exclusiveFor"] = o.ExclusiveFor.Get()
+	toSerialize["fromAssetRecordId"] = o.FromAssetRecordId.Get()
+	toSerialize["toAssetRecordId"] = o.ToAssetRecordId.Get()
+	toSerialize["fromChainRecordId"] = o.FromChainRecordId.Get()
+	toSerialize["toChainRecordId"] = o.ToChainRecordId.Get()
 	toSerialize["solverId"] = o.SolverId
-	if o.IntegratorKeyHash != nil {
-		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash
+	if o.IntegratorKeyHash.IsSet() {
+		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash.Get()
 	}
 	return toSerialize, nil
 }

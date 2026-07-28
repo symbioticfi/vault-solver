@@ -2,34 +2,50 @@ package rfq
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
 // quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID   int64
-	executor  common.Address
-	whitelist adapterWhitelist // nil disables adapter filtering
-	// tokensToQuote scopes which input tokens are quotable: "all" (default), "permissioned", or
-	// "permissionless" (see Config.TokensToQuote); evaluated against permissionedTokens.
-	tokensToQuote      string
-	permissionedTokens map[common.Address]bool
-	strategy           types.Strategy
-	log                logr.Logger
-	now                func() time.Time
+	chainID     int64
+	executor    common.Address
+	whitelist   adapterWhitelist // nil disables adapter filtering
+	tokenPolicy tokenpolicy.Policy
+	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
+	// map (or a nil map) has no minimum.
+	minAmountsIn map[common.Address]*big.Int
+	reader       quoteCandidateReader
+	strategy     types.Strategy
+	log          logr.Logger
+	now          func() time.Time
+}
+
+type quoteCandidateReader interface {
+	readQuoteCandidates(
+		ctx context.Context,
+		inventory []solverInventory,
+		tokenIn common.Address,
+		tokenOut common.Address,
+		amountIn *big.Int,
+	) ([]liquidlane.QuoteCandidate, error)
 }
 
 // quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
-// can't quote it (wrong type/chain, no whitelisted adapter, no matching asset, or no viable
-// strategy). An error is returned only for malformed input or a failed chain read.
+// can't quote it (wrong type/chain, input token out of scope or below its configured minimum, no
+// whitelisted adapter, no matching asset, or no viable strategy). An error is returned only for
+// malformed input or a failed chain read.
 func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteResponse, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
@@ -39,9 +55,15 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
 		return nil, nil
 	}
-	if !qs.quotesTokenIn(parsed.req.TokenIn) {
+	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
 		qs.log.V(1).Info("declining quote: input token out of scope",
-			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokensToQuote)
+			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
+		return nil, nil
+	}
+	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
+		qs.log.V(1).Info("declining quote: input amount below configured minimum",
+			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
+			"amount", parsed.req.Amount.String(), "min", minIn.String())
 		return nil, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
@@ -50,7 +72,16 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, nil
 	}
 
-	input := newQuoteInput(qs.chainID, qs.executor, req, inv, nil, qs.now())
+	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
+	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	if err != nil {
+		return nil, errors.Errorf("quote: read LiquidLane candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
+		return nil, nil
+	}
+	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
 	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
@@ -59,8 +90,8 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return nil, nil
 	}
-	if out.QuotedAmountOut == nil {
-		return nil, errors.New("quote: strategy returned quote without amountOut")
+	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
+		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
 
 	qs.log.V(1).Info("quoted",
@@ -82,17 +113,3 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
 func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
-
-// quotesTokenIn reports whether this filler's TokensToQuote scope admits the request's input token:
-// "permissioned" admits only tokens in permissionedTokens, "permissionless" admits only those not in
-// it, and "all" (or any unset value, for hand-built services) admits every token.
-func (qs *quoteService) quotesTokenIn(tokenIn common.Address) bool {
-	switch qs.tokensToQuote {
-	case tokensToQuotePermissioned:
-		return qs.permissionedTokens[tokenIn]
-	case tokensToQuotePermissionless:
-		return !qs.permissionedTokens[tokenIn]
-	default:
-		return true
-	}
-}

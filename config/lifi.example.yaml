@@ -1,0 +1,95 @@
+# vault-solver — LI.FI same-chain intent solver (`lifi-samechain`), annotated example.
+#
+# Publishes standing quotes to the LI.FI Intents order server for LiquidLane-backed same-chain
+# RWA -> underlying routes, then listens for matched escrow orders over the LI.FI WebSocket feed.
+#
+# Secrets are referenced by env-var NAME and read at point of use; ${VAR} fields are expanded from the
+# environment at load time. Never commit a real key or production endpoint.
+
+chain:
+  rpcUrl: ${ETH_RPC_URL_SEPOLIA}
+  chainId: 11155111
+  # writeRpcUrl: ${WRITE_RPC_URL}
+  # rpcFallbackUrls:
+  #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
+
+signer:
+  # Runtime caller and tx sender. The executor owner adds it through setCallers(); startup checks isCaller().
+  keyEnv: SOLVER_PRIVATE_KEY
+
+txManager:
+  confirmations: 2
+  maxFeeGwei: 50              # required absolute ceiling; normal sends reserve one bump for cancellation
+  replacementIntervalMs: 30000 # replace a pending call with higher fees every 30s
+  pendingTimeoutMs: 300000     # after 5m, cancel the lowest blocked nonce
+  # Each LI.FI fill also pins its own decision-time fee cap; txmanager clamps fee and tip to that
+  # budget and drops only when it no longer covers base fee.
+  # tipGwei: 1
+
+observability:
+  addr: ":9090"
+  debug: false
+
+solvers:
+  - name: lifi-samechain
+    config:
+      strategy:
+        name: default
+        config:
+          priceBufferBps: 20         # one rate-move buffer, also reserves upward private-discount output movement
+          inventoryReserveBps: 500   # never advertise the final 5% of getMaxAssets
+          minAmount: "1000000"       # tokenIn floor; choose it high enough to cover gas and rounding
+          rangeCount: 8              # geometric ranges per pair (default 8, max 16)
+          executionDeadlineBuffer: 12s # one Ethereum block left for order and private signatures
+
+      # Gas conversion is a solver fact shared by every strategy. Configure one Chainlink USD feed for
+      # every distinct adapter vault asset (tokenOut); startup fails if any resolved route is uncovered.
+      gas:
+        nativeUsdFeed: ${ETH_USD_FEED}
+        nativeMaxAge: 2h          # actual heartbeat plus testnet publication slack
+        tokenUsdFeeds:
+          - token: "0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d" # TLOAN (6 decimals)
+            feed: ${TLOAN_USD_FEED}
+            maxAge: 24h           # set independently for every token/USD feed
+
+      # External strategy alternative:
+      # strategy:
+      #   name: webhook
+      #   config:
+      #     url: https://strategy.example/lifi
+      #     timeout: 5s
+
+      orderServer:
+        baseUrl: https://order-dev.li.fi
+        wsUrl: wss://order-dev.li.fi
+        # Deployment convention: one key per executor; all processes using it share its reputation.
+        apiKeyEnv: LIFI_SOLVER_API_KEY
+        # httpTimeout: 10s
+
+      # Mirrors RFQ deployment profiles. "external" (default) uses only direct filler-authorized
+      # adapters. "internal" also uses the shared private-discounts API; the URL is required then.
+      solverMode: external
+      # solverMode: internal
+      # privateDiscountsUrl: ${RFQ_BACKEND_URL}
+      inputSettler:  "0x000025c3226C00B2Cdc200005a1600509f4e00C0"   # LI.FI InputSettlerEscrowLIFI
+      outputSettler: "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"   # LI.FI OutputSettler
+      executor:      "0x0000000000000000000000000000000000000000"   # registered EIP-1271 LI.FI solver
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; when set, LiquidLane swappable
+                                        # headroom is read from its cross-adapter deallocation-cascade
+                                        # estimate instead of each adapter's getMaxAssets(). Omit to use the adapter getter.
+
+      # LiquidLane adapter instances this solver serves. Each adapter's vault/asset and tokenToRedeem
+      # list are resolved on-chain at startup; this config is the executor's route scope.
+      # Direct filler authorization is required in external mode; signed discounts authorize internal fills.
+      adapters:
+        - "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"   # Sepolia TCOL -> TLOAN testbed adapter
+
+      # Scope input tokens against permissionedTokens: "all" (default), "permissioned" (only listed),
+      # or "permissionless" (only unlisted). Permissioned scope also requires one physical route.
+      # tokensToQuote: all
+      # permissionedTokens:
+      #   - "0x..."
+
+      quoteIntervalMs: 1000        # block poll interval; quotes are recalculated only on a new block
+      quoteTtl: 36s                # rolling expiry, about three Ethereum blocks
+      quoteRefreshMode: block      # "block" (default) | "interval"
