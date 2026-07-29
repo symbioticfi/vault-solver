@@ -63,6 +63,29 @@ func RateForAmountOut(amountOut, amountIn *big.Int, tokenInDecimals, tokenOutDec
 	return num.Div(num, den)
 }
 
+// ConservativeAdvertisedRate re-derives a fixed rate for amountIn from an advertised rate — one the
+// backend produced by pre-applying a discount to the adapter's oracle price (a discount offer's
+// maxRate) — so that pricing at the result never predicts more than the adapter pays.
+//
+// The adapter rounds down twice, in the opposite order: getAmountOut floors
+// amountIn × price × 10^outDec / (1e18 × 10^inDec) first, then swap(DiscountSwap, ...) applies
+// (DISCOUNT_PRECISION − discount) / DISCOUNT_PRECISION and floors again. An advertised rate has the
+// discount applied and floored before we ever see it, so AmountOutForRate at that rate can land
+// exactly one unit above the adapter's own result — enough to leave a filler short of an order's
+// signed outputs. Shaving one unit and re-deriving the rate keeps every downstream
+// AmountOutForRate(amountIn, ...) at or below the on-chain value, because that round trip through
+// RateForAmountOut floors; no other call site has to know about the shave.
+//
+// Returns zero when nothing positive survives the shave, which marks the leg as not quotable.
+func ConservativeAdvertisedRate(amountIn, advertisedRate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
+	amountOut := AmountOutForRate(amountIn, advertisedRate, tokenInDecimals, tokenOutDecimals)
+	amountOut.Sub(amountOut, big.NewInt(1))
+	if amountOut.Sign() <= 0 {
+		return new(big.Int)
+	}
+	return RateForAmountOut(amountOut, amountIn, tokenInDecimals, tokenOutDecimals)
+}
+
 // AmountOutAfterDiscount applies a LiquidLane ppm discount, rounding down.
 func AmountOutAfterDiscount(grossAmountOut, discount *big.Int) *big.Int {
 	precision := big.NewInt(DiscountPrecision)

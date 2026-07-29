@@ -274,10 +274,11 @@ dropping features.
    200/204 paths incl. disabled toggle, fill-time discount filter, mismatch → failed order with no
    tx).
 5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
-   quote and fill inputs require one fully covering candidate instead of aggregation, and the solver
-   rejects multi-leg strategy/webhook outputs before publication or calldata construction. Cold fill
-   fill planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
-   single-route selection/decline, webhook rejection, and fresh planning.
+   quote and fill inputs use one candidate instead of aggregation, and the solver rejects multi-leg
+   strategy/webhook outputs before publication or calldata construction. Input beyond that route's
+   output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
+   planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
+   single-route capped output, webhook rejection, and fresh planning.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
@@ -302,10 +303,29 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing follows the TS greedy port for permissionless inputs** — permissioned inputs deliberately
-  use the single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
+- **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
+  single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
   layer below).
+- **Discount-leg rate rounding** — a discount leg prices off the backend's advertised `maxRate`, which
+  is the adapter oracle price with the discount already applied *and floored*. The adapter rounds down
+  in the opposite order: `getAmountOut` floors `amountIn × price × 10^outDec / (1e18 × 10^inDec)`
+  first, then `swap(DiscountSwap, ...)` applies the discount and floors again. The two nested roundings
+  differ by at most one unit, and the difference falls our way often (roughly a fifth to a half of
+  amounts at a non-zero discount) — so pricing at the raw `maxRate` predicts one unit more output than
+  the adapter delivers. That is not an adapter revert (the adapter computes `amountOut` itself and
+  `InvalidSwapRate` cannot trigger, since `discount ≥ minDiscount`); it reverts in
+  `Reactor._fill`, which pulls the order's *signed* outputs out of the Executor after `execute()`
+  returns. With no `priceBufferBps` in RFQ and `Finalize` distributing the full achievable output, the
+  slack is exactly zero whenever the price has not moved since the quote, so the fill fails gas
+  estimation and the order retries until it expires. `NormalizeOracleInventory` therefore re-derives
+  every discount candidate's rate through `liquidlane.ConservativeAdvertisedRate`, which shaves one
+  unit off the predicted output and converts it back to a rate; the round trip through
+  `RateForAmountOut` floors, so downstream `AmountOutForRate` call sites need no change. Direct legs
+  are unaffected — they already re-derive their rate from a live `getAmountOut` read. The exact
+  alternative (clamp against `AmountOutAfterDiscount(GrossAmountOut, discount)`, as
+  `discounts.AdvertisedFillQuotes` does) needs the discount ppm, which the `/quote` request's
+  `adapters[]` entries do not carry; revisit if that field is ever added to the backend contract.
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
@@ -313,14 +333,15 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): functional parity for the
-permissionless path, plus the permissioned-scope single-route constraint described above.** The
+**Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
+permissioned-scope single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
 and the fill-time RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed
 hardenings the TS filler lacks** — an order-deadline check before fill, a strategy↔order
 `tokenIn`/`tokenOut`/`amountIn` binding, txHash validation on reconcile, a single-entry guard on the
-batch discount-resolve shape, and TTL eviction of stale terminal orders (TS maps grow unbounded).
+batch discount-resolve shape, a conservative discount-leg rate that cannot out-predict the adapter's
+nested rounding (§5), and TTL eviction of stale terminal orders (TS maps grow unbounded).
 A few **intentional, non-fund-moving divergences** remain, by design:
 
 - **Quote-time oracle revert** — a reverting `getAmountOut` makes the Go quote *skip that asset and
