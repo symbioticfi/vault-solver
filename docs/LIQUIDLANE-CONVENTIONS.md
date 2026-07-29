@@ -47,7 +47,10 @@ Core field rules:
 - Direct inventory `MaxRate` is `getMaxRate(tokenIn)` and already includes `minDiscount`. A `FillQuote`
   derives the same conservative fixed-point fact from `MaxAmountOut / AmountIn`, so fill-time private
   offers are bounded without another RPC call.
-- Discount `MaxRate` comes from the discounts backend and already includes its advertised discount.
+- Discount `MaxRate` comes from the discounts backend and already includes its advertised discount. It
+  arrives already floored, while the adapter floors `getAmountOut` first and applies the discount
+  second, so pricing directly at it can predict one unit above what the adapter pays. Re-derive it for
+  the concrete `amountIn` with `liquidlane.ConservativeAdvertisedRate` before quoting or sizing a leg.
 - `GrossAmountOut` is raw `getAmountOut`; `MaxAmountOut` is the executable amount after discount.
 - `MinDiscount` is the adapter's current lower bound for a fill.
 - `ValidUntil` is an external offer deadline. Inventory does not carry a duplicate read timestamp;
@@ -158,7 +161,10 @@ tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `Ca
 For signed discounts:
 
 1. List and validate advertised offers for quote construction.
-2. Never apply `discount` to backend `maxRate` a second time.
+2. Never apply `discount` to backend `maxRate` a second time — but do re-derive the rate for the
+   concrete `amountIn` with `ConservativeAdvertisedRate`. The backend floors the discount into the
+   rate while the adapter floors `getAmountOut` first, so the raw rate can price a unit above what the
+   adapter pays, and an over-predicted leg leaves the filler short of the order's signed outputs.
 3. Resolve signatures again immediately before fill.
 4. Recheck id, adapter, tokens, current discount bounds, and deadlines.
 5. Reserve capacity for upward price movement: discount swaps release their full computed output and

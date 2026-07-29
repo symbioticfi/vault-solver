@@ -55,7 +55,52 @@ func TestNormalizeOracleInventoryUsesSignedRateForPrivateAlternative(t *testing.
 	}}
 
 	got := NormalizeOracleInventory(amountIn, sources, physical)
-	if len(got) != 1 || got[0].Rate.String() != "750000000000000000" || got[0].DiscountID == nil {
+	// The advertised 0.75 rate wins over the physical route's 0.8, but is re-derived conservatively:
+	// the backend pre-applies and floors the discount while the adapter floors getAmountOut first, so
+	// the candidate prices one output unit (1e12 rate units at 18→6 decimals) below the advertised rate.
+	if len(got) != 1 || got[0].Rate.String() != "749999000000000000" || got[0].DiscountID == nil {
 		t.Fatalf("normalized = %#v", got)
+	}
+	if out := liquidlane.AmountOutForRate(amountIn, got[0].Rate, 18, 6); out.String() != "749999" {
+		t.Fatalf("amountOut at normalized rate = %s, want one unit below the advertised 750000", out)
+	}
+}
+
+// A discount candidate whose advertised rate would over-predict must be normalized to a rate that
+// never prices above what the adapter pays for the same amountIn.
+func TestNormalizeOracleInventoryKeepsDiscountRateBelowAdapter(t *testing.T) {
+	t.Parallel()
+	tokenIn := common.HexToAddress("0x1")
+	tokenOut := common.HexToAddress("0x2")
+	route := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"), tokenIn, tokenOut, 18, 18)
+	discountID := common.HexToHash("0xd")
+	amountIn, _ := new(big.Int).SetString("1000000000000000", 10)
+	price, _ := new(big.Int).SetString("1034567891234567890", 10)
+
+	// maxRate as the backend derives it: price with a 1 ppm discount applied, floored.
+	advertised := new(big.Int).Mul(price, big.NewInt(liquidlane.DiscountPrecision-1))
+	advertised.Div(advertised, big.NewInt(liquidlane.DiscountPrecision))
+	// What the adapter actually pays: floor getAmountOut first, then apply the same discount.
+	adapterOut := liquidlane.AmountOutAfterDiscount(
+		liquidlane.AmountOutForRate(amountIn, price, 18, 18), big.NewInt(1),
+	)
+	if raw := liquidlane.AmountOutForRate(amountIn, advertised, 18, 18); raw.Cmp(adapterOut) <= 0 {
+		t.Fatalf("fixture no longer reproduces the over-prediction: raw %s, adapter %s", raw, adapterOut)
+	}
+
+	sources := []liquidlane.Inventory{
+		liquidlane.DiscountInventory(route, big.NewInt(1_000_000_000_000_000_000), advertised, discountID, time.Time{}),
+	}
+	physical := []liquidlane.FillQuote{{
+		Inventory: liquidlane.DirectInventory(route, big.NewInt(1_000_000_000_000_000_000), nil),
+		AmountIn:  amountIn, MaxAmountOut: big.NewInt(1),
+	}}
+
+	got := NormalizeOracleInventory(amountIn, sources, physical)
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want one", len(got))
+	}
+	if out := liquidlane.AmountOutForRate(amountIn, got[0].Rate, 18, 18); out.Cmp(adapterOut) > 0 {
+		t.Fatalf("normalized rate prices %s, above the adapter's %s", out, adapterOut)
 	}
 }

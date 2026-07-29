@@ -71,7 +71,7 @@ func NormalizeOracleInventory(
 		if quote.MaxAssets.Cmp(capacity) < 0 {
 			capacity.Set(quote.MaxAssets)
 		}
-		rate := source.MaxRate
+		var rate *big.Int
 		if source.DiscountID == nil {
 			rate = liquidlane.RateForAmountOut(
 				quote.MaxAmountOut,
@@ -82,6 +82,16 @@ func NormalizeOracleInventory(
 			if source.MaxRate == nil || source.MaxRate.Cmp(rate) < 0 {
 				continue
 			}
+		} else {
+			// A discount leg prices off the backend's advertised maxRate, which already has the
+			// discount applied and floored, while the adapter floors getAmountOut first and discounts
+			// second. Re-derive a rate that cannot predict above what the adapter pays.
+			rate = liquidlane.ConservativeAdvertisedRate(
+				amountIn,
+				source.MaxRate,
+				source.TokenInDecimals,
+				source.TokenOutDecimals,
+			)
 		}
 		if rate == nil || rate.Sign() <= 0 {
 			continue
