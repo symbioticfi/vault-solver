@@ -57,7 +57,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   `rfq_filler_http_request_duration_seconds` (route is allowlisted to bound cardinality). The
   framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
   memory, goroutines, GC, and FDs. Net effect: the same metric names the filler exposed, surfaced on
-  the shared observability port rather than a per-solver endpoint.
+  the shared observability port rather than a per-solver endpoint. The canonical names, labels, and
+  meanings for RFQ lifecycle and shared txmanager collectors are in the
+  [README metrics table](../README.md#metrics).
 - **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
   request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the
   handler context so quote logs carry it), an access log line (method/route/status/duration), the

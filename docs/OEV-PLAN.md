@@ -124,10 +124,15 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` โ€
   callback balance, bundle-level gas profitability, and the adapter's `isFiller` gate. The default strategy computes the bid **off-chain** from the
   configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec ยง8); optional solver-owned `maxBidWei`
   caps the final signed bid for every strategy. The contract carries no on-chain bid cap.
-- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): auctions/bids/wins/
-  failed-liquidations counters, a `skips_total{reason}` vector, a hot-path latency histogram, and deposit
-  gauges. The breaker halts bidding after N failed liquidations in a rolling window,
-  and immediately on a `blacklisted` frame.
+- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): auctions/bids/wins and
+  failed-liquidations counters, bid wei at submitted/won/settled lifecycle stages, a `skips_total{reason}` vector,
+  a hot-path latency histogram, and deposit
+  gauges, plus matched settlement outcomes, wins awaiting settlement, and timed-out unresolved wins.
+  Win/settlement lifecycle counters intentionally include only frames matched while their local bid
+  reservation is active; late frames after nonce/TTL reconciliation are excluded instead of adding a
+  second terminal-history cache. The breaker halts bidding after N failed liquidations in a rolling
+  window, and immediately on a `blacklisted` frame. Exact names and labels are in the
+  [README metrics table](../README.md#metrics).
 - **Bindings.** The RedStone `Executor`, `IMorpho` (subset), `IAdaptiveCurveIrm`, `IOracle`, and our
   `SymbioticOevSolver`, and `AggregatorV3` feeds are **abigen --v2** bindings under `api/bindings/oev/*`
   (vendored ABIs in `api/abi/`: the external contracts hand-vendored, the Executor ABI mirroring the

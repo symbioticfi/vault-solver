@@ -29,7 +29,7 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
-	metrics      *httpMetrics // nil disables HTTP instrumentation (e.g. in tests)
+	metrics      *rfqMetrics // nil disables instrumentation (e.g. in tests)
 	log          logr.Logger
 }
 

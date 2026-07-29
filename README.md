@@ -281,6 +281,33 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ./bin/vault-solver run --config config/3f.example.yaml --debug
 ```
 
+## Observability
+
+The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
+config is required for the collectors below.
+
+### Metrics
+
+| Scope | Metric families | Labels | What they show |
+|---|---|---|---|
+| Shared txmanager | `solver_bot_txmanager_requests_total`<br>`solver_bot_txmanager_inflight`<br>`solver_bot_txmanager_gas_used_total`<br>`solver_bot_txmanager_replacements_total` | `label`, `outcome`, or `kind` as applicable | Logical transaction results, current in-flight requests, mined gas, and successful fee-bump/cancellation broadcasts. |
+| LiquidLane fills | `liquidlane_fill_amount_atomic_units_total` | `solver`, `token`, `kind` | Successful RFQ, LI.FI, and UniswapX routed input, required output, and planning-time gross surplus. Kinds are `input`, `output`, and `planned_surplus`; values use token atomic units. Surplus excludes gas and may differ from the executor's final retained balance. |
+| RFQ HTTP | `rfq_filler_http_requests_total`<br>`rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server traffic and latency. |
+| RFQ lifecycle | `rfq_wins_total`<br>`rfq_active_orders`<br>`rfq_oldest_active_order_age_seconds` | — | Orders assigned to this filler and obligations still awaiting terminal backend state. |
+| LI.FI quotes | `lifi_active_quotes`<br>`lifi_last_successful_refresh_timestamp` | — | Last successfully reconciled standing-quote state and its freshness. |
+| UniswapX request/fill | `uniswapx_quote_requests_total`<br>`uniswapx_quote_duration_seconds`<br>`uniswapx_order_polls_total`<br>`uniswapx_fills_total` | `outcome`; polls also use `source` | Quote traffic, order-source polling, and local fill attempts. |
+| UniswapX health | `uniswapx_ready`<br>`uniswapx_block_until_timestamp`<br>`uniswapx_last_quote_refresh_timestamp`<br>`uniswapx_last_exclusive_poll_timestamp`<br>`uniswapx_pending_fills` | — | Readiness, breaker deadline, state freshness, and fills awaiting txmanager completion. |
+| UniswapX obligations | `uniswapx_exclusive_wins_total`<br>`uniswapx_exclusive_obligations_outstanding`<br>`uniswapx_exclusive_nearest_deadline_timestamp`<br>`uniswapx_exclusive_obligation_outcomes_total` | terminal metric uses `outcome` | Unique live-observed wins, won-but-not-classified orders, nearest deadline, and terminal delivery result. Recovery restores safety state without replaying counters. |
+| OEV auction flow | `oev_auctions_total`<br>`oev_bids_total`<br>`oev_bid_wei_total`<br>`oev_wins_total`<br>`oev_skips_total`<br>`oev_hotpath_seconds` | `strategy`; bid amount uses `stage`; skips also use `reason` | Auction traffic, bid/win funnel, bid wei at `submitted`, `won`, `settled_success`, and `settled_failed` stages, skip reasons, and hot-path latency. Dry-run increments only the bid count. |
+| OEV settlement | `oev_settlements_total`<br>`oev_failed_liquidations_total`<br>`oev_won_inflight`<br>`oev_unresolved_wins_total` | `strategy`; settlements also use `result` | Matched settlement outcomes and winning bids that are still pending or timed out unresolved. Late frames after reservation reconciliation are deliberately excluded. |
+| OEV safety | `oev_deposit_wei`<br>`oev_deposit_below_floor` | `strategy` | Executor deposit and whether it is below the bidding floor. |
+| 3F offers | `threef_offer_submissions_total`<br>`threef_offer_amount_atomic_units_total`<br>`threef_live_offers` | submission metric uses `result`; amount metric uses `token`, `kind` | API submission results, successfully submitted principal and quoted expected-yield amounts, and live offers from the last complete reconciliation. Amount kinds are `principal` and `expected_yield`; they are not realized settlement amounts. |
+| 3F requests | `threef_active_requests`<br>`threef_redeemable_requests`<br>`threef_last_successful_observation_timestamp` | freshness metric uses `view` | Active/redeemable requests and independent freshness for offers, active requests, and redeemable scans. |
+
+Txmanager `label` values are stable operation names (`redeem`, `rfq-fill`, `lifi-fill`,
+`uniswapx-fill`). Terminal outcomes are `confirmed`, `included_unconfirmed`, `reverted`, `cancelled`,
+`submission_error`, and `tracking_stopped`.
+
 ## Configuration
 
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the

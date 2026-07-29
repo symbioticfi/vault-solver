@@ -222,6 +222,23 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 	}
 }
 
+func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
+	st, be := fillFixtures(t)
+	be.order.OrderStatus = "open"
+	txm := &fakeTxm{result: txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
+	}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusSubmitted {
+		t.Fatalf("status = %v, want submitted", rec)
+	}
+}
+
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")

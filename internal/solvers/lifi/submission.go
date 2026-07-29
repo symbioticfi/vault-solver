@@ -49,7 +49,7 @@ func (s *Solver) submitFill(
 	s.reserve(reservationKey, reservations)
 	return &pendingFill{
 		order: order, orderID: calldata.OrderID, reservationKey: reservationKey,
-		result: result,
+		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount), result: result,
 	}
 }
 
@@ -57,16 +57,46 @@ func (s *Solver) completeFill(pending *pendingFillState, completion fillCompleti
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
 	s.releaseReservation(fill.reservationKey)
-	if completion.result.Err == nil {
+	outcome := completion.result.EffectiveOutcome()
+	if outcome == txmanager.OutcomeConfirmed {
+		s.observeFillAmounts(completion.result, fill)
 		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return
 	}
-	s.log.Error(completion.result.Err, "order fill failed",
+	if outcome == txmanager.OutcomeIncludedUnconfirmed {
+		s.observeFillAmounts(completion.result, fill)
+		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+		)
+		return
+	}
+	err := completion.result.Err
+	if err == nil {
+		err = errors.Errorf("unknown transaction outcome %q", outcome)
+	}
+	s.log.Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,
 		"onChainOrderId", fill.orderID.Hex(),
 		"quoteId", fill.order.QuoteID,
 		"tx", completion.result.Hash.Hex(),
+	)
+}
+
+func (s *Solver) observeFillAmounts(result txmanager.Result, fill *pendingFill) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.fillAmounts.Observe(
+		result.Receipt,
+		fill.order.TokenIn,
+		fill.order.AmountIn,
+		fill.order.TokenOut,
+		fill.order.OutputAmount,
+		fill.plannedSurplus,
 	)
 }
 

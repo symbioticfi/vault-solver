@@ -54,14 +54,15 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
-	var metrics *httpMetrics
+	var metrics *rfqMetrics
 	if deps.Metrics != nil {
-		if metrics, err = newHTTPMetrics(deps.Metrics.Registerer()); err != nil {
+		if metrics, err = newRFQMetrics(deps.Metrics.Registerer(), st); err != nil {
 			return nil, err
 		}
 	}
 
 	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
+	exec.metrics = metrics
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,

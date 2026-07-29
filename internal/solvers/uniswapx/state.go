@@ -16,6 +16,9 @@ const (
 	orderStatusExpired           = "expired"
 	orderStatusFilled            = "filled"
 	orderStatusInsufficientFunds = "insufficient-funds"
+
+	exclusiveOutcomeSettledInTime = "settled_in_time"
+	exclusiveOutcomeMissed        = "missed"
 )
 
 type orderTerminal struct {
@@ -27,11 +30,13 @@ type exclusiveObligation struct {
 	hash             common.Hash
 	deadline         time.Time
 	recoveredAtStart bool
+	liveObserved     bool
 }
 
 type trackedExclusive struct {
 	deadline         time.Time
 	recoveredAtStart bool
+	liveObserved     bool
 }
 
 type exclusiveDecision struct {
@@ -127,14 +132,15 @@ func (s *Solver) recordFillSuccess() {
 	}
 }
 
-func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) {
+func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) bool {
 	if order.Source != orderSourceExclusiveV2 || order.ExclusiveUntil == 0 {
-		return
+		return false
 	}
-	s.trackExclusiveObligation(
+	return s.trackExclusiveObligation(
 		exclusiveObligation{
-			hash:     order.Hash,
-			deadline: time.Unix(int64(order.ExclusiveUntil), 0),
+			hash:         order.Hash,
+			deadline:     time.Unix(int64(order.ExclusiveUntil), 0),
+			liveObserved: true,
 		},
 		order.QuoteID,
 		now,
@@ -145,24 +151,27 @@ func (s *Solver) trackExclusiveObligation(
 	obligation exclusiveObligation,
 	quoteID string,
 	now time.Time,
-) {
+) bool {
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
-	updated := false
-	if _, terminal := s.exclusiveTerminal[obligation.hash]; !terminal {
-		current, exists := s.exclusiveUntil[obligation.hash]
-		if !exists || obligation.deadline.Before(current.deadline) {
-			current.deadline = obligation.deadline
-			updated = true
-		}
-		if !exists {
-			current.recoveredAtStart = obligation.recoveredAtStart
-		} else if !obligation.recoveredAtStart {
-			// A live observation or runtime recovery takes precedence over startup history.
-			current.recoveredAtStart = false
-		}
-		s.exclusiveUntil[obligation.hash] = current
+	if _, terminal := s.exclusiveTerminal[obligation.hash]; terminal {
+		s.stateMu.Unlock()
+		return false
 	}
+	current, exists := s.exclusiveUntil[obligation.hash]
+	newLive := obligation.liveObserved && (!exists || !current.liveObserved)
+	updated := !exists || obligation.deadline.Before(current.deadline)
+	if updated {
+		current.deadline = obligation.deadline
+	}
+	if !exists {
+		current.recoveredAtStart = obligation.recoveredAtStart
+	} else if !obligation.recoveredAtStart {
+		// A live observation or runtime recovery takes precedence over startup history.
+		current.recoveredAtStart = false
+	}
+	current.liveObserved = current.liveObserved || obligation.liveObserved
+	s.exclusiveUntil[obligation.hash] = current
 	s.stateMu.Unlock()
 	if updated {
 		s.log.V(1).Info(
@@ -172,6 +181,7 @@ func (s *Solver) trackExclusiveObligation(
 			"exclusiveUntil", obligation.deadline.Unix(),
 		)
 	}
+	return newLive
 }
 
 func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
@@ -184,6 +194,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 				hash:             hash,
 				deadline:         tracked.deadline,
 				recoveredAtStart: tracked.recoveredAtStart,
+				liveObserved:     tracked.liveObserved,
 			})
 		}
 	}
@@ -269,6 +280,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 			continue
 		}
 		decision.recoveredAtStart = tracked.recoveredAtStart
+		decision.liveObserved = tracked.liveObserved
 		delete(s.exclusiveUntil, decision.hash)
 		s.exclusiveTerminal[decision.hash] = now
 		if decision.settledInTime {
@@ -282,7 +294,9 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	s.stateMu.Unlock()
 
 	for _, decision := range settled {
-		s.observeFill("exclusive-settled-in-time")
+		if decision.liveObserved {
+			s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)
+		}
 		s.log.Info(
 			"exclusive order settled before exclusivity ended",
 			"orderHash", decision.hash.Hex(),
@@ -318,7 +332,9 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 	s.invalidateQuotes()
 	s.updateBlockUntilMetric()
 	for _, decision := range missed {
-		s.observeFill("missed-exclusive")
+		if decision.liveObserved {
+			s.observeExclusiveOutcome(exclusiveOutcomeMissed)
+		}
 		fields := []any{
 			"orderHash", decision.hash.Hex(),
 			"status", decision.status,
@@ -332,6 +348,22 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 	}
 }
 
+func (s *Solver) exclusiveObligationMetrics() (int, int64) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	outstanding := len(s.exclusiveUntil)
+	var nearest time.Time
+	for _, tracked := range s.exclusiveUntil {
+		if nearest.IsZero() || tracked.deadline.Before(nearest) {
+			nearest = tracked.deadline
+		}
+	}
+	if nearest.IsZero() {
+		return outstanding, 0
+	}
+	return outstanding, nearest.Unix()
+}
+
 func (s *Solver) cleanupExclusiveLocked(now time.Time) {
 	if s.exclusiveUntil == nil {
 		s.exclusiveUntil = make(map[common.Hash]trackedExclusive)
@@ -340,7 +372,7 @@ func (s *Solver) cleanupExclusiveLocked(now time.Time) {
 		s.exclusiveTerminal = make(map[common.Hash]time.Time)
 	}
 	for hash, terminalAt := range s.exclusiveTerminal {
-		if now.Sub(terminalAt) > time.Hour {
+		if now.Sub(terminalAt) > s.exclusiveRecoveryLookback() {
 			delete(s.exclusiveTerminal, hash)
 		}
 	}

@@ -9,9 +9,20 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
+
+func newUniswapXTestMetrics(t *testing.T, solver *Solver) *uniswapXMetrics {
+	t.Helper()
+	metrics, err := newUniswapXMetrics(prometheus.NewRegistry(), solver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return metrics
+}
 
 type stateTestOrderPoller struct {
 	terminals map[common.Hash]orderTerminal
@@ -87,6 +98,7 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 			hash: {Status: orderStatusExpired},
 		}},
 	}
+	solver.metrics = newUniswapXTestMetrics(t, solver)
 	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(now.Add(time.Second).Unix()),
@@ -106,6 +118,14 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 	}
 	if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
 		t.Fatal("missed obligation was not marked terminal")
+	}
+	if got := testutil.ToFloat64(
+		solver.metrics.exclusiveOutcomes.WithLabelValues(exclusiveOutcomeMissed),
+	); got != 1 {
+		t.Fatalf("missed outcomes = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(solver.metrics.exclusiveOutstanding); got != 0 {
+		t.Fatalf("outstanding obligations = %v, want 0", got)
 	}
 
 	// A later unrelated fill may reset the ordinary failure breaker, but never the fade breaker.
@@ -165,6 +185,7 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 			txHash: deadline,
 		}},
 	}
+	solver.metrics = newUniswapXTestMetrics(t, solver)
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
 	}, now)
@@ -182,6 +203,11 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	reader := solver.reader.(*stateTestChainReader)
 	if reader.confirmations != 2 {
 		t.Fatalf("confirmation depth = %d, want 2", reader.confirmations)
+	}
+	if got := testutil.ToFloat64(
+		solver.metrics.exclusiveOutcomes.WithLabelValues(exclusiveOutcomeSettledInTime),
+	); got != 1 {
+		t.Fatalf("settled outcomes = %v, want 1", got)
 	}
 }
 
@@ -277,6 +303,30 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 				t.Fatal("unresolved obligation was removed instead of retried")
 			}
 		})
+	}
+}
+
+func TestExclusiveTerminalRetentionCoversRecoveryLookback(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	recent := common.HexToHash("0x1234")
+	old := common.HexToHash("0x5678")
+	solver := &Solver{
+		cfg: &Config{Breaker: BreakerConfig{Window: 2 * time.Hour}},
+		exclusiveTerminal: map[common.Hash]time.Time{
+			recent: now.Add(-3 * time.Hour),
+			old:    now.Add(-5 * time.Hour),
+		},
+	}
+
+	solver.stateMu.Lock()
+	solver.cleanupExclusiveLocked(now)
+	solver.stateMu.Unlock()
+
+	if _, retained := solver.exclusiveTerminal[recent]; !retained {
+		t.Fatal("terminal outcome inside recovery lookback was discarded")
+	}
+	if _, retained := solver.exclusiveTerminal[old]; retained {
+		t.Fatal("terminal outcome older than recovery lookback was retained")
 	}
 }
 

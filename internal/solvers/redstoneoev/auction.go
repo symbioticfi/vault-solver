@@ -27,6 +27,7 @@ const (
 // bidDecision is the outcome of evaluating one auction: either a ready-to-send solve or a bounded skip.
 type bidDecision struct {
 	solve      SolveMessage
+	bidWei     *big.Int
 	nonce      uint64
 	callback   common.Address
 	skip       string
@@ -70,8 +71,9 @@ func (s *Solver) handleAuctionResult(raw []byte) {
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	won := liquidator == s.cfg.Callback
 	if won {
-		s.metrics.won()
-		s.markReservationWon(r.ID)
+		if bidWei, transitioned := s.markReservationWon(r.ID); transitioned {
+			s.metrics.won(bidWei)
+		}
 	} else {
 		s.releaseReservationByAuction(r.ID)
 	}
@@ -92,11 +94,35 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 		return
 	}
 	s.requestStateRefresh()
-	s.releaseReservationByAuction(r.ID)
-	if !r.Data.Success {
-		s.breaker.recordFailure(time.Now())
-		s.metrics.failed()
+	if reservation, released := s.releaseReservationByAuction(r.ID); released {
+		if !reservation.won {
+			s.metrics.won(reservation.bidWei)
+		}
+		s.metrics.settlement(r.Data.Success, reservation.bidWei)
 	}
+	if !r.Data.Success {
+		now := time.Now()
+		identity := liquidationResultIdentity(r)
+		recorded := true
+		if identity == "" {
+			s.breaker.recordFailure(now)
+		} else {
+			recorded = s.breaker.recordFailureOnce(identity, now)
+		}
+		if recorded {
+			s.metrics.failed()
+		}
+	}
+}
+
+func liquidationResultIdentity(result LiquidationResult) string {
+	if id := strings.TrimSpace(result.ID); id != "" {
+		return "id:" + id
+	}
+	if txHash := strings.ToLower(strings.TrimSpace(result.Data.TxHash)); txHash != "" {
+		return "tx:" + txHash
+	}
+	return ""
 }
 
 func (s *Solver) handleBlacklisted(raw []byte) {
@@ -155,7 +181,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 		return
 	}
 	if s.dryRun {
-		s.metrics.bid()
+		s.metrics.wouldBid()
 		s.log.Info("DRY-RUN would bid", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 			"bidEth", d.solve.Data.Bid)
 		return
@@ -163,13 +189,14 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	if s.bidExpired(a, start) {
 		return
 	}
+	s.reserve(d.nonce, time.Now(), a.ID, d.bidWei)
 	if !s.ws.Send(marshal(d.solve)) {
+		s.releaseReservationByAuction(a.ID)
 		s.metrics.skip("send_dropped")
 		s.log.Info("bid NOT sent (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
 		return
 	}
-	s.reserve(d.nonce, time.Now(), d.callback, a.ID)
-	s.metrics.bid()
+	s.metrics.submittedBid(d.bidWei)
 	s.log.Info("bid sent", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid)
 }
@@ -286,6 +313,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	return bidDecision{
 		nonce:    nonce,
 		callback: callback,
+		bidWei:   bidNative,
 		solve: SolveMessage{
 			Op: "solve", ID: a.ID,
 			Data: SolveData{

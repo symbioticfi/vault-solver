@@ -147,18 +147,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	var metrics *uniswapXMetrics
-	if deps.Metrics != nil {
-		metrics, err = newUniswapXMetrics(deps.Metrics.Registerer())
-		if err != nil {
-			return nil, err
-		}
-	}
 	var discountClient liquiddiscounts.Provider
 	if cfg.usesDiscounts() {
 		discountClient = liquiddiscounts.NewClient(cfg.Discounts.BaseURL)
 	}
-	return &Solver{
+	result := &Solver{
 		cfg:               cfg,
 		chainID:           deps.Chain.ChainID().Int64(),
 		solverAddress:     deps.Signer.Address(),
@@ -175,10 +168,16 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		retryAt:           make(map[common.Hash]time.Time),
 		inFlight:          make(map[common.Hash]bool),
 		attempts:          make(map[common.Hash]int),
-		metrics:           metrics,
 		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
-	}, nil
+	}
+	if deps.Metrics != nil {
+		result.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), result)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func (s *Solver) Name() string { return Name }

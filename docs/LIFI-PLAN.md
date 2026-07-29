@@ -769,7 +769,9 @@ still requires the redeploy in phase 0.
    The new executor asks direct adapters for the buffered `amountOut`, executes private routes from signed
    terms, and delegates context resolution and output sufficiency to the OutputSettler. If the order is not
    executable at decision time, it is dropped.
-3. **Harden** — staleness/skip edge cases, revert handling, metrics on the shared observability server;
+   Quote-state and shared fill-transaction collectors are listed in the
+   [README metrics table](../README.md#metrics).
+3. **Harden** — staleness/skip edge cases, revert handling;
    a repeatable green E2E on Sepolia (`order-dev`).
 4. **Mainnet** — deploy the executor per target chain, point config at `order.li.fi`, register each
    executor account through EIP-1271, and run.

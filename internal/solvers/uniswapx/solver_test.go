@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
@@ -271,18 +272,30 @@ func TestPollSourceTracksRejectedExclusiveOrder(t *testing.T) {
 			return []orderEntry{entry}, nil
 		}),
 	)
+	solver.metrics = newUniswapXTestMetrics(t, solver)
 
-	if _, err := solver.pollSource(
-		t.Context(),
-		orderSourceExclusiveV2,
-		&cfg.Executor,
-		make(chan *resolvedOrder, 1),
-	); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if _, err := solver.pollSource(
+			t.Context(),
+			orderSourceExclusiveV2,
+			&cfg.Executor,
+			make(chan *resolvedOrder, 1),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	hash := common.HexToHash(entry.OrderHash)
 	if tracked, ok := solver.exclusiveUntil[hash]; !ok || !tracked.deadline.Equal(now) {
 		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", tracked.deadline, ok)
+	}
+	if got := testutil.ToFloat64(solver.metrics.exclusiveWins); got != 1 {
+		t.Fatalf("exclusive wins = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(solver.metrics.exclusiveOutstanding); got != 1 {
+		t.Fatalf("outstanding obligations = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(solver.metrics.exclusiveDeadline); got != float64(now.Unix()) {
+		t.Fatalf("nearest deadline = %v, want %d", got, now.Unix())
 	}
 }
 
@@ -317,6 +330,7 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			)
 			solver.reader = &countingChainReader{now: time.Unix(1_001, 0)}
 			solver.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+			solver.metrics = newUniswapXTestMetrics(t, solver)
 			solver.quoteState.Store(&quoteState{})
 			solver.exclusiveStateUnknown.Store(true)
 			if !tc.startup {
@@ -346,6 +360,14 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			}
 			if tc.startup && strings.Contains(logged, `"error"`) {
 				t.Fatalf("startup-recovered miss was logged as an error: %s", logged)
+			}
+			if got := testutil.ToFloat64(solver.metrics.exclusiveWins); got != 0 {
+				t.Fatalf("recovery replayed wins: %v", got)
+			}
+			if got := testutil.ToFloat64(
+				solver.metrics.exclusiveOutcomes.WithLabelValues(exclusiveOutcomeMissed),
+			); got != 0 {
+				t.Fatalf("recovery replayed missed outcomes: %v", got)
 			}
 
 			initialLogCount := strings.Count(logged, "historical exclusive obligation missed")

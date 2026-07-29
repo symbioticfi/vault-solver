@@ -92,13 +92,17 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
 	// Shared, nonce-serialized transaction sender.
-	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
+	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
+	if err != nil {
+		return err
+	}
+	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
 		TipGwei:             cfg.TxManager.TipGwei,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
-	}, log)
+	}, txMetrics, log)
 	go txm.Start(ctx)
 
 	// Build every configured solver. They share the chain client, signer, and the single
