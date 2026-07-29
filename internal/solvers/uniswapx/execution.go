@@ -59,11 +59,11 @@ func (s *Solver) fillLoop(
 			)
 			now, err := s.reader.latestBlockTime(ctx)
 			if err != nil {
+				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
 				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
 				continue
 			}
-			s.beginFillPlanning()
 			fill, err := s.startFill(ctx, routes, order, now)
 			s.endFillPlanning()
 			if err != nil {

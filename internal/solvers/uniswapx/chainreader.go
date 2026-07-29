@@ -148,7 +148,11 @@ func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
 	return time.Unix(int64(header.Time), 0), nil
 }
 
-func (r *reader) transactionBlockTime(ctx context.Context, txHash common.Hash) (time.Time, error) {
+func (r *reader) transactionBlockTimeConfirmed(
+	ctx context.Context,
+	txHash common.Hash,
+	confirmations uint64,
+) (time.Time, error) {
 	receipt, err := r.chain.TransactionReceipt(ctx, txHash)
 	if err != nil {
 		return time.Time{}, errors.Errorf("read transaction receipt %s: %w", txHash.Hex(), err)
@@ -163,5 +167,30 @@ func (r *reader) transactionBlockTime(ctx context.Context, txHash common.Hash) (
 	if header == nil || receipt.BlockHash != (common.Hash{}) && header.Hash() != receipt.BlockHash {
 		return time.Time{}, errors.Errorf("transaction %s receipt is not canonical", txHash.Hex())
 	}
+	head, err := r.chain.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return time.Time{}, errors.Errorf("read latest block for transaction %s: %w", txHash.Hex(), err)
+	}
+	if head == nil || head.Number == nil {
+		return time.Time{}, errors.Errorf("latest block for transaction %s has no number", txHash.Hex())
+	}
+	if err := requireConfirmationDepth(receipt.BlockNumber, head.Number, confirmations); err != nil {
+		return time.Time{}, errors.Errorf("transaction %s: %w", txHash.Hex(), err)
+	}
 	return time.Unix(int64(header.Time), 0), nil
+}
+
+func requireConfirmationDepth(receiptBlock, head *big.Int, confirmations uint64) error {
+	if receiptBlock == nil || head == nil {
+		return errors.New("receipt and head block numbers are required")
+	}
+	confirmedAt := new(big.Int).Add(receiptBlock, new(big.Int).SetUint64(confirmations))
+	if head.Cmp(confirmedAt) < 0 {
+		return errors.Errorf(
+			"%s confirmations pending at head %s",
+			new(big.Int).Sub(confirmedAt, head),
+			head,
+		)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package uniswapx
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 
@@ -8,6 +9,15 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
+
+func TestRequireConfirmationDepth(t *testing.T) {
+	if err := requireConfirmationDepth(big.NewInt(100), big.NewInt(101), 2); err == nil {
+		t.Fatal("unconfirmed receipt was accepted")
+	}
+	if err := requireConfirmationDepth(big.NewInt(100), big.NewInt(102), 2); err != nil {
+		t.Fatalf("confirmed receipt rejected: %v", err)
+	}
+}
 
 func TestRequireExecutorCode(t *testing.T) {
 	executor := common.HexToAddress("0x1111111111111111111111111111111111111111")

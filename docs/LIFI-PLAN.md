@@ -346,6 +346,12 @@ type Strategy interface {
   when at most `max(quoteInterval, quoteTtl / 3)` remains, even when no new block is observed or the head poll
   fails. The strategy
   may only shorten that expiry to `discount deadline - executionDeadlineBuffer`.
+  Capacity allocation is scoped to one token pair before the range curve is built. Different pairs backed
+  by the same vault therefore each advertise the full currently unreserved `CapacityID` instead of receiving
+  static shares. This is deliberately optimistic: an accepted fill reserves the shared domain and wakes quote
+  refresh immediately, but two orders matched against the previous curves can still race. Fresh fill planning,
+  the shared reservation ledger, and inclusion-time adapter checks prevent double spending; they do not promise
+  that every concurrently matched order can be filled.
 - **`FillInput`** = the matched signed `StandardOrder` output facts (`output.amount`, raw
   `output.context`) plus fresh `getAmountOut`, `minDiscount`, `getMaxAssets`, pending fill reservations
   by shared `CapacityID`, and the same latest LiquidLane gas facts. Direct candidates require current
@@ -377,9 +383,11 @@ type Strategy interface {
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
-and releases it when that send completes. A single shared `CapacityLedger` is the source for both fill
-planning and quote refresh; the quote coordinator receives only a coalesced refresh signal and does not
-keep a second copy of per-order reservations. On startup, when any economic payload changes, or when expiry enters the renewal
+and releases it only when the shared tx manager returns after the globally configured confirmation depth.
+A successful tx-manager admission immediately sends a coalesced refresh signal; confirmed completion and
+reservation release send another. A single shared `CapacityLedger` is the source for
+both fill planning and quote refresh, and the quote coordinator does not keep a second copy of per-order
+reservations. On startup, when any economic payload changes, or when expiry enters the renewal
 window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
 stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
 the old server-side quote. An unchanged pair is not reposted on every calculation tick.
@@ -508,9 +516,11 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   to cover gas, both quote-time price windows, and rounding.
   The strategy charges complete-plan gas after route allocation and omits any capacity range whose lower
   boundary is not economically positive.
-- **Capacity safety** — routes sharing a vault share one conservative capacity domain. Both quote and
-  fill planning subtract in-flight buffered outputs before allocating that shared capacity. Each fill
-  still uses a fresh chain snapshot and the adapter enforces execution at inclusion. An economic change removes
+- **Capacity safety** — routes sharing a vault share one conservative capacity domain. Each pair may advertise
+  the full domain, while quote and fill planning subtract every in-flight buffered output from it. This
+  optimistic publication can overbook across simultaneously matched pairs, but each fill still uses a fresh
+  chain snapshot and the adapter enforces execution at inclusion. An accepted fill immediately requests quote
+  replacement; its reservation remains until configured confirmations complete, and an economic change removes
   old server ranges before replacement.
 - **Authorization safety** — startup validates executor immutables and requires the framework signer to be
   authorized by `executor.isCaller`. Startup and every admitted order also require

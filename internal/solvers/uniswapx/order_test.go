@@ -444,3 +444,35 @@ func TestDecayMatchesDutchLinearRounding(t *testing.T) {
 		t.Fatalf("ascending decay = %s, want 3", got)
 	}
 }
+
+func testExclusiveOrderEntry(t *testing.T, exclusiveFiller common.Address) (orderEntry, *Config) {
+	t.Helper()
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	amount := big.NewInt(1)
+	order := v2Order{
+		Info: v2OrderInfo{
+			Nonce: amount, Deadline: big.NewInt(1_200),
+		},
+		BaseInput: v2Input{StartAmount: amount, EndAmount: amount},
+		BaseOutputs: []v2Output{{
+			StartAmount: amount, EndAmount: amount,
+		}},
+		CosignerData: v2CosignerData{
+			DecayStartTime: big.NewInt(1_000), DecayEndTime: big.NewInt(1_100),
+			ExclusiveFiller: exclusiveFiller, ExclusivityOverrideBps: new(big.Int),
+			InputOverride: new(big.Int), OutputOverrides: []*big.Int{new(big.Int)},
+		},
+	}
+	hash, err := v2OrderHash(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := v2OrderArguments.Pack(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return orderEntry{
+		Type: orderTypeDutchV2, EncodedOrder: hexutil.Encode(encoded), Signature: "0x",
+		OrderHash: hash.Hex(), OrderStatus: orderStatusOpen, ChainID: 1, QuoteID: "quote-1",
+	}, &Config{Executor: executor}
+}

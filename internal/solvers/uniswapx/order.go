@@ -83,9 +83,10 @@ type resolvedOrder struct {
 }
 
 var (
-	v2OrderArguments        = mustV2OrderArguments()
-	v2CosignerDataArguments = mustV2CosignerDataArguments()
-	v2HashArguments         = mustV2HashArguments()
+	v2OrderArguments            = mustV2OrderArguments()
+	v2CosignerDataArguments     = mustV2CosignerDataArguments()
+	v2HashArguments             = mustV2HashArguments()
+	errDifferentExclusiveFiller = errors.New("order is exclusive to another filler")
 )
 
 type v2HashABIs struct {
@@ -172,6 +173,48 @@ func parseAndResolveOrder(
 	now time.Time,
 ) (*resolvedOrder, error) {
 	return parseAndResolveV2Order(entry, source, cfg, chainID, now)
+}
+
+func exclusiveObligationFromEntry(
+	entry orderEntry,
+	cfg *Config,
+	chainID int64,
+) (exclusiveObligation, error) {
+	if entry.Type != orderTypeDutchV2 {
+		return exclusiveObligation{}, errors.Errorf("unsupported order type %q", entry.Type)
+	}
+	if entry.ChainID != chainID {
+		return exclusiveObligation{}, errors.Errorf("order chain id %d does not match %d", entry.ChainID, chainID)
+	}
+	encoded, err := hexutil.Decode(entry.EncodedOrder)
+	if err != nil {
+		return exclusiveObligation{}, errors.Errorf("encodedOrder: %w", err)
+	}
+	decoded, err := v2OrderArguments.Unpack(encoded)
+	if err != nil || len(decoded) != 1 {
+		return exclusiveObligation{}, errors.Errorf("decode V2 order: %w", err)
+	}
+	order := *abi.ConvertType(decoded[0], new(v2Order)).(*v2Order)
+	if order.CosignerData.ExclusiveFiller != cfg.Executor {
+		return exclusiveObligation{}, errors.Errorf(
+			"%w: got %s",
+			errDifferentExclusiveFiller,
+			order.CosignerData.ExclusiveFiller.Hex(),
+		)
+	}
+	deadline, ok := uint64Value(order.CosignerData.DecayStartTime)
+	if !ok || deadline == 0 {
+		return exclusiveObligation{}, errors.New("invalid exclusive deadline")
+	}
+	hash, err := v2OrderHash(order)
+	if err != nil {
+		return exclusiveObligation{}, err
+	}
+	backendHash, err := parseHash(entry.OrderHash)
+	if err != nil || backendHash != hash {
+		return exclusiveObligation{}, errors.New("orderHash does not match encoded order")
+	}
+	return exclusiveObligation{hash: hash, deadline: time.Unix(int64(deadline), 0)}, nil
 }
 
 func parseAndResolveV2Order(

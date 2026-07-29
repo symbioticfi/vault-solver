@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,11 +51,36 @@ func newOrderClient(cfg OrderServerConfig, apiKey string) *orderClient {
 }
 
 func (c *orderClient) openOrders(ctx context.Context, chainID int64, filler *common.Address) ([]orderEntry, error) {
+	return c.orders(ctx, chainID, filler, orderStatusOpen, time.Time{})
+}
+
+func (c *orderClient) recentOrders(
+	ctx context.Context,
+	chainID int64,
+	filler common.Address,
+	createdAfter time.Time,
+) ([]orderEntry, error) {
+	if filler == (common.Address{}) {
+		return nil, errors.New("GET /orders history: zero filler")
+	}
+	if createdAfter.IsZero() {
+		return nil, errors.New("GET /orders history: zero created-after time")
+	}
+	return c.orders(ctx, chainID, &filler, "", createdAfter)
+}
+
+func (c *orderClient) orders(
+	ctx context.Context,
+	chainID int64,
+	filler *common.Address,
+	status string,
+	createdAfter time.Time,
+) ([]orderEntry, error) {
 	var orders []orderEntry
 	var cursor string
 	seenCursors := make(map[string]bool)
 	for range maxOrderPages {
-		page, err := c.orderPage(ctx, chainID, filler, cursor)
+		page, err := c.orderPage(ctx, chainID, filler, status, createdAfter, cursor)
 		if err != nil {
 			return orders, err
 		}
@@ -164,12 +190,14 @@ func (c *orderClient) orderPage(
 	ctx context.Context,
 	chainID int64,
 	filler *common.Address,
+	status string,
+	createdAfter time.Time,
 	cursor string,
 ) (orderPage, error) {
 	if err := c.waitForRequestSlot(ctx); err != nil {
 		return orderPage{}, errors.Errorf("wait for orders rate limit: %w", err)
 	}
-	response, err := c.executeOrderRequest(ctx, chainID, filler, cursor)
+	response, err := c.executeOrderRequest(ctx, chainID, filler, status, createdAfter, cursor)
 	if err != nil {
 		return orderPage{}, err
 	}
@@ -202,16 +230,24 @@ func (c *orderClient) executeOrderRequest(
 	ctx context.Context,
 	chainID int64,
 	filler *common.Address,
+	status string,
+	createdAfter time.Time,
 	cursor string,
 ) (*uniswapxservice.GetOrdersResponse, error) {
 	request := c.client.OrdersAPI.OrdersGet(ctx).
 		ChainId(uniswapxservice.ChainId(chainID)).
 		Limit(orderPageLimit).
-		OrderStatus(uniswapxservice.OPEN).
 		SortKey(uniswapxservice.CREATED_AT).
-		Sort("gt(0)").
 		Desc(true).
 		OrderType(uniswapxservice.DUTCH_V2)
+	if status != "" {
+		request = request.OrderStatus(uniswapxservice.OrderStatus(status))
+	}
+	if createdAfter.IsZero() {
+		request = request.Sort("gt(0)")
+	} else {
+		request = request.Sort("gt(" + strconv.FormatInt(createdAfter.Unix(), 10) + ")")
+	}
 	if filler != nil {
 		request = request.Filler(filler.Hex())
 	}

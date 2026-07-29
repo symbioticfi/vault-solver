@@ -125,14 +125,27 @@ func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) {
 	if order.Source != orderSourceExclusiveV2 || order.ExclusiveUntil == 0 {
 		return
 	}
+	s.trackExclusiveObligation(
+		exclusiveObligation{
+			hash:     order.Hash,
+			deadline: time.Unix(int64(order.ExclusiveUntil), 0),
+		},
+		order.QuoteID,
+		now,
+	)
+}
+
+func (s *Solver) trackExclusiveObligation(
+	obligation exclusiveObligation,
+	quoteID string,
+	now time.Time,
+) {
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
 	tracked := false
-	var deadline time.Time
-	if _, terminal := s.exclusiveTerminal[order.Hash]; !terminal {
-		deadline = time.Unix(int64(order.ExclusiveUntil), 0)
-		if current, exists := s.exclusiveUntil[order.Hash]; !exists || deadline.Before(current) {
-			s.exclusiveUntil[order.Hash] = deadline
+	if _, terminal := s.exclusiveTerminal[obligation.hash]; !terminal {
+		if current, exists := s.exclusiveUntil[obligation.hash]; !exists || obligation.deadline.Before(current) {
+			s.exclusiveUntil[obligation.hash] = obligation.deadline
 			tracked = true
 		}
 	}
@@ -140,9 +153,9 @@ func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) {
 	if tracked {
 		s.log.V(1).Info(
 			"exclusive obligation tracked",
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"exclusiveUntil", deadline.Unix(),
+			"orderHash", obligation.hash.Hex(),
+			"quoteId", quoteID,
+			"exclusiveUntil", obligation.deadline.Unix(),
 		)
 	}
 }
@@ -190,7 +203,11 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 			if terminal.TxHash == (common.Hash{}) {
 				return errors.Errorf("lookup expired obligation %s: filled order has no transaction", obligation.hash.Hex())
 			}
-			filledAt, readErr := s.reader.transactionBlockTime(ctx, terminal.TxHash)
+			filledAt, readErr := s.reader.transactionBlockTimeConfirmed(
+				ctx,
+				terminal.TxHash,
+				s.confirmations,
+			)
 			if readErr != nil {
 				return errors.Errorf("lookup expired obligation %s fill time: %w", obligation.hash.Hex(), readErr)
 			}

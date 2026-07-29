@@ -225,6 +225,32 @@ func TestOrderClientLeavesFillerUnsetForPublicSources(t *testing.T) {
 	}
 }
 
+func TestOrderClientReadsRecentFillerHistoryAcrossStatuses(t *testing.T) {
+	filler := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("chainId") != "1" || query.Get("filler") != filler.Hex() ||
+			query.Get("orderType") != orderTypeDutchV2 ||
+			query.Get("sortKey") != "createdAt" || query.Get("sort") != "gt(900)" ||
+			query.Get("desc") != "true" || query.Has("orderStatus") {
+			t.Errorf("unexpected history query: %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{}})
+	}))
+	defer server.Close()
+
+	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
+	client.requestGap = 0
+	orders, err := client.recentOrders(t.Context(), 1, filler, time.Unix(900, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 0 {
+		t.Fatalf("history = %+v, want empty response", orders)
+	}
+}
+
 func TestOrderClientRateLimitsEveryPage(t *testing.T) {
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

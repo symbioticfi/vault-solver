@@ -22,12 +22,6 @@ func (s *Solver) markExclusiveStateUnknown() {
 	s.invalidateQuotes()
 }
 
-func (s *Solver) markExclusivePollFailure() {
-	if !s.exclusiveDeliveryHealthy() {
-		s.invalidateQuotes()
-	}
-}
-
 func (s *Solver) ready() bool {
 	now := time.Now()
 	lastPoll := s.lastExclusivePoll.Load()
