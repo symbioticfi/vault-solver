@@ -128,7 +128,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.New("UniswapX order API key env must be non-empty")
 	}
 	log := deps.Log.WithName(Name)
-	reader, err := newReader(deps.Chain, log, cfg.Gas)
+	reader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
 	if err != nil {
 		return nil, err
 	}

@@ -48,7 +48,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	chainID := deps.Chain.ChainID().Int64()
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
-	rdr := newReader(deps.Chain, log)
+	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
 	quoteStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
@@ -90,14 +90,15 @@ func buildServices(
 	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:     chainID,
-		executor:    cfg.Executor,
-		whitelist:   quoteWhitelist,
-		tokenPolicy: cfg.TokenPolicy,
-		reader:      rdr,
-		strategy:    quoteStrategy,
-		log:         log,
-		now:         time.Now,
+		chainID:      chainID,
+		executor:     cfg.Executor,
+		whitelist:    quoteWhitelist,
+		tokenPolicy:  cfg.TokenPolicy,
+		minAmountsIn: cfg.MinAmountsIn,
+		reader:       rdr,
+		strategy:     quoteStrategy,
+		log:          log,
+		now:          time.Now,
 	}
 	exec := &executionService{
 		chainID:          chainID,

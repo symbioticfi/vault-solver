@@ -13,6 +13,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/vaultcontroller"
 	"github.com/symbioticfi/vault-solver/api/bindings/adapterfactory"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
+	"github.com/symbioticfi/vault-solver/api/bindings/lens"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
@@ -29,6 +30,7 @@ var (
 	factoryB  = adapterfactory.NewIAdapterFactory()
 	vc        = vaultcontroller.NewIVaultController()
 	erc4626b  = erc4626.NewIERC4626()
+	lensB     = lens.NewFrontendLiquidityLens()
 )
 
 // maxRequests mirrors MAX_REQUESTS in IThreeFAdapter — the adapter rejects a new request once it tracks
@@ -75,10 +77,14 @@ func newSignerProbe(s signer.Signer) (signerProbe, error) {
 // Multicall3 where calls are independent.
 type reader struct {
 	chain *chain.Client
+	// lens is the FrontendLiquidityLens address. When non-zero, funding headroom is read from the lens's
+	// cross-adapter deallocation-cascade estimate instead of the adapter's own getMaxAssets(); zero falls
+	// back to the adapter getter.
+	lens common.Address
 }
 
-func newReader(c *chain.Client) *reader {
-	return &reader{chain: c}
+func newReader(c *chain.Client, lens common.Address) *reader {
+	return &reader{chain: c, lens: lens}
 }
 
 // factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
@@ -259,8 +265,14 @@ type exposureState struct {
 // the bot can't sign an offer the JIT pull at consume time can't satisfy. openCount is the adapter's own
 // requestsLength() (a single read) feeding the concurrency pre-screen.
 func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Address) (exposureState, error) {
+	// getMaxAssets headroom comes from the lens when configured (it models the delegator's cross-adapter
+	// deallocation cascade, which the adapter's own getter overstates); otherwise from the adapter itself.
+	maxAssetsCall := chain.Call{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()}
+	if r.lens != (common.Address{}) {
+		maxAssetsCall = chain.Call{Target: r.lens, Data: lensB.PackGetMaxAssets(adapterAddr)}
+	}
 	calls := []chain.Call{
-		{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()},
+		maxAssetsCall,
 		{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},

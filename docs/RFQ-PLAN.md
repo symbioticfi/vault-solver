@@ -128,6 +128,18 @@ declines if none exists. The solver independently rejects any quoted or fill pla
 not exactly one, so webhook and fresh fill planning fail closed at the same boundary. The `all` and
 `permissionless` scopes retain greedy multi-candidate aggregation.
 
+`minAmountsIn` is a second solver-owned quote gate, independent of the token scope: an optional map of
+input-token address → minimum request size in that token's **base units** (decimal string). It is
+evaluated in `quoteService.quote` right after the token-scope check and before any adapter filtering or
+chain read, so a below-minimum request costs nothing and returns the usual no-quote (`nil, nil` ⇒ HTTP
+204). The comparison is strict: `amountIn == min` still quotes. Keys are parsed into `common.Address`,
+so configured checksum casing does not matter; values must parse as positive integers (zero, negative,
+non-numeric, or a zero/invalid address key is a startup error, as is the same token listed twice in
+different casing). Tokens absent from the map have no floor. This is how RWA inputs (HYBOND, deJAAA,
+deJTRSY) enforce a redemption-sized minimum without a per-token code path. Covered by
+`gating_test.go` (`TestParseConfigMinAmountsIn`, `TestParseConfigMinAmountsInErrors`,
+`TestQuoteMinAmountIn`) and `server_test.go` (`TestServer_QuoteBelowMinAmountNoContent`).
+
 The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
 brain; the solver only enforces its own structural and safety constraints) are documented once in
 [`strategy-plan.md`](strategy-plan.md), shared with every solver. Shared LiquidLane fact conventions
@@ -180,6 +192,8 @@ solvers:
       pollIntervalMs: 3000
       orderLimit: 20
       solverMode: external                              # "external" (default) | "internal" — see below
+      minAmountsIn:                                     # optional per-input-token floor (base units)
+        "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
       adapters:                                         # LiquidLane adapter addresses (whitelist + fill planning)
         - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
 ```
@@ -260,10 +274,11 @@ dropping features.
    200/204 paths incl. disabled toggle, fill-time discount filter, mismatch → failed order with no
    tx).
 5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
-   quote and fill inputs require one fully covering candidate instead of aggregation, and the solver
-   rejects multi-leg strategy/webhook outputs before publication or calldata construction. Cold fill
-   fill planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
-   single-route selection/decline, webhook rejection, and fresh planning.
+   quote and fill inputs use one candidate instead of aggregation, and the solver rejects multi-leg
+   strategy/webhook outputs before publication or calldata construction. Input beyond that route's
+   output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
+   planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
+   single-route capped output, webhook rejection, and fresh planning.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
@@ -288,8 +303,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
   chain. A single `rpcUrl` keeps the plain dial (any scheme).
-- **Pricing follows the TS greedy port for permissionless inputs** — permissioned inputs deliberately
-  use the single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
+- **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
+  single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
   layer below).
 - **Discount-leg rate rounding** — a discount leg prices off the backend's advertised `maxRate`, which
@@ -318,8 +333,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 ### Parity with the current TS filler
 
-**Status (verified against the current TS `rfq-filler` working tree): functional parity for the
-permissionless path, plus the permissioned-scope single-route constraint described above.** The
+**Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
+permissioned-scope single-route constraint described above.** The
 pricing/sizing/leg-selection math, the `Executor.fill` selector + nested tuple encoding, the backend
 endpoints actually used (`GET /orders` ×3 query shapes, `GET /discounts`, `POST /discounts` resolve),
 and the fill-time RPC read/authorization set are all 1:1. The Go port adds a few **fail-closed

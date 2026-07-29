@@ -51,6 +51,8 @@ solvers:
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle
       reactor:  "0xC323B898d7E4105E3980082B74CC5D4602996B10"   # Reactor — invoked by the Executor at fill time
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
+                                        # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
 
       # solverMode: "external" (default) | "internal".
       #   external — the open-source filler: never touches the discounts API; `adapters` is REQUIRED and
@@ -65,6 +67,12 @@ solvers:
       # tokensToQuote: all
       # permissionedTokens:            # with tokensToQuote: permissioned, inputs must use one candidate route
       #   - "0x..."
+
+      # minAmountsIn sets a per-input-token floor on request size, in that token's BASE UNITS (decimal
+      # string). A request below its token's minimum gets no quote (HTTP 204); an amount equal to the
+      # minimum still quotes. Tokens not listed have no minimum.
+      # minAmountsIn:
+      #   "0x238a700eD6165261Cf8b2e544ba797BC11e466Ba": "1000000000000000000"  # 1 token (18 decimals)
 
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
       # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode

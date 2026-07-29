@@ -19,6 +19,7 @@ type rawConfig struct {
 	InputSettler       string                  `yaml:"inputSettler"`
 	OutputSettler      string                  `yaml:"outputSettler"`
 	Executor           string                  `yaml:"executor"`
+	LiquidityLens      string                  `yaml:"liquidityLens"`
 	Adapters           []string                `yaml:"adapters"`
 	TokensToQuote      string                  `yaml:"tokensToQuote"`
 	PermissionedTokens []string                `yaml:"permissionedTokens"`
@@ -44,10 +45,14 @@ type rawStrategyConfig struct {
 }
 
 type Config struct {
-	OrderServer      OrderServerConfig
-	InputSettler     common.Address
-	OutputSettler    common.Address
-	Executor         common.Address
+	OrderServer   OrderServerConfig
+	InputSettler  common.Address
+	OutputSettler common.Address
+	Executor      common.Address
+	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
+	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
+	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
+	LiquidityLens    common.Address
 	Adapters         []common.Address
 	TokenPolicy      tokenpolicy.Policy
 	QuoteInterval    time.Duration
@@ -105,6 +110,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
+	}
+	var liquidityLens common.Address
+	if raw.LiquidityLens != "" {
+		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
 	}
 	adapters, err := parseAdapters(raw.Adapters)
 	if err != nil {
@@ -168,6 +179,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		InputSettler:     inputSettler,
 		OutputSettler:    outputSettler,
 		Executor:         executor,
+		LiquidityLens:    liquidityLens,
 		Adapters:         adapters,
 		TokenPolicy:      tokenPolicy,
 		QuoteInterval:    quoteInterval,

@@ -57,6 +57,9 @@ solvers:
       # isValidSignature — the solver EOA or an EIP-1271 contract signer) and whose
       # adapter.vault()/vault.asset() resolve to non-zero addresses.
       adapterFactory: "0x5e0c165Acc4653bD4cf966A454C9aF1647E65Eb1"
+      # liquidityLens: "0x..."          # optional FrontendLiquidityLens; when set, funding headroom is read
+                                        # from its cross-adapter deallocation-cascade estimate instead of the
+                                        # adapter's own getMaxAssets(). Omit to use the adapter getter.
       # adapters:                       # optional exclusive override
       #   - "0x..."
 

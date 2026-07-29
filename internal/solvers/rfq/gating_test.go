@@ -50,6 +50,142 @@ permissionedTokens:
 	}
 }
 
+func TestParseConfigMinAmountsIn(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+oneAdapter+`
+minAmountsIn:
+  "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "100000000000000000000"
+  "0xaaa0008c8cf3a7dca931adaf04336a5d808c82cc": "1000000000000000000000"
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(cfg.MinAmountsIn) != 2 {
+		t.Fatalf("minAmountsIn = %d entries, want 2", len(cfg.MinAmountsIn))
+	}
+	// Keys are addresses, so the configured checksum casing does not matter at lookup time.
+	got := cfg.MinAmountsIn[common.HexToAddress("0x1204371ac0e5176f4b8c5b2f16c2bec551b6fc1a")]
+	if got == nil || got.Cmp(mustBig(t, "100000000000000000000")) != 0 {
+		t.Fatalf("HYBOND minimum = %v, want 100e18", got)
+	}
+	got = cfg.MinAmountsIn[common.HexToAddress("0xAAA0008C8CF3A7Dca931adaF04336A5D808C82Cc")]
+	if got == nil || got.Cmp(mustBig(t, "1000000000000000000000")) != 0 {
+		t.Fatalf("deJAAA minimum = %v, want 1000e18", got)
+	}
+
+	def, err := parseCfg(t, minimalConfig+oneAdapter)
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if def.MinAmountsIn != nil {
+		t.Fatalf("default minAmountsIn = %v, want nil (no minimums)", def.MinAmountsIn)
+	}
+}
+
+func TestParseConfigMinAmountsInErrors(t *testing.T) {
+	cases := map[string]string{ //nolint:gosec // G101 false positive: YAML test fixtures, not credentials.
+		"zero address key": `
+minAmountsIn:
+  "0x0000000000000000000000000000000000000000": "1"
+`,
+		"invalid address key": `
+minAmountsIn:
+  "not-an-address": "1"
+`,
+		"non-numeric value": `
+minAmountsIn:
+  "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "lots"
+`,
+		"zero value": `
+minAmountsIn:
+  "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "0"
+`,
+		"negative value": `
+minAmountsIn:
+  "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "-1"
+`,
+		"same token twice in different casing": `
+minAmountsIn:
+  "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "1"
+  "0x1204371ac0e5176f4b8c5b2f16c2bec551b6fc1a": "2"
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseCfg(t, minimalConfig+oneAdapter+body); err == nil {
+				t.Fatalf("expected an error for %q", name)
+			}
+		})
+	}
+}
+
+// countingStrategy delegates to the in-process default strategy while counting quote decisions, so a
+// gated request can assert the strategy was never consulted.
+type countingStrategy struct {
+	types.Strategy
+
+	quoteCalls int
+}
+
+func (s *countingStrategy) DecideQuote(
+	ctx context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	s.quoteCalls++
+	return s.Strategy.DecideQuote(ctx, input)
+}
+
+func TestQuoteMinAmountIn(t *testing.T) {
+	// validQuoteBody quotes 1e18 of tIn; the gate is evaluated against that amount.
+	const amountIn = "1000000000000000000"
+	cases := map[string]struct {
+		minAmountsIn map[common.Address]*big.Int
+		wantQuote    bool
+	}{
+		"below minimum declines":    {minAmountsIn: minAmountsFor(t, tIn, "2000000000000000000")},
+		"equal to minimum quotes":   {minAmountsIn: minAmountsFor(t, tIn, amountIn), wantQuote: true},
+		"above minimum quotes":      {minAmountsIn: minAmountsFor(t, tIn, "500000000000000000"), wantQuote: true},
+		"minimum for another token": {minAmountsIn: minAmountsFor(t, tOut, "2000000000000000000"), wantQuote: true},
+		"no minimum configured":     {wantQuote: true},
+		"one wei below the minimum": {minAmountsIn: minAmountsFor(t, tIn, "1000000000000000001")},
+		"one wei above the minimum": {minAmountsIn: minAmountsFor(t, tIn, "999999999999999999"), wantQuote: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := testServer()
+			strategy := &countingStrategy{Strategy: newDefaultTestStrategy()}
+			srv.quotes.strategy = strategy
+			srv.quotes.minAmountsIn = tc.minAmountsIn
+			request := validQuoteBody()
+			request.Amount = amountIn
+
+			response, err := srv.quotes.quote(t.Context(), &request)
+			if err != nil {
+				t.Fatalf("quote: %v", err)
+			}
+			if !tc.wantQuote {
+				if response != nil {
+					t.Fatalf("quote = %+v, want no quote (204)", response)
+				}
+				if strategy.quoteCalls != 0 {
+					t.Fatalf("strategy consulted %d times for a below-minimum request", strategy.quoteCalls)
+				}
+				return
+			}
+			if response == nil {
+				t.Fatal("quote declined, want a quote")
+			}
+			if strategy.quoteCalls != 1 {
+				t.Fatalf("strategy quote calls = %d, want 1", strategy.quoteCalls)
+			}
+		})
+	}
+}
+
+func minAmountsFor(t *testing.T, token common.Address, amount string) map[common.Address]*big.Int {
+	t.Helper()
+	return map[common.Address]*big.Int{token: mustBig(t, amount)}
+}
+
 type inputRecordingStrategy struct {
 	quoteInput types.QuoteInput
 	fillInput  types.FillInput

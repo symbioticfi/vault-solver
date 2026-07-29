@@ -50,7 +50,7 @@ func TestRefreshTargets_ExplicitAdaptersSkipFactoryDiscovery(t *testing.T) {
 			Targets:        []Target{{Adapter: adapterAddr}},
 			AdapterFactory: common.HexToAddress("0x00000000000000000000000000000000000000F0"),
 		},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -78,7 +78,7 @@ func TestRefreshTargets_RetainsLastKnownGoodOnWholeRefreshFailure(t *testing.T) 
 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -125,7 +125,7 @@ func TestRefreshTargets_RemovesAndReaddsWhenSignerEligibilityChanges(t *testing.
 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -172,7 +172,7 @@ func TestRun_AllowsEmptyFactorySnapshotAtStartup(t *testing.T) {
 				Reconcile:  5 * time.Millisecond,
 			},
 		},
-		reader: newReader(c),
+		reader: newReader(c, common.Address{}),
 		log:    logr.Discard(),
 		offers: newOfferTracker(),
 	}
@@ -194,7 +194,7 @@ func TestRun_ExplicitEmptyAdaptersSkipFactoryDiscoveryAndFailStartup(t *testing.
 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{}, AdapterFactory: factoryAddr},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -220,7 +220,7 @@ func TestRun_StaticOnlyStillFailsStartupWhenNoAdapterPassesValidation(t *testing
 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -260,7 +260,7 @@ func TestRefreshTargetsAndHydrate_HydratesOnlyNewlyUsableAdapters(t *testing.T) 
 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
 		log:        logr.Discard(),
 		signerAddr: signer,
@@ -304,7 +304,7 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 
 	s := &Solver{
 		cfg:        &Config{AdapterFactory: factoryAddr},
-		reader:     newReader(c),
+		reader:     newReader(c, common.Address{}),
 		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
 		log:        logr.Discard(),
 		signerAddr: signer,
