@@ -534,7 +534,7 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 }
 
 // TestPruneReservations pins reservation lifecycle: a bid whose nonce fell below the on-chain nonce
-// (submitted → settled/reverted) or that aged past reservationTTL is freed, while a recent still-pending
+// (enqueued → settled/reverted) or that aged past reservationTTL is freed, while a recent still-pending
 // bid remains visible to strategies as a pending auction.
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
@@ -644,7 +644,7 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 
-	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
+	// An enqueued bid (nonce 8), plus a stale local nonce high-water mark (5).
 	s.reserve(8, now, "auction-8", nil)
 	s.nonces.reconcile(5)
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
@@ -666,14 +666,14 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 }
 
 // TestFullAuctionLifecycle drives the whole inbound-frame flow through handleMessage: an auction frame
-// produces a signed solve on the wire, then tripping the breaker via its REAL input (recorded settlement
+// enqueues a signed solve, then tripping the breaker via its REAL input (recorded settlement
 // failures, the same path the WS liquidation-result handler feeds) makes buildBid skip "breaker" so a fresh
-// auction is dropped (no solve sent). (The WS-frame → recordFailure path is covered by
+// auction is dropped (no solve enqueued). (The WS-frame → recordFailure path is covered by
 // TestLiquidationResultFeedsBreaker.)
 func TestFullAuctionLifecycle(t *testing.T) {
 	s, sgnr := seededSolver(t)
 
-	// 1) Auction → a solve is sent on the wire. Stamp the frame as freshly emitted so the too_late gate
+	// 1) Auction → a solve is accepted by the outbound queue. Stamp the frame as freshly emitted so the too_late gate
 	// doesn't drop the captured fixture's long-past emit time.
 	fresh := decodeAuction(t)
 	setAuctionPrice(&fresh, seedLiquidatablePrice)
@@ -682,7 +682,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	s.handleMessage(t.Context(), marshal(fresh))
 	frame := waitSend(t, s)
 	if frame == nil {
-		t.Fatal("expected a solve to be sent for a liquidatable auction")
+		t.Fatal("expected a solve to be enqueued for a liquidatable auction")
 	}
 	var solve SolveMessage
 	if err := json.Unmarshal(frame, &solve); err != nil {
@@ -712,7 +712,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 		t.Fatalf("tripped breaker must skip the bid, got skip %q", d.skip)
 	}
 
-	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing sent.
+	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing enqueued.
 	a := decodeAuction(t)
 	a.ID = "9999aaaa-0000-1111-2222-333344445555"
 	a.Timestamp = time.Now().UnixMilli()
@@ -820,7 +820,7 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 }
 
 // TestDryRunSuppressesSend pins the OEV_DRY_RUN observe mode: a profitable auction is fully evaluated
-// (counted as a would-bid) but NO solve is sent on the wire — the operator can watch the
+// (counted as a would-bid) but NO solve is enqueued — the operator can watch the
 // bot's decisions against a live feed without funding or competing.
 func TestDryRunSuppressesSend(t *testing.T) {
 	s, _ := seededSolver(t)
@@ -841,13 +841,13 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
 	if f := drainSend(s); f != nil {
-		t.Fatalf("dry-run must not send a solve, got %s", f)
+		t.Fatalf("dry-run must not enqueue a solve, got %s", f)
 	}
-	if got := testutil.ToFloat64(m.bids); got != 1 {
-		t.Fatalf("oev_bids_total = %v, want 1 (dry-run still counts the would-bid)", got)
+	if got := testutil.ToFloat64(m.decisions.WithLabelValues(auctionOutcomeWouldBid)); got != 1 {
+		t.Fatalf("would-bid decisions = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidSubmitted)); got != 0 {
-		t.Fatalf("dry-run submitted bid wei = %v, want 0", got)
+	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidEnqueued)); got != 0 {
+		t.Fatalf("dry-run enqueued bid wei = %v, want 0", got)
 	}
 }
 
@@ -873,8 +873,11 @@ func TestDroppedBidReleasesReservation(t *testing.T) {
 	if pending := s.inFlightSnapshot().pending; len(pending) != 0 {
 		t.Fatalf("dropped bid left a reservation: %v", pending)
 	}
-	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidSubmitted)); got != 0 {
-		t.Fatalf("dropped submitted bid wei = %v, want 0", got)
+	if got := testutil.ToFloat64(m.decisions.WithLabelValues(auctionOutcomeSendDropped)); got != 1 {
+		t.Fatalf("send-dropped decisions = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidEnqueued)); got != 0 {
+		t.Fatalf("dropped enqueued bid wei = %v, want 0", got)
 	}
 }
 
@@ -884,32 +887,32 @@ func TestMetricsCarryStrategyLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMetrics: %v", err)
 	}
-	m.skip("strategy_skip")
+	m.auctionDecision("strategy_skip", 0)
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("gather metrics: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() != "oev_skips_total" {
+		if family.GetName() != "oev_auction_decisions_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
-			hasReason := false
+			hasOutcome := false
 			hasStrategy := false
 			for _, label := range metric.GetLabel() {
 				switch label.GetName() {
-				case "reason":
-					hasReason = label.GetValue() == "strategy_skip"
+				case "outcome":
+					hasOutcome = label.GetValue() == "strategy_skip"
 				case "strategy":
 					hasStrategy = label.GetValue() == "webhook"
 				}
 			}
-			if hasReason && hasStrategy {
+			if hasOutcome && hasStrategy {
 				return
 			}
 		}
 	}
-	t.Fatal("oev_skips_total missing strategy label")
+	t.Fatal("oev_auction_decisions_total missing strategy label")
 }
 
 // TestHandleAuctionEmptyIdDropped pins the auction identity invariant: RedStone auctions must carry an id.

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	oevBidSubmitted      = "submitted"
+	oevBidEnqueued       = "enqueued"
 	oevBidWon            = "won"
 	oevBidSettledSuccess = "settled_success"
 	oevBidSettledFailed  = "settled_failed"
@@ -19,18 +19,15 @@ const (
 // the framework's /metrics). All methods are nil-safe so the solver runs unmetered when no registry
 // is provided.
 type metrics struct {
-	auctions            prometheus.Counter
-	bids                prometheus.Counter
+	decisions           *prometheus.CounterVec
 	bidWei              *prometheus.CounterVec
 	wins                prometheus.Counter
-	failedLiq           prometheus.Counter
+	breakerFailures     prometheus.Counter
 	settlements         *prometheus.CounterVec
 	wonInflight         prometheus.GaugeFunc
 	unresolvedWinsTotal prometheus.Counter
-	skips               *prometheus.CounterVec
 	hotPath             prometheus.Histogram
 	deposit             prometheus.Gauge
-	depositLow          prometheus.Gauge // 1 when the deposit is below the on-chain MIN_DEPOSIT floor
 }
 
 func newMetrics(reg prometheus.Registerer, strategyName string, wonCount func() int) (*metrics, error) {
@@ -42,8 +39,10 @@ func newMetrics(reg prometheus.Registerer, strategyName string, wonCount func() 
 	}
 	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
 	m := &metrics{
-		auctions: prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_auctions_total", Help: "OEV auction frames seen."}),
-		bids:     prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_bids_total", Help: "Bids sent (or would-bid in dry-run)."}),
+		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "oev_auction_decisions_total",
+			Help: "Successfully parsed OEV auction frames by terminal local outcome.",
+		}, []string{"outcome"}),
 		bidWei: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "oev_bid_wei_total",
 			Help: "Bid wei at matched local auction lifecycle stages.",
@@ -52,7 +51,10 @@ func newMetrics(reg prometheus.Registerer, strategyName string, wonCount func() 
 			Name: "oev_wins_total",
 			Help: "Wins matched to an active local bid reservation; late frames after reconciliation are excluded.",
 		}),
-		failedLiq: prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_failed_liquidations_total", Help: "Reverted settlements for our callback (from the WS liquidation-result frame)."}),
+		breakerFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "oev_breaker_failures_total",
+			Help: "Failed liquidation-result frames for our callback accepted by the rolling breaker; identifiable replays within its window are excluded.",
+		}),
 		settlements: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "oev_settlements_total",
 			Help: "Settlement results matched to active local bid reservations.",
@@ -65,19 +67,15 @@ func newMetrics(reg prometheus.Registerer, strategyName string, wonCount func() 
 			Name: "oev_unresolved_wins_total",
 			Help: "Winning bids whose local reservation expired without settlement or nonce proof.",
 		}),
-		skips: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "oev_skips_total", Help: "Auctions not bid on, by reason.",
-		}, []string{"reason"}),
 		hotPath: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "oev_hotpath_seconds", Help: "handleAuction wall-clock (the ~400ms budget).",
+			Name: "oev_hotpath_seconds", Help: "Wall-clock time from a parsed auction frame to its terminal local outcome.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.4, 1},
 		}),
-		deposit:    prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei)."}),
-		depositLow: prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_below_floor", Help: "1 when the Executor deposit is below the on-chain MIN_DEPOSIT floor."}),
+		deposit: prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei)."}),
 	}
 	for _, c := range []prometheus.Collector{
-		m.auctions, m.bids, m.bidWei, m.wins, m.failedLiq, m.settlements, m.wonInflight,
-		m.unresolvedWinsTotal, m.skips, m.hotPath, m.deposit, m.depositLow,
+		m.decisions, m.bidWei, m.wins, m.breakerFailures, m.settlements, m.wonInflight,
+		m.unresolvedWinsTotal, m.hotPath, m.deposit,
 	} {
 		if err := reg.Register(c); err != nil {
 			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
@@ -86,24 +84,18 @@ func newMetrics(reg prometheus.Registerer, strategyName string, wonCount func() 
 	return m, nil
 }
 
-func (m *metrics) auction() {
-	if m != nil {
-		m.auctions.Inc()
-	}
-}
-
-func (m *metrics) wouldBid() {
-	if m != nil {
-		m.bids.Inc()
-	}
-}
-
-func (m *metrics) submittedBid(amount *big.Int) {
+func (m *metrics) auctionDecision(outcome string, elapsed time.Duration) {
 	if m == nil {
 		return
 	}
-	m.bids.Inc()
-	m.addBidWei(oevBidSubmitted, amount)
+	m.decisions.WithLabelValues(outcome).Inc()
+	m.hotPath.Observe(elapsed.Seconds())
+}
+
+func (m *metrics) enqueuedBid(amount *big.Int) {
+	if m != nil {
+		m.addBidWei(oevBidEnqueued, amount)
+	}
 }
 
 func (m *metrics) won(amount *big.Int) {
@@ -114,9 +106,9 @@ func (m *metrics) won(amount *big.Int) {
 	m.addBidWei(oevBidWon, amount)
 }
 
-func (m *metrics) failed() {
+func (m *metrics) breakerFailure() {
 	if m != nil {
-		m.failedLiq.Inc()
+		m.breakerFailures.Inc()
 	}
 }
 
@@ -146,31 +138,8 @@ func (m *metrics) unresolvedWins(count int) {
 	}
 }
 
-func (m *metrics) skip(reason string) {
-	if m != nil {
-		m.skips.WithLabelValues(reason).Inc()
-	}
-}
-
-func (m *metrics) latency(d time.Duration) {
-	if m != nil {
-		m.hotPath.Observe(d.Seconds())
-	}
-}
-
 func (m *metrics) depositWei(depositWei float64) {
 	if m != nil {
 		m.deposit.Set(depositWei)
-	}
-}
-
-// depositBelowFloor sets the alarm gauge; "below" now means deposit < MIN_DEPOSIT.
-func (m *metrics) depositBelowFloor(below bool) {
-	if m != nil {
-		v := 0.0
-		if below {
-			v = 1
-		}
-		m.depositLow.Set(v)
 	}
 }

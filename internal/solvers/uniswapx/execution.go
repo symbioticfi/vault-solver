@@ -388,7 +388,6 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 		}
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
-		s.observeFill("failed")
 		s.log.Error(
 			err,
 			"order fill failed",
@@ -407,7 +406,6 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
-	s.observeFill("filled")
 	if s.metrics != nil {
 		s.metrics.fillAmounts.Observe(
 			completion.result.Receipt,

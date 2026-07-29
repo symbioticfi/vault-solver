@@ -53,17 +53,17 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   Prometheus metrics belong to the generic `internal/observability` layer (one registry, one
   `/metrics` on `:9090`), so the RFQ server doesn't expose its own. Instead the solver **registers its
   collectors on the shared registry** via `deps.Metrics.Registerer()` in the factory: a Huma/HTTP
-  middleware records `rfq_filler_http_requests_total{method,route,status}` and
-  `rfq_filler_http_request_duration_seconds` (route is allowlisted to bound cardinality). The
+  middleware records `rfq_filler_http_request_duration_seconds{method,route,status}` (route is
+  allowlisted to bound cardinality, and the histogram's `_count` is the request counter). The
   framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
-  memory, goroutines, GC, and FDs. Net effect: the same metric names the filler exposed, surfaced on
-  the shared observability port rather than a per-solver endpoint. The canonical names, labels, and
-  meanings for RFQ lifecycle and shared txmanager collectors are in the
+  memory, goroutines, GC, and FDs. RFQ win/backlog gauges and the shared txmanager lifecycle make
+  awarded-but-unfinished orders visible without duplicating transaction counters. The canonical names,
+  labels, and meanings are in the
   [README metrics table](../README.md#metrics).
 - **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
   request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
-  metrics above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
+  request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
 - **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on

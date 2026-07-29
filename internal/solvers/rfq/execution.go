@@ -263,7 +263,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		e.store.markStatus(orderID, statusFilled, txHash, "")
 	case "expired":
 		e.store.markStatus(orderID, statusExpired, txHash, "")
-	case "open":
+	case backendOrderStatusOpen:
 		// still open; leave as-is for the next cycle
 	default:
 		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)

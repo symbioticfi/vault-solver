@@ -30,14 +30,14 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 	token := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	s.observeSubmittedOffer(token, big.NewInt(1_000), big.NewInt(25))
 
-	if got := testutil.ToFloat64(m.liveOffers); got != 0 {
-		t.Fatalf("live offers = %v, want 0", got)
-	}
-	if got := testutil.ToFloat64(m.activeRequests); got != 2 {
-		t.Fatalf("active requests = %v, want 2", got)
-	}
-	if got := testutil.ToFloat64(m.redeemable); got != 1 {
-		t.Fatalf("redeemable = %v, want 1", got)
+	for view, want := range map[string]float64{
+		threeFStateOffers:         0,
+		threeFStateActiveRequests: 2,
+		threeFStateRedeemable:     1,
+	} {
+		if got := testutil.ToFloat64(m.observedItems.WithLabelValues(view)); got != want {
+			t.Fatalf("observed items for %s = %v, want %v", view, got, want)
+		}
 	}
 	if got := testutil.ToFloat64(m.offerSubmissions.WithLabelValues("success")); got != 1 {
 		t.Fatalf("offer submissions = %v, want 1", got)

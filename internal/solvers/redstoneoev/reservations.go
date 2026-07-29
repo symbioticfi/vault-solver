@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// reservedBid is one sent-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
+// reservedBid is one enqueued-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
 // callback funding/gas decisions, while this state lets the solver pass pending auction ids back to the
 // strategy and release reservations by nonce/result frames.
 type reservedBid struct {

@@ -288,25 +288,66 @@ config is required for the collectors below.
 
 ### Metrics
 
-| Scope | Metric families | Labels | What they show |
+The registry also includes standard Go/process collectors and
+`solver_bot_build_info{version,commit}`. The latter identifies the exact binary behind a sample.
+
+| Scope | Metric family | Labels | What it shows and why it is useful |
 |---|---|---|---|
-| Shared txmanager | `solver_bot_txmanager_requests_total`<br>`solver_bot_txmanager_inflight`<br>`solver_bot_txmanager_gas_used_total`<br>`solver_bot_txmanager_replacements_total` | `label`, `outcome`, or `kind` as applicable | Logical transaction results, current in-flight requests, mined gas, and successful fee-bump/cancellation broadcasts. |
-| LiquidLane fills | `liquidlane_fill_amount_atomic_units_total` | `solver`, `token`, `kind` | Successful RFQ, LI.FI, and UniswapX routed input, required output, and planning-time gross surplus. Kinds are `input`, `output`, and `planned_surplus`; values use token atomic units. Surplus excludes gas and may differ from the executor's final retained balance. |
-| RFQ HTTP | `rfq_filler_http_requests_total`<br>`rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server traffic and latency. |
-| RFQ lifecycle | `rfq_wins_total`<br>`rfq_active_orders`<br>`rfq_oldest_active_order_age_seconds` | — | Orders assigned to this filler and obligations still awaiting terminal backend state. |
-| LI.FI quotes | `lifi_active_quotes`<br>`lifi_last_successful_refresh_timestamp` | — | Last successfully reconciled standing-quote state and its freshness. |
-| UniswapX request/fill | `uniswapx_quote_requests_total`<br>`uniswapx_quote_duration_seconds`<br>`uniswapx_order_polls_total`<br>`uniswapx_fills_total` | `outcome`; polls also use `source` | Quote traffic, order-source polling, and local fill attempts. |
-| UniswapX health | `uniswapx_ready`<br>`uniswapx_block_until_timestamp`<br>`uniswapx_last_quote_refresh_timestamp`<br>`uniswapx_last_exclusive_poll_timestamp`<br>`uniswapx_pending_fills` | — | Readiness, breaker deadline, state freshness, and fills awaiting txmanager completion. |
-| UniswapX obligations | `uniswapx_exclusive_wins_total`<br>`uniswapx_exclusive_obligations_outstanding`<br>`uniswapx_exclusive_nearest_deadline_timestamp`<br>`uniswapx_exclusive_obligation_outcomes_total` | terminal metric uses `outcome` | Unique live-observed wins, won-but-not-classified orders, nearest deadline, and terminal delivery result. Recovery restores safety state without replaying counters. |
-| OEV auction flow | `oev_auctions_total`<br>`oev_bids_total`<br>`oev_bid_wei_total`<br>`oev_wins_total`<br>`oev_skips_total`<br>`oev_hotpath_seconds` | `strategy`; bid amount uses `stage`; skips also use `reason` | Auction traffic, bid/win funnel, bid wei at `submitted`, `won`, `settled_success`, and `settled_failed` stages, skip reasons, and hot-path latency. Dry-run increments only the bid count. |
-| OEV settlement | `oev_settlements_total`<br>`oev_failed_liquidations_total`<br>`oev_won_inflight`<br>`oev_unresolved_wins_total` | `strategy`; settlements also use `result` | Matched settlement outcomes and winning bids that are still pending or timed out unresolved. Late frames after reservation reconciliation are deliberately excluded. |
-| OEV safety | `oev_deposit_wei`<br>`oev_deposit_below_floor` | `strategy` | Executor deposit and whether it is below the bidding floor. |
-| 3F offers | `threef_offer_submissions_total`<br>`threef_offer_amount_atomic_units_total`<br>`threef_live_offers` | submission metric uses `result`; amount metric uses `token`, `kind` | API submission results, successfully submitted principal and quoted expected-yield amounts, and live offers from the last complete reconciliation. Amount kinds are `principal` and `expected_yield`; they are not realized settlement amounts. |
-| 3F requests | `threef_active_requests`<br>`threef_redeemable_requests`<br>`threef_last_successful_observation_timestamp` | freshness metric uses `view` | Active/redeemable requests and independent freshness for offers, active requests, and redeemable scans. |
+| Txmanager | `solver_bot_txmanager_requests_total` | `label`, `outcome` | Terminal results of logical on-chain operations. This is the primary confirmed/reverted/submission-failure funnel for every solver. |
+| Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
+| Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
+| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
+| LiquidLane | `liquidlane_fill_amount_atomic_units_total` | `solver`, `token`, `kind` | Order input, required output, and positive planning-time gross surplus for successful receipts. `kind` is `input`, `output`, or `planned_surplus`; values are monitoring counters in token atomic units, not realized PnL. |
+| RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted to bound cardinality. |
+| RFQ | `rfq_wins_total` | — | Orders first observed assigned to this filler. A win is counted even if planning or transaction submission later fails. |
+| RFQ | `rfq_active_orders` | — | Current queued, submitting, or submitted obligations awaiting terminal backend state. |
+| RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
+| LI.FI | `lifi_active_quotes` | — | Standing quotes in the last successfully reconciled backend state; zero means the solver is currently quote-dark. |
+| LI.FI | `lifi_last_successful_refresh_timestamp` | — | Freshness of standing-quote reconciliation; distinguishes an authoritative zero from a dead refresh loop. |
+| UniswapX | `uniswapx_quote_requests_total` | `outcome` | Quote webhook decisions: `invalid`, `breaker-notification`, `error`, `declined`, or `quoted`. `quoted` means a response was selected for writing, not that a user signed it. |
+| UniswapX | `uniswapx_quote_duration_seconds` | — | End-to-end quote-handler latency across all request outcomes. |
+| UniswapX | `uniswapx_order_polls_total` | `source`, `outcome` | Successful and failed `exclusive-v2`/`public-v2` poll cycles. An exclusive success includes recovery and obligation reconciliation. |
+| UniswapX | `uniswapx_exclusive_wins_total` | — | Exclusive delivery obligations first observed by live polling. Startup recovery restores safety state without replaying this counter. |
+| UniswapX | `uniswapx_exclusive_obligations_outstanding` | — | Live-observed or recovered obligations still awaiting terminal classification. |
+| UniswapX | `uniswapx_exclusive_nearest_deadline_timestamp` | — | Nearest outstanding exclusivity deadline; alerts on urgent or stuck obligations. |
+| UniswapX | `uniswapx_exclusive_obligation_outcomes_total` | `outcome` | Live-observed obligations classified as `settled_in_time` or `missed`. Timely delivery may be by another filler; this is a delivery SLO, not a self-fill counter. |
+| UniswapX | `uniswapx_block_until_timestamp` | — | Maximum deadline among remote, local-fill, exclusive-fade, and startup-warmup time-based quote blockers. |
+| UniswapX | `uniswapx_ready` | — | Scrape-time availability: `1` only when current quote state, breakers, and exclusive delivery permit quoting. |
+| UniswapX | `uniswapx_last_quote_refresh_timestamp` | — | Last atomic quote-state publication. A successful publication may contain no inventory, so freshness alone is not readiness. |
+| UniswapX | `uniswapx_last_exclusive_poll_timestamp` | — | Last successful exclusive poll plus recovery/obligation reconciliation. |
+| UniswapX | `uniswapx_pending_fills` | — | Admitted fills holding LiquidLane capacity while awaiting a txmanager terminal result. |
+| OEV | `oev_auction_decisions_total` | `strategy`, `outcome` | One bounded terminal decision per parsed auction, including `enqueued`, `would_bid`, and skip reasons. Summing outcomes gives processed auction traffic and each outcome explains why no bid was enqueued. |
+| OEV | `oev_bid_wei_total` | `strategy`, `stage` | Bid value at `enqueued`, `won`, `settled_success`, and `settled_failed` stages. It provides an amount-weighted funnel, not realized profit or proof of server receipt. |
+| OEV | `oev_wins_total` | `strategy` | Wins matched to an active local bid reservation. |
+| OEV | `oev_breaker_failures_total` | `strategy` | Failed liquidation frames for our callback recorded by the rolling breaker, including failures received after local reservation reconciliation. Replays are deduplicated when the frame has an ID or transaction hash. |
+| OEV | `oev_settlements_total` | `strategy`, `result` | Successful/failed settlement frames matched while the local bid reservation is active. |
+| OEV | `oev_won_inflight` | `strategy` | Locally observed winning bids still awaiting settlement. |
+| OEV | `oev_unresolved_wins_total` | `strategy` | Winning reservations removed after timeout without settlement or nonce proof; this is the missed-obligation signal. |
+| OEV | `oev_hotpath_seconds` | `strategy` | End-to-end handling latency for parsed auction frames against the auction's short decision budget. |
+| OEV | `oev_deposit_wei` | `strategy` | Executor deposit from the last complete state refresh; use it to monitor settlement runway. |
+| 3F | `threef_offer_submissions_total` | `result` | `createOffer` API successes and errors after local validation; these are submissions, not wins. |
+| 3F | `threef_offer_amount_atomic_units_total` | `token`, `kind` | Principal and quoted expected yield in API-successful offers. `kind` is `principal` or `expected_yield`; neither is a realized settlement amount. |
+| 3F | `threef_observed_items` | `view` | Last complete count for `offers`, `active_requests`, or `redeemable`. The views show offer coverage, outstanding exposure, and redeem backlog. |
+| 3F | `threef_last_successful_observation_timestamp` | `view` | Independent freshness for each 3F view, so retained last-known-good counts cannot silently look current. |
 
 Txmanager `label` values are stable operation names (`redeem`, `rfq-fill`, `lifi-fill`,
 `uniswapx-fill`). Terminal outcomes are `confirmed`, `included_unconfirmed`, `reverted`, `cancelled`,
-`submission_error`, and `tracking_stopped`.
+`submission_error`, and `tracking_stopped`. LiquidLane counters include successful receipts reported as
+`included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
+different token labels must not be added without price/decimal normalization.
+
+Migration from removed metrics:
+
+| Removed | How to migrate |
+|---|---|
+| `rfq_filler_http_requests_total` | `rfq_filler_http_request_duration_seconds_count` with the same labels |
+| `uniswapx_fills_total{outcome="filled"}` | `solver_bot_txmanager_requests_total{label="uniswapx-fill",outcome=~"confirmed\|included_unconfirmed"}` |
+| `uniswapx_fills_total{outcome="failed"}` | `solver_bot_txmanager_requests_total{label="uniswapx-fill",outcome=~"reverted\|cancelled\|submission_error\|tracking_stopped"}` |
+| `oev_auctions_total`, `oev_bids_total`, `oev_skips_total` | Query explicit `oev_auction_decisions_total{outcome}` values. Their old semantics are intentionally consolidated; the new total also classifies `feed_ignored`. |
+| `oev_bid_wei_total{stage="submitted"}` | `oev_bid_wei_total{stage="enqueued"}` |
+| `oev_failed_liquidations_total` | `oev_breaker_failures_total` |
+| `oev_deposit_below_floor` | `oev_deposit_wei < bool 10000000000000` |
+| `threef_live_offers`, `threef_active_requests`, `threef_redeemable_requests` | `threef_observed_items{view=~"offers\|active_requests\|redeemable"}` or the corresponding exact `view` |
 
 ## Configuration
 

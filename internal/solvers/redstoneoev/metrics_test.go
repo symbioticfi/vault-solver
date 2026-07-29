@@ -1,12 +1,14 @@
 package redstoneoev
 
 import (
+	"context"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
@@ -17,9 +19,9 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	}
 	s.metrics = m
 	bidWei := big.NewInt(123)
-	m.submittedBid(bidWei)
-	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidSubmitted)); got != 123 {
-		t.Fatalf("submitted bid wei = %v, want 123", got)
+	m.enqueuedBid(bidWei)
+	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidEnqueued)); got != 123 {
+		t.Fatalf("enqueued bid wei = %v, want 123", got)
 	}
 	s.reserve(8, time.Now(), "auction", bidWei)
 
@@ -71,6 +73,9 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidSettledFailed)); got != 456 {
 		t.Fatalf("failed settled bid wei = %v, want 456", got)
 	}
+	if got := testutil.ToFloat64(m.breakerFailures); got != 1 {
+		t.Fatalf("breaker failures = %v, want 1", got)
+	}
 }
 
 func TestWonReservationTimeoutIsVisible(t *testing.T) {
@@ -91,5 +96,81 @@ func TestWonReservationTimeoutIsVisible(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.wonInflight); got != 0 {
 		t.Fatalf("won inflight after timeout = %v, want 0", got)
+	}
+}
+
+func TestAuctionDecisionCountsEveryParsedTerminalPathOnce(t *testing.T) {
+	s, _ := seededSolver(t)
+	m, err := newMetrics(prometheus.NewRegistry(), defaultStrategyName, s.wonReservationCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.metrics = m
+
+	empty := decodeAuction(t)
+	empty.ID = ""
+	s.handleAuctionWithContext(t.Context(), marshal(empty))
+
+	canceled := decodeAuction(t)
+	canceled.ID = "canceled"
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	s.handleAuctionWithContext(ctx, marshal(canceled))
+	s.handleAuctionWithContext(t.Context(), marshal(canceled))
+
+	late := decodeAuction(t)
+	late.ID = "late"
+	late.Timestamp = time.Now().Add(-time.Second).UnixMilli()
+	late.TimeoutMs = 1
+	s.handleAuctionWithContext(t.Context(), marshal(late))
+
+	s.handleMessage(t.Context(), []byte(`{
+		"op":"auction","id":"feed",
+		"payload":{"ETH":"250000000000"}
+	}`))
+	s.handleAuctionWithContext(t.Context(), []byte(`{"op":"auction"`))
+
+	outcomes := []string{
+		skipEmptyAuctionID,
+		auctionOutcomeContextCanceled,
+		auctionOutcomeDuplicate,
+		auctionOutcomeTooLate,
+		auctionOutcomeFeedIgnored,
+	}
+	for _, outcome := range outcomes {
+		if got := testutil.ToFloat64(m.decisions.WithLabelValues(outcome)); got != 1 {
+			t.Errorf("%s decisions = %v, want 1", outcome, got)
+		}
+	}
+
+	metric := &dto.Metric{}
+	if err := m.hotPath.Write(metric); err != nil {
+		t.Fatal(err)
+	}
+	if got := metric.GetHistogram().GetSampleCount(); got != uint64(len(outcomes)) {
+		t.Fatalf("hot-path samples = %d, want %d", got, len(outcomes))
+	}
+}
+
+func TestBuildBidClassifiesCancellationDuringStrategy(t *testing.T) {
+	s, _ := seededSolver(t)
+	blocking := &blockingBidStrategy{started: make(chan struct{}, 1), release: make(chan struct{})}
+
+	auction := decodeAuction(t)
+	auction.ID = "canceled-during-strategy"
+	auction.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, auction.Timestamp)
+	s.strategy = blocking
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		select {
+		case <-blocking.started:
+			cancel()
+		case <-t.Context().Done():
+		}
+	}()
+	if decision := s.buildBidWithContext(ctx, auction, time.Now); decision.skip != auctionOutcomeContextCanceled {
+		t.Fatalf("decision = %q, want %q", decision.skip, auctionOutcomeContextCanceled)
 	}
 }

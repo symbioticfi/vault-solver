@@ -11,7 +11,6 @@ import (
 )
 
 type rfqMetrics struct {
-	requests     *prometheus.CounterVec
 	duration     *prometheus.HistogramVec
 	wins         prometheus.Counter
 	activeOrders prometheus.GaugeFunc
@@ -25,13 +24,9 @@ func newRFQMetrics(reg prometheus.Registerer, st *store) (*rfqMetrics, error) {
 		return nil, err
 	}
 	m := &rfqMetrics{
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "rfq_filler_http_requests_total",
-			Help: "Total HTTP requests handled by the RFQ filler.",
-		}, []string{"method", "route", "status"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "rfq_filler_http_request_duration_seconds",
-			Help:    "RFQ filler HTTP request duration in seconds.",
+			Help:    "RFQ filler HTTP request count and duration in seconds.",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 		}, []string{"method", "route", "status"}),
 		wins: prometheus.NewCounter(prometheus.CounterOpts{
@@ -55,7 +50,7 @@ func newRFQMetrics(reg prometheus.Registerer, st *store) (*rfqMetrics, error) {
 		fillAmounts: fillAmounts,
 	}
 	for _, collector := range []prometheus.Collector{
-		m.requests, m.duration, m.wins, m.activeOrders, m.oldestActive,
+		m.duration, m.wins, m.activeOrders, m.oldestActive,
 	} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("rfq: register metric: %w", err)
@@ -82,7 +77,6 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 			"route":  routeLabel(r.URL.Path),
 			"status": strconv.Itoa(rec.status),
 		}
-		m.requests.With(labels).Inc()
 		m.duration.With(labels).Observe(time.Since(start).Seconds())
 	})
 }

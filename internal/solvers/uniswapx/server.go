@@ -217,12 +217,18 @@ func declinedQuote(response quoteResponse, reason string) quoteResponse {
 }
 
 func (s *Solver) quoteBlocked(now int64) bool {
-	return s.blockUntil.Load() > now ||
-		s.localBlockUntil.Load() > now ||
-		s.exclusiveBlockUntil.Load() > now ||
-		s.warmupUntil.Load() > now ||
+	return s.timeBasedBlockUntil() > now ||
 		s.planningFills.Load() != 0 ||
 		!s.exclusiveDeliveryHealthy()
+}
+
+func (s *Solver) timeBasedBlockUntil() int64 {
+	return max(
+		s.blockUntil.Load(),
+		s.localBlockUntil.Load(),
+		s.exclusiveBlockUntil.Load(),
+		s.warmupUntil.Load(),
+	)
 }
 
 func supportedQuoteType(value string) bool {
@@ -260,17 +266,4 @@ func (s *Solver) setBlockUntil(timestamp int64) {
 		s.invalidateQuotes()
 	}
 	s.requestQuoteRefresh()
-	if s.metrics != nil {
-		s.updateBlockUntilMetric()
-	}
-}
-
-func (s *Solver) updateBlockUntilMetric() {
-	if s.metrics != nil {
-		s.metrics.blockUntil.Set(float64(max(
-			s.blockUntil.Load(),
-			s.localBlockUntil.Load(),
-			s.exclusiveBlockUntil.Load(),
-		)))
-	}
 }

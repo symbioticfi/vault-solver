@@ -62,9 +62,6 @@ func (s *Solver) setPendingReservations(hash common.Hash, reservations liquidlan
 	if !s.capacity.Set(hash.Hex(), reservations) {
 		return
 	}
-	if s.metrics != nil {
-		s.metrics.pendingFills.Set(float64(s.capacity.Len()))
-	}
 	s.log.V(1).Info(
 		"fill capacity reserved",
 		"orderHash", hash.Hex(),
@@ -81,9 +78,6 @@ func (s *Solver) clearPendingReservations(hash common.Hash) {
 	s.invalidateQuotes()
 	if !s.capacity.Delete(hash.Hex()) {
 		return
-	}
-	if s.metrics != nil {
-		s.metrics.pendingFills.Set(float64(s.capacity.Len()))
 	}
 	s.log.V(1).Info(
 		"fill capacity released",
@@ -111,7 +105,6 @@ func (s *Solver) recordFillFailure(now time.Time) {
 	s.stateMu.Unlock()
 	if tripped {
 		s.invalidateQuotes()
-		s.updateBlockUntilMetric()
 		s.log.Info("local fade breaker opened", "until", s.localBlockUntil.Load())
 	}
 }
@@ -122,7 +115,6 @@ func (s *Solver) recordFillSuccess() {
 	s.failureTimes = nil
 	s.stateMu.Unlock()
 	blockedUntil := s.localBlockUntil.Swap(0)
-	s.updateBlockUntilMetric()
 	if hadFailures || blockedUntil != 0 {
 		s.log.V(1).Info(
 			"local fill breaker cleared",
@@ -330,7 +322,6 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 		s.exclusiveBlockUntil.Store(blockedUntil)
 	}
 	s.invalidateQuotes()
-	s.updateBlockUntilMetric()
 	for _, decision := range missed {
 		if decision.liveObserved {
 			s.observeExclusiveOutcome(exclusiveOutcomeMissed)

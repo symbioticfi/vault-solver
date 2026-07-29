@@ -124,14 +124,18 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   callback balance, bundle-level gas profitability, and the adapter's `isFiller` gate. The default strategy computes the bid **off-chain** from the
   configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec §8); optional solver-owned `maxBidWei`
   caps the final signed bid for every strategy. The contract carries no on-chain bid cap.
-- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): auctions/bids/wins and
-  failed-liquidations counters, bid wei at submitted/won/settled lifecycle stages, a `skips_total{reason}` vector,
-  a hot-path latency histogram, and deposit
-  gauges, plus matched settlement outcomes, wins awaiting settlement, and timed-out unresolved wins.
+- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): one bounded auction
+  decision vector replaces separate auction/bid/skip counters; bid wei is recorded at
+  enqueued/won/settled lifecycle stages; and a full parsed-frame latency histogram covers the decision
+  budget. Deposit, matched settlements, wins awaiting settlement, timed-out unresolved wins, and
+  breaker-recorded callback failures remain separate because they represent independent operational
+  signals. Queue acceptance is deliberately called `enqueued`, not sent or server-accepted.
   Win/settlement lifecycle counters intentionally include only frames matched while their local bid
-  reservation is active; late frames after nonce/TTL reconciliation are excluded instead of adding a
-  second terminal-history cache. The breaker halts bidding after N failed liquidations in a rolling
-  window, and immediately on a `blacklisted` frame. Exact names and labels are in the
+  reservation is active; late frames after nonce/TTL reconciliation are excluded from those metrics,
+  while breaker failures still include late failed frames for our callback; identifiable replays are
+  deduplicated by frame ID or transaction hash. The breaker
+  halts bidding after N failed liquidations in a rolling window, and immediately on a `blacklisted`
+  frame. Exact names and labels are in the
   [README metrics table](../README.md#metrics).
 - **Bindings.** The RedStone `Executor`, `IMorpho` (subset), `IAdaptiveCurveIrm`, `IOracle`, and our
   `SymbioticOevSolver`, and `AggregatorV3` feeds are **abigen --v2** bindings under `api/bindings/oev/*`
@@ -393,7 +397,7 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 
 ## 5. Settlement, reservation & safety
 
-- **In-flight reservation.** A sent bid records `reservedBid{nonce, at, auctionID, callback}` as lifecycle
+- **In-flight reservation.** An enqueued bid records `reservedBid{nonce, at, auctionID, callback}` as lifecycle
   state. The solver passes pending auction IDs to the strategy; strategy-specific duplicate-position,
   callback funding, and gas risk avoidance stay inside the strategy because the solver no longer knows
   callback operation semantics or Morpho legs. The default strategy keeps its own per-auction bid, predicted
@@ -413,7 +417,8 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
   de-dup + `timeoutMs` drop, optional operator bid cap (`bid_cap`), after-cost profitability (`gas_unprofitable`), Executor deposit floor
   (`deposit_low`) + callback-native funding. The default bid is bounded **off-chain** by
   `strategy.config.bid.bidEth` plus optional `strategy.config.bid.totalBundleProfitBps`, and the solver can cap the final signed bid with `maxBidWei`.
-  There is no on-chain bid cap. A deposit below MIN_DEPOSIT raises an `oev_deposit_below_floor` gauge + error log.
+  There is no on-chain bid cap. A deposit below MIN_DEPOSIT raises an error log and skips bidding;
+  monitoring derives the condition directly from `oev_deposit_wei`.
   The operator tops up that deposit and the callback's payBid native balance out-of-band.
 - **No self-funding.** The bot moves no funds outside the signed settlement: the callback's payBid native
   pool is owner-refilled out-of-band and the signer's Executor gas deposit is topped up out-of-band. The

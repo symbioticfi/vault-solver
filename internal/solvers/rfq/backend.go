@@ -12,6 +12,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
+const backendOrderStatusOpen = "open"
+
 // backendOrder is one order row from the RFQ backend (GET /orders), projected from the generated
 // rfqbackend.OrdersResponseOrdersInner. The optional fields (encodedOrder/protocolSignature/deadline/
 // filler) are populated only for executable orders; the generated model exposes them as pointers, so
@@ -79,7 +81,7 @@ func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit
 	// narrowing is safe.
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		Filler(filler).
-		OrderStatus("open").
+		OrderStatus(backendOrderStatusOpen).
 		Limit(int32(limit))
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
@@ -94,7 +96,7 @@ func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler 
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		OrderId(orderID).
 		Filler(filler).
-		OrderStatus("open")
+		OrderStatus(backendOrderStatusOpen)
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {

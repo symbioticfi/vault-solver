@@ -186,9 +186,6 @@ func (s *Solver) recordExclusivePollSuccess(now time.Time) {
 	wasUnknown := s.exclusiveStateUnknown.Swap(false)
 	timestamp := now.Unix()
 	s.lastExclusivePoll.Store(timestamp)
-	if s.metrics != nil {
-		s.metrics.exclusivePoll.Set(float64(timestamp))
-	}
 	if wasUnknown {
 		s.requestQuoteRefresh()
 	}

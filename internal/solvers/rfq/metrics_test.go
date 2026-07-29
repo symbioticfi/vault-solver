@@ -11,6 +11,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
@@ -26,12 +27,25 @@ func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
-	got := testutil.ToFloat64(m.requests.With(prometheus.Labels{
+	got := histogramCount(t, m.duration.With(prometheus.Labels{
 		"method": "POST", "route": "/quote", "status": "204",
 	}))
 	if got != 1 {
-		t.Fatalf("rfq_filler_http_requests_total{POST,/quote,204} = %v, want 1", got)
+		t.Fatalf("rfq_filler_http_request_duration_seconds_count{POST,/quote,204} = %d, want 1", got)
 	}
+}
+
+func histogramCount(t *testing.T, observer prometheus.Observer) uint64 {
+	t.Helper()
+	metric, ok := observer.(prometheus.Metric)
+	if !ok {
+		t.Fatal("histogram observer does not implement prometheus.Metric")
+	}
+	var data dto.Metric
+	if err := metric.Write(&data); err != nil {
+		t.Fatalf("write histogram metric: %v", err)
+	}
+	return data.GetHistogram().GetSampleCount()
 }
 
 func TestRouteLabel_BoundsCardinality(t *testing.T) {

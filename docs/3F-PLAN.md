@@ -365,8 +365,9 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 **Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
 - **Metrics.** The shared registry reports offer submission results and their submitted
-  principal/quoted-expected-yield amounts by deposit token, live offers, active and redeemable
-  requests, and independent freshness timestamps for those three views. Redeem transaction outcomes,
-  in-flight requests, gas, and replacements come from txmanager. The API does not attribute consumed
-  offers to this solver, so no speculative 3F “wins” counter is exposed. Exact names and labels are in
-  the [README metrics table](../README.md#metrics).
+  principal/quoted-expected-yield amounts by deposit token. One
+  `threef_observed_items{view}` gauge reports offers, active requests, and redeemable requests; a
+  matching freshness vector distinguishes current zeroes from retained last-known-good state. Redeem
+  transaction outcomes, in-flight requests, gas, and replacements come from txmanager. The API does
+  not attribute consumed offers to this solver, so no speculative 3F “wins” or realized-yield counter
+  is exposed. Exact names and labels are in the [README metrics table](../README.md#metrics).
