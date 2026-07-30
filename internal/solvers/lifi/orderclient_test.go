@@ -107,7 +107,7 @@ func TestOrderClientValidateExecutorRegistration(t *testing.T) {
 }
 
 func TestOrderClientReplaceSupportedContracts(t *testing.T) {
-	var gotBody map[string]any
+	var gotBody lifiorder.PutSupportedContractsDto
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/solver/supported-contracts" {
 			t.Fatalf("%s %s", r.Method, r.URL.Path)
@@ -120,42 +120,46 @@ func TestOrderClientReplaceSupportedContracts(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	inputSettler := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	outputSettler := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
 	err := client.replaceSupportedContracts(
 		context.Background(),
 		supportedContractsDTO(
 			lifiorder.ContractsByKindDto{},
 			chainRef(11155111),
-			common.HexToAddress("0x1111111111111111111111111111111111111111"),
-			common.HexToAddress("0x2222222222222222222222222222222222222222"),
+			inputSettler,
+			outputSettler,
 		),
 	)
 	if err != nil {
 		t.Fatalf("replaceSupportedContracts: %v", err)
 	}
-	if got := gotBody["inputSettler"].([]any)[0].(map[string]any)["chain"]; got != "eip155:11155111" {
-		t.Fatalf("chain = %v", got)
+	if len(gotBody.InputSettler) != 1 ||
+		gotBody.InputSettler[0].Chain != "eip155:11155111" ||
+		gotBody.InputSettler[0].Address != inputSettler.Hex() {
+		t.Fatalf("input settlers = %+v", gotBody.InputSettler)
 	}
-	if got := gotBody["oracle"].([]any)[0].(map[string]any)["address"]; got != "0x2222222222222222222222222222222222222222" {
-		t.Fatalf("oracle address = %v", got)
+	if len(gotBody.OutputSettler) != 1 ||
+		gotBody.OutputSettler[0].Chain != "eip155:11155111" ||
+		gotBody.OutputSettler[0].Address != outputSettler.Hex() {
+		t.Fatalf("output settlers = %+v", gotBody.OutputSettler)
+	}
+	if gotBody.Oracle != nil {
+		t.Fatalf("oracles = %+v, want omitted", gotBody.Oracle)
 	}
 }
 
 func TestOrderClientEnsureSupportedContractsSkipsPutWhenPresent(t *testing.T) {
-	var putCalled bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/solver/supported-contracts" {
 			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if r.Method == http.MethodPut {
-			putCalled = true
-			t.Fatal("unexpected PUT")
 		}
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"oracle":[{"chain":"eip155:11155111","address":"0x2222222222222222222222222222222222222222"}],"inputSettler":[{"chain":"eip155:11155111","address":"0x1111111111111111111111111111111111111111"}],"outputSettler":[{"chain":"eip155:11155111","address":"0x2222222222222222222222222222222222222222"}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:11155111","address":"0x1111111111111111111111111111111111111111"}],"outputSettler":[{"chain":"eip155:11155111","address":"0x2222222222222222222222222222222222222222"}]}}`))
 	}))
 	defer srv.Close()
 
@@ -169,14 +173,11 @@ func TestOrderClientEnsureSupportedContractsSkipsPutWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureSupportedContracts: %v", err)
 	}
-	if putCalled {
-		t.Fatal("PUT was called")
-	}
 }
 
 func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 	var methods []string
-	var gotBody map[string]any
+	var gotBody lifiorder.PutSupportedContractsDto
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/solver/supported-contracts" {
 			t.Fatalf("path = %s", r.URL.Path)
@@ -210,34 +211,31 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
 		t.Fatalf("methods = %v", methods)
 	}
-	inputSettlers := gotBody["inputSettler"].([]any)
+	inputSettlers := gotBody.InputSettler
 	if got := len(inputSettlers); got != 2 {
 		t.Fatalf("inputSettler count = %d", got)
 	}
-	if got := inputSettlers[0].(map[string]any)["address"]; got != "0x4444444444444444444444444444444444444444" {
+	if got := inputSettlers[0].Address; got != "0x4444444444444444444444444444444444444444" {
 		t.Fatalf("preserved inputSettler address = %v", got)
 	}
-	if got := inputSettlers[1].(map[string]any)["address"]; got != "0x1111111111111111111111111111111111111111" {
+	if got := inputSettlers[1].Address; got != "0x1111111111111111111111111111111111111111" {
 		t.Fatalf("configured inputSettler address = %v", got)
 	}
-	outputSettlers := gotBody["outputSettler"].([]any)
+	outputSettlers := gotBody.OutputSettler
 	if got := len(outputSettlers); got != 2 {
 		t.Fatalf("outputSettler count = %d", got)
 	}
-	if got := outputSettlers[0].(map[string]any)["address"]; got != "0x5555555555555555555555555555555555555555" {
+	if got := outputSettlers[0].Address; got != "0x5555555555555555555555555555555555555555" {
 		t.Fatalf("preserved outputSettler address = %v", got)
 	}
-	if got := outputSettlers[1].(map[string]any)["address"]; got != "0x2222222222222222222222222222222222222222" {
+	if got := outputSettlers[1].Address; got != "0x2222222222222222222222222222222222222222" {
 		t.Fatalf("configured outputSettler address = %v", got)
 	}
-	oracles := gotBody["oracle"].([]any)
-	if got := len(oracles); got != 2 {
+	oracles := gotBody.Oracle
+	if got := len(oracles); got != 1 {
 		t.Fatalf("oracle count = %d", got)
 	}
-	if got := oracles[0].(map[string]any)["address"]; got != "0x3333333333333333333333333333333333333333" {
+	if got := oracles[0].Address; got != "0x3333333333333333333333333333333333333333" {
 		t.Fatalf("preserved oracle address = %v", got)
-	}
-	if got := oracles[1].(map[string]any)["address"]; got != "0x2222222222222222222222222222222222222222" {
-		t.Fatalf("configured oracle address = %v", got)
 	}
 }

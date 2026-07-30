@@ -2,8 +2,8 @@
 
 The **`lifi-samechain`** solver fills **same-chain on-chain** LI.FI Intents (Open Intents Framework /
 Catalyst). The executor contract is the registered LI.FI solver identity. Its owner
-authorizes runtime callers; a caller submits the selected `FillRoute[]`, and the executor uses the input
-settler's direct finalise path,
+authorizes runtime callers; a caller submits the selected direct `FillRoute[]` and discount-backed
+`DiscountRoute[]`, and the executor uses the input settler's direct finalise path,
 receives the claimed input RWA in the callback, redeems it through a Symbiotic
 **LiquidLane adapter**, then fills and attests the output in one transaction.
 Follows the framework boundary and
@@ -28,8 +28,8 @@ A user opens/funds an intent on-chain: "here is X of RWA token `tokenIn`; pay me
 and matched-order delivery; it pushes the `StandardOrder` to us over the solver WebSocket. We settle
 that already-opened order in **one atomic transaction**:
 
-1. call `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes)` with the matched
-   `StandardOrder` and selected LiquidLane routes,
+1. call `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` with the
+   matched `StandardOrder` and selected direct/discount-backed LiquidLane routes,
 2. the executor calls `InputSettler.finalise(...)` with `solver = destination = address(this)`; the input
    settler releases the opened order input to the executor and calls `orderFinalised(inputs, FillCall)` with
    the callback payload constructed by the executor,
@@ -42,8 +42,10 @@ output after the strategy's gas-aware checks. It remains in the executor; the cu
 entrypoint, so recovery requires the proxy administration path described in §7.
 
 This is the same-chain specialization of the cross-chain OIF flow. Same-chain is strictly simpler:
-`inputOracle == OutputSettler` (the settler is its own oracle — no cross-chain proof relay). The
-user/order creator is responsible for the on-chain open step before the solver sees the order.
+`StandardOrder.inputOracle` and `MandateOutput.oracle` / `settler` all identify the OutputSettler because
+there is no cross-chain proof relay. These order fields are separate from the order server's
+supported-contract `oracle` kind. The user/order creator is responsible for the on-chain open step before
+the solver sees the order.
 
 ---
 
@@ -77,7 +79,7 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 |---|---|---|
 | `LiquidLaneLifiExecutor` (Solidity) | `../rfq/src/lifi/` | Caller-gated solver/callback contract; `finaliseWithCurrentTimestamp(...)` calls `InputSettler.finalise`; `orderFinalised(..., FillCall)` redeems claimed input via LiquidLane, fills output, and attests; ERC-1271 validates domain-separated registration signatures against the current callers. |
 | Vendored OIF interfaces/structs | `../rfq/src/lifi/interfaces/` | `IInputCallback`, `MandateOutput`, `StandardOrder`, OutputSettler `fill`/`setAttestation` surface. |
-| `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, finalise calldata with typed `FillRoute[]`, submit. |
+| `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, finalise calldata with typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]`, submit. |
 | Order-server client (Go, generated) | `api/lifiorder/` ← `openapi/lifi-order.openapi.json` | Typed HTTP client for register / `quotes/submit` / `orders` (vendor→generate→commit, like `api/rfqbackend`). The WebSocket order feed is a thin hand-written client. |
 | LI.FI strategies (Go) | `internal/solvers/lifi/strategies/` | `default` owns local quote/fill policy; `webhook` delegates to `/decide-quotes` and `/decide-fill` and validates returned route references. |
 | LI.FI order server | external | Discovery: standing quotes + matched-order WS feed. |
@@ -96,7 +98,11 @@ tx entrypoint the Go solver calls.
 
 ```solidity
 // Caller-gated runtime entrypoint. The executor derives settler, solver, and destination itself.
-function finaliseWithCurrentTimestamp(StandardOrder calldata order, FillRoute[] calldata routes) external;
+function finaliseWithCurrentTimestamp(
+    StandardOrder calldata order,
+    FillRoute[] calldata routes,
+    DiscountRoute[] calldata discountRoutes
+) external;
 
 // IInputCallback (vendored from OIF) — the settler calls this on `destination`.
 function orderFinalised(uint256[2][] calldata inputs, bytes calldata call) external;
@@ -113,24 +119,26 @@ The current contract also exposes `initialize`, `callers`/`setCallers`/`isCaller
 owner, caller list, and EIP-712 state are initialized in proxy storage. The owner manages caller authorization.
 ERC-1271 uses the same caller set but is not used by the Go fill path.
 
-`inputs` are the RWA amounts delivered to the executor during finalise. The solver submits only `FillRoute[]`.
-The executor constructs the callback `FillCall` from the canonical order and those routes:
+`inputs` are the RWA amounts delivered to the executor during finalise. The solver submits separate direct
+and discount-backed route arrays. The executor constructs the callback `FillCall` from the canonical order
+and those routes:
 
 ```solidity
 struct FillCall {
     bytes32 orderId;          // OIF order id
     MandateOutput output;     // the single output to satisfy (token, amount, recipient, ...)
     uint32 fillDeadline;      // from the order
-    FillRoute[] routes;       // atomic LiquidLane execution legs
+    FillRoute[] routes;               // direct-swap LiquidLane legs
+    DiscountRoute[] discountRoutes;   // signed discount-backed legs
 }
 struct FillRoute {
     address adapter;
     uint256 amountIn;
-    uint256 amountOut;         // requested direct-swap output; unused by a discount route
-    FillDiscount discount;    // discountId == 0 means direct swap
+    uint256 amountOut;
 }
-struct FillDiscount {
-    bytes32 discountId;
+struct DiscountRoute {
+    address adapter;
+    uint256 amountIn;
     ILiquidLaneAdapter.DiscountSwap discountSwap;
     bytes protocolSignature;
 }
@@ -138,14 +146,15 @@ struct FillDiscount {
 
 ### Execution flow
 
-1. `finaliseWithCurrentTimestamp(order, routes)` requires an authorized executor caller, computes the order id,
-   and constructs callback data from `order.outputs[0]`, `order.fillDeadline`, and the supplied routes.
+1. `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` requires an authorized executor caller,
+   computes the order id, and constructs callback data from `order.outputs[0]`, `order.fillDeadline`, and
+   the supplied direct/discount-backed routes.
 2. It calls `InputSettler.finalise(order, solveParams, bytes32(address(this)), call)` with
    `solveParams[0].solver = bytes32(address(this))`. The settler's direct path accepts this because its caller
    is the canonical solver contract.
 3. After the input is claimed, `orderFinalised` accepts calls only from the immutable input settler, transfers
-   each route's input to its adapter, and calls direct `swap` or signed
-   `discountSwap`. The canonical adapter verifies discount signer/protocol signatures and terms.
+   each route's input to its adapter, executes `FillRoute[]` through direct `swap` and `DiscountRoute[]`
+   through signed `discountSwap`. The canonical adapter verifies discount signer/protocol signatures and terms.
 4. The OutputSettler resolves the accepted limit or exclusive-limit context authoritatively and pulls the
    amount it is owed; a shortfall or invalid context reverts the transaction. Dutch contexts are rejected by
    the solver before planning.
@@ -201,9 +210,9 @@ The solver supports only limit and exclusive-limit contexts. It discards both Du
 admission and logs the order identifiers and unsupported context type.
 
 **Entrypoint:** the bot calls
-`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes)`. The executor calls the LI.FI
-opened-order direct finalise path with the current `block.timestamp`; both canonical solver and destination
-are the executor itself, and it constructs the callback `FillCall` internally. Gasless
+`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)`. The executor calls
+the LI.FI opened-order direct finalise path with the current `block.timestamp`; both canonical solver and
+destination are the executor itself, and it constructs the callback `FillCall` internally. Gasless
 `openForAndFinalise` is not supported.
 
 **Deployed addresses** (LI.FI-owned; integrate against these — do **not** deploy):
@@ -229,9 +238,12 @@ Account, chain, contract, and route prerequisites are the onboarding runbook in 
 key's registered identities include the configured executor, then checks
 `GET /api/v1/solver/supported-contracts` and, when needed,
 merges the configured escrow InputSettler and OutputSettler into the complete list with `PUT`. The endpoint
-has replace semantics, so the solver preserves existing entries and registers the OutputSettler in both the
-`outputSettler` and `oracle` lists. This opts the solver into opened escrow delivery over WebSocket; the same
-executor is the on-chain solver identity and callback destination.
+has replace semantics, so the solver preserves existing entries, registers the two settlers only in their
+respective `inputSettler` / `outputSettler` lists, and leaves `oracle` untouched. LI.FI correctly returns an
+empty `oracle` list for this same-chain model; the order-level oracle identifiers still equal the configured
+OutputSettler, but that does not make the settler an `oracle`-kind supported contract. This opts the solver
+into opened escrow delivery over WebSocket; the same executor is the on-chain solver identity and callback
+destination.
 
 #### Identity, API key, and reputation
 
@@ -393,7 +405,7 @@ stops quoting, it submits the last curve with an expiry in the past, which overw
 the old server-side quote. An unchanged pair is not reposted on every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
-`finaliseWithCurrentTimestamp(order, routes)` tx from the
+`finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the
 `FillPlan`. `default` is in-process. `webhook` posts the same raw snapshots to `/decide-quotes` and
 `/decide-fill`; its response is a `FillPlan` or `null`. The solver normalizes adapters/capacity IDs from
 trusted candidates and rejects unknown, oversized, duplicated, input-mismatched, capacity-conflicting,
@@ -403,10 +415,10 @@ solver-side validation.
 
 ### 5.3 Build & submit
 
-Convert the strategy plan into typed executor `FillRoute[]` → require the route input sum to equal the gross
-order input → pack `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes)` via generated
-bindings → read `InputSettlerEscrowLIFI.orderStatus(orderId)` again → submit only when the status is
-`Deposited`.
+Split the strategy plan into direct executor `FillRoute[]` and discount-backed `DiscountRoute[]` by
+`DiscountID` → require the combined input sum to equal the gross order input → pack
+`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` via generated bindings
+→ read `InputSettlerEscrowLIFI.orderStatus(orderId)` again → submit only when the status is `Deposited`.
 The executor derives the solver identifier from `address(this)`. The WS handler
 places parsed orders into an in-memory FIFO without blocking the socket reader, so ping/pong and later messages
 continue while one planner evaluates accepted orders in arrival order. It reads
@@ -433,9 +445,10 @@ swap and resolved output; stale state therefore reverts atomically rather than b
 There is no solver-level pending plan, timer, future-auction scheduling, or new fill attempt. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
-For a selected private candidate, the solver commits the fresh signed terms and both signatures inside
-the selected `FillRoute`; a missing or mismatched resolution aborts before submission. Those two signatures
-authorize the private LiquidLane route and are unrelated to LI.FI account or fill authorization.
+For a selected private candidate, the solver uses its `DiscountID` only as the off-chain resolution key,
+then commits the fresh signed terms and both signatures inside a separate `DiscountRoute`; a missing or
+mismatched resolution aborts before submission. Those two signatures authorize the private LiquidLane route
+and are unrelated to LI.FI account or fill authorization.
 
 ### 5.4 Config block (sketch)
 
@@ -486,9 +499,9 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   price: fresh direct getAmountOut or signed-discount output; getMaxAssets → reserved cap
   decide: buffered target ≥ resolved output + gas, deadlines buffered ?  ── no ─▶ skip
      │ yes
-  build FillRoute[]; require Σ amountIn == order input
+  build direct FillRoute[] + discount-backed DiscountRoute[]; require combined Σ amountIn == order input
      │
-  txmanager ─▶ LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes)
+  txmanager ─▶ LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)
               └▶ InputSettlerEscrowLIFI.finalise(... solver=destination=EXECUTOR ...)
                  ├─ deliver opened order RWA → EXECUTOR
                  └─ EXECUTOR.orderFinalised(inputs, FillCall):
@@ -535,12 +548,14 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` discovery, physical-route
   matching, cap/rate clipping, and fresh signed-term validation. Advertised terms
   may shape standing quotes, but execution always resolves fresh signatures, recomputes output from the
-  current adapter oracle, and commits the selected discount ID and typed payload in `FillRoute`.
+  current adapter oracle, uses the selected discount ID only for off-chain resolution, and commits the typed
+  signed payload in `DiscountRoute`.
 - **No prefunded working inventory is required** (unlike OEV): the opened input funds each atomic
   redemption. A reverting fill spends gas only; accumulated executor surplus is a separate standing balance
   governed by the deployment and zero-fee invariant.
-- **Executor surplus** may remain as a standing balance. The current PR #18 executor ABI has no sweep entrypoint;
-  recovery therefore requires the deployment's proxy-upgrade administration rather than the runtime solver.
+- **Executor surplus** may remain as a standing balance. The current split-route executor ABI has no sweep
+  entrypoint; recovery therefore requires the deployment's proxy-upgrade administration rather than the
+  runtime solver.
 
 ---
 
@@ -564,7 +579,7 @@ production.
 | One configured EVM chain; same-chain input and output. | Cross-chain orders or a chain different from runtime config. |
 | Already-opened `InputSettlerEscrowLIFI` order delivered over the LI.FI WebSocket. | Compact, Permit2, ERC-3009, gasless submit, and `openForAndFinalise`. |
 | One ERC-20 input, one output, full fill. | Native input, multiple inputs/outputs, and partial fills. |
-| Configured OutputSettler as input oracle, output oracle, and output settler. | Unknown settlers/oracles and non-empty output callback data. |
+| `StandardOrder.inputOracle` and `MandateOutput.oracle` / `settler` identify the configured OutputSettler. | Unknown order settlers/oracles and non-empty output callback data. |
 | The default strategy handles limit and exclusive-limit output contexts. | Dutch and exclusive Dutch are ignored globally. The default strategy rejects unknown or malformed contexts; a webhook strategy must decline every non-Dutch context it cannot resolve. |
 | Immediate decide-and-send using current time and state. | Retaining or scheduling a future exclusive-limit order for later retry. |
 | WebSocket discovery with an on-chain `Deposited` check before send. | On-chain event discovery or trusting WS status without the chain check. |
@@ -640,8 +655,9 @@ no configured gas oracle, executor settler immutables do not match, the signer i
 `executor.isCaller`, `InputSettler.governanceFee()` is non-zero or unreadable, the API
 key does not list the executor as a registered solver identity, or external mode lacks direct filler
 authorization. After those checks the solver reads `GET /api/v1/solver/supported-contracts`; if needed it
-preserves the current lists and adds the configured escrow InputSettler plus the OutputSettler in both the
-`outputSettler` and `oracle` lists with one replacement `PUT`.
+preserves the current lists and adds the configured escrow InputSettler and OutputSettler only to the
+`inputSettler` and `outputSettler` lists with one replacement `PUT`. The `oracle` list is preserved unchanged
+and may correctly remain empty.
 
 #### Onboarding acceptance check
 
@@ -677,7 +693,8 @@ One-time setup:
 4. **Config** — copy `config/lifi.example.yaml` into an operator-local config, point `orderServer` at
    `order-dev.li.fi`, and set the §4 settlers, deployed executor, TCOL->TLOAN adapter, RPC, and gas feeds.
    On first startup the solver preserves existing supported contracts and adds the escrow InputSettler plus
-   the OutputSettler as both output settler and oracle for `eip155:11155111`.
+   the OutputSettler to their respective settler lists for `eip155:11155111`; it does not register the
+   OutputSettler as an oracle.
 
 The loop, on every change:
 1. Run the bot → it submits an **exclusive** standing quote (`exclusiveFor = executor`) for the
@@ -718,15 +735,15 @@ order-server mock + a simulated/forked chain backend.
 
 Testnet-first: the executor is developed from P0 so every later phase integrates against the live
 `order-dev.li.fi` + real settlers + real adapter (§8.2). The opened-order callback flow was proven through
-a settled Sepolia order using the previous deployed executor; the latest `FillRoute` ABI still requires
-the redeploy in phase 0.
+a settled Sepolia order using the previous deployed executor; the latest split direct/discount route ABI
+still requires the redeploy in phase 0.
 
 0. **Done locally; Sepolia redeploy required** — `LiquidLaneLifiExecutor` implements domain-separated ERC-1271
    registration through its caller set and caller-gated runtime authorization in §3. Its Foundry unit suite
    and the real-settler Sepolia fork test pass. Deploy to Ethereum
    Sepolia, register it with LI.FI through EIP-1271, and register it as an adapter filler.
    The vendored ABI and Go binding are generated from the contract artifact at
-   [symbioticfi/rfq#18](https://github.com/symbioticfi/rfq/pull/18) head `25b35af`.
+   RFQ `main` commit `8b970bd`, including the split direct/discount route interface.
 1. **Done locally** Order-server client — the vendored `openapi/lifi-order.openapi.json` + generated `api/lifiorder`
    client (register / `quotes/submit` / `orders`) plus a thin hand-written WS client for
    `user:vm-order-submit`, wired to the live `order-dev.li.fi`; register the executor account; config parsing
@@ -738,7 +755,7 @@ the redeploy in phase 0.
    LiquidLane fill planning,
    asset match, immediate OutputSettlerSimple context resolution
    for limit and exclusive-limit outputs, with Dutch contexts rejected at WebSocket admission);
-   executor-as-solver typed `FillRoute[]` direct-finalise calldata;
+   executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
    early/final `orderStatus == Deposited` checks; latest-state snapshots; raw live txmanager fee input; dynamic
    ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
    pending-capacity-aware one-shot planning, inclusion-time reservation release, and fresh state for every admitted order.
@@ -767,21 +784,19 @@ the redeploy in phase 0.
   The first acquire-route budgets are 550k direct and 625k private from
   `250k fixed + LiquidLane route units (+75k private)`. Multi-route callback behavior was also exercised.
   Compare the first Sepolia receipts against these constants before mainnet rollout.
-- **Executor redeploy** — deploy the [rfq#18](https://github.com/symbioticfi/rfq/pull/18) implementation plus
-  transparent proxy, initialize the runtime signer as a caller, register the proxy address with LI.FI, update
-  config, and grant the proxy adapter filler authorization before E2E. Confirm the canonical InputSettler
-  reports `governanceFee() == 0`; startup fails closed otherwise, and every admitted order rechecks it.
+- **Executor redeploy** — deploy the split-route implementation recorded in phase 0 plus transparent proxy,
+  initialize the runtime signer as a caller, register the proxy address with LI.FI, update config, and grant
+  the proxy adapter filler authorization before E2E. Confirm the canonical InputSettler reports
+  `governanceFee() == 0`; startup fails closed otherwise, and every admitted order rechecks it.
 - **Opened-order callback flow: previously confirmed on Sepolia; contract-identity rerun required.** The
   executor uses the same opened-order callback path, but `finaliseWithCurrentTimestamp` now calls
   `InputSettler.finalise` as the registered solver contract, then receives/redeems inputs and
   fills/attests output via `orderFinalised(uint256[2][] inputs, bytes call)` in the same transaction.
-  It is **opt-in** ("your solver has to support `orderFinalised`"). **Opt-in mechanism = resolved:** we
-  ensure the **escrow `InputSettlerEscrowLIFI`** plus the OutputSettler via
-  `GET /api/v1/solver/supported-contracts`, then conditional `PUT /api/v1/solver/supported-contracts`
-  when missing. The solver merges its configured escrow InputSettler and OutputSettler into the complete
-  current list before replacement, preserving other chains and registering the OutputSettler in both
-  `outputSettler[]` and `oracle[]`. The executor is the registered solver, finalise caller, and callback
-  destination. The previous EOA-identity build proved the remainder of the live path: `order-dev`
+  It is **opt-in** ("your solver has to support `orderFinalised`"). **Opt-in mechanism = resolved:** the solver
+  ensures the escrow InputSettler and OutputSettler under their respective supported-contract kinds as
+  described in §5.1 and §8.1; it leaves `oracle[]` unchanged, and an empty list is valid. The executor is the
+  registered solver, finalise caller, and callback destination. The previous EOA-identity build proved the
+  remainder of the live path: `order-dev`
   delivered an already-opened/funded escrow order over `user:vm-order-submit`, and the resulting Sepolia
   fill reached backend status `Settled`. Repeat that E2E after deploying and registering the new executor.
   The live feed may omit `orderType`; admission

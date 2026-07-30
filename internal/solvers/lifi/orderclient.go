@@ -103,7 +103,6 @@ func supportedContractsDTO(
 	}
 	dto.InputSettler = appendSupportedContract(dto.InputSettler, chain, inputSettler)
 	dto.OutputSettler = appendSupportedContract(dto.OutputSettler, chain, outputSettler)
-	dto.Oracle = appendSupportedContract(dto.Oracle, chain, outputSettler)
 	return dto
 }
 
@@ -137,8 +136,7 @@ func supportsConfiguredContracts(
 	inputSettler, outputSettler common.Address,
 ) bool {
 	return hasChainAddress(contracts.InputSettler, chain, inputSettler) &&
-		hasChainAddress(contracts.OutputSettler, chain, outputSettler) &&
-		hasChainAddress(contracts.Oracle, chain, outputSettler)
+		hasChainAddress(contracts.OutputSettler, chain, outputSettler)
 }
 
 func hasChainAddress(items []lifiorder.ChainAddressDto, chain string, address common.Address) bool {
