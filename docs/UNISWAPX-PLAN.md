@@ -440,9 +440,11 @@ the configured V2 Reactor/Executor pair and `GET /orders`; there is no legacy `/
 After each successful exclusive poll, tracked obligations past `decayStartTime` are reconciled by hash in
 bounded batches through the same endpoint. Only a canonical successful fill whose block time is at or before
 the deadline discharges the obligation. This includes another filler's soft override. A later fill by any
-filler, including our executor, or any final non-filled state is a local fade. An order that is still `open`,
-missing/unknown API data, or an unreadable receipt makes exclusive state unknown and blocks quotes without
-opening the breaker; the next successful reconciliation retries it.
+filler, including our executor, or any final non-filled state for an obligation observed live or recovered
+after a runtime poll gap is a local fade. An already-terminal miss discovered only by initial startup history
+reconciliation is logged and terminalized without opening a fresh local breaker. An order that is still
+`open`, missing/unknown API data, or an unreadable receipt makes exclusive state unknown and blocks quotes
+without opening the breaker; the next successful reconciliation retries it.
 
 **Hard-quote phase** is run and cosigned by Uniswap; **we do not host it**. The same webhook receives both
 indicative and hard RFQs, and the quoter cannot distinguish them. A fresh `quoteId` is generated for each
@@ -536,10 +538,12 @@ is economic, not just gas:
   the shared tx manager's configured confirmation depth.
   Only a successful on-chain fill at or before the deadline clears the obligation; this makes another
   filler's timely soft override non-fade. A fill only after the deadline—including one mined through our
-  executor—or a final non-filled state opens an independent local fade breaker: Uniswap still counts the
-  original quoter as faded once exclusivity expires unfilled. Consequently, an unrelated or late successful
-  fill cannot clear this timed breaker. An `open` order, unknown status, or unknown receipt time invalidates
-  quotes and retries reconciliation without guessing fade. The trusted
+  executor—or a final non-filled state for an obligation observed live or recovered after a runtime poll gap
+  opens an independent local fade breaker: Uniswap still counts the original quoter as faded once exclusivity
+  expires unfilled. An already-terminal miss found only during initial startup recovery is retained and
+  logged without starting a new local penalty window. Consequently, an unrelated or late successful fill
+  cannot clear a live/runtime-recovered timed breaker. An `open` order, unknown status, or unknown receipt
+  time invalidates quotes and retries reconciliation without guessing fade. The trusted
   `blockUntilTimestamp` remains the authoritative external penalty window.
 
 ---
@@ -668,8 +672,9 @@ in the owning repository and the integration harness pins the resulting revision
   discovery/resolution/calldata exist. Txmanager's configured confirmations are honored; released capacity
   stays unavailable until a post-fill snapshot. Exclusive obligations are tracked through `decayStartTime`
   from admission (including execution-invalid awarded orders), recent terminal history is recovered after
-  startup/poll gaps, and confirmed terminal receipts are batch-reconciled before either clearing obligations
-  or opening the independent local fade breaker.
+  startup/poll gaps, and confirmed terminal receipts are batch-reconciled before clearing obligations,
+  opening the independent local fade breaker for live/runtime misses, or recording a startup-only historical
+  miss without a new breaker window.
 - [ ] **P6 — Packaging + E2E.** The isolated local stack now passes quote → order → on-chain fill for
   exclusive V2 exact-input/exact-output/same-token multi-output, decaying public V2, public V2 with an
   exclusivity override, and a forced signed-discount-only route; the smoke test decodes executor calldata

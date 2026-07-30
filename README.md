@@ -198,8 +198,11 @@ Every valid exclusive order assigned to the executor is tracked through `decaySt
 deadline, tracked hashes are reconciled in batches against the order API and canonical transaction receipts.
 A successful on-chain fill at or before the deadline clears the obligation, including another filler's soft
 override. A fill by any filler only after the deadline—including our executor—or any known non-filled
-terminal state opens the separate local fade breaker, matching Uniswap's
+terminal state for an obligation observed live or recovered after a runtime poll gap opens the separate
+local fade breaker, matching Uniswap's
 [fade definition](https://developers.uniswap.org/docs/liquidity/uniswapx/filling/faq#fade-mechanics).
+An already-terminal miss found only by initial startup history reconciliation is logged and terminalized
+without opening a fresh local breaker.
 If terminal status or receipt time cannot be established, quoting stops without opening the breaker until
 reconciliation succeeds.
 
