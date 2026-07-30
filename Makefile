@@ -7,14 +7,14 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION           ?= v1.16.1
+ABIGEN_VERSION           ?= v1.17.4
 GOLANGCI_LINT_VERSION    ?= v2.11.4
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
-GENQLIENT_X_TOOLS_VERSION ?= v0.38.0
+GENQLIENT_X_TOOLS_VERSION ?= v0.48.0
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
-OPENAPI_GENERATOR_VERSION ?= 7.12.0
+OPENAPI_GENERATOR_VERSION ?= 7.24.0
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out

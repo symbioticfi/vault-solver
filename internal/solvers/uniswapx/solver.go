@@ -39,6 +39,7 @@ type Solver struct {
 	reader        chainReader
 	strategy      strategytypes.Strategy
 	txm           transactionManager
+	confirmations uint64
 	orders        orderPoller
 	discounts     liquiddiscounts.Provider
 	log           logr.Logger
@@ -97,11 +98,21 @@ type chainReader interface {
 		amountIn *big.Int,
 	) ([]liquidlane.FillQuote, error)
 	latestBlockTime(ctx context.Context) (time.Time, error)
-	transactionBlockTime(ctx context.Context, txHash common.Hash) (time.Time, error)
+	transactionBlockTimeConfirmed(
+		ctx context.Context,
+		txHash common.Hash,
+		confirmations uint64,
+	) (time.Time, error)
 }
 
 type orderPoller interface {
 	openOrders(ctx context.Context, chainID int64, filler *common.Address) ([]orderEntry, error)
+	recentOrders(
+		ctx context.Context,
+		chainID int64,
+		filler common.Address,
+		createdAfter time.Time,
+	) ([]orderEntry, error)
 	ordersByHash(
 		ctx context.Context,
 		chainID int64,
@@ -155,6 +166,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		reader:            reader,
 		strategy:          strategy,
 		txm:               deps.TxManager,
+		confirmations:     deps.TxManager.Confirmations(),
 		orders:            newOrderClient(cfg.OrderServer, orderKey),
 		discounts:         discountClient,
 		log:               log,
@@ -229,7 +241,8 @@ func (s *Solver) Run(ctx context.Context) error {
 			"executor", s.cfg.Executor.Hex(), "orderApi", s.cfg.OrderServer.BaseURL)
 		return startupErr
 	}
-	s.recordExclusivePollSuccess(time.Now())
+	// Reconcile recent terminal history before serving quotes after every process start.
+	s.exclusiveStateUnknown.Store(true)
 	s.warmupUntil.Store(time.Now().Add(s.cfg.QuoteServer.QuoteTTL).Unix())
 	if err := s.refreshQuoteState(ctx, routes); err != nil {
 		startupErr := errors.Errorf("initial quote refresh: %w", err)

@@ -29,13 +29,13 @@ func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) erro
 	if s.cfg.OrderServer.Sources.ExclusiveV2 {
 		now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
 		if err != nil {
-			s.markExclusivePollFailure()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else if err := s.sweepExclusive(ctx, now); err != nil {
 			s.markExclusiveStateUnknown()
 			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, errors.Errorf("reconcile exclusive orders: %w", err))
+			pollErrs = append(pollErrs, err)
+		} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
+			s.markExclusiveStateUnknown()
+			s.observePoll(string(orderSourceExclusiveV2), "failed")
+			pollErrs = append(pollErrs, err)
 		} else {
 			s.recordExclusivePollSuccess(time.Now())
 			s.observePoll(string(orderSourceExclusiveV2), "ok")
@@ -50,6 +50,50 @@ func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) erro
 		}
 	}
 	return errors.Join(pollErrs...)
+}
+
+func (s *Solver) reconcileExclusivePoll(ctx context.Context, now time.Time) error {
+	if s.exclusiveStateUnknown.Load() {
+		if err := s.recoverRecentExclusive(ctx, now); err != nil {
+			return err
+		}
+	}
+	if err := s.sweepExclusive(ctx, now); err != nil {
+		return errors.Errorf("reconcile exclusive orders: %w", err)
+	}
+	return nil
+}
+
+func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) error {
+	lookback := max(time.Hour, 2*s.cfg.Breaker.Window)
+	createdAfter := now.Add(-lookback)
+	entries, err := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, createdAfter)
+	if err != nil {
+		return errors.Errorf("poll recent exclusive orders: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.OrderStatus == orderStatusOpen {
+			continue
+		}
+		obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
+		if obligationErr != nil {
+			if errors.Is(obligationErr, errDifferentExclusiveFiller) {
+				continue
+			}
+			return errors.Errorf(
+				"track terminal exclusive order %q: %w",
+				entry.OrderHash,
+				obligationErr,
+			)
+		}
+		s.trackExclusiveObligation(obligation, entry.QuoteID, now)
+	}
+	s.log.V(1).Info(
+		"recent exclusive history reconciled",
+		"orders", len(entries),
+		"createdAfter", createdAfter.Unix(),
+	)
+	return nil
 }
 
 func (s *Solver) pollSource(
@@ -75,6 +119,18 @@ func (s *Solver) pollSource(
 	for _, entry := range entries {
 		order, parseErr := parseAndResolveOrder(entry, source, s.cfg, s.chainID, now)
 		if parseErr != nil {
+			if source == orderSourceExclusiveV2 {
+				obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
+				if obligationErr != nil {
+					return now, errors.Errorf(
+						"rejected exclusive order %q cannot be tracked: parse: %v; obligation: %w",
+						entry.OrderHash,
+						parseErr,
+						obligationErr,
+					)
+				}
+				s.trackExclusiveObligation(obligation, entry.QuoteID, now)
+			}
 			s.log.V(1).Info("order rejected", "error", parseErr, "source", source,
 				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
@@ -103,6 +159,7 @@ func (s *Solver) pollSource(
 		select {
 		case out <- order:
 		case <-ctx.Done():
+			s.endFillPlanning()
 			s.retry(order.Hash, now, false)
 			return time.Time{}, ctx.Err()
 		}
@@ -149,6 +206,7 @@ func (s *Solver) claim(hash common.Hash, now time.Time) bool {
 		return false
 	}
 	delete(s.retryAt, hash)
+	s.beginFillPlanning()
 	s.inFlight[hash] = true
 	return true
 }

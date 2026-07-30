@@ -20,6 +20,15 @@ func (f orderPollerFunc) openOrders(ctx context.Context, chainID int64, filler *
 	return f(ctx, chainID, filler)
 }
 
+func (f orderPollerFunc) recentOrders(
+	context.Context,
+	int64,
+	common.Address,
+	time.Time,
+) ([]orderEntry, error) {
+	return nil, nil
+}
+
 func (f orderPollerFunc) ordersByHash(
 	context.Context,
 	int64,
@@ -32,6 +41,7 @@ type countingChainReader struct {
 	chainReader
 
 	latestCalls int
+	now         time.Time
 }
 
 type startupChainReader struct {
@@ -182,6 +192,9 @@ func TestRunInternalModeAllowsNoAdaptersAndSkipsDirectAuthorizationGate(t *testi
 
 func (r *countingChainReader) latestBlockTime(context.Context) (time.Time, error) {
 	r.latestCalls++
+	if !r.now.IsZero() {
+		return r.now, nil
+	}
 	return time.Unix(1_000, 0), nil
 }
 
@@ -217,23 +230,14 @@ func TestPollOrdersProcessesExclusiveBeforePublicFailure(t *testing.T) {
 func TestPollOrdersKeepsUnknownExclusivePendingAndStopsQuotes(t *testing.T) {
 	hash := common.HexToHash("0x1234")
 	now := time.Unix(1_000, 0)
-	solver := &Solver{
-		cfg: &Config{
-			OrderServer: OrderServerConfig{
-				PollInterval: time.Second,
-				Sources:      OrderSourcesConfig{ExclusiveV2: true},
-			},
-			Breaker: BreakerConfig{Window: time.Minute},
-		},
-		chainID:  1,
-		reader:   &countingChainReader{},
-		orders:   &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{}},
-		log:      logr.Discard(),
-		filled:   make(map[common.Hash]time.Time),
-		retryAt:  make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool),
-		attempts: make(map[common.Hash]int),
+	cfg := &Config{
+		OrderServer: OrderServerConfig{PollInterval: time.Second},
+		Breaker:     BreakerConfig{Window: time.Minute},
 	}
+	solver := newPollingTestSolver(
+		cfg,
+		&stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{}},
+	)
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(now.Add(-time.Second).Unix()),
 	}, now.Add(-2*time.Second))
@@ -252,5 +256,93 @@ func TestPollOrdersKeepsUnknownExclusivePendingAndStopsQuotes(t *testing.T) {
 	}
 	if _, pending := solver.exclusiveUntil[hash]; !pending {
 		t.Fatal("unknown exclusive obligation was not retained for retry")
+	}
+}
+
+func TestPollSourceTracksRejectedExclusiveOrder(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	entry, cfg := testExclusiveOrderEntry(
+		t,
+		common.HexToAddress("0x2222222222222222222222222222222222222222"),
+	)
+	solver := newPollingTestSolver(
+		cfg,
+		orderPollerFunc(func(context.Context, int64, *common.Address) ([]orderEntry, error) {
+			return []orderEntry{entry}, nil
+		}),
+	)
+
+	if _, err := solver.pollSource(
+		t.Context(),
+		orderSourceExclusiveV2,
+		&cfg.Executor,
+		make(chan *resolvedOrder, 1),
+	); err != nil {
+		t.Fatal(err)
+	}
+	hash := common.HexToHash(entry.OrderHash)
+	if deadline, ok := solver.exclusiveUntil[hash]; !ok || !deadline.Equal(now) {
+		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", deadline, ok)
+	}
+}
+
+func TestPollOrdersRecoversTerminalExclusiveOrderAfterDowntime(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	entry, cfg := testExclusiveOrderEntry(t, executor)
+	entry.OrderStatus = orderStatusExpired
+	otherFiller, _ := testExclusiveOrderEntry(
+		t,
+		common.HexToAddress("0x9999999999999999999999999999999999999999"),
+	)
+	otherFiller.OrderStatus = orderStatusExpired
+	cfg.Breaker.Window = time.Minute
+	hash := common.HexToHash(entry.OrderHash)
+	solver := newPollingTestSolver(
+		cfg,
+		&stateTestOrderPoller{
+			recent: []orderEntry{otherFiller, entry},
+			terminals: map[common.Hash]orderTerminal{
+				hash: {Status: orderStatusExpired},
+			},
+		},
+	)
+	solver.reader = &countingChainReader{now: time.Unix(1_001, 0)}
+	solver.exclusiveStateUnknown.Store(true)
+
+	if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if solver.exclusiveBlockUntil.Load() == 0 {
+		t.Fatal("recovered missed exclusive order did not open breaker")
+	}
+	if _, pending := solver.exclusiveUntil[hash]; pending {
+		t.Fatal("recovered terminal obligation remained pending")
+	}
+}
+
+func TestPollOrdersStopsQuotesWhenExclusiveHistoryIsUnknown(t *testing.T) {
+	solver := newPollingTestSolver(
+		&Config{
+			Executor: common.HexToAddress("0x1111111111111111111111111111111111111111"),
+			Breaker:  BreakerConfig{Window: time.Minute},
+		},
+		&stateTestOrderPoller{err: errors.New("history unavailable")},
+	)
+	solver.exclusiveStateUnknown.Store(true)
+	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
+
+	err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1))
+	if err == nil || !strings.Contains(err.Error(), "poll recent exclusive orders") {
+		t.Fatalf("pollOrders error = %v", err)
+	}
+	if !solver.exclusiveStateUnknown.Load() || solver.quoteState.Load() != nil {
+		t.Fatal("unknown recovery history did not stop quotes")
+	}
+}
+
+func newPollingTestSolver(cfg *Config, orders orderPoller) *Solver {
+	cfg.OrderServer.Sources.ExclusiveV2 = true
+	return &Solver{
+		cfg: cfg, chainID: 1, reader: &countingChainReader{}, orders: orders, log: logr.Discard(),
 	}
 }
