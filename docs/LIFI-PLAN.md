@@ -334,14 +334,16 @@ type Strategy interface {
   `DecideQuotes` applies `inventoryReserveBps` before pricing, normalizes direct and private inventory into
   shared greedy candidates, and keeps at most three physical routes (one for permissioned inputs). LI.FI
   retains only the range-shaped protocol adapter: selected capacity is divided geometrically into at most
-  `rangeCount` contiguous ranges (default eight, hard protocol limit sixteen). For each
+  `rangeCount` candidate ranges (default eight, hard protocol limit sixteen). For each
   `[inputLow,inputHigh]` the strategy calls the same exact-input `greedy.SolveQuote` used by concrete
-  RFQ-style solvers at both endpoints. The lower endpoint rate is capped by a linear conservative floor
-  derived from the alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas, and
-  integer rounding. This covers interior route switches without enumerating route combinations. Two
+  RFQ-style solvers at both endpoints. The lower of the two endpoint rates is capped by a linear conservative
+  floor derived from the alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas,
+  and integer rounding. This covers interior route switches without enumerating route combinations. Two
   price-movement stages are deducted (quote→decision and decision→inclusion). There is no separate LI.FI
-  quote planner, profitability binary search, or minimum-profit setting. If either endpoint is not
-  economically positive, that whole range is omitted. Solver-level token admission uses the shared
+  quote planner or minimum-profit setting. If a candidate range starts below the conservative economic floor,
+  the strategy finds the first lower bound whose fixed-upper floor yields a representable positive output and
+  publishes that safe suffix. It omits the range only when no such suffix exists or endpoint pricing still
+  fails closed. Solver-level token admission uses the shared
   `internal/tokenpolicy` policy also used by RFQ: `all` serves every input, `permissioned` serves only
   `permissionedTokens`, and `permissionless` serves only inputs outside that set. Only the
   `permissioned` scope is single-route: the solver passes that constraint into each strategy decision,
@@ -461,7 +463,7 @@ solvers:
         config:
           priceBufferBps: 20
           inventoryReserveBps: 500
-          minAmount: "1000000"          # tokenIn floor sized to cover gas and rounding
+          minAmount: "1000000"          # operator tokenIn floor; published ranges may start higher for economics
           rangeCount: 8                 # geometric ranges per pair; hard max is 16
           executionDeadlineBuffer: 12s
       gas:
@@ -525,10 +527,10 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   accepted order amount, the whole transaction reverts.
 - **Gas-aware quotes** — the solver supplies the live txmanager fee cap, latest LiquidLane gas state, and
   Chainlink-derived token/native conversion as raw facts. Code-owned fixed settlement/private units combine
-  with shared route prediction; there is no separate gas padding knob. Operators set `minAmount` high enough
-  to cover gas, both quote-time price windows, and rounding.
-  The strategy charges complete-plan gas after route allocation and omits any capacity range whose lower
-  boundary is not economically positive.
+  with shared route prediction; there is no separate gas padding knob. `minAmount` is the operator's token-input
+  floor. The strategy additionally raises a candidate range's published lower boundary as needed to cover
+  complete-plan gas, both quote-time price windows, and rounding; it omits the range only when its conservative
+  floor has no economically positive suffix.
 - **Capacity safety** — routes sharing a vault share one conservative capacity domain. Each pair may advertise
   the full domain, while quote and fill planning subtract every in-flight buffered output from it. This
   optimistic publication can overbook across simultaneously matched pairs, but each fill still uses a fresh
