@@ -5,6 +5,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     target-branch: "stage"
     open-pull-requests-limit: 5
     ignore:
@@ -13,11 +15,13 @@ updates:
       - alexey-symbiotic
       - arturSymbiotic
 
-  # Enable version updates for npm
+  # Enable version updates for Go modules
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     target-branch: "stage"
     open-pull-requests-limit: 10
     assignees:
@@ -32,6 +36,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     target-branch: "stage"
     open-pull-requests-limit: 5
     assignees:
