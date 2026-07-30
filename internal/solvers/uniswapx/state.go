@@ -24,8 +24,14 @@ type orderTerminal struct {
 }
 
 type exclusiveObligation struct {
-	hash     common.Hash
-	deadline time.Time
+	hash             common.Hash
+	deadline         time.Time
+	recoveredAtStart bool
+}
+
+type trackedExclusive struct {
+	deadline         time.Time
+	recoveredAtStart bool
 }
 
 type exclusiveDecision struct {
@@ -142,15 +148,23 @@ func (s *Solver) trackExclusiveObligation(
 ) {
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
-	tracked := false
+	updated := false
 	if _, terminal := s.exclusiveTerminal[obligation.hash]; !terminal {
-		if current, exists := s.exclusiveUntil[obligation.hash]; !exists || obligation.deadline.Before(current) {
-			s.exclusiveUntil[obligation.hash] = obligation.deadline
-			tracked = true
+		current, exists := s.exclusiveUntil[obligation.hash]
+		if !exists || obligation.deadline.Before(current.deadline) {
+			current.deadline = obligation.deadline
+			updated = true
 		}
+		if !exists {
+			current.recoveredAtStart = obligation.recoveredAtStart
+		} else if !obligation.recoveredAtStart {
+			// A live observation or runtime recovery takes precedence over startup history.
+			current.recoveredAtStart = false
+		}
+		s.exclusiveUntil[obligation.hash] = current
 	}
 	s.stateMu.Unlock()
-	if tracked {
+	if updated {
 		s.log.V(1).Info(
 			"exclusive obligation tracked",
 			"orderHash", obligation.hash.Hex(),
@@ -164,9 +178,13 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
 	expired := make([]exclusiveObligation, 0, len(s.exclusiveUntil))
-	for hash, deadline := range s.exclusiveUntil {
-		if now.After(deadline) {
-			expired = append(expired, exclusiveObligation{hash: hash, deadline: deadline})
+	for hash, tracked := range s.exclusiveUntil {
+		if now.After(tracked.deadline) {
+			expired = append(expired, exclusiveObligation{
+				hash:             hash,
+				deadline:         tracked.deadline,
+				recoveredAtStart: tracked.recoveredAtStart,
+			})
 		}
 	}
 	s.stateMu.Unlock()
@@ -241,19 +259,22 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		decisions = append(decisions, decision)
 	}
 
-	var missed []exclusiveDecision
+	var missed, historicalMissed []exclusiveDecision
 	var settled []exclusiveDecision
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
 	for _, decision := range decisions {
-		deadline, tracked := s.exclusiveUntil[decision.hash]
-		if !tracked || !deadline.Equal(decision.deadline) {
+		tracked, ok := s.exclusiveUntil[decision.hash]
+		if !ok || !tracked.deadline.Equal(decision.deadline) {
 			continue
 		}
+		decision.recoveredAtStart = tracked.recoveredAtStart
 		delete(s.exclusiveUntil, decision.hash)
 		s.exclusiveTerminal[decision.hash] = now
 		if decision.settledInTime {
 			settled = append(settled, decision)
+		} else if decision.recoveredAtStart {
+			historicalMissed = append(historicalMissed, decision)
 		} else {
 			missed = append(missed, decision)
 		}
@@ -269,6 +290,18 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 			"filledAt", decision.filledAt.Unix(),
 			"exclusiveUntil", decision.deadline.Unix(),
 		)
+	}
+	for _, decision := range historicalMissed {
+		fields := []any{
+			"orderHash", decision.hash.Hex(),
+			"status", decision.status,
+			"exclusiveUntil", decision.deadline.Unix(),
+			"origin", "startup-recovery",
+		}
+		if decision.txHash != (common.Hash{}) {
+			fields = append(fields, "tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix())
+		}
+		s.log.Info("historical exclusive obligation missed", fields...)
 	}
 	s.openExclusiveBreaker(missed, now)
 	return nil
@@ -301,7 +334,7 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 
 func (s *Solver) cleanupExclusiveLocked(now time.Time) {
 	if s.exclusiveUntil == nil {
-		s.exclusiveUntil = make(map[common.Hash]time.Time)
+		s.exclusiveUntil = make(map[common.Hash]trackedExclusive)
 	}
 	if s.exclusiveTerminal == nil {
 		s.exclusiveTerminal = make(map[common.Hash]time.Time)

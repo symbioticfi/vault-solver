@@ -65,6 +65,7 @@ func (s *Solver) reconcileExclusivePoll(ctx context.Context, now time.Time) erro
 }
 
 func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) error {
+	startup := s.lastExclusivePoll.Load() == 0
 	lookback := max(time.Hour, 2*s.cfg.Breaker.Window)
 	createdAfter := now.Add(-lookback)
 	entries, err := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, createdAfter)
@@ -86,12 +87,14 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 				obligationErr,
 			)
 		}
+		obligation.recoveredAtStart = startup
 		s.trackExclusiveObligation(obligation, entry.QuoteID, now)
 	}
 	s.log.V(1).Info(
 		"recent exclusive history reconciled",
 		"orders", len(entries),
 		"createdAfter", createdAfter.Unix(),
+		"startup", startup,
 	)
 	return nil
 }

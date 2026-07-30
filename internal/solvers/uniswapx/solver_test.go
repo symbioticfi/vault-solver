@@ -281,42 +281,85 @@ func TestPollSourceTracksRejectedExclusiveOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := common.HexToHash(entry.OrderHash)
-	if deadline, ok := solver.exclusiveUntil[hash]; !ok || !deadline.Equal(now) {
-		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", deadline, ok)
+	if tracked, ok := solver.exclusiveUntil[hash]; !ok || !tracked.deadline.Equal(now) {
+		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", tracked.deadline, ok)
 	}
 }
 
-func TestPollOrdersRecoversTerminalExclusiveOrderAfterDowntime(t *testing.T) {
-	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	entry, cfg := testExclusiveOrderEntry(t, executor)
-	entry.OrderStatus = orderStatusExpired
-	otherFiller, _ := testExclusiveOrderEntry(
-		t,
-		common.HexToAddress("0x9999999999999999999999999999999999999999"),
-	)
-	otherFiller.OrderStatus = orderStatusExpired
-	cfg.Breaker.Window = time.Minute
-	hash := common.HexToHash(entry.OrderHash)
-	solver := newPollingTestSolver(
-		cfg,
-		&stateTestOrderPoller{
-			recent: []orderEntry{otherFiller, entry},
-			terminals: map[common.Hash]orderTerminal{
-				hash: {Status: orderStatusExpired},
-			},
-		},
-	)
-	solver.reader = &countingChainReader{now: time.Unix(1_001, 0)}
-	solver.exclusiveStateUnknown.Store(true)
+func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		startup bool
+	}{
+		{name: "startup logs historical miss", startup: true},
+		{name: "runtime recovery opens breaker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+			entry, cfg := testExclusiveOrderEntry(t, executor)
+			entry.OrderStatus = orderStatusExpired
+			otherFiller, _ := testExclusiveOrderEntry(
+				t,
+				common.HexToAddress("0x9999999999999999999999999999999999999999"),
+			)
+			otherFiller.OrderStatus = orderStatusExpired
+			cfg.Breaker.Window = time.Minute
+			hash := common.HexToHash(entry.OrderHash)
+			var logs []string
+			solver := newPollingTestSolver(
+				cfg,
+				&stateTestOrderPoller{
+					recent: []orderEntry{otherFiller, entry},
+					terminals: map[common.Hash]orderTerminal{
+						hash: {Status: orderStatusExpired},
+					},
+				},
+			)
+			solver.reader = &countingChainReader{now: time.Unix(1_001, 0)}
+			solver.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+			solver.quoteState.Store(&quoteState{})
+			solver.exclusiveStateUnknown.Store(true)
+			if !tc.startup {
+				solver.lastExclusivePoll.Store(999)
+			}
 
-	if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
-		t.Fatal(err)
-	}
-	if solver.exclusiveBlockUntil.Load() == 0 {
-		t.Fatal("recovered missed exclusive order did not open breaker")
-	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
-		t.Fatal("recovered terminal obligation remained pending")
+			if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
+				t.Fatal(err)
+			}
+			wantBreaker := !tc.startup
+			if got := solver.exclusiveBlockUntil.Load() != 0; got != wantBreaker {
+				t.Fatalf("recovered missed exclusive breaker = %v, want %v", got, wantBreaker)
+			}
+			if got := solver.quoteState.Load() == nil; got != wantBreaker {
+				t.Fatalf("recovered missed exclusive invalidated quotes = %v, want %v", got, wantBreaker)
+			}
+			if _, pending := solver.exclusiveUntil[hash]; pending {
+				t.Fatal("recovered terminal obligation remained pending")
+			}
+			if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
+				t.Fatal("recovered terminal obligation was not retained")
+			}
+
+			logged := strings.Join(logs, "\n")
+			if got := strings.Contains(logged, "historical exclusive obligation missed"); got != tc.startup {
+				t.Fatalf("historical miss log = %v, want %v: %s", got, tc.startup, logged)
+			}
+			if tc.startup && strings.Contains(logged, `"error"`) {
+				t.Fatalf("startup-recovered miss was logged as an error: %s", logged)
+			}
+
+			initialLogCount := strings.Count(logged, "historical exclusive obligation missed")
+			solver.exclusiveStateUnknown.Store(true)
+			if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(
+				strings.Join(logs, "\n"),
+				"historical exclusive obligation missed",
+			); got != initialLogCount {
+				t.Fatalf("historical miss log repeated: got %d entries, want %d", got, initialLogCount)
+			}
+		})
 	}
 }
 
