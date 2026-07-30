@@ -66,7 +66,7 @@ type Solver struct {
 	inFlight          map[common.Hash]bool
 	attempts          map[common.Hash]int
 	capacity          liquidlane.CapacityLedger
-	exclusiveUntil    map[common.Hash]time.Time
+	exclusiveUntil    map[common.Hash]trackedExclusive
 	exclusiveTerminal map[common.Hash]time.Time
 	failureTimes      []time.Time
 	metrics           *uniswapXMetrics
@@ -176,7 +176,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		inFlight:          make(map[common.Hash]bool),
 		attempts:          make(map[common.Hash]int),
 		metrics:           metrics,
-		exclusiveUntil:    make(map[common.Hash]time.Time),
+		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
 	}, nil
 }

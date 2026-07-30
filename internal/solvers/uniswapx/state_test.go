@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -111,6 +112,40 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 	solver.recordFillSuccess()
 	if solver.exclusiveBlockUntil.Load() == 0 {
 		t.Fatal("ordinary fill success cleared the exclusive fade breaker")
+	}
+}
+
+func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	hash := common.HexToHash("0x1234")
+	poller := &stateTestOrderPoller{
+		terminals: map[common.Hash]orderTerminal{hash: {Status: orderStatusExpired}},
+		err:       errors.New("temporary order API failure"),
+	}
+	solver := &Solver{
+		cfg: &Config{Breaker: BreakerConfig{Window: time.Minute}}, log: logr.Discard(),
+		orders: poller,
+	}
+	solver.trackExclusiveObligation(exclusiveObligation{
+		hash: hash, deadline: now.Add(time.Second), recoveredAtStart: true,
+	}, "", now)
+
+	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err == nil {
+		t.Fatal("temporary terminal lookup failure was accepted")
+	}
+	if tracked := solver.exclusiveUntil[hash]; !tracked.recoveredAtStart {
+		t.Fatal("startup recovery marker was lost after failed reconciliation")
+	}
+
+	poller.err = nil
+	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if solver.exclusiveBlockUntil.Load() != 0 {
+		t.Fatal("retried startup history opened exclusive breaker")
+	}
+	if _, pending := solver.exclusiveUntil[hash]; pending {
+		t.Fatal("retried startup history remained pending")
 	}
 }
 
