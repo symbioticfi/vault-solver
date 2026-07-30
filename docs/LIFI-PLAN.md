@@ -463,7 +463,7 @@ solvers:
         config:
           priceBufferBps: 20
           inventoryReserveBps: 500
-          minAmount: "1000000"          # operator tokenIn floor; published ranges may start higher for economics
+          minAmount: "1000000"          # operator tokenIn floor; ranges may start higher
           rangeCount: 8                 # geometric ranges per pair; hard max is 16
           executionDeadlineBuffer: 12s
       gas:
@@ -528,9 +528,8 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Gas-aware quotes** — the solver supplies the live txmanager fee cap, latest LiquidLane gas state, and
   Chainlink-derived token/native conversion as raw facts. Code-owned fixed settlement/private units combine
   with shared route prediction; there is no separate gas padding knob. `minAmount` is the operator's token-input
-  floor. The strategy additionally raises a candidate range's published lower boundary as needed to cover
-  complete-plan gas, both quote-time price windows, and rounding; it omits the range only when its conservative
-  floor has no economically positive suffix.
+  floor. The per-range conservative floor covers complete-plan gas, both quote-time price windows, and rounding;
+  ranges with no positive suffix are omitted.
 - **Capacity safety** — routes sharing a vault share one conservative capacity domain. Each pair may advertise
   the full domain, while quote and fill planning subtract every in-flight buffered output from it. This
   optimistic publication can overbook across simultaneously matched pairs, but each fill still uses a fresh

@@ -26,9 +26,6 @@ func (s *Strategy) buildQuoteRanges(
 	}
 	maxGasCost := pricing.MaxCost(routeCount, privateRouteCount)
 	breakpoints := quoteBreakpoints(maximum, s.minAmount, s.rangeCount)
-	outputBufferBps := 2 * s.cfg.PriceBufferBps
-	inDecimals := candidates[0].Route.TokenInDecimals
-	outDecimals := candidates[0].Route.TokenOutDecimals
 	used := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate)
 	ranges := make([]types.QuoteRange, 0, len(breakpoints))
 	lower := new(big.Int).Set(s.minAmount)
@@ -36,16 +33,7 @@ func (s *Strategy) buildQuoteRanges(
 		if upper.Cmp(lower) < 0 {
 			continue
 		}
-		safeLower := firstSafeRangeInput(
-			candidates,
-			lower,
-			upper,
-			maxGasCost,
-			routeCount,
-			outputBufferBps,
-			inDecimals,
-			outDecimals,
-		)
+		safeLower := s.firstSafeRangeInput(candidates, lower, upper, maxGasCost, routeCount)
 		if safeLower == nil {
 			lower = new(big.Int).Add(upper, big.NewInt(1))
 			continue
@@ -69,17 +57,17 @@ func (s *Strategy) buildQuoteRanges(
 	return ranges, used, nil
 }
 
-func firstSafeRangeInput(
+func (s *Strategy) firstSafeRangeInput(
 	candidates []liquidlane.QuoteCandidate,
 	lower *big.Int,
 	upper *big.Int,
 	maxGasCost *big.Int,
 	routeCount int,
-	outputBufferBps int,
-	inDecimals int,
-	outDecimals int,
 ) *big.Int {
-	safe := func(amount *big.Int) bool {
+	outputBufferBps := 2 * s.cfg.PriceBufferBps
+	inDecimals := candidates[0].Route.TokenInDecimals
+	outDecimals := candidates[0].Route.TokenOutDecimals
+	isSafeInput := func(amount *big.Int) bool {
 		rate := candidateFloorRate(
 			candidates,
 			amount,
@@ -93,28 +81,28 @@ func firstSafeRangeInput(
 		return rate.Sign() > 0 &&
 			liquidlane.AmountOutForRate(amount, rate, inDecimals, outDecimals).Sign() > 0
 	}
-	if safe(lower) {
+	if isSafeInput(lower) {
 		return new(big.Int).Set(lower)
 	}
-	if !safe(upper) {
+	if !isSafeInput(upper) {
 		return nil
 	}
 
-	// For a fixed upper bound, the candidate floor and maximum loss are fixed.
+	// For a fixed upper bound, the candidate base rate and maximum loss are fixed.
 	// Raising the lower bound only reduces the loss amortized into its rate.
-	unsafe := new(big.Int).Set(lower)
-	safeAmount := new(big.Int).Set(upper)
+	unsafeInput := new(big.Int).Set(lower)
+	safeInput := new(big.Int).Set(upper)
 	one := big.NewInt(1)
-	for new(big.Int).Sub(safeAmount, unsafe).Cmp(one) > 0 {
-		mid := new(big.Int).Add(unsafe, safeAmount)
-		mid.Rsh(mid, 1)
-		if safe(mid) {
-			safeAmount.Set(mid)
+	for new(big.Int).Sub(safeInput, unsafeInput).Cmp(one) > 0 {
+		midpoint := new(big.Int).Add(unsafeInput, safeInput)
+		midpoint.Rsh(midpoint, 1)
+		if isSafeInput(midpoint) {
+			safeInput.Set(midpoint)
 		} else {
-			unsafe.Set(mid)
+			unsafeInput.Set(midpoint)
 		}
 	}
-	return safeAmount
+	return safeInput
 }
 
 func (s *Strategy) priceQuoteRange(

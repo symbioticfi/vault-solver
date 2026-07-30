@@ -146,9 +146,7 @@ admission and logged as unsupported. `solverMode: external` serves direct filler
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
 its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
-available capacity and publishes only their economically usable suffixes; `rangeCount` sets their target
-number. See the
-plan for settlement, pricing, concurrency, and onboarding details:
+available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
 
