@@ -362,6 +362,16 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
-**Testing:**
+**Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
-- **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
+- **Metrics.** The shared registry reports offer submission results and their submitted
+  principal/quoted-expected-yield amounts by deposit token. One
+  `threef_observed_items{view}` gauge reports offers, active requests, and redeemable requests; a
+  matching freshness vector distinguishes current zeroes from retained last-known-good state. Each
+  redeem pass scans every adapter and publishes only a complete snapshot before submitting any
+  blocking transaction; malformed sub-call data withholds freshness while valid ready requests are
+  still redeemed best-effort. Malformed live-offer status, expiration, or amount likewise withholds
+  offer-view freshness. Redeem transaction outcomes, in-flight requests, gas, and replacements come
+  from txmanager. The API does
+  not attribute consumed offers to this solver, so no speculative 3F “wins” or realized-yield counter
+  is exposed. Exact names and labels are in the [README metrics table](../README.md#metrics).

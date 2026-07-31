@@ -129,3 +129,27 @@ func TestAwaitFillTreatsClosedResultChannelAsFailure(t *testing.T) {
 		t.Fatal("closed transaction result channel was treated as a successful fill")
 	}
 }
+
+func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
+	var logs []string
+	solver := &Solver{
+		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	fill := &pendingFill{
+		order:          &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID:        common.HexToHash("0x1"),
+		reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+
+	solver.completeFill(pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
+	}})
+
+	logged := strings.Join(logs, "\n")
+	if pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		!strings.Contains(logged, "order fill included but confirmation wait failed") {
+		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
+	}
+}

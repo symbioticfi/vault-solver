@@ -114,7 +114,6 @@ func (s *Solver) applyExecutorState(st ExecutorState, now time.Time) {
 	s.metrics.depositWei(weiFloat(st.Deposit))
 
 	belowFloor := st.Deposit.Cmp(minDeposit) < 0
-	s.metrics.depositBelowFloor(belowFloor)
 	if belowFloor {
 		s.log.Error(errors.New("executor deposit below MIN_DEPOSIT"),
 			"bidding will skip until the operator refuels the Executor deposit",

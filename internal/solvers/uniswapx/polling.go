@@ -66,7 +66,7 @@ func (s *Solver) reconcileExclusivePoll(ctx context.Context, now time.Time) erro
 
 func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) error {
 	startup := s.lastExclusivePoll.Load() == 0
-	lookback := max(time.Hour, 2*s.cfg.Breaker.Window)
+	lookback := s.exclusiveRecoveryLookback()
 	createdAfter := now.Add(-lookback)
 	entries, err := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, createdAfter)
 	if err != nil {
@@ -97,6 +97,10 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 		"startup", startup,
 	)
 	return nil
+}
+
+func (s *Solver) exclusiveRecoveryLookback() time.Duration {
+	return max(time.Hour, 2*s.cfg.Breaker.Window)
 }
 
 func (s *Solver) pollSource(
@@ -132,13 +136,18 @@ func (s *Solver) pollSource(
 						obligationErr,
 					)
 				}
-				s.trackExclusiveObligation(obligation, entry.QuoteID, now)
+				obligation.liveObserved = true
+				if s.trackExclusiveObligation(obligation, entry.QuoteID, now) {
+					s.observeExclusiveWin()
+				}
 			}
 			s.log.V(1).Info("order rejected", "error", parseErr, "source", source,
 				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
 		}
-		s.trackExclusive(order, now)
+		if s.trackExclusive(order, now) {
+			s.observeExclusiveWin()
+		}
 		if !s.claim(order.Hash, now) {
 			s.log.V(1).Info(
 				"order skipped: already handled or awaiting retry",
@@ -177,9 +186,6 @@ func (s *Solver) recordExclusivePollSuccess(now time.Time) {
 	wasUnknown := s.exclusiveStateUnknown.Swap(false)
 	timestamp := now.Unix()
 	s.lastExclusivePoll.Store(timestamp)
-	if s.metrics != nil {
-		s.metrics.exclusivePoll.Set(float64(timestamp))
-	}
 	if wasUnknown {
 		s.requestQuoteRefresh()
 	}

@@ -51,13 +51,31 @@ type Request struct {
 	GasLimit      uint64
 	MaxFeePerGas  *big.Int // optional hard EIP-1559 fee ceiling; fees are clamped to it or rejected below base fee
 	Confirmations *uint64  // optional wait override; nil uses Config.Confirmations
-	Label         string   // for logs/metrics, e.g. "redeem"
+	Label         string   // stable operation name for logs and metrics
+}
+
+// Outcome is the terminal transaction state observed by the manager.
+type Outcome string
+
+const (
+	OutcomeConfirmed           Outcome = "confirmed"
+	OutcomeIncludedUnconfirmed Outcome = "included_unconfirmed"
+	OutcomeReverted            Outcome = "reverted"
+	OutcomeCancelled           Outcome = "cancelled"
+	OutcomeSubmissionError     Outcome = "submission_error"
+	OutcomeTrackingStopped     Outcome = "tracking_stopped"
+)
+
+// Included reports whether the request reached the chain, even if confirmation tracking stopped.
+func (o Outcome) Included() bool {
+	return o == OutcomeConfirmed || o == OutcomeIncludedUnconfirmed
 }
 
 // Result carries the outcome of one transaction request.
 type Result struct {
 	Hash    common.Hash
 	Receipt *types.Receipt
+	Outcome Outcome
 	Err     error
 }
 
@@ -87,6 +105,7 @@ type Manager struct {
 	signer  signer.Signer
 	chainID *big.Int
 	cfg     Config
+	metrics *Metrics
 	log     logr.Logger
 
 	queue        chan job
@@ -138,6 +157,20 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	}
 }
 
+// NewWithMetrics constructs a Manager with transaction lifecycle metrics.
+func NewWithMetrics(
+	backend Backend,
+	s signer.Signer,
+	chainID *big.Int,
+	cfg Config,
+	metrics *Metrics,
+	log logr.Logger,
+) *Manager {
+	manager := New(backend, s, chainID, cfg, log)
+	manager.metrics = metrics
+	return manager
+}
+
 // Confirmations returns the configured finality depth used by requests without an override.
 func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
@@ -152,9 +185,15 @@ func (m *Manager) Start(ctx context.Context) {
 			m.log.Info("stopped", "reason", ctx.Err().Error())
 			return
 		case j := <-m.queue:
+			m.metrics.requestStarted(j.req.Label)
 			pending, err := m.broadcast(ctx, j.req)
 			if err != nil {
-				j.res <- Result{Err: err}
+				outcome := OutcomeSubmissionError
+				if ctx.Err() != nil {
+					outcome = OutcomeTrackingStopped
+				}
+				m.metrics.requestFinished(j.req.Label, outcome, nil)
+				j.res <- Result{Outcome: outcome, Err: err}
 				continue
 			}
 			m.addUnminedNonce(pending.nonce)
@@ -178,7 +217,7 @@ func (m *Manager) Send(ctx context.Context, req Request) Result {
 	case m.blockingSlot <- struct{}{}:
 		defer func() { <-m.blockingSlot }()
 	case <-ctx.Done():
-		return Result{Err: ctx.Err()}
+		return Result{Outcome: OutcomeSubmissionError, Err: ctx.Err()}
 	}
 	return m.sendAccepted(ctx, req)
 }
@@ -198,7 +237,7 @@ func (m *Manager) TrySend(ctx context.Context, req Request) (Result, bool) {
 func (m *Manager) sendAccepted(ctx context.Context, req Request) Result {
 	result, accepted := m.SendAsync(ctx, req)
 	if !accepted {
-		return Result{Err: ctx.Err()}
+		return Result{Outcome: OutcomeSubmissionError, Err: ctx.Err()}
 	}
 	return <-result
 }
@@ -312,7 +351,9 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction, result chan<- Result) {
 	defer m.removeUnminedNonce(pending.nonce)
-	result <- m.waitForPendingTransaction(ctx, pending)
+	completed := m.waitForPendingTransaction(ctx, pending)
+	m.metrics.requestFinished(pending.req.Label, completed.Outcome, completed.Receipt)
+	result <- completed
 }
 
 func (m *Manager) confirmations(req Request) uint64 {
@@ -337,7 +378,11 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		}
 		select {
 		case <-ctx.Done():
-			return Result{Hash: pending.attempts[0].hash, Err: ctx.Err()}
+			return Result{
+				Hash:    pending.attempts[0].hash,
+				Outcome: OutcomeTrackingStopped,
+				Err:     ctx.Err(),
+			}
 		case <-poll.C:
 		case <-replace.C:
 			m.tryReplace(ctx, pending, cancelling)
@@ -387,16 +432,22 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 			return Result{
 				Hash:    attempt.hash,
 				Receipt: receipt,
+				Outcome: OutcomeReverted,
 				Err:     errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex()),
 			}, true
 		}
 		if err := m.waitForConfirmations(ctx, receipt, m.confirmations(pending.req)); err != nil {
-			return Result{Hash: attempt.hash, Receipt: receipt, Err: err}, true
+			outcome := OutcomeIncludedUnconfirmed
+			if attempt.cancellation {
+				outcome = OutcomeCancelled
+			}
+			return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
 		}
 		if attempt.cancellation {
 			return Result{
 				Hash:    attempt.hash,
 				Receipt: receipt,
+				Outcome: OutcomeCancelled,
 				Err: errors.Errorf(
 					"send %q: pending transaction cancelled at nonce %d after %s",
 					pending.req.Label, pending.nonce, m.cfg.PendingTimeout,
@@ -413,7 +464,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 			"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice),
 			"confirmations", m.confirmations(pending.req),
 		)
-		return Result{Hash: attempt.hash, Receipt: receipt}, true
+		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
 	}
 	return Result{}, false
 }
@@ -453,6 +504,11 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	pending.fees = cloneFeeQuote(fees)
 	pending.attempts = append(pending.attempts, txAttempt{hash: hash, cancellation: cancellation})
+	kind := replacementKindReplacement
+	if cancellation {
+		kind = replacementKindCancellation
+	}
+	m.metrics.replacement(pending.req.Label, kind)
 	m.log.Info("pending transaction replaced",
 		"label", pending.req.Label,
 		"hash", hash.Hex(),
@@ -674,12 +730,12 @@ func (m *Manager) waitForConfirmations(
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 
+	confirmed := receipt.BlockNumber.Uint64() + confirmations
 	for {
 		head, err := m.backend.BlockNumber(ctx)
 		if err != nil {
 			return errors.Errorf("block number: %w", err)
 		}
-		confirmed := receipt.BlockNumber.Uint64() + confirmations
 		if head >= confirmed {
 			return nil
 		}

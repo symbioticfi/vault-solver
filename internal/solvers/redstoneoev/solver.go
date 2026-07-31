@@ -43,8 +43,8 @@ type Solver struct {
 	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.
 	stateRefreshCh chan struct{}
 
-	// resMu guards sent-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
-	// below the on-chain nonce (submitted -> settled or reverted; the fresh read reflects it) or it aged past
+	// resMu guards enqueued-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
+	// below the on-chain nonce (enqueued -> settled or reverted; the fresh read reflects it) or it aged past
 	// reservationTTL as a last-resort cleanup for missed result frames.
 	resMu sync.Mutex
 	res   []reservedBid

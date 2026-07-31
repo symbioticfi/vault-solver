@@ -515,7 +515,7 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, a.ID)
+	s.reserve(d1.nonce, time.Unix(1781243340, 0), a.ID, d1.bidWei)
 
 	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
 		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
@@ -534,14 +534,14 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 }
 
 // TestPruneReservations pins reservation lifecycle: a bid whose nonce fell below the on-chain nonce
-// (submitted → settled/reverted) or that aged past reservationTTL is freed, while a recent still-pending
+// (enqueued → settled/reverted) or that aged past reservationTTL is freed, while a recent still-pending
 // bid remains visible to strategies as a pending auction.
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-8")
-	s.reserve(10, now, seedCallback, "auction-10")
-	s.reserve(12, now.Add(-time.Hour), seedCallback, "auction-old")
+	s.reserve(8, now, "auction-8", nil)
+	s.reserve(10, now, "auction-10", nil)
+	s.reserve(12, now.Add(-time.Hour), "auction-old", nil)
 
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
@@ -550,7 +550,7 @@ func TestPruneReservations(t *testing.T) {
 		t.Fatalf("all reservations should be freed, got pending=%v", inFlight.pending)
 	}
 
-	s.reserve(11, now, seedCallback, "auction-11")
+	s.reserve(11, now, "auction-11", nil)
 	s.pruneReservations(10, now)
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-11" {
 		t.Fatalf("a recent pending bid should be kept, got pending=%v", inFlight.pending)
@@ -566,7 +566,7 @@ func TestPruneReservations(t *testing.T) {
 func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-won")
+	s.reserve(8, now, "auction-won", nil)
 	s.markReservationWon("auction-won")
 
 	s.pruneReservations(7, now.Add(2*time.Minute))
@@ -578,7 +578,7 @@ func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-lost")
+	s.reserve(8, now, "auction-lost", nil)
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
@@ -589,7 +589,7 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 		t.Fatalf("lost auction must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-won")
+	s.reserve(9, now, "auction-won", nil)
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-won",
@@ -603,7 +603,7 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-ours")
+	s.reserve(8, now, "auction-ours", nil)
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
@@ -614,7 +614,7 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 		t.Fatalf("our liquidation result must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-other")
+	s.reserve(9, now, "auction-other", nil)
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-other",
@@ -644,8 +644,8 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
 
-	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
-	s.reserve(8, now, seedCallback, "auction-8")
+	// An enqueued bid (nonce 8), plus a stale local nonce high-water mark (5).
+	s.reserve(8, now, "auction-8", nil)
 	s.nonces.reconcile(5)
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
 		t.Fatal("precondition: the reservation should be present")
@@ -666,14 +666,14 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 }
 
 // TestFullAuctionLifecycle drives the whole inbound-frame flow through handleMessage: an auction frame
-// produces a signed solve on the wire, then tripping the breaker via its REAL input (recorded settlement
+// enqueues a signed solve, then tripping the breaker via its REAL input (recorded settlement
 // failures, the same path the WS liquidation-result handler feeds) makes buildBid skip "breaker" so a fresh
-// auction is dropped (no solve sent). (The WS-frame → recordFailure path is covered by
+// auction is dropped (no solve enqueued). (The WS-frame → recordFailure path is covered by
 // TestLiquidationResultFeedsBreaker.)
 func TestFullAuctionLifecycle(t *testing.T) {
 	s, sgnr := seededSolver(t)
 
-	// 1) Auction → a solve is sent on the wire. Stamp the frame as freshly emitted so the too_late gate
+	// 1) Auction → a solve is accepted by the outbound queue. Stamp the frame as freshly emitted so the too_late gate
 	// doesn't drop the captured fixture's long-past emit time.
 	fresh := decodeAuction(t)
 	setAuctionPrice(&fresh, seedLiquidatablePrice)
@@ -682,7 +682,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	s.handleMessage(t.Context(), marshal(fresh))
 	frame := waitSend(t, s)
 	if frame == nil {
-		t.Fatal("expected a solve to be sent for a liquidatable auction")
+		t.Fatal("expected a solve to be enqueued for a liquidatable auction")
 	}
 	var solve SolveMessage
 	if err := json.Unmarshal(frame, &solve); err != nil {
@@ -712,7 +712,7 @@ func TestFullAuctionLifecycle(t *testing.T) {
 		t.Fatalf("tripped breaker must skip the bid, got skip %q", d.skip)
 	}
 
-	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing sent.
+	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing enqueued.
 	a := decodeAuction(t)
 	a.ID = "9999aaaa-0000-1111-2222-333344445555"
 	a.Timestamp = time.Now().UnixMilli()
@@ -820,7 +820,7 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 }
 
 // TestDryRunSuppressesSend pins the OEV_DRY_RUN observe mode: a profitable auction is fully evaluated
-// (counted as a would-bid via metrics.bid()) but NO solve is sent on the wire — the operator can watch the
+// (counted as a would-bid) but NO solve is enqueued — the operator can watch the
 // bot's decisions against a live feed without funding or competing.
 func TestDryRunSuppressesSend(t *testing.T) {
 	s, _ := seededSolver(t)
@@ -828,7 +828,7 @@ func TestDryRunSuppressesSend(t *testing.T) {
 
 	// Real metrics on a fresh registry so we can read the would-bid counter back.
 	reg := prometheus.NewRegistry()
-	m, err := newMetrics(reg, defaultStrategyName)
+	m, err := newMetrics(reg, defaultStrategyName, s.wonReservationCount)
 	if err != nil {
 		t.Fatalf("newMetrics: %v", err)
 	}
@@ -841,45 +841,78 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
 	if f := drainSend(s); f != nil {
-		t.Fatalf("dry-run must not send a solve, got %s", f)
+		t.Fatalf("dry-run must not enqueue a solve, got %s", f)
 	}
-	if got := testutil.ToFloat64(m.bids); got != 1 {
-		t.Fatalf("oev_bids_total = %v, want 1 (dry-run still counts the would-bid)", got)
+	if got := testutil.ToFloat64(m.decisions.WithLabelValues(auctionOutcomeWouldBid)); got != 1 {
+		t.Fatalf("would-bid decisions = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidEnqueued)); got != 0 {
+		t.Fatalf("dry-run enqueued bid wei = %v, want 0", got)
+	}
+}
+
+func TestDroppedBidReleasesReservation(t *testing.T) {
+	s, _ := seededSolver(t)
+	m, err := newMetrics(prometheus.NewRegistry(), defaultStrategyName, s.wonReservationCount)
+	if err != nil {
+		t.Fatalf("newMetrics: %v", err)
+	}
+	s.metrics = m
+	for range cap(s.ws.send) {
+		if !s.ws.Send([]byte("occupied")) {
+			t.Fatal("failed to fill send buffer")
+		}
+	}
+	a := decodeAuction(t)
+	setAuctionPrice(&a, seedLiquidatablePrice)
+	a.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, a.Timestamp)
+
+	s.handleAuctionWithContext(t.Context(), marshal(a))
+
+	if pending := s.inFlightSnapshot().pending; len(pending) != 0 {
+		t.Fatalf("dropped bid left a reservation: %v", pending)
+	}
+	if got := testutil.ToFloat64(m.decisions.WithLabelValues(auctionOutcomeSendDropped)); got != 1 {
+		t.Fatalf("send-dropped decisions = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.bidWei.WithLabelValues(oevBidEnqueued)); got != 0 {
+		t.Fatalf("dropped enqueued bid wei = %v, want 0", got)
 	}
 }
 
 func TestMetricsCarryStrategyLabel(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	m, err := newMetrics(reg, "webhook")
+	m, err := newMetrics(reg, "webhook", nil)
 	if err != nil {
 		t.Fatalf("newMetrics: %v", err)
 	}
-	m.skip("strategy_skip")
+	m.auctionDecision("strategy_skip", 0)
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("gather metrics: %v", err)
 	}
 	for _, family := range families {
-		if family.GetName() != "oev_skips_total" {
+		if family.GetName() != "oev_auction_decisions_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
-			hasReason := false
+			hasOutcome := false
 			hasStrategy := false
 			for _, label := range metric.GetLabel() {
 				switch label.GetName() {
-				case "reason":
-					hasReason = label.GetValue() == "strategy_skip"
+				case "outcome":
+					hasOutcome = label.GetValue() == "strategy_skip"
 				case "strategy":
 					hasStrategy = label.GetValue() == "webhook"
 				}
 			}
-			if hasReason && hasStrategy {
+			if hasOutcome && hasStrategy {
 				return
 			}
 		}
 	}
-	t.Fatal("oev_skips_total missing strategy label")
+	t.Fatal("oev_auction_decisions_total missing strategy label")
 }
 
 // TestHandleAuctionEmptyIdDropped pins the auction identity invariant: RedStone auctions must carry an id.
@@ -964,28 +997,32 @@ func TestSeenAuctions(t *testing.T) {
 // frame, and a failure for ANOTHER liquidator, record none. This is the sole breaker-failure feed now that
 // the on-chain event scan is gone.
 func TestLiquidationResultFeedsBreaker(t *testing.T) {
-	frame := func(liquidator string, success bool) []byte {
+	frame := func(id, liquidator string, success bool) []byte {
 		return marshal(LiquidationResult{
-			Op: "liquidation-result", ID: "a",
-			Data: LiquidationResultData{Success: success, Liquidator: liquidator, TxHash: "0x1"},
+			Op: "liquidation-result", ID: id,
+			Data: LiquidationResultData{Success: success, Liquidator: liquidator},
 		})
 	}
 	now := time.Now()
 
-	t.Run("success:false for our callback records a failure and trips at maxFailures", func(t *testing.T) {
+	t.Run("unique failures trip while replay is ignored", func(t *testing.T) {
 		s, _ := seededSolver(t) // breaker maxFailures = 3
-		for i := 0; i < 3; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), false))
+		for _, id := range []string{"a", "a", "b"} {
+			s.handleMessage(t.Context(), frame(id, seedCallback.Hex(), false))
 		}
+		if tripped, _ := s.breaker.tripped(now); tripped {
+			t.Fatal("replayed failed liquidation-result must not count twice")
+		}
+		s.handleMessage(t.Context(), frame("c", seedCallback.Hex(), false))
 		if tripped, _ := s.breaker.tripped(now); !tripped {
-			t.Fatal("3 failed liquidation-result frames for our callback must trip the breaker")
+			t.Fatal("3 unique failed liquidation-result frames must trip the breaker")
 		}
 	})
 
 	t.Run("success:true records none", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(seedCallback.Hex(), true))
+			s.handleMessage(t.Context(), frame("a", seedCallback.Hex(), true))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("successful liquidation-result frames must not trip the breaker")
@@ -996,10 +1033,20 @@ func TestLiquidationResultFeedsBreaker(t *testing.T) {
 		s, _ := seededSolver(t)
 		other := common.HexToAddress("0x2222222222222222222222222222222222222222").Hex()
 		for i := 0; i < 5; i++ {
-			s.handleMessage(t.Context(), frame(other, false))
+			s.handleMessage(t.Context(), frame("a", other, false))
 		}
 		if tripped, _ := s.breaker.tripped(now); tripped {
 			t.Fatal("another solver's failed liquidations must not trip our breaker")
+		}
+	})
+
+	t.Run("missing identity fails closed", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		s.breaker = newBreaker(2, time.Hour)
+		s.handleMessage(t.Context(), frame("", seedCallback.Hex(), false))
+		s.handleMessage(t.Context(), frame("", seedCallback.Hex(), false))
+		if tripped, _ := s.breaker.tripped(now); !tripped {
+			t.Fatal("unidentifiable failed settlements must fail closed")
 		}
 	})
 }

@@ -12,6 +12,7 @@ type breaker struct {
 	mu          sync.Mutex
 	blacklisted bool
 	failures    []time.Time
+	failureIDs  map[string]time.Time
 	maxFailures int
 	window      time.Duration
 }
@@ -33,6 +34,21 @@ func (b *breaker) recordFailure(now time.Time) {
 	defer b.mu.Unlock()
 	b.failures = append(b.failures, now)
 	b.prune(now)
+}
+
+func (b *breaker) recordFailureOnce(id string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune(now)
+	if _, exists := b.failureIDs[id]; exists {
+		return false
+	}
+	if b.failureIDs == nil {
+		b.failureIDs = make(map[string]time.Time)
+	}
+	b.failureIDs[id] = now
+	b.failures = append(b.failures, now)
+	return true
 }
 
 // tripped reports whether bidding must halt, with a reason.
@@ -59,4 +75,9 @@ func (b *breaker) prune(now time.Time) {
 		}
 	}
 	b.failures = keep
+	for id, observedAt := range b.failureIDs {
+		if !observedAt.After(cutoff) {
+			delete(b.failureIDs, id)
+		}
+	}
 }

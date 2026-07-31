@@ -44,6 +44,7 @@ type Solver struct {
 	deps       solver.Deps
 	api        *apiClient
 	reader     *reader
+	txManager  transactionSender
 	strategy   types.Strategy
 	log        logr.Logger
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
@@ -51,6 +52,7 @@ type Solver struct {
 	nonceSeq   atomic.Uint64
 	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
 	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	metrics    *threeFMetrics
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -82,17 +84,26 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	var metrics *threeFMetrics
+	if deps.Metrics != nil {
+		metrics, err = newThreeFMetrics(deps.Metrics.Registerer())
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	s := &Solver{
 		cfg:        cfg,
 		deps:       deps,
 		api:        api,
 		reader:     newReader(deps.Chain, cfg.LiquidityLens),
+		txManager:  deps.TxManager,
 		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),
 		probe:      probe,
 		offers:     newOfferTracker(),
+		metrics:    metrics,
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
@@ -153,27 +164,42 @@ func (s *Solver) Run(ctx context.Context) error {
 // reconcileOffers re-lists each target adapter's live offers from the 3F API and replaces that adapter's
 // offer cache with them, so coverage reflects our own offers and any made out of band. The poll is
 // authoritative. Best-effort: one adapter's list failure can't block the pass (its cache is left as-is).
-func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) {
+func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 	now := time.Now()
+	complete := true
 	for _, t := range targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
+			complete = false
 			s.log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
 		live := make(map[int64]offerState)
 		for _, o := range offers {
-			if offerStatusIgnored[strings.ToUpper(strings.TrimSpace(o.Status))] {
+			status := strings.ToUpper(strings.TrimSpace(o.Status))
+			if offerStatusIgnored[status] {
 				continue // failed/not-accepted/cancelled offers aren't live coverage
 			}
+			if status == "" {
+				complete = false
+				s.log.Info("reconcile offers: empty status; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+			}
 			exp, perr := parseUnixTime(o.Expiration)
-			if perr != nil || !exp.After(now) {
-				continue // unparseable or already expired
+			if perr != nil {
+				complete = false
+				s.log.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				continue
+			}
+			if !exp.After(now) {
+				continue // valid, already-expired offer
 			}
 			principal, ok := new(big.Int).SetString(o.Amount, 10)
-			if !ok {
-				s.log.V(1).Info("reconcile offers: unparseable amount; coverage may undercount",
-					"adapter", t.Adapter.Hex(), "amount", o.Amount)
+			if !ok || principal.Sign() < 0 {
+				complete = false
+				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = new(big.Int)
 			}
 			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
@@ -184,6 +210,7 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) {
 		}
 		s.offers.reconcileAdapter(t.Adapter, live)
 	}
+	return complete
 }
 
 // adapterOffering tracks one adapter's liquidity/exposure snapshot for one offer pass.
@@ -196,6 +223,7 @@ type adapterOffering struct {
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
 	if len(s.targets) == 0 {
+		s.observeState(threeFStateOffers, 0)
 		return
 	}
 	auctions, err := s.api.listAuctions(ctx)
@@ -206,7 +234,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
 	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
-	s.reconcileOffers(ctx, s.targets)
+	offersComplete := s.reconcileOffers(ctx, s.targets)
 
 	offerings := make([]*adapterOffering, 0, len(s.targets))
 	for _, t := range s.targets {
@@ -221,12 +249,14 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			"minYieldPpm", st.minYieldPpm.String())
 		offerings = append(offerings, &adapterOffering{target: t, st: st})
 	}
+	now := time.Now()
+	s.offers.pruneExpired(now)
+	if offersComplete {
+		s.observeState(threeFStateOffers, len(s.offers.liveEntries(now)))
+	}
 	if len(offerings) == 0 {
 		return // every adapter's liquidity read failed this pass
 	}
-
-	now := time.Now()
-	s.offers.pruneExpired(now) // keep the dedup map bounded
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {
 		return // no open, offerable auctions this pass
@@ -275,32 +305,34 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			continue
 		}
 		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
+			s.observeOfferSubmission("error")
 			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
+		s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
 		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
 }
 
-// redeemAll runs the redeemer for every matched adapter.
-func (s *Solver) redeemAll(ctx context.Context) {
-	for _, t := range s.targets {
-		s.redeemReady(ctx, t)
-	}
-}
-
 // reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
+	totalOpen := 0
+	complete := true
 	for _, t := range s.targets {
 		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if err != nil {
+			complete = false
 			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
 			continue
 		}
+		totalOpen += st.openCount
 		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
 			"openRequests", st.openCount, "fundable", st.fundable.String())
+	}
+	if complete {
+		s.observeState(threeFStateActiveRequests, totalOpen)
 	}
 }
 
@@ -316,7 +348,7 @@ func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.reconcileOffers(ctx, added) // hydrate the newly-added adapters' live offers
+	s.reconcileOffers(ctx, added) // hydrate only; the next full reconcile publishes metrics
 	return nil
 }
 

@@ -65,6 +65,10 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 - **Config, secrets** — order-server URL + `apiKeyEnv`, settler/executor/adapter addresses via
   `solver.config`; the LI.FI API key via `*Env` indirection. `solverMode` mirrors RFQ: `external` is
   direct-only, while `internal` enables the shared private-discounts backend.
+- **Observability** — `lifi_order_feed_connected` is `1` only while the feed loop owns an established
+  WebSocket. `lifi_active_quotes` is a process-local last-successful reconciliation count, not a live
+  backend inventory: it may remain nonzero after remote quotes expire at `quoteTtl`, so operators pair
+  it with `lifi_last_successful_refresh_timestamp`.
 - **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
   (`DecideQuotes` + `DecideFill`; `default` in-process or `webhook` external), per
   [`strategy-plan.md`](strategy-plan.md). See §5.2.
@@ -769,7 +773,9 @@ still requires the redeploy in phase 0.
    The new executor asks direct adapters for the buffered `amountOut`, executes private routes from signed
    terms, and delegates context resolution and output sufficiency to the OutputSettler. If the order is not
    executable at decision time, it is dropped.
-3. **Harden** — staleness/skip edge cases, revert handling, metrics on the shared observability server;
+   Quote-state, WebSocket connectivity, and shared fill-transaction collectors are listed in the
+   [README metrics table](../README.md#metrics).
+3. **Harden** — staleness/skip edge cases, revert handling;
    a repeatable green E2E on Sepolia (`order-dev`).
 4. **Mainnet** — deploy the executor per target chain, point config at `order.li.fi`, register each
    executor account through EIP-1271, and run.

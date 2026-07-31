@@ -80,6 +80,7 @@ func (b *mockBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 		Status:      types.ReceiptStatusSuccessful,
 		TxHash:      tx.Hash(),
 		BlockNumber: new(big.Int).SetUint64(b.head),
+		GasUsed:     tx.Gas(),
 	}
 	return nil
 }
@@ -132,7 +133,6 @@ func TestSend_HappyPath(t *testing.T) {
 	if res.Receipt == nil || res.Receipt.Status != types.ReceiptStatusSuccessful {
 		t.Fatalf("expected successful receipt, got %+v", res.Receipt)
 	}
-
 	tx := b.lastSent()
 	if tx == nil {
 		t.Fatal("no transaction sent")
@@ -558,7 +558,7 @@ func TestIncludedNonceDoesNotBlockLaterCancellationWhileConfirming(t *testing.T)
 }
 
 func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), failures: 1}
+	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 1}
 	m := New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{
@@ -600,18 +600,18 @@ func waitForSentTransactions(t *testing.T, b *mockBackend, count int) {
 type receiptErrorBackend struct {
 	*mockBackend
 
-	receiptMu sync.Mutex
-	failures  int
+	errorMu         sync.Mutex
+	receiptFailures int
 }
 
 func (b *receiptErrorBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	b.receiptMu.Lock()
-	if b.failures > 0 {
-		b.failures--
-		b.receiptMu.Unlock()
+	b.errorMu.Lock()
+	if b.receiptFailures > 0 {
+		b.receiptFailures--
+		b.errorMu.Unlock()
 		return nil, errors.New("temporary receipt failure")
 	}
-	b.receiptMu.Unlock()
+	b.errorMu.Unlock()
 	return b.mockBackend.TransactionReceipt(ctx, hash)
 }
 
@@ -678,6 +678,7 @@ func successfulReceipt(tx *types.Transaction, block uint64) *types.Receipt {
 		Status:      types.ReceiptStatusSuccessful,
 		TxHash:      tx.Hash(),
 		BlockNumber: new(big.Int).SetUint64(block),
+		GasUsed:     tx.Gas(),
 	}
 }
 
@@ -727,6 +728,26 @@ func TestSend_RevertedReceiptIsError(t *testing.T) {
 	}
 }
 
+func TestOutcomeIncluded(t *testing.T) {
+	tests := []struct {
+		outcome Outcome
+		want    bool
+	}{
+		{outcome: OutcomeConfirmed, want: true},
+		{outcome: OutcomeIncludedUnconfirmed, want: true},
+		{outcome: OutcomeReverted},
+		{outcome: OutcomeCancelled},
+		{outcome: OutcomeSubmissionError},
+		{outcome: OutcomeTrackingStopped},
+		{outcome: ""},
+	}
+	for _, test := range tests {
+		if got := test.outcome.Included(); got != test.want {
+			t.Fatalf("%q.Included() = %t, want %t", test.outcome, got, test.want)
+		}
+	}
+}
+
 // revertingBackend records a failed receipt instead of a successful one.
 type revertingBackend struct{ *mockBackend }
 
@@ -738,6 +759,7 @@ func (b *revertingBackend) SendTransaction(_ context.Context, tx *types.Transact
 		Status:      types.ReceiptStatusFailed,
 		TxHash:      tx.Hash(),
 		BlockNumber: new(big.Int).SetUint64(b.head),
+		GasUsed:     tx.Gas(),
 	}
 	return nil
 }

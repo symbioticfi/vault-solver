@@ -9,6 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -192,6 +194,21 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	if removed != 1 || len(submitter.calls) != 1 || len(submitter.calls[0]) != 1 ||
 		len(submitter.calls[0][0].Ranges) == 0 || submitter.calls[0][0].Expiry >= now.Unix() {
 		t.Fatalf("remove: removed=%d calls=%#v", removed, submitter.calls)
+	}
+}
+
+func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), newOrderFeed("", "", logr.Discard()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&Solver{metrics: metrics}).observeQuoteRefresh(3)
+
+	if got := testutil.ToFloat64(metrics.activeQuotes); got != 3 {
+		t.Fatalf("active quotes = %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(metrics.lastRefresh); got <= 0 {
+		t.Fatalf("last refresh = %v, want a current timestamp", got)
 	}
 }
 

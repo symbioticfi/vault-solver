@@ -32,13 +32,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	log := deps.Log.WithName(Name)
-	var mx *metrics
-	if deps.Metrics != nil {
-		if mx, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name); err != nil {
-			return nil, err
-		}
-	}
-
 	s := &Solver{
 		cfg:            cfg,
 		deps:           deps,
@@ -48,10 +41,15 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		reader:         newReader(deps.Chain, log, cfg.LiquidityLens),
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
-		metrics:        mx,
 		seen:           newSeenAuctions(maxSeenAuctions),
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
+	}
+	if deps.Metrics != nil {
+		s.metrics, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name, s.wonReservationCount)
+		if err != nil {
+			return nil, err
+		}
 	}
 	strategy, err := newStrategy(cfg, strategies.Deps{
 		Chain:               deps.Chain,

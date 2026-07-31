@@ -1,8 +1,11 @@
 package uniswapx
 
 import (
+	"math/big"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
@@ -45,5 +48,71 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 	solver.lastExclusivePoll.Store(now.Add(-time.Minute).Unix())
 	if solver.ready() {
 		t.Fatal("solver with stale exclusive delivery should not be ready")
+	}
+}
+
+func TestReadinessMetricIsEvaluatedAtCollection(t *testing.T) {
+	now := time.Now()
+	solver := &Solver{cfg: &Config{
+		QuoteServer: QuoteServerConfig{QuoteTTL: 30 * time.Second},
+		OrderServer: OrderServerConfig{PollInterval: time.Second},
+	}}
+	solver.lastExclusivePoll.Store(now.Unix())
+	solver.quoteState.Store(&quoteState{
+		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(time.Minute),
+		inventory: []liquidlane.Inventory{{}},
+	})
+	metrics := newUniswapXTestMetrics(t, solver)
+
+	if got := testutil.ToFloat64(metrics.ready); got != 1 {
+		t.Fatalf("ready metric = %v, want 1", got)
+	}
+	solver.quoteState.Store(&quoteState{
+		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(-time.Minute),
+		inventory: []liquidlane.Inventory{{}},
+	})
+	if got := testutil.ToFloat64(metrics.ready); got != 0 {
+		t.Fatalf("stale ready metric = %v, want 0", got)
+	}
+}
+
+func TestBlockUntilMetricIncludesEveryTimeBasedBlocker(t *testing.T) {
+	solver := &Solver{}
+	metrics := newUniswapXTestMetrics(t, solver)
+	solver.blockUntil.Store(10)
+	solver.localBlockUntil.Store(20)
+	solver.exclusiveBlockUntil.Store(30)
+	solver.warmupUntil.Store(40)
+
+	if got := testutil.ToFloat64(metrics.blockUntil); got != 40 {
+		t.Fatalf("block until metric = %v, want 40", got)
+	}
+	solver.warmupUntil.Store(0)
+	if got := testutil.ToFloat64(metrics.blockUntil); got != 30 {
+		t.Fatalf("block until metric without warmup = %v, want 30", got)
+	}
+}
+
+func TestStateMetricsAreEvaluatedAtCollection(t *testing.T) {
+	solver := &Solver{}
+	metrics := newUniswapXTestMetrics(t, solver)
+	solver.lastExclusivePoll.Store(123)
+	if !solver.capacity.Set("order", liquidlane.CapacityReservations{
+		liquidlane.CapacityID("capacity"): big.NewInt(1),
+	}) {
+		t.Fatal("capacity reservation was not stored")
+	}
+
+	if got := testutil.ToFloat64(metrics.exclusivePoll); got != 123 {
+		t.Fatalf("exclusive poll metric = %v, want 123", got)
+	}
+	if got := testutil.ToFloat64(metrics.pendingFills); got != 1 {
+		t.Fatalf("pending fills metric = %v, want 1", got)
+	}
+	if !solver.capacity.Delete("order") {
+		t.Fatal("capacity reservation was not released")
+	}
+	if got := testutil.ToFloat64(metrics.pendingFills); got != 0 {
+		t.Fatalf("released pending fills metric = %v, want 0", got)
 	}
 }

@@ -23,8 +23,9 @@ var (
 )
 
 type pendingUniswapFill struct {
-	order  *resolvedOrder
-	result <-chan txmanager.Result
+	order          *resolvedOrder
+	plannedSurplus *big.Int
+	result         <-chan txmanager.Result
 }
 
 type uniswapFillCompletion struct {
@@ -244,7 +245,9 @@ func (s *Solver) startFill(
 		"reservationDomains", len(reservations),
 		"maxFeePerGas", maxFee.String(),
 	)
-	return &pendingUniswapFill{order: order, result: result}, nil
+	return &pendingUniswapFill{
+		order: order, plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
+	}, nil
 }
 
 func (s *Solver) buildExecutorCalldata(
@@ -377,19 +380,42 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	order := completion.fill.order
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
-	if completion.result.Err != nil {
+	outcome := completion.result.Outcome
+	if !outcome.Included() {
+		err := completion.result.Err
+		if err == nil {
+			err = errors.Errorf("unknown transaction outcome %q", outcome)
+		}
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
-		s.observeFill("failed")
-		s.log.Error(completion.result.Err, "order fill failed", "source", order.Source,
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+		s.log.Error(
+			err,
+			"order fill failed",
+			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+		)
 		return
+	}
+	if outcome == txmanager.OutcomeConfirmed {
+		s.log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+	} else {
+		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
+			"source", order.Source, "executor", order.Executor.Hex(),
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
-	s.observeFill("filled")
-	s.log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-		"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+	if s.metrics != nil {
+		s.metrics.fillAmounts.Observe(
+			completion.result.Receipt,
+			order.TokenIn,
+			order.AmountIn,
+			order.TokenOut,
+			order.AmountOut,
+			completion.fill.plannedSurplus,
+		)
+	}
 }
 
 func (s *Solver) recordOrderFillFailure(order *resolvedOrder, now time.Time) {

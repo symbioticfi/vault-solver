@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -23,6 +24,7 @@ type pendingFill struct {
 	order          *submittedOrder
 	orderID        common.Hash
 	reservationKey string
+	plannedSurplus *big.Int
 	result         <-chan txmanager.Result
 }
 

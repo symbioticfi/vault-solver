@@ -125,8 +125,14 @@ assertion because the PR19 ABI has no getter.
   until ctx cancels. The framework observability server (`:9090`) stays separate.
 - **The quote server is a bounded strict-JSON stdlib handler.** The public quote schema is not available in
   the order-service OpenAPI and remains a hand-vendored, tested boundary (§4.1, §4.3).
-- **`/metrics`** is the framework's shared registry; the solver registers bounded quote, poll, fill,
-  readiness, and breaker collectors via `deps.Metrics.Registerer()`.
+- **`/metrics`** is the framework's shared registry; the solver registers bounded quote, poll,
+  scrape-time readiness/breaker, pending-capacity, and exclusive-obligation collectors via
+  `deps.Metrics.Registerer()`. Fill results come from the shared txmanager rather than a coarser duplicate.
+  Live polling increments unique exclusive wins; outstanding count, nearest deadline, and terminal
+  outcomes make won-but-not-delivered obligations visible. A timely terminal delivery may be by another
+  filler. Startup and runtime recovery restore safety state without replaying counters; only startup-only
+  terminal misses are informational and do not open the breaker. Exact names and labels are in the
+  [README metrics table](../README.md#metrics).
 - **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). The
   solver builds `LiquidLaneUniswapXExecutor.execute` calldata; txmanager owns nonce/send/receipt and applies
   the configured confirmation count. Pending capacity stays reserved through that completion, then remains

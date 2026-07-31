@@ -455,7 +455,10 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if reservations := strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	txm.result <- txmanager.Result{
+		Hash:    common.HexToHash("0x2"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 	result := <-pending.result
 	solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
 	if solver.capacity.Len() != 0 {
@@ -483,5 +486,35 @@ func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {
 
 	if solver.localBlockUntil.Load() == 0 {
 		t.Fatal("public execution failure did not open the ordinary local breaker")
+	}
+}
+
+func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
+	hash := common.HexToHash("0x1234")
+	order := &resolvedOrder{Hash: hash, Source: orderSourcePublicV2}
+	solver := &Solver{
+		log:      logr.Discard(),
+		filled:   make(map[common.Hash]time.Time),
+		retryAt:  make(map[common.Hash]time.Time),
+		inFlight: map[common.Hash]bool{hash: true},
+		attempts: make(map[common.Hash]int),
+	}
+
+	solver.completePendingFill(uniswapFillCompletion{
+		fill: &pendingUniswapFill{order: order},
+		result: txmanager.Result{
+			Outcome: txmanager.OutcomeIncludedUnconfirmed,
+			Err:     errors.New("confirmation wait failed"),
+		},
+	})
+
+	if _, done := solver.filled[hash]; !done {
+		t.Fatal("included fill was not completed")
+	}
+	if _, retrying := solver.retryAt[hash]; retrying {
+		t.Fatal("included fill was scheduled for retry")
+	}
+	if solver.localBlockUntil.Load() != 0 {
+		t.Fatal("included fill opened the local breaker")
 	}
 }

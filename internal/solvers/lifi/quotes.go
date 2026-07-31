@@ -120,6 +120,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
 	}
+	s.observeQuoteRefresh(len(out.Quotes))
 	s.log.Info("quotes reconciled", "quotes", len(out.Quotes), "removedPairs", removed, "routes", len(inventory))
 }
 
