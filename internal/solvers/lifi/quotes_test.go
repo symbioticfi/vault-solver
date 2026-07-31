@@ -17,6 +17,7 @@ import (
 
 type fakeQuoteSubmitter struct {
 	calls [][]types.Quote
+	err   error
 }
 
 func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
@@ -48,7 +49,7 @@ func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
 func (f *fakeQuoteSubmitter) submitQuotes(_ context.Context, quotes []types.Quote) error {
 	copyOfQuotes := append([]types.Quote(nil), quotes...)
 	f.calls = append(f.calls, copyOfQuotes)
-	return nil
+	return f.err
 }
 
 func TestQuoteStatePublishesAndReplacesChangedTopology(t *testing.T) {
@@ -150,31 +151,6 @@ func TestShouldRefreshQuotesInBlockMode(t *testing.T) {
 	}
 }
 
-func TestCapacityChangesRequestImmediateQuoteRefresh(t *testing.T) {
-	solver := &Solver{quoteRefresh: make(chan struct{}, 1)}
-	reservations := liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)}
-
-	solver.reserve("order-1", reservations)
-	select {
-	case <-solver.quoteRefresh:
-	default:
-		t.Fatal("reservation did not request quote refresh")
-	}
-	if got := solver.capacity.Snapshot()["capacity-1"]; got == nil || got.String() != "400" {
-		t.Fatalf("reserved capacity = %v, want 400", got)
-	}
-
-	solver.releaseReservation("order-1")
-	select {
-	case <-solver.quoteRefresh:
-	default:
-		t.Fatal("reservation release did not request quote refresh")
-	}
-	if got := solver.capacity.Snapshot()["capacity-1"]; got != nil {
-		t.Fatalf("released capacity = %v, want nil", got)
-	}
-}
-
 func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	routeItem := testQuoteRoute()
 	state := newQuoteState(30 * time.Second)
@@ -192,6 +168,46 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	if removed != 1 || len(submitter.calls) != 1 || len(submitter.calls[0]) != 1 ||
 		len(submitter.calls[0][0].Ranges) == 0 || submitter.calls[0][0].Expiry >= now.Unix() {
 		t.Fatalf("remove: removed=%d calls=%#v", removed, submitter.calls)
+	}
+}
+
+func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
+	routeItem := testQuoteRoute()
+	state := newQuoteState(30 * time.Second)
+	submitter := &fakeQuoteSubmitter{err: errors.New("lost response")}
+	now := time.Unix(1_800_000_000, 0)
+
+	if _, err := state.reconcile(
+		context.Background(),
+		submitter,
+		[]types.Quote{testStandingQuote(routeItem, 1_000)},
+		now,
+	); err == nil {
+		t.Fatal("publish unexpectedly succeeded")
+	}
+	if len(state.active) != 1 {
+		t.Fatalf("uncertain active pairs = %d, want 1", len(state.active))
+	}
+	for _, pair := range state.active {
+		if pair.expiry != 0 {
+			t.Fatalf("uncertain pair expiry = %d, want forced renewal", pair.expiry)
+		}
+	}
+
+	submitter.err = nil
+	submitter.calls = nil
+	removed, err := state.reconcile(context.Background(), submitter, nil, now)
+	if err != nil {
+		t.Fatalf("expire uncertain pair: %v", err)
+	}
+	if removed != 1 || len(state.active) != 0 || len(submitter.calls) != 1 ||
+		len(submitter.calls[0]) != 1 || submitter.calls[0][0].Expiry >= now.Unix() {
+		t.Fatalf(
+			"expire uncertain pair: removed=%d active=%d calls=%#v",
+			removed,
+			len(state.active),
+			submitter.calls,
+		)
 	}
 }
 

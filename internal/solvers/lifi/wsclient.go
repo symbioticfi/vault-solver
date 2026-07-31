@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -34,10 +35,14 @@ func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
 	return &orderFeed{url: url, apiKey: apiKey, log: log}
 }
 
-func (f *orderFeed) run(ctx context.Context, handle func(context.Context, orderMessage)) error {
+func (f *orderFeed) run(
+	ctx context.Context,
+	onConnected func(context.Context),
+	handle func(context.Context, orderMessage),
+) error {
 	backoff := initialWSBackoff
 	for {
-		connected, err := f.watchOnce(ctx, handle)
+		connected, err := f.watchOnce(ctx, onConnected, handle)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -61,6 +66,7 @@ func (f *orderFeed) run(ctx context.Context, handle func(context.Context, orderM
 
 func (f *orderFeed) watchOnce(
 	ctx context.Context,
+	onConnected func(context.Context),
 	handle func(context.Context, orderMessage),
 ) (bool, error) {
 	headers := http.Header{}
@@ -88,6 +94,16 @@ func (f *orderFeed) watchOnce(
 	defer close(done)
 	defer conn.Close()
 
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	var connectionWork sync.WaitGroup
+	defer func() {
+		cancelConnection()
+		connectionWork.Wait()
+	}()
+	if onConnected != nil {
+		connectionWork.Go(func() { onConnected(connectionCtx) })
+	}
+
 	f.log.Info("order feed connected", "url", f.url)
 	for {
 		messageType, msg, err := conn.ReadMessage()
@@ -113,7 +129,7 @@ func (f *orderFeed) watchOnce(
 			f.log.V(1).Info("order feed event ignored", "event", envelope.Event)
 			continue
 		}
-		handle(ctx, envelope)
+		handle(connectionCtx, envelope)
 	}
 }
 

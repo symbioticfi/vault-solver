@@ -67,3 +67,13 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	}
 	return &types.FillPlan{Routes: routes}, nil
 }
+
+// DecideFillWithoutReservations lets the LI.FI worker distinguish a capacity-blocked order from
+// any other terminal nil decision without issuing a second decision to external strategies.
+func (s *Strategy) DecideFillWithoutReservations(
+	ctx context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	input.Reservations = nil
+	return s.DecideFill(ctx, input)
+}

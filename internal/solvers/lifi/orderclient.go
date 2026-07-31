@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
@@ -13,6 +14,13 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+)
+
+const (
+	orderRecoveryPageLimit int32 = 50
+	orderRecoveryMaxOffset int32 = 1_000
+	orderStatusSigned            = "Signed"
+	orderStatusDelivered         = "Delivered"
 )
 
 type orderClient struct {
@@ -146,6 +154,89 @@ func hasChainAddress(items []lifiorder.ChainAddressDto, chain string, address co
 		}
 	}
 	return false
+}
+
+func (c *orderClient) listRecoverableOrders(
+	ctx context.Context,
+	executor common.Address,
+) ([]json.RawMessage, error) {
+	statuses := [...]string{orderStatusSigned, orderStatusDelivered}
+	var orders []json.RawMessage
+	for _, status := range statuses {
+		listed, err := c.listRecoverableOrdersByStatus(ctx, executor, status)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, listed...)
+	}
+	return orders, nil
+}
+
+func (c *orderClient) listRecoverableOrdersByStatus(
+	ctx context.Context,
+	executor common.Address,
+	status string,
+) ([]json.RawMessage, error) {
+	var orders []json.RawMessage
+	for offset := int32(0); ; {
+		response, httpResp, err := c.api.BridgeAPIAPI.
+			OrdersControllerGetOrders(c.withAuth(ctx)).
+			Limit(orderRecoveryPageLimit).
+			Offset(offset).
+			Status(status).
+			ExclusiveFor(executor.Hex()).
+			OriginChainId(c.chain).
+			DestinationChainId(c.chain).
+			Execute()
+		closeResp(httpResp)
+		if err != nil {
+			return nil, apiErr("get "+status+" orders", httpResp, err)
+		}
+		if response == nil {
+			return nil, errors.Errorf("lifi order server: get %s orders: empty response", status)
+		}
+		if len(response.Data) > int(orderRecoveryPageLimit) {
+			return nil, errors.Errorf(
+				"lifi order server: get %s orders: page has %d items, maximum is %d",
+				status,
+				len(response.Data),
+				orderRecoveryPageLimit,
+			)
+		}
+		for i := range response.Data {
+			raw, marshalErr := json.Marshal(response.Data[i])
+			if marshalErr != nil {
+				return nil, errors.Errorf("lifi order server: encode %s order %d: %w", status, i, marshalErr)
+			}
+			orders = append(orders, raw)
+		}
+
+		pageSize := int32(len(response.Data))
+		nextOffset := offset + pageSize
+		if response.Meta.Total > 0 {
+			if float32(nextOffset) >= response.Meta.Total {
+				return orders, nil
+			}
+			if pageSize == 0 {
+				return nil, errors.Errorf(
+					"lifi order server: get %s orders: empty page at offset %d before total %v",
+					status,
+					offset,
+					response.Meta.Total,
+				)
+			}
+		} else if pageSize < orderRecoveryPageLimit {
+			return orders, nil
+		}
+		if nextOffset > orderRecoveryMaxOffset {
+			return nil, errors.Errorf(
+				"lifi order server: get %s orders: pagination exceeds maximum offset %d",
+				status,
+				orderRecoveryMaxOffset,
+			)
+		}
+		offset = nextOffset
+	}
 }
 
 func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) error {

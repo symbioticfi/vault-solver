@@ -120,7 +120,7 @@ func fillGasCostAtRate(
 	}
 	demands := make([]liquidlanegas.AdapterDemand, 0, len(legs))
 	units := envelope.SettlementUnits
-	for _, leg := range legs {
+	for _, leg := range executorOrderedGasLegs(legs) {
 		demands = append(demands, liquidlanegas.AdapterDemand{
 			Adapter: leg.Route.Adapter,
 			Vault:   leg.Route.Vault,
@@ -136,6 +136,23 @@ func fillGasCostAtRate(
 	units = saturatingAdd(units, liquidlanegas.PredictAdapters(demands, snapshot).Units)
 	nativeCost := new(big.Int).Mul(maxFeePerGas, new(big.Int).SetUint64(units))
 	return liquidlane.MulDivUp(nativeCost, tokenOutPerNative, big.NewInt(nativeUnit))
+}
+
+// executorOrderedGasLegs mirrors the executor calldata shape: direct swaps are
+// executed before discount swaps, while order within each group is preserved.
+func executorOrderedGasLegs(legs []GasLeg) []GasLeg {
+	ordered := make([]GasLeg, 0, len(legs))
+	for _, leg := range legs {
+		if !leg.Private {
+			ordered = append(ordered, leg)
+		}
+	}
+	for _, leg := range legs {
+		if leg.Private {
+			ordered = append(ordered, leg)
+		}
+	}
+	return ordered
 }
 
 func saturatingAdd(left, right uint64) uint64 {

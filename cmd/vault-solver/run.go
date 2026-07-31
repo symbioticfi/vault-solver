@@ -99,7 +99,18 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 	}, log)
-	go txm.Start(ctx)
+	// Accepted transactions outlive solver intake cancellation: solvers first stop admitting
+	// work and drain their pending results, then this deferred stop ends the shared tx manager.
+	txCtx, stopTx := context.WithCancel(context.WithoutCancel(ctx))
+	txDone := make(chan struct{})
+	go func() {
+		defer close(txDone)
+		txm.Start(txCtx)
+	}()
+	defer func() {
+		stopTx()
+		<-txDone
+	}()
 
 	// Build every configured solver. They share the chain client, signer, and the single
 	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
@@ -118,9 +129,56 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
+	var shutdownPreparationTimeout time.Duration
+	for _, slv := range solvers {
+		if preparer, ok := slv.(solver.ShutdownPreparer); ok {
+			shutdownPreparationTimeout = max(
+				shutdownPreparationTimeout,
+				preparer.ShutdownPreparationTimeout(),
+			)
+		}
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}
-	return g.Wait()
+	solversDone := make(chan struct{})
+	drainMonitorDone := make(chan struct{})
+	// The finite shutdown budget covers solver preparation, one pending-timeout window, and one
+	// replacement interval. It bounds how long the process waits; with multiple pending nonces it
+	// does not guarantee a cancellation attempt for every nonce.
+	shutdownTimeout := shutdownPreparationTimeout + time.Duration(
+		cfg.TxManager.PendingTimeoutMs+cfg.TxManager.ReplacementIntervalMs,
+	)*time.Millisecond
+	go func() {
+		defer close(drainMonitorDone)
+		monitorTransactionDrain(gctx.Done(), solversDone, shutdownTimeout, func() {
+			log.Info("solver shutdown timed out; stopping tx manager", "timeout", shutdownTimeout.String())
+			stopTx()
+		})
+	}()
+	err = g.Wait()
+	close(solversDone)
+	<-drainMonitorDone
+	return err
+}
+
+func monitorTransactionDrain(
+	shutdown <-chan struct{},
+	solversDone <-chan struct{},
+	timeout time.Duration,
+	onTimeout func(),
+) {
+	select {
+	case <-shutdown:
+	case <-solversDone:
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		onTimeout()
+	case <-solversDone:
+	}
 }

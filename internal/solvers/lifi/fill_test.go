@@ -210,12 +210,12 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	discountAmountIn := new(big.Int).Sub(submitted.AmountIn, directAmountIn)
 	plan := &types.FillPlan{Routes: []types.FillRoute{
 		{
-			RouteID: "route-direct", Adapter: directAdapter, AmountIn: directAmountIn,
-			ExpectedAmountOut: big.NewInt(390_000), MinAmountOut: big.NewInt(380_000),
-		},
-		{
 			RouteID: "route-discount", Adapter: discountAdapter, AmountIn: discountAmountIn,
 			ExpectedAmountOut: big.NewInt(600_000), MinAmountOut: big.NewInt(590_000), DiscountID: &discountID,
+		},
+		{
+			RouteID: "route-direct", Adapter: directAdapter, AmountIn: directAmountIn,
+			ExpectedAmountOut: big.NewInt(390_000), MinAmountOut: big.NewInt(380_000),
 		},
 	}}
 	resolved := &discounts.Signed{
@@ -242,7 +242,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, calldata.Finalise)
 	if len(directRoutes) != 1 || directRoutes[0].Adapter != directAdapter ||
 		directRoutes[0].AmountIn.Cmp(directAmountIn) != 0 ||
-		directRoutes[0].AmountOut.Cmp(plan.Routes[0].ExpectedAmountOut) != 0 {
+		directRoutes[0].AmountOut.Cmp(plan.Routes[1].ExpectedAmountOut) != 0 {
 		t.Fatalf("direct routes = %+v", directRoutes)
 	}
 	if len(discountRoutes) != 1 {

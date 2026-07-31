@@ -6,10 +6,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -237,5 +239,75 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 	}
 	if got := oracles[0].Address; got != "0x3333333333333333333333333333333333333333" {
 		t.Fatalf("preserved oracle address = %v", got)
+	}
+}
+
+func TestOrderClientListRecoverableOrdersPaginatesAndFilters(t *testing.T) {
+	cfg := testLifiConfig()
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	type request struct {
+		status string
+		offset string
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/orders" {
+			t.Fatalf("%s %s", r.Method, r.URL.Path)
+		}
+		query := r.URL.Query()
+		if got := query.Get("limit"); got != "50" {
+			t.Fatalf("limit = %q", got)
+		}
+		if got := query.Get("exclusiveFor"); got != cfg.Executor.Hex() {
+			t.Fatalf("exclusiveFor = %q", got)
+		}
+		if got := query.Get("originChainId"); got != "11155111" {
+			t.Fatalf("originChainId = %q", got)
+		}
+		if got := query.Get("destinationChainId"); got != "11155111" {
+			t.Fatalf("destinationChainId = %q", got)
+		}
+		status := query.Get("status")
+		offset := query.Get("offset")
+		requests = append(requests, request{status: status, offset: offset})
+
+		row := testListedOrderJSON(t, cfg, tokenIn, tokenOut, status)
+		count := 50
+		pageOffset := 0
+		if offset == "50" {
+			count = 1
+			pageOffset = 50
+		}
+		rows := make([]json.RawMessage, count)
+		for i := range rows {
+			rows[i] = row
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(testListedOrdersPageJSON(t, rows, 51, pageOffset))
+	}))
+	defer srv.Close()
+
+	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+	orders, err := client.listRecoverableOrders(t.Context(), cfg.Executor)
+	if err != nil {
+		t.Fatalf("listRecoverableOrders: %v", err)
+	}
+	if len(orders) != 102 {
+		t.Fatalf("orders = %d, want 102", len(orders))
+	}
+	wantRequests := []request{
+		{status: orderStatusSigned, offset: "0"},
+		{status: orderStatusSigned, offset: "50"},
+		{status: orderStatusDelivered, offset: "0"},
+		{status: orderStatusDelivered, offset: "50"},
+	}
+	if !slices.Equal(requests, wantRequests) {
+		t.Fatalf("requests = %+v, want %+v", requests, wantRequests)
+	}
+
+	solver := &Solver{cfg: cfg, chainID: 11155111, log: logr.Discard()}
+	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: orders[0]}); order == nil {
+		t.Fatal("listed order did not pass the WebSocket admission parser")
 	}
 }

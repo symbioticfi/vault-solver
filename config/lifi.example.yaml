@@ -21,7 +21,7 @@ txManager:
   confirmations: 2
   maxFeeGwei: 50              # required absolute ceiling; normal sends reserve one bump for cancellation
   replacementIntervalMs: 30000 # replace a pending call with higher fees every 30s
-  pendingTimeoutMs: 300000     # after 5m, cancel the lowest blocked nonce
+  pendingTimeoutMs: 300000     # after 5m, cancel the lowest unresolved nonce
   # Each LI.FI fill also pins its own decision-time fee cap; txmanager clamps fee and tip to that
   # budget and drops only when it no longer covers base fee.
   # tipGwei: 1

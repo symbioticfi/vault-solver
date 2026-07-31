@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
 )
@@ -48,11 +50,105 @@ func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
 	defer server.Close()
 
 	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
-	connected, err := feed.watchOnce(context.Background(), func(context.Context, orderMessage) {})
+	connected, err := feed.watchOnce(context.Background(), nil, func(context.Context, orderMessage) {})
 	if !connected {
 		t.Fatal("connection was not reported as established")
 	}
 	if err == nil {
 		t.Fatal("expected read error after server closed the connection")
+	}
+}
+
+func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(
+			websocket.TextMessage,
+			[]byte(`{"event":"`+orderSubmitEvent+`","data":{}}`),
+		); err != nil {
+			t.Errorf("write event: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	workStarted := make(chan struct{})
+	workCanceled := make(chan struct{})
+	liveHandled := make(chan struct{})
+	releaseWork := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		_, _ = feed.watchOnce(
+			t.Context(),
+			func(connectionCtx context.Context) {
+				close(workStarted)
+				<-connectionCtx.Done()
+				close(workCanceled)
+				<-releaseWork
+			},
+			func(context.Context, orderMessage) { close(liveHandled) },
+		)
+		close(done)
+	}()
+
+	expectSignal(t, workStarted)
+	expectSignal(t, liveHandled)
+	expectSignal(t, workCanceled)
+	select {
+	case <-done:
+		t.Fatal("watchOnce returned before connection work stopped")
+	default:
+	}
+	close(releaseWork)
+	expectSignal(t, done)
+}
+
+func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	started := make(chan struct{}, 2)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- feed.run(ctx, func(context.Context) {
+			started <- struct{}{}
+		}, func(context.Context, orderMessage) {})
+	}()
+
+	expectSignal(t, started)
+	expectSignal(t, started)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("feed.run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("feed did not stop")
+	}
+}
+
+func expectSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for signal")
 	}
 }

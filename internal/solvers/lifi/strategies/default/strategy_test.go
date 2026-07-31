@@ -172,6 +172,78 @@ func TestDecideQuotesAllowsBreakEvenMinimum(t *testing.T) {
 	}
 }
 
+func TestMaximumNonOverquotingRate(t *testing.T) {
+	tests := []struct {
+		name                    string
+		amountIn, amountOut     int64
+		inDecimals, outDecimals int
+		want                    int64
+	}{
+		{name: "fractional boundary", amountIn: 3, amountOut: 1, want: 666_666_666_666_666_666},
+		{name: "exact boundary", amountIn: 4, amountOut: 1, want: 499_999_999_999_999_999},
+		{
+			name: "decimal conversion", amountIn: 3, amountOut: 1,
+			inDecimals: 6, outDecimals: 18, want: 666_666,
+		},
+		{
+			name: "unrepresentable output", amountIn: 2_000_000_000_000_000_000, amountOut: 1,
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			amountIn := big.NewInt(tt.amountIn)
+			amountOut := big.NewInt(tt.amountOut)
+			got := maximumNonOverquotingRate(
+				amountOut, amountIn, tt.inDecimals, tt.outDecimals,
+			)
+			if got.Cmp(big.NewInt(tt.want)) != 0 {
+				t.Fatalf("rate = %s, want %d", got, tt.want)
+			}
+			if output := liquidlane.AmountOutForRate(
+				amountIn, got, tt.inDecimals, tt.outDecimals,
+			); output.Cmp(amountOut) > 0 {
+				t.Fatalf("rate %s produces %s, above %s", got, output, amountOut)
+			}
+			next := new(big.Int).Add(got, big.NewInt(1))
+			if output := liquidlane.AmountOutForRate(
+				amountIn, next, tt.inDecimals, tt.outDecimals,
+			); output.Cmp(amountOut) <= 0 {
+				t.Fatalf("next rate %s is still safe", next)
+			}
+		})
+	}
+}
+
+func TestPriceQuoteRangeKeepsPositiveMinimumOutput(t *testing.T) {
+	strategy := &Strategy{minAmount: big.NewInt(3)}
+	candidates := []liquidlane.QuoteCandidate{{
+		ID:           "route-1",
+		Route:        liquidlane.Route{ID: "route-1"},
+		Rate:         big.NewInt(500_000_000_000_000_000),
+		MaxAmountIn:  big.NewInt(4),
+		MaxAmountOut: big.NewInt(2),
+	}}
+	pricing, err := liquidstrategies.NewGasPricing(
+		big.NewInt(0), candidates[0].Route.TokenOut, nil, nil, 0, liquidstrategies.GasEnvelope{},
+	)
+	if err != nil {
+		t.Fatalf("NewGasPricing: %v", err)
+	}
+	quoteRange, err := strategy.priceQuoteRange(
+		candidates, 1, big.NewInt(3), big.NewInt(4), pricing.MaxCost(1, 0), 1, pricing,
+	)
+	if err != nil {
+		t.Fatalf("priceQuoteRange: %v", err)
+	}
+	if quoteRange == nil ||
+		quoteRange.MinAmount.Cmp(big.NewInt(3)) != 0 ||
+		quoteRange.MaxAmount.Cmp(big.NewInt(4)) != 0 ||
+		quoteRange.Quote != "0.5" {
+		t.Fatalf("range = %+v, want [3,4] at 0.5", quoteRange)
+	}
+}
+
 func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{MinAmount: "1", RangeCount: 8}))
 	if err != nil {
