@@ -131,12 +131,14 @@ func (f *fakeLifiTxSender) SendAsync(
 }
 
 func (f *fakeLifiTxSender) fillResult() txmanager.Result {
-	if f.result.Err != nil || f.result.Receipt != nil || f.result.Hash != (common.Hash{}) {
+	if f.result.Outcome != "" || f.result.Err != nil ||
+		f.result.Receipt != nil || f.result.Hash != (common.Hash{}) {
 		return f.result
 	}
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		Receipt: &ethtypes.Receipt{Status: ethtypes.ReceiptStatusSuccessful},
+		Outcome: txmanager.OutcomeConfirmed,
 	}
 }
 
@@ -372,7 +374,10 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New strategy: %v", err)
 	}
-	txm := &fakeLifiTxSender{result: txmanager.Result{Err: errors.New("send failed")}}
+	txm := &fakeLifiTxSender{result: txmanager.Result{
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("send failed"),
+	}}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 
 	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))

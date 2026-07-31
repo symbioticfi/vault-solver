@@ -66,30 +66,17 @@ const (
 	OutcomeTrackingStopped     Outcome = "tracking_stopped"
 )
 
+// Included reports whether the request reached the chain, even if confirmation tracking stopped.
+func (o Outcome) Included() bool {
+	return o == OutcomeConfirmed || o == OutcomeIncludedUnconfirmed
+}
+
 // Result carries the outcome of one transaction request.
 type Result struct {
 	Hash    common.Hash
 	Receipt *types.Receipt
 	Outcome Outcome
 	Err     error
-}
-
-// EffectiveOutcome falls back to Result fields for lightweight test senders. Manager results always
-// carry an explicit outcome because only the manager can distinguish a cancellation transaction.
-func (r Result) EffectiveOutcome() Outcome {
-	if r.Outcome != "" {
-		return r.Outcome
-	}
-	switch {
-	case r.Receipt != nil && r.Receipt.Status == types.ReceiptStatusFailed:
-		return OutcomeReverted
-	case r.Receipt != nil && r.Err != nil:
-		return OutcomeIncludedUnconfirmed
-	case r.Err != nil:
-		return OutcomeSubmissionError
-	default:
-		return OutcomeConfirmed
-	}
 }
 
 type feeQuote struct {
@@ -747,11 +734,9 @@ func (m *Manager) waitForConfirmations(
 	for {
 		head, err := m.backend.BlockNumber(ctx)
 		if err != nil {
-			m.log.V(1).Info("confirmation head unavailable; retrying",
-				"error", err,
-				"tx", receipt.TxHash.Hex(),
-			)
-		} else if head >= confirmed {
+			return errors.Errorf("block number: %w", err)
+		}
+		if head >= confirmed {
 			return nil
 		}
 		select {

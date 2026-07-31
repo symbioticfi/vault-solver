@@ -2,17 +2,21 @@ package txmanager
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestMetrics(t *testing.T) {
+	submissionErrorBackend := newMockBackend()
+	submissionErrorBackend.sendErrs = []error{errors.New("send failed")}
 	for _, test := range []struct {
 		name    string
 		label   string
@@ -21,6 +25,7 @@ func TestMetrics(t *testing.T) {
 	}{
 		{"confirmed", "rfq-fill", newMockBackend(), OutcomeConfirmed},
 		{"reverted", "uniswapx-fill", &revertingBackend{mockBackend: newMockBackend()}, OutcomeReverted},
+		{"submission error", "lifi-fill", submissionErrorBackend, OutcomeSubmissionError},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			metrics := newTestMetrics(t)
@@ -33,7 +38,11 @@ func TestMetrics(t *testing.T) {
 			}
 			assertMetric(t, metrics.requests.WithLabelValues(test.label, string(test.outcome)), 1)
 			assertMetric(t, metrics.inflight.WithLabelValues(test.label), 0)
-			assertMetric(t, metrics.gasUsed.WithLabelValues(test.label, string(test.outcome)), 21_000)
+			wantGas := float64(21_000)
+			if test.outcome == OutcomeSubmissionError {
+				wantGas = 0
+			}
+			assertMetric(t, metrics.gasUsed.WithLabelValues(test.label, string(test.outcome)), wantGas)
 		})
 	}
 
@@ -101,6 +110,51 @@ func TestMetrics(t *testing.T) {
 			replacementKindCancellation,
 		), 1)
 	})
+
+	t.Run("tracking stopped", func(t *testing.T) {
+		backend := &pendingMetricsBackend{mockBackend: newMockBackend()}
+		metrics := newTestMetrics(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		manager := NewWithMetrics(
+			backend, mustSigner(t), big.NewInt(11155111),
+			Config{PollInterval: time.Millisecond}, metrics, logr.Discard(),
+		)
+		go manager.Start(ctx)
+
+		result, accepted := manager.SendAsync(ctx, Request{
+			To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "rfq-fill",
+		})
+		if !accepted {
+			t.Fatal("transaction was not accepted")
+		}
+		waitForSentTransactions(t, backend.mockBackend, 1)
+		assertMetric(t, metrics.inflight.WithLabelValues("rfq-fill"), 1)
+
+		cancel()
+		completed := <-result
+		if completed.Outcome != OutcomeTrackingStopped {
+			t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeTrackingStopped)
+		}
+		assertMetric(t, metrics.requests.WithLabelValues(
+			"rfq-fill",
+			string(OutcomeTrackingStopped),
+		), 1)
+		assertMetric(t, metrics.inflight.WithLabelValues("rfq-fill"), 0)
+	})
+}
+
+type pendingMetricsBackend struct {
+	*mockBackend
+}
+
+func (b *pendingMetricsBackend) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	if err := b.mockBackend.SendTransaction(ctx, tx); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	delete(b.receipts, tx.Hash())
+	b.mu.Unlock()
+	return nil
 }
 
 func startTestManager(t *testing.T, backend Backend, cfg Config, metrics *Metrics) *Manager {

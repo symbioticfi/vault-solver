@@ -198,7 +198,7 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 }
 
 func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry())
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), newOrderFeed("", "", logr.Discard()))
 	if err != nil {
 		t.Fatal(err)
 	}

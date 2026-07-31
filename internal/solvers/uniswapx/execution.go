@@ -380,8 +380,8 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	order := completion.fill.order
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
-	outcome := completion.result.EffectiveOutcome()
-	if outcome != txmanager.OutcomeConfirmed && outcome != txmanager.OutcomeIncludedUnconfirmed {
+	outcome := completion.result.Outcome
+	if !outcome.Included() {
 		err := completion.result.Err
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)

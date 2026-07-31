@@ -25,10 +25,11 @@ type fakeBackend struct {
 	discounts    *discountsResponse
 	resolveCalls int
 	listCalls    int
+	orderListErr error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
-	return f.open, nil
+	return f.open, f.orderListErr
 }
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
@@ -98,6 +99,13 @@ type fakeTxm struct {
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
 	f.lastData = req.Data
 	return f.result
+}
+
+func confirmedTxResult() txmanager.Result {
+	return txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 }
 
 func strPtr(s string) *string { return &s }
@@ -180,7 +188,7 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 
 func TestExecution_DirectFillHappyPath(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -197,7 +205,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	st, be := fillFixtures(t)
 	be.executable.Outputs[0].Amount = "899999"
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -212,7 +220,11 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
+	txm := &fakeTxm{result: txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeReverted,
+		Err:     errors.New("tx reverted on-chain"),
+	}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -252,7 +264,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
@@ -295,7 +307,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
@@ -331,7 +343,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 

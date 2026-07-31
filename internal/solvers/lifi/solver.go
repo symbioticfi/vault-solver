@@ -93,9 +93,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey, log)
 	var metrics *lifiMetrics
 	if deps.Metrics != nil {
-		metrics, err = newLIFIMetrics(deps.Metrics.Registerer())
+		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +108,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy:     strategy,
 		caller:       deps.Signer.Address(),
 		orders:       newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
-		feed:         newOrderFeed(cfg.OrderServer.WSURL, apiKey, log),
+		feed:         feed,
 		txm:          deps.TxManager,
 		log:          log,
 		now:          reader.latestBlockTime,

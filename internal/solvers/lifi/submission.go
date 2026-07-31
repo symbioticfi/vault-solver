@@ -57,7 +57,7 @@ func (s *Solver) completeFill(pending *pendingFillState, completion fillCompleti
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
 	s.releaseReservation(fill.reservationKey)
-	outcome := completion.result.EffectiveOutcome()
+	outcome := completion.result.Outcome
 	if outcome == txmanager.OutcomeConfirmed {
 		s.observeFillAmounts(completion.result, fill)
 		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),

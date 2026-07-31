@@ -119,6 +119,9 @@ func (e *executionService) pollOpenOrders(ctx context.Context) error {
 	if len(orders) > 0 {
 		e.log.V(1).Info("polled open orders", "count", len(orders))
 	}
+	if e.metrics != nil {
+		e.metrics.observeOrderPoll(e.now())
+	}
 	return nil
 }
 
@@ -201,8 +204,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	res := e.txm.Send(ctx, txmanager.Request{To: e.executor, Data: calldata, Label: "rfq-fill"})
 	attempt := e.store.recordAttempt(orderID)
-	outcome := res.EffectiveOutcome()
-	if outcome != txmanager.OutcomeConfirmed && outcome != txmanager.OutcomeIncludedUnconfirmed {
+	outcome := res.Outcome
+	if !outcome.Included() {
 		err := res.Err
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)

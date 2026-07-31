@@ -6,9 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestPongFor(t *testing.T) {
@@ -54,5 +57,61 @@ func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("expected read error after server closed the connection")
+	}
+}
+
+func TestOrderFeedConnectedMetricLifecycle(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	upgraded := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		close(upgraded)
+		<-release
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
+		t.Fatalf("initial connected = %v, want 0", got)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, watchErr := feed.watchOnce(t.Context(), func(context.Context, orderMessage) {})
+		result <- watchErr
+	}()
+	<-upgraded
+	assertGaugeEventually(t, metrics.orderFeedConnected, 1)
+
+	close(release)
+	if err := <-result; err == nil {
+		t.Fatal("expected read error after server closed the connection")
+	}
+	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
+		t.Fatalf("disconnected = %v, want 0", got)
+	}
+}
+
+func assertGaugeEventually(t *testing.T, collector prometheus.Collector, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if got := testutil.ToFloat64(collector); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gauge did not reach %v", want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

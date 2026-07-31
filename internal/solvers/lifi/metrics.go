@@ -7,12 +7,13 @@ import (
 )
 
 type lifiMetrics struct {
-	activeQuotes prometheus.Gauge
-	lastRefresh  prometheus.Gauge
-	fillAmounts  *liquidlane.FillMetrics
+	activeQuotes       prometheus.Gauge
+	lastRefresh        prometheus.Gauge
+	orderFeedConnected prometheus.GaugeFunc
+	fillAmounts        *liquidlane.FillMetrics
 }
 
-func newLIFIMetrics(reg prometheus.Registerer) (*lifiMetrics, error) {
+func newLIFIMetrics(reg prometheus.Registerer, feed *orderFeed) (*lifiMetrics, error) {
 	fillAmounts, err := liquidlane.NewFillMetrics(reg, "lifi")
 	if err != nil {
 		return nil, err
@@ -20,15 +21,24 @@ func newLIFIMetrics(reg prometheus.Registerer) (*lifiMetrics, error) {
 	m := &lifiMetrics{
 		activeQuotes: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "lifi_active_quotes",
-			Help: "Standing LI.FI quotes in the last successfully reconciled state.",
+			Help: "Process-local standing quote count from the last successful reconciliation; quotes may expire remotely after their TTL.",
 		}),
 		lastRefresh: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "lifi_last_successful_refresh_timestamp",
 			Help: "Unix timestamp of the last successful standing-quote reconciliation.",
 		}),
+		orderFeedConnected: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "lifi_order_feed_connected",
+			Help: "1 while the LI.FI WebSocket order feed owns an established connection; 0 otherwise.",
+		}, func() float64 {
+			if feed != nil && feed.connected.Load() {
+				return 1
+			}
+			return 0
+		}),
 		fillAmounts: fillAmounts,
 	}
-	for _, collector := range []prometheus.Collector{m.activeQuotes, m.lastRefresh} {
+	for _, collector := range []prometheus.Collector{m.activeQuotes, m.lastRefresh, m.orderFeedConnected} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("lifi: register metric: %w", err)
 		}

@@ -11,11 +11,12 @@ import (
 )
 
 type rfqMetrics struct {
-	duration     *prometheus.HistogramVec
-	wins         prometheus.Counter
-	activeOrders prometheus.GaugeFunc
-	oldestActive prometheus.GaugeFunc
-	fillAmounts  *liquidlane.FillMetrics
+	duration      *prometheus.HistogramVec
+	wins          prometheus.Counter
+	activeOrders  prometheus.GaugeFunc
+	oldestActive  prometheus.GaugeFunc
+	lastOrderPoll prometheus.Gauge
+	fillAmounts   *liquidlane.FillMetrics
 }
 
 func newRFQMetrics(reg prometheus.Registerer, st *store) (*rfqMetrics, error) {
@@ -47,10 +48,14 @@ func newRFQMetrics(reg prometheus.Registerer, st *store) (*rfqMetrics, error) {
 			_, age := st.activeOrderMetrics()
 			return age.Seconds()
 		}),
+		lastOrderPoll: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "rfq_last_successful_order_poll_timestamp",
+			Help: "Unix timestamp of the last fully processed successful backend open-order poll.",
+		}),
 		fillAmounts: fillAmounts,
 	}
 	for _, collector := range []prometheus.Collector{
-		m.duration, m.wins, m.activeOrders, m.oldestActive,
+		m.duration, m.wins, m.activeOrders, m.oldestActive, m.lastOrderPoll,
 	} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("rfq: register metric: %w", err)
@@ -65,20 +70,36 @@ func (m *rfqMetrics) observeWin() {
 	}
 }
 
+func (m *rfqMetrics) observeOrderPoll(at time.Time) {
+	if m != nil {
+		m.lastOrderPoll.Set(float64(at.Unix()))
+	}
+}
+
 // instrument wraps a handler to record per-request count + duration. The route label is drawn from a
-// fixed allowlist so unmatched paths can't blow up label cardinality.
+// fixed allowlist and the method is normalized, so unmatched inputs can't blow up label cardinality.
 func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		labels := prometheus.Labels{
-			"method": r.Method,
+			"method": methodLabel(r.Method),
 			"route":  routeLabel(r.URL.Path),
 			"status": strconv.Itoa(rec.status),
 		}
 		m.duration.With(labels).Observe(time.Since(start).Seconds())
 	})
+}
+
+// methodLabel bounds arbitrary HTTP methods to the methods served by this process.
+func methodLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodPost:
+		return method
+	default:
+		return "other"
+	}
 }
 
 // statusRecorder captures the response status code for the metrics labels.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -62,6 +63,19 @@ func TestRouteLabel_BoundsCardinality(t *testing.T) {
 	}
 }
 
+func TestMethodLabel_BoundsCardinality(t *testing.T) {
+	for method, want := range map[string]string{
+		http.MethodGet:  http.MethodGet,
+		http.MethodPost: http.MethodPost,
+		http.MethodPut:  "other",
+		"ARBITRARY":     "other",
+	} {
+		if got := methodLabel(method); got != want {
+			t.Fatalf("methodLabel(%q) = %q, want %q", method, got, want)
+		}
+	}
+}
+
 func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	st := newStore(func() time.Time { return now })
@@ -75,6 +89,7 @@ func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 		store:    st,
 		metrics:  metrics,
 		log:      logr.Discard(),
+		now:      func() time.Time { return now },
 	}
 
 	if err := exec.pollOpenOrders(context.Background()); err != nil {
@@ -93,5 +108,38 @@ func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.oldestActive); got != 10 {
 		t.Fatalf("oldest active age = %v, want 10", got)
+	}
+	if got := testutil.ToFloat64(metrics.lastOrderPoll); got != 1_000 {
+		t.Fatalf("last successful order poll = %v, want 1000", got)
+	}
+}
+
+func TestRFQMetricsFailedPollKeepsLastSuccess(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	st := newStore(func() time.Time { return now })
+	metrics, err := newRFQMetrics(prometheus.NewRegistry(), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeBackend{}
+	exec := &executionService{
+		executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		backend:  backend,
+		store:    st,
+		metrics:  metrics,
+		log:      logr.Discard(),
+		now:      func() time.Time { return now },
+	}
+	if err := exec.pollOpenOrders(t.Context()); err != nil {
+		t.Fatalf("successful poll: %v", err)
+	}
+
+	now = now.Add(time.Minute)
+	backend.orderListErr = errors.New("backend unavailable")
+	if err := exec.pollOpenOrders(t.Context()); err == nil {
+		t.Fatal("failed poll returned nil")
+	}
+	if got := testutil.ToFloat64(metrics.lastOrderPoll); got != 1_000 {
+		t.Fatalf("last successful order poll after failure = %v, want 1000", got)
 	}
 }

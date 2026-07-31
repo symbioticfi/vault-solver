@@ -44,6 +44,7 @@ type Solver struct {
 	deps       solver.Deps
 	api        *apiClient
 	reader     *reader
+	txManager  transactionSender
 	strategy   types.Strategy
 	log        logr.Logger
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
@@ -96,6 +97,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		deps:       deps,
 		api:        api,
 		reader:     newReader(deps.Chain, cfg.LiquidityLens),
+		txManager:  deps.TxManager,
 		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		signerAddr: deps.Signer.Address(),
@@ -174,17 +176,30 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 		}
 		live := make(map[int64]offerState)
 		for _, o := range offers {
-			if offerStatusIgnored[strings.ToUpper(strings.TrimSpace(o.Status))] {
+			status := strings.ToUpper(strings.TrimSpace(o.Status))
+			if offerStatusIgnored[status] {
 				continue // failed/not-accepted/cancelled offers aren't live coverage
 			}
+			if status == "" {
+				complete = false
+				s.log.Info("reconcile offers: empty status; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+			}
 			exp, perr := parseUnixTime(o.Expiration)
-			if perr != nil || !exp.After(now) {
-				continue // unparseable or already expired
+			if perr != nil {
+				complete = false
+				s.log.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				continue
+			}
+			if !exp.After(now) {
+				continue // valid, already-expired offer
 			}
 			principal, ok := new(big.Int).SetString(o.Amount, 10)
-			if !ok {
-				s.log.V(1).Info("reconcile offers: unparseable amount; coverage may undercount",
-					"adapter", t.Adapter.Hex(), "amount", o.Amount)
+			if !ok || principal.Sign() < 0 {
+				complete = false
+				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = new(big.Int)
 			}
 			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
@@ -298,20 +313,6 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
-	}
-}
-
-// redeemAll runs the redeemer for every matched adapter.
-func (s *Solver) redeemAll(ctx context.Context) {
-	totalReady := 0
-	complete := true
-	for _, t := range s.targets {
-		ready, ok := s.redeemReady(ctx, t)
-		totalReady += ready
-		complete = complete && ok
-	}
-	if complete {
-		s.observeState(threeFStateRedeemable, totalReady)
 	}
 }
 

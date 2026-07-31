@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -25,9 +26,10 @@ type orderMessage struct {
 }
 
 type orderFeed struct {
-	url    string
-	apiKey string
-	log    logr.Logger
+	url       string
+	apiKey    string
+	log       logr.Logger
+	connected atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
 }
 
 func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
@@ -77,6 +79,7 @@ func (f *orderFeed) watchOnce(
 		}
 		return false, errors.Errorf("dial websocket: %w", err)
 	}
+	f.connected.Store(true)
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -85,6 +88,7 @@ func (f *orderFeed) watchOnce(
 		case <-done:
 		}
 	}()
+	defer f.connected.Store(false)
 	defer close(done)
 	defer conn.Close()
 

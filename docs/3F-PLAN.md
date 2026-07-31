@@ -367,7 +367,11 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Metrics.** The shared registry reports offer submission results and their submitted
   principal/quoted-expected-yield amounts by deposit token. One
   `threef_observed_items{view}` gauge reports offers, active requests, and redeemable requests; a
-  matching freshness vector distinguishes current zeroes from retained last-known-good state. Redeem
-  transaction outcomes, in-flight requests, gas, and replacements come from txmanager. The API does
+  matching freshness vector distinguishes current zeroes from retained last-known-good state. Each
+  redeem pass scans every adapter and publishes only a complete snapshot before submitting any
+  blocking transaction; malformed sub-call data withholds freshness while valid ready requests are
+  still redeemed best-effort. Malformed live-offer status, expiration, or amount likewise withholds
+  offer-view freshness. Redeem transaction outcomes, in-flight requests, gas, and replacements come
+  from txmanager. The API does
   not attribute consumed offers to this solver, so no speculative 3F “wins” or realized-yield counter
   is exposed. Exact names and labels are in the [README metrics table](../README.md#metrics).

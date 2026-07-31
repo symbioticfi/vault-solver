@@ -130,8 +130,8 @@ assertion because the PR19 ABI has no getter.
   `deps.Metrics.Registerer()`. Fill results come from the shared txmanager rather than a coarser duplicate.
   Live polling increments unique exclusive wins; outstanding count, nearest deadline, and terminal
   outcomes make won-but-not-delivered obligations visible. A timely terminal delivery may be by another
-  filler. Startup history recovery restores safety state without replaying counters. Exact names and labels
-  are in the
+  filler. Startup and runtime recovery restore safety state without replaying counters; only startup-only
+  terminal misses are informational and do not open the breaker. Exact names and labels are in the
   [README metrics table](../README.md#metrics).
 - **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). The
   solver builds `LiquidLaneUniswapXExecutor.execute` calldata; txmanager owns nonce/send/receipt and applies

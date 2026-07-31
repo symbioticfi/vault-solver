@@ -455,7 +455,10 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if reservations := strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	txm.result <- txmanager.Result{
+		Hash:    common.HexToHash("0x2"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 	result := <-pending.result
 	solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
 	if solver.capacity.Len() != 0 {

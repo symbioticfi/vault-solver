@@ -298,16 +298,18 @@ The registry also includes standard Go/process collectors and
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
 | LiquidLane | `liquidlane_fill_amount_atomic_units_total` | `solver`, `token`, `kind` | Order input, required output, and positive planning-time gross surplus for successful receipts. `kind` is `input`, `output`, or `planned_surplus`; values are monitoring counters in token atomic units, not realized PnL. |
-| RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted to bound cardinality. |
+| RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
 | RFQ | `rfq_wins_total` | — | Orders first observed assigned to this filler. A win is counted even if planning or transaction submission later fails. |
 | RFQ | `rfq_active_orders` | — | Current queued, submitting, or submitted obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
-| LI.FI | `lifi_active_quotes` | — | Standing quotes in the last successfully reconciled backend state; zero means the solver is currently quote-dark. |
+| RFQ | `rfq_last_successful_order_poll_timestamp` | — | Unix timestamp of the last complete successful backend open-order poll, including an authoritative empty result; failed polls leave it unchanged. |
+| LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
 | LI.FI | `lifi_last_successful_refresh_timestamp` | — | Freshness of standing-quote reconciliation; distinguishes an authoritative zero from a dead refresh loop. |
+| LI.FI | `lifi_order_feed_connected` | — | `1` only while the order-feed loop owns an established WebSocket; `0` while disconnected, dialing, or backing off. |
 | UniswapX | `uniswapx_quote_requests_total` | `outcome` | Quote webhook decisions: `invalid`, `breaker-notification`, `error`, `declined`, or `quoted`. `quoted` means a response was selected for writing, not that a user signed it. |
 | UniswapX | `uniswapx_quote_duration_seconds` | — | End-to-end quote-handler latency across all request outcomes. |
 | UniswapX | `uniswapx_order_polls_total` | `source`, `outcome` | Successful and failed `exclusive-v2`/`public-v2` poll cycles. An exclusive success includes recovery and obligation reconciliation. |
-| UniswapX | `uniswapx_exclusive_wins_total` | — | Exclusive delivery obligations first observed by live polling. Startup recovery restores safety state without replaying this counter. |
+| UniswapX | `uniswapx_exclusive_wins_total` | — | Exclusive delivery obligations first observed by live polling. Startup and runtime recovery restore safety state without replaying this counter; only startup-only terminal misses avoid the breaker. |
 | UniswapX | `uniswapx_exclusive_obligations_outstanding` | — | Live-observed or recovered obligations still awaiting terminal classification. |
 | UniswapX | `uniswapx_exclusive_nearest_deadline_timestamp` | — | Nearest outstanding exclusivity deadline; alerts on urgent or stuck obligations. |
 | UniswapX | `uniswapx_exclusive_obligation_outcomes_total` | `outcome` | Live-observed obligations classified as `settled_in_time` or `missed`. Timely delivery may be by another filler; this is a delivery SLO, not a self-fill counter. |

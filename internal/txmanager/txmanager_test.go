@@ -558,7 +558,7 @@ func TestIncludedNonceDoesNotBlockLaterCancellationWhileConfirming(t *testing.T)
 }
 
 func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &transientErrorBackend{mockBackend: newMockBackend(), receiptFailures: 1}
+	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 1}
 	m := New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{
@@ -582,31 +582,6 @@ func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
 	}
 }
 
-func TestTransientConfirmationHeadErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &transientErrorBackend{mockBackend: newMockBackend(), blockFailures: 1}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
-	go m.Start(t.Context())
-
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "confirmation retry",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	b.mu.Lock()
-	b.head = 102
-	b.mu.Unlock()
-
-	if got := <-result; got.Err != nil || got.Outcome != OutcomeConfirmed {
-		t.Fatalf("confirmation retry result: %+v", got)
-	}
-}
-
 func waitForSentTransactions(t *testing.T, b *mockBackend, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -622,15 +597,14 @@ func waitForSentTransactions(t *testing.T, b *mockBackend, count int) {
 	t.Fatalf("timed out waiting for %d broadcasts", count)
 }
 
-type transientErrorBackend struct {
+type receiptErrorBackend struct {
 	*mockBackend
 
 	errorMu         sync.Mutex
 	receiptFailures int
-	blockFailures   int
 }
 
-func (b *transientErrorBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+func (b *receiptErrorBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	b.errorMu.Lock()
 	if b.receiptFailures > 0 {
 		b.receiptFailures--
@@ -639,17 +613,6 @@ func (b *transientErrorBackend) TransactionReceipt(ctx context.Context, hash com
 	}
 	b.errorMu.Unlock()
 	return b.mockBackend.TransactionReceipt(ctx, hash)
-}
-
-func (b *transientErrorBackend) BlockNumber(ctx context.Context) (uint64, error) {
-	b.errorMu.Lock()
-	if b.blockFailures > 0 {
-		b.blockFailures--
-		b.errorMu.Unlock()
-		return 0, errors.New("temporary block-number failure")
-	}
-	b.errorMu.Unlock()
-	return b.mockBackend.BlockNumber(ctx)
 }
 
 type replacementBackend struct {
@@ -765,22 +728,22 @@ func TestSend_RevertedReceiptIsError(t *testing.T) {
 	}
 }
 
-func TestResultEffectiveOutcome(t *testing.T) {
-	success := &types.Receipt{Status: types.ReceiptStatusSuccessful}
-	revert := &types.Receipt{Status: types.ReceiptStatusFailed}
+func TestOutcomeIncluded(t *testing.T) {
 	tests := []struct {
-		result Result
-		want   Outcome
+		outcome Outcome
+		want    bool
 	}{
-		{result: Result{Outcome: OutcomeTrackingStopped}, want: OutcomeTrackingStopped},
-		{result: Result{}, want: OutcomeConfirmed},
-		{result: Result{Receipt: revert, Err: errors.New("reverted")}, want: OutcomeReverted},
-		{result: Result{Receipt: success, Err: context.Canceled}, want: OutcomeIncludedUnconfirmed},
-		{result: Result{Err: errors.New("send")}, want: OutcomeSubmissionError},
+		{outcome: OutcomeConfirmed, want: true},
+		{outcome: OutcomeIncludedUnconfirmed, want: true},
+		{outcome: OutcomeReverted},
+		{outcome: OutcomeCancelled},
+		{outcome: OutcomeSubmissionError},
+		{outcome: OutcomeTrackingStopped},
+		{outcome: ""},
 	}
 	for _, test := range tests {
-		if got := test.result.EffectiveOutcome(); got != test.want {
-			t.Fatalf("EffectiveOutcome() = %q, want %q", got, test.want)
+		if got := test.outcome.Included(); got != test.want {
+			t.Fatalf("%q.Included() = %t, want %t", test.outcome, got, test.want)
 		}
 	}
 }
