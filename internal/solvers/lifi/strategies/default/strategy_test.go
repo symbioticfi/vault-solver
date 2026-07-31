@@ -172,33 +172,97 @@ func TestDecideQuotesAllowsBreakEvenMinimum(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesRaisesMinimumAboveGasBreakEven(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1"}))
+func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
+	strategy, err := New(testStrategyConfig(Config{MinAmount: "1", RangeCount: 8}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	now := time.Unix(1_800_000_000, 0)
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID:      "route-1",
-				TokenIn: common.HexToAddress("0x1111111111111111111111111111111111111111"), TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(10_000_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		}},
-		GasPrices: testGasPrices(tokenOut, 1_000_000_000_000_000_000), MaxFeePerGas: big.NewInt(1),
-		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
+	route := liquidlane.Route{
+		ID: "route-1", TokenIn: tokenIn, TokenOut: tokenOut,
+		TokenInDecimals: 6, TokenOutDecimals: 6,
 	}
-	if len(out.Quotes) != 1 || len(out.Quotes[0].Ranges) == 0 {
-		t.Fatalf("quotes = %+v, want gas-aware range", out.Quotes)
+	maximum := big.NewInt(10_000_000)
+	rate := big.NewInt(1_000_000_000_000_000_000)
+	gasPrices := testGasPrices(tokenOut, 1_000_000_000_000_000_000)
+	candidates := []liquidlane.QuoteCandidate{{
+		ID: "route-1", Route: route, Rate: rate,
+		MaxAmountIn: maximum, MaxAmountOut: maximum,
+	}}
+	breakpoints := quoteBreakpoints(maximum, big.NewInt(1), 8)
+	if len(breakpoints) != 8 {
+		t.Fatalf("breakpoints = %v, want eight", breakpoints)
 	}
-	if out.Quotes[0].Ranges[0].MinAmount.Cmp(big.NewInt(1)) <= 0 {
-		t.Fatalf("minAmount = %s, want amount above gas break-even", out.Quotes[0].Ranges[0].MinAmount)
+
+	tests := []struct {
+		name          string
+		maxFeePerGas  int64
+		crossingRange int
+	}{
+		{name: "penultimate range", maxFeePerGas: 1, crossingRange: 6},
+		{name: "final range", maxFeePerGas: 2, crossingRange: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			maxFeePerGas := big.NewInt(tt.maxFeePerGas)
+			pricing, pricingErr := liquidstrategies.NewGasPricing(
+				maxFeePerGas, tokenOut, gasPrices, nil, 0, types.LiquidLaneGasEnvelope(),
+			)
+			if pricingErr != nil {
+				t.Fatalf("NewGasPricing: %v", pricingErr)
+			}
+			gasCost := pricing.MaxCost(1, 0)
+			actualGasCost := pricing.Cost([]liquidstrategies.GasLeg{{Route: route, AmountOut: maximum}})
+			if actualGasCost.Cmp(gasCost) != 0 {
+				t.Fatalf("actual gas cost = %s, max gas cost = %s", actualGasCost, gasCost)
+			}
+
+			// At gasCost+1 the floor rate is positive but still rounds to zero output.
+			wantMin := new(big.Int).Add(gasCost, big.NewInt(2))
+			floorOutput := func(amount *big.Int) *big.Int {
+				floorRate := candidateFloorRate(candidates, amount, maximum, gasCost, 1, 0, 6, 6)
+				return liquidlane.AmountOutForRate(amount, floorRate, 6, 6)
+			}
+			if unsafeInput := new(big.Int).Sub(wantMin, big.NewInt(1)); floorOutput(unsafeInput).Sign() != 0 {
+				t.Fatalf("amount %s has positive floor output", unsafeInput)
+			}
+			if floorOutput(wantMin).Sign() <= 0 {
+				t.Fatalf("amount %s has no positive floor output", wantMin)
+			}
+
+			rangeLower := big.NewInt(1)
+			if tt.crossingRange > 0 {
+				rangeLower = new(big.Int).Add(breakpoints[tt.crossingRange-1], big.NewInt(1))
+			}
+			rangeUpper := breakpoints[tt.crossingRange]
+			if rangeLower.Cmp(wantMin) >= 0 || rangeUpper.Cmp(wantMin) < 0 {
+				t.Fatalf("range [%s,%s] does not cross safe minimum %s", rangeLower, rangeUpper, wantMin)
+			}
+
+			out, decideErr := strategy.DecideQuotes(context.Background(), types.QuoteInput{
+				Inventory: []liquidlane.Inventory{{
+					Route:     route,
+					MaxAssets: maximum, MaxRate: rate,
+				}},
+				GasPrices: gasPrices, MaxFeePerGas: maxFeePerGas,
+				ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
+			})
+			if decideErr != nil {
+				t.Fatalf("DecideQuotes: %v", decideErr)
+			}
+			if len(out.Quotes) != 1 || len(out.Quotes[0].Ranges) == 0 {
+				t.Fatalf("quotes = %+v, want ranges above gas break-even", out.Quotes)
+			}
+			ranges := out.Quotes[0].Ranges
+			if ranges[0].MinAmount.Cmp(wantMin) != 0 {
+				t.Fatalf("first minAmount = %s, want %s", ranges[0].MinAmount, wantMin)
+			}
+			if ranges[len(ranges)-1].MaxAmount.Cmp(maximum) != 0 {
+				t.Fatalf("last maxAmount = %s, want %s", ranges[len(ranges)-1].MaxAmount, maximum)
+			}
+		})
 	}
 }
 

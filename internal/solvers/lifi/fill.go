@@ -20,65 +20,72 @@ type fillCalldata struct {
 	Finalise []byte
 }
 
-func executorRoutes(
+func buildExecutorRoutes(
 	order submittedOrder,
 	plan *types.FillPlan,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
-) ([]executor.ILiquidLaneLifiExecutorFillRoute, error) {
+) (
+	[]executor.ILiquidLaneLifiExecutorFillRoute,
+	[]executor.ILiquidLaneLifiExecutorDiscountRoute,
+	error,
+) {
 	if plan == nil || len(plan.Routes) == 0 {
-		return nil, errors.New("fill plan has no routes")
+		return nil, nil, errors.New("fill plan has no routes")
 	}
-	routes := make([]executor.ILiquidLaneLifiExecutorFillRoute, 0, len(plan.Routes))
+	directRoutes := make([]executor.ILiquidLaneLifiExecutorFillRoute, 0, len(plan.Routes))
+	discountRoutes := make([]executor.ILiquidLaneLifiExecutorDiscountRoute, 0, len(plan.Routes))
 	totalAmountIn := new(big.Int)
 	for i, route := range plan.Routes {
 		if route.Adapter == (common.Address{}) || route.AmountIn == nil || route.AmountIn.Sign() <= 0 ||
 			route.ExpectedAmountOut == nil || route.ExpectedAmountOut.Sign() <= 0 ||
 			route.MinAmountOut == nil || route.MinAmountOut.Sign() <= 0 ||
 			route.MinAmountOut.Cmp(route.ExpectedAmountOut) > 0 {
-			return nil, errors.Errorf("fill plan route %d is invalid", i)
+			return nil, nil, errors.Errorf("fill plan route %d is invalid", i)
 		}
-		discount, err := executorDiscount(route, order.TokenIn, resolvedDiscounts)
-		if err != nil {
-			return nil, errors.Errorf("fill plan route %d discount: %w", i, err)
-		}
-		routes = append(routes, executor.ILiquidLaneLifiExecutorFillRoute{
-			Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
-			Discount: discount,
-		})
 		totalAmountIn.Add(totalAmountIn, route.AmountIn)
+		if route.DiscountID == nil {
+			directRoutes = append(directRoutes, executor.ILiquidLaneLifiExecutorFillRoute{
+				Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
+			})
+			continue
+		}
+		discountRoute, err := buildExecutorDiscountRoute(route, *route.DiscountID, order.TokenIn, resolvedDiscounts)
+		if err != nil {
+			return nil, nil, errors.Errorf("fill plan route %d discount: %w", i, err)
+		}
+		discountRoutes = append(discountRoutes, discountRoute)
 	}
 	if totalAmountIn.Cmp(order.AmountIn) != 0 {
-		return nil, errors.Errorf("fill plan input sum %s does not match order input %s", totalAmountIn, order.AmountIn)
+		return nil, nil, errors.Errorf("fill plan input sum %s does not match order input %s", totalAmountIn, order.AmountIn)
 	}
-	return routes, nil
+	return directRoutes, discountRoutes, nil
 }
 
-func executorDiscount(
+func buildExecutorDiscountRoute(
 	route types.FillRoute,
+	discountID common.Hash,
 	tokenIn common.Address,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
-) (executor.ILiquidLaneLifiExecutorFillDiscount, error) {
-	if route.DiscountID == nil {
-		return emptyExecutorDiscount(), nil
+) (executor.ILiquidLaneLifiExecutorDiscountRoute, error) {
+	if discountID == (common.Hash{}) {
+		return executor.ILiquidLaneLifiExecutorDiscountRoute{}, errors.New("discount id is zero")
 	}
-	if *route.DiscountID == (common.Hash{}) {
-		return executor.ILiquidLaneLifiExecutorFillDiscount{}, errors.New("discount id is zero")
-	}
-	resolved := resolvedDiscounts[*route.DiscountID]
+	resolved := resolvedDiscounts[discountID]
 	if resolved == nil {
-		return executor.ILiquidLaneLifiExecutorFillDiscount{}, errors.New("resolved discount is missing")
+		return executor.ILiquidLaneLifiExecutorDiscountRoute{}, errors.New("resolved discount is missing")
 	}
-	if resolved.DiscountID != *route.DiscountID {
-		return executor.ILiquidLaneLifiExecutorFillDiscount{}, errors.New("resolved discount id mismatch")
+	if resolved.DiscountID != discountID {
+		return executor.ILiquidLaneLifiExecutorDiscountRoute{}, errors.New("resolved discount id mismatch")
 	}
 	if resolved.Adapter != route.Adapter {
-		return executor.ILiquidLaneLifiExecutorFillDiscount{}, errors.New("resolved discount adapter mismatch")
+		return executor.ILiquidLaneLifiExecutorDiscountRoute{}, errors.New("resolved discount adapter mismatch")
 	}
 	if resolved.Terms.TokenToRedeem != tokenIn {
-		return executor.ILiquidLaneLifiExecutorFillDiscount{}, errors.New("resolved discount token mismatch")
+		return executor.ILiquidLaneLifiExecutorDiscountRoute{}, errors.New("resolved discount token mismatch")
 	}
-	return executor.ILiquidLaneLifiExecutorFillDiscount{
-		DiscountId: [32]byte(resolved.DiscountID),
+	return executor.ILiquidLaneLifiExecutorDiscountRoute{
+		Adapter:  route.Adapter,
+		AmountIn: route.AmountIn,
 		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
 			Discount: executor.ILiquidLaneAdapterDiscount{
 				TokenToRedeem: resolved.Terms.TokenToRedeem,
@@ -95,30 +102,20 @@ func executorDiscount(
 	}, nil
 }
 
-func emptyExecutorDiscount() executor.ILiquidLaneLifiExecutorFillDiscount {
-	return executor.ILiquidLaneLifiExecutorFillDiscount{
-		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
-			Discount: executor.ILiquidLaneAdapterDiscount{
-				Discount: new(big.Int), Nonce: new(big.Int), Deadline: new(big.Int),
-			},
-			ProtocolDeadline: new(big.Int),
-		},
-	}
-}
-
 func buildFillCalldata(
 	order submittedOrder,
 	orderID common.Hash,
 	plan *types.FillPlan,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
 ) (*fillCalldata, error) {
-	routes, err := executorRoutes(order, plan, resolvedDiscounts)
+	directRoutes, discountRoutes, err := buildExecutorRoutes(order, plan, resolvedDiscounts)
 	if err != nil {
 		return nil, err
 	}
 	finaliseCalldata, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp(
 		toExecutorOrder(order.Order),
-		routes,
+		directRoutes,
+		discountRoutes,
 	)
 	if err != nil {
 		return nil, errors.Errorf("pack finaliseWithCurrentTimestamp: %w", err)

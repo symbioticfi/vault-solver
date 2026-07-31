@@ -228,77 +228,82 @@
             "name": "amountOut",
             "type": "uint256",
             "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "discountRoutes",
+        "type": "tuple[]",
+        "internalType": "struct ILiquidLaneLifiExecutor.DiscountRoute[]",
+        "components": [
+          {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
           },
           {
-            "name": "discount",
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "discountSwap",
             "type": "tuple",
-            "internalType": "struct ILiquidLaneLifiExecutor.FillDiscount",
+            "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
             "components": [
               {
-                "name": "discountId",
-                "type": "bytes32",
-                "internalType": "bytes32"
-              },
-              {
-                "name": "discountSwap",
+                "name": "discount",
                 "type": "tuple",
-                "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
+                "internalType": "struct ILiquidLaneAdapter.Discount",
                 "components": [
                   {
+                    "name": "tokenToRedeem",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
                     "name": "discount",
-                    "type": "tuple",
-                    "internalType": "struct ILiquidLaneAdapter.Discount",
-                    "components": [
-                      {
-                        "name": "tokenToRedeem",
-                        "type": "address",
-                        "internalType": "address"
-                      },
-                      {
-                        "name": "discount",
-                        "type": "uint256",
-                        "internalType": "uint256"
-                      },
-                      {
-                        "name": "signer",
-                        "type": "address",
-                        "internalType": "address"
-                      },
-                      {
-                        "name": "protocol",
-                        "type": "address",
-                        "internalType": "address"
-                      },
-                      {
-                        "name": "nonce",
-                        "type": "uint256",
-                        "internalType": "uint256"
-                      },
-                      {
-                        "name": "deadline",
-                        "type": "uint48",
-                        "internalType": "uint48"
-                      }
-                    ]
+                    "type": "uint256",
+                    "internalType": "uint256"
                   },
                   {
-                    "name": "signerSignature",
-                    "type": "bytes",
-                    "internalType": "bytes"
+                    "name": "signer",
+                    "type": "address",
+                    "internalType": "address"
                   },
                   {
-                    "name": "protocolDeadline",
+                    "name": "protocol",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "deadline",
                     "type": "uint48",
                     "internalType": "uint48"
                   }
                 ]
               },
               {
-                "name": "protocolSignature",
+                "name": "signerSignature",
                 "type": "bytes",
                 "internalType": "bytes"
+              },
+              {
+                "name": "protocolDeadline",
+                "type": "uint48",
+                "internalType": "uint48"
               }
             ]
+          },
+          {
+            "name": "protocolSignature",
+            "type": "bytes",
+            "internalType": "bytes"
           }
         ]
       }

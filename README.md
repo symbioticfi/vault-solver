@@ -120,9 +120,10 @@ and immediately refreshes every affected quote. A fill remains pending until the
 the configured confirmation depth; only then is its reservation released and quote refresh requested.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
-executor surplus. The default strategy prices every standing range by running the shared LiquidLane exact-input
-quote solver at both endpoints. It publishes the lower endpoint rate capped by a linear conservative floor for
-interior route transitions, worst-case route gas, and rounding.
+executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
+floor yields a positive output, then prices the published suffix by running the shared LiquidLane exact-input
+quote solver at both endpoints. It caps the lower of the two endpoint rates by that floor for interior route
+transitions, worst-case route gas, and rounding.
 `strategy.config.rangeCount` sets the geometric curve resolution (default `8`, maximum `16`).
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
@@ -145,8 +146,7 @@ admission and logged as unsupported. `solverMode: external` serves direct filler
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
 its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
-available capacity; `rangeCount` sets their target number. See the
-plan for settlement, pricing, concurrency, and onboarding details:
+available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
 
