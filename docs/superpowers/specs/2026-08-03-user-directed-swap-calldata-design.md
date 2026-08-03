@@ -363,7 +363,7 @@ SignedSwap(
   caller    = router,
   signer    = framework signer address,
   nonce     = deterministic nonce described below,
-  deadline  = confirmation validUntil
+  deadline  = immutable public deadline from BUILD (never after confirmation validUntil)
 )
 ```
 
@@ -433,7 +433,7 @@ deadlines.
 
 A discount is eligible only when it applies to the persisted adapter and input token, covers the exact
 persisted input, yields at least the persisted leg floor under fresh state, and both signed deadlines cover
-the confirmation's remaining validity. Encode an eligible discount with `TryPackSwap0`; the selector is
+the immutable public BUILD deadline. Encode an eligible discount with `TryPackSwap0`; the selector is
 `0x8fa5c671`, recipient is the Router, and amount is the persisted leg input.
 
 If the selected discount cannot be resolved or is no longer eligible, the solver may fall back to
@@ -449,10 +449,11 @@ a stale-confirmation conflict. External mode never calls the discount API and al
   dynamically by the backend are validated and cached before confirmation and revalidated for build;
   enabling the API does not require a static adapter list.
 - A confirmation may be built only before its `validUntil`.
-- `SignedSwap.deadline` equals, and therefore never exceeds, confirmation `validUntil`.
-- A discount is used only if both of its deadlines last through confirmation `validUntil`.
-- Each call's `validUntil` equals the confirmation deadline. It describes the authorization's
-  time bound, not a reservation or guarantee against intervening chain state.
+- `SignedSwap.deadline` equals the immutable public BUILD deadline, which cannot exceed confirmation
+  `validUntil`.
+- A discount is used only if both of its deadlines last through that public deadline.
+- Each call's `validUntil` reports its actual authorization bound and cannot precede the public deadline.
+  It is not a reservation or guarantee against intervening chain state.
 - Expired confirmations and build-cache entries are swept. The store has a fixed upper bound; once full,
   it rejects new confirmations rather than evicting live ones.
 
