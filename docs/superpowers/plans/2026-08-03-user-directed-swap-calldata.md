@@ -1004,7 +1004,7 @@ func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T)
 
 Confirm from discount inventory without configuring any discount resolver. BUILD must succeed with
 selector `0x9a4568b6`, preserve adapter/route/split/domain/order, use the original call index for its
-deterministic nonce, and create both adapter and Router signatures.
+deterministic nonce, and create the Router-bound adapter signature.
 
 - [x] **Step 2: Remove the private discount BUILD surface**
 
