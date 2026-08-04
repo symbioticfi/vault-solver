@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	frameworksigner "github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -96,6 +98,35 @@ func packSignedSwapCall(
 	data, err := swapAdapterBinding.TryPackSwap1(value, signature)
 	if err != nil {
 		return nil, errors.Errorf("pack signed swap: %w", err)
+	}
+	return data, nil
+}
+
+func packDiscountSwapCall(
+	signed *discounts.Signed,
+	recipient common.Address,
+	amountIn *big.Int,
+) ([]byte, error) {
+	if signed == nil {
+		return nil, errors.New("discount swap is nil")
+	}
+	value := adapter.ILiquidLaneAdapterDiscountSwap{
+		Discount: adapter.ILiquidLaneAdapterDiscount{
+			TokenToRedeem: signed.Terms.TokenToRedeem,
+			Discount:      signed.Terms.Discount,
+			Signer:        signed.Terms.Signer,
+			Protocol:      signed.Terms.Protocol,
+			Nonce:         signed.Terms.Nonce,
+			Deadline:      signed.Terms.Deadline,
+		},
+		SignerSignature:  signed.SignerSignature,
+		ProtocolDeadline: signed.ProtocolDeadline,
+	}
+	data, err := swapAdapterBinding.TryPackSwap0(
+		value, signed.ProtocolSignature, recipient, liquidlane.CloneBig(amountIn),
+	)
+	if err != nil {
+		return nil, errors.Errorf("pack discount swap: %w", err)
 	}
 	return data, nil
 }

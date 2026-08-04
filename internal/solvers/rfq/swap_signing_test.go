@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"math/big"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
 const (
@@ -117,6 +119,44 @@ func TestPackSignedSwapCallPropagatesSigningFailure(t *testing.T) {
 	}
 }
 
+func TestPackDiscountSwapCallUsesExactResolvedPayload(t *testing.T) {
+	signed := sampleSignedDiscount()
+	recipient := common.HexToAddress(testRouter)
+	amountIn := big.NewInt(100)
+
+	data, err := packDiscountSwapCall(signed, recipient, amountIn)
+	if err != nil {
+		t.Fatalf("packDiscountSwapCall: %v", err)
+	}
+	if got := common.Bytes2Hex(data[:4]); got != "8fa5c671" {
+		t.Fatalf("selector = 0x%s", got)
+	}
+	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := parsed.Methods["swap0"].Inputs.Unpack(data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := *abi.ConvertType(
+		values[0], new(adapter.ILiquidLaneAdapterDiscountSwap),
+	).(*adapter.ILiquidLaneAdapterDiscountSwap)
+	if decoded.Discount.TokenToRedeem != signed.Terms.TokenToRedeem ||
+		decoded.Discount.Discount.Cmp(signed.Terms.Discount) != 0 ||
+		decoded.Discount.Signer != signed.Terms.Signer || decoded.Discount.Protocol != signed.Terms.Protocol ||
+		decoded.Discount.Nonce.Cmp(signed.Terms.Nonce) != 0 ||
+		decoded.Discount.Deadline.Cmp(signed.Terms.Deadline) != 0 ||
+		!bytes.Equal(decoded.SignerSignature, signed.SignerSignature) ||
+		decoded.ProtocolDeadline.Cmp(signed.ProtocolDeadline) != 0 {
+		t.Fatalf("decoded discount swap = %+v", decoded)
+	}
+	if !bytes.Equal(values[1].([]byte), signed.ProtocolSignature) || values[2].(common.Address) != recipient ||
+		values[3].(*big.Int).Cmp(amountIn) != 0 {
+		t.Fatalf("outer discount arguments = protocolSig %x recipient %v amountIn %v", values[1], values[2], values[3])
+	}
+}
+
 type swapTestSigner struct {
 	key   *ecdsa.PrivateKey
 	err   error
@@ -162,6 +202,24 @@ func sampleSignedSwap(signer common.Address) adapter.ILiquidLaneAdapterSignedSwa
 		Recipient: common.HexToAddress(testRouter), TokenIn: common.HexToAddress(testTokenIn),
 		AmountIn: big.NewInt(10), AmountOut: big.NewInt(19), Caller: common.HexToAddress(testRouter),
 		Signer: signer, Nonce: big.NewInt(9), Deadline: big.NewInt(2_000_000_000),
+	}
+}
+
+func sampleSignedDiscount() *discounts.Signed {
+	return &discounts.Signed{
+		DiscountID: common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Adapter:    common.HexToAddress(testAdapter),
+		Terms: discounts.SignedTerms{
+			TokenToRedeem: common.HexToAddress(testTokenIn),
+			Discount:      big.NewInt(123),
+			Signer:        common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			Protocol:      common.HexToAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			Nonce:         big.NewInt(9),
+			Deadline:      big.NewInt(2_000_000_000),
+		},
+		SignerSignature:   []byte{0x01, 0x02, 0x03},
+		ProtocolDeadline:  big.NewInt(2_000_000_001),
+		ProtocolSignature: []byte{0x04, 0x05, 0x06},
 	}
 }
 
