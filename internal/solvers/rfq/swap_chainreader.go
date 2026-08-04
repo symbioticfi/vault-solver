@@ -18,20 +18,20 @@ type swapNonceCheck struct {
 }
 
 type swapStateReader interface {
-	validateRouter(context.Context, common.Address) error
-	validateAdapters(context.Context, []common.Address, common.Address) (map[common.Address]swapDomain, error)
-	readFillQuote(context.Context, liquidlane.Route, *big.Int) (liquidlane.FillQuote, error)
-	readUsedNonces(context.Context, []swapNonceCheck) ([]bool, error)
+	validateRouter(ctx context.Context, router common.Address) error
+	validateAdapters(ctx context.Context, adapters []common.Address, signer common.Address) (map[common.Address]swapDomain, error)
+	readFillQuote(ctx context.Context, route liquidlane.Route, amountIn *big.Int) (liquidlane.FillQuote, error)
+	readUsedNonces(ctx context.Context, checks []swapNonceCheck) ([]bool, error)
 }
 
 type swapChainBackend interface {
-	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
-	Multicall(context.Context, []chain.Call) ([]chain.CallResult, error)
+	CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error)
+	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
 }
 
 type swapLiquidLaneReader interface {
-	ReadAuth(context.Context, []common.Address, common.Address) ([]liquidlane.Auth, error)
-	ReadFillQuotes(context.Context, []liquidlane.Route, common.Address, *big.Int) ([]liquidlane.FillQuote, error)
+	ReadAuth(ctx context.Context, adapters []common.Address, filler common.Address) ([]liquidlane.Auth, error)
+	ReadFillQuotes(ctx context.Context, routes []liquidlane.Route, tokenIn common.Address, amountIn *big.Int) ([]liquidlane.FillQuote, error)
 }
 
 type swapOnchainReader struct {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/google/uuid"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -45,7 +46,7 @@ func TestSwapStoreDiscoveryIsDeepCopiedAndExpires(t *testing.T) {
 	}
 
 	now = now.Add(time.Minute)
-	if _, err := store.discovery(id); err != errSwapRecordExpired {
+	if _, err := store.discovery(id); !errors.Is(err, errSwapRecordExpired) {
 		t.Fatalf("expired discovery error = %v", err)
 	}
 }
@@ -74,7 +75,7 @@ func TestSwapStoreConfirmationIsDeepCopiedAndExpires(t *testing.T) {
 	}
 
 	now = record.ValidUntil
-	if _, err := store.confirmation(record.SolverQuoteID); err != errSwapRecordExpired {
+	if _, err := store.confirmation(record.SolverQuoteID); !errors.Is(err, errSwapRecordExpired) {
 		t.Fatalf("expired confirmation error = %v", err)
 	}
 }
@@ -88,7 +89,7 @@ func TestSwapStoreRejectsWhenTenThousandLiveRecordsExist(t *testing.T) {
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
-	if err := store.putDiscovery(discoveryRecord{RequestID: uuid.New(), Points: map[string]discoveryPointRecord{}, ExpiresAt: now.Add(time.Hour)}); err != errSwapStoreFull {
+	if err := store.putDiscovery(discoveryRecord{RequestID: uuid.New(), Points: map[string]discoveryPointRecord{}, ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, errSwapStoreFull) {
 		t.Fatalf("overflow error = %v", err)
 	}
 	now = now.Add(2 * time.Hour)
@@ -145,10 +146,10 @@ func TestSwapStoreBuildLeaseRejectsSecondBuildIDAndFingerprintDrift(t *testing.T
 		t.Fatal(err)
 	}
 	lease.Release()
-	if _, err := store.acquireBuild(record.SolverQuoteID, uuid.New(), fingerprint); err != errSwapBuildConflict {
+	if _, err := store.acquireBuild(record.SolverQuoteID, uuid.New(), fingerprint); !errors.Is(err, errSwapBuildConflict) {
 		t.Fatalf("second build ID error = %v", err)
 	}
-	if _, err := store.acquireBuild(record.SolverQuoteID, buildID, common.HexToHash("0x02")); err != errSwapBuildConflict {
+	if _, err := store.acquireBuild(record.SolverQuoteID, buildID, common.HexToHash("0x02")); !errors.Is(err, errSwapBuildConflict) {
 		t.Fatalf("fingerprint drift error = %v", err)
 	}
 }

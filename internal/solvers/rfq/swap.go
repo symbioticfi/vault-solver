@@ -4,7 +4,7 @@ import (
 	"context"
 	"math/big"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +28,7 @@ import (
 var errSwapNoContent = errors.New("swap confirmation has no current liquidity")
 
 type swapDiscountBackend interface {
-	resolveDiscount(context.Context, string) (*resolveDiscountResponse, error)
+	resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error)
 }
 
 type swapServiceError struct {
@@ -310,8 +310,10 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 			callValidUntil = record.PublicDeadline.Unix()
 		}
 		authSignature, authErr := signRouterSwapAuthorization(s.signer, record.ChainID, s.router, routerSwapAuthorization{
-			Swapper: record.Swapper, Adapter: leg.Adapter, AmountIn: liquidlane.CloneBig(leg.AmountIn),
-			DataHash: crypto.Keccak256Hash(data), Deadline: big.NewInt(record.PublicDeadline.Unix()),
+			Swapper: record.Swapper, AuthSigner: s.signer.Address(), TokenIn: record.TokenIn,
+			Adapter: leg.Adapter, AmountIn: liquidlane.CloneBig(leg.AmountIn), DataHash: crypto.Keccak256Hash(data),
+			ExecutionDeadline:     big.NewInt(record.PublicDeadline.Unix()),
+			AuthorizationDeadline: big.NewInt(record.PublicDeadline.Unix()),
 		})
 		if authErr != nil {
 			return nil, swapError(http.StatusBadGateway, "Router swap authorization signing failed", authErr)
@@ -319,9 +321,10 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 		amountOut.Add(amountOut, prepared[i].amountOut)
 		calls[i] = swapCallResponse{
 			To: lowerAddr(leg.Adapter), Data: strings.ToLower(hexutil.Encode(data)),
-			AuthSigner: lowerAddr(s.signer.Address()), AuthSignature: strings.ToLower(hexutil.Encode(authSignature)),
-			AmountIn:  leg.AmountIn.String(),
-			AmountOut: prepared[i].amountOut.String(), TokenOut: lowerAddr(record.TokenOut),
+			AuthSigner: lowerAddr(s.signer.Address()), AuthDeadline: record.PublicDeadline.Unix(),
+			AuthSignature: strings.ToLower(hexutil.Encode(authSignature)),
+			AmountIn:      leg.AmountIn.String(),
+			AmountOut:     prepared[i].amountOut.String(), TokenOut: lowerAddr(record.TokenOut),
 			LiquidityDomain: string(liquidlane.RouteCapacityID(leg.Route)), ValidUntil: callValidUntil,
 		}
 	}
@@ -500,7 +503,7 @@ func validateSwapPlan(
 	for domain := range domainSet {
 		domains = append(domains, domain)
 	}
-	sort.Slice(domains, func(i, j int) bool { return domains[i] < domains[j] })
+	slices.Sort(domains)
 	return domains, nil
 }
 
@@ -556,12 +559,13 @@ func equalCapacityDomains(left, right []liquidlane.CapacityID) bool {
 }
 
 func buildFingerprint(request *parsedSwapRequest) common.Hash {
-	fields := []string{
+	fields := make([]string, 0, 14+len(request.LiquidityDomains))
+	fields = append(fields,
 		request.Protocol, string(request.Phase), request.RequestID.String(), request.QuoteID.String(),
 		request.SolverQuoteID.String(), request.BuildID.String(), strconv.FormatInt(request.ChainID, 10),
 		lowerAddr(request.Swapper), lowerAddr(request.TokenIn), lowerAddr(request.TokenOut), request.AmountIn.String(),
 		request.MinAmountOut.String(), strconv.FormatInt(request.Deadline.Unix(), 10), lowerAddr(request.Router),
-	}
+	)
 	fields = append(fields, capacityStrings(request.LiquidityDomains)...)
 	return crypto.Keccak256Hash([]byte(strings.Join(fields, "\x00")))
 }

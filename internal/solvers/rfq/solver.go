@@ -90,6 +90,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 // buildServices wires the quote and execution services from the parsed config and shared deps.
 // Split from factory so the config → service wiring (notably the adapter whitelist reaching both
 // services) is unit-testable without a chain client.
+//
+//nolint:unparam // tests intentionally exercise the stage deployment's chain ID while production uses buildServicesWithSwap.
 func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, quoteStrategy types.Strategy, log logr.Logger,
 ) (*quoteService, *executionService) {

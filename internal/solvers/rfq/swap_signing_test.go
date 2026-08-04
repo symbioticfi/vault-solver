@@ -25,9 +25,10 @@ const (
 
 func TestRouterSwapAuthorizationDigestMatchesEIP712Reference(t *testing.T) {
 	value := routerSwapAuthorization{
-		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter),
+		Swapper: common.HexToAddress(testSwapper), AuthSigner: common.HexToAddress(testSwapper),
+		TokenIn: common.HexToAddress(testTokenIn), Adapter: common.HexToAddress(testAdapter),
 		AmountIn: big.NewInt(10), DataHash: crypto.Keccak256Hash([]byte{0x12, 0x34}),
-		Deadline: big.NewInt(2_000_000_000),
+		ExecutionDeadline: big.NewInt(2_000_000_000), AuthorizationDeadline: big.NewInt(2_000_000_000),
 	}
 	got, err := routerSwapAuthorizationDigest(1, common.HexToAddress(testRouter), value)
 	if err != nil {
@@ -40,9 +41,10 @@ func TestRouterSwapAuthorizationDigestMatchesEIP712Reference(t *testing.T) {
 				{Name: "chainId", Type: "uint256"}, {Name: "verifyingContract", Type: "address"},
 			},
 			"SwapAuthorization": {
-				{Name: "swapper", Type: "address"}, {Name: "adapter", Type: "address"},
+				{Name: "swapper", Type: "address"}, {Name: "authSigner", Type: "address"},
+				{Name: "tokenIn", Type: "address"}, {Name: "adapter", Type: "address"},
 				{Name: "amountIn", Type: "uint256"}, {Name: "dataHash", Type: "bytes32"},
-				{Name: "deadline", Type: "uint256"},
+				{Name: "executionDeadline", Type: "uint256"}, {Name: "authorizationDeadline", Type: "uint256"},
 			},
 		},
 		PrimaryType: "SwapAuthorization",
@@ -51,8 +53,10 @@ func TestRouterSwapAuthorizationDigestMatchesEIP712Reference(t *testing.T) {
 			VerifyingContract: testRouter,
 		},
 		Message: apitypes.TypedDataMessage{
-			"swapper": value.Swapper.Hex(), "adapter": value.Adapter.Hex(), "amountIn": value.AmountIn.String(),
-			"dataHash": value.DataHash.Hex(), "deadline": value.Deadline.String(),
+			"swapper": value.Swapper.Hex(), "authSigner": value.AuthSigner.Hex(), "tokenIn": value.TokenIn.Hex(),
+			"adapter": value.Adapter.Hex(), "amountIn": value.AmountIn.String(), "dataHash": value.DataHash.Hex(),
+			"executionDeadline":     value.ExecutionDeadline.String(),
+			"authorizationDeadline": value.AuthorizationDeadline.String(),
 		},
 	}
 	domainHash, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
@@ -72,9 +76,10 @@ func TestRouterSwapAuthorizationDigestMatchesEIP712Reference(t *testing.T) {
 func TestSignRouterSwapAuthorizationUsesFrameworkSigner(t *testing.T) {
 	signer := newSwapTestSigner(t)
 	value := routerSwapAuthorization{
-		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter),
+		Swapper: common.HexToAddress(testSwapper), AuthSigner: signer.Address(),
+		TokenIn: common.HexToAddress(testTokenIn), Adapter: common.HexToAddress(testAdapter),
 		AmountIn: big.NewInt(10), DataHash: crypto.Keccak256Hash([]byte{0x12, 0x34}),
-		Deadline: big.NewInt(2_000_000_000),
+		ExecutionDeadline: big.NewInt(2_000_000_000), AuthorizationDeadline: big.NewInt(2_000_000_000),
 	}
 	signature, err := signRouterSwapAuthorization(signer, 1, common.HexToAddress(testRouter), value)
 	if err != nil {

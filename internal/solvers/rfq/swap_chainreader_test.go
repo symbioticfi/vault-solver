@@ -33,7 +33,7 @@ func TestSwapOnchainReaderValidateAdaptersAcceptsAuthorizedDomain(t *testing.T) 
 	adapterAddress := common.HexToAddress(testAdapter)
 	signer := common.HexToAddress(testSwapper)
 	chainBackend := &fakeSwapChain{results: []chain.CallResult{{
-		Success: true, ReturnData: packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", "1", 1, adapterAddress, [32]byte{}, nil),
+		Success: true, ReturnData: packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", 1, adapterAddress, [32]byte{}, nil),
 	}}}
 	ll := &fakeSwapLiquidLaneReader{auth: []liquidlane.Auth{{Adapter: adapterAddress, Authorized: true}}}
 	reader := &swapOnchainReader{chain: chainBackend, ll: ll, chainID: 1}
@@ -67,16 +67,16 @@ func TestSwapOnchainReaderValidateAdaptersRejectsInvalidDomainShapes(t *testing.
 	adapterAddress := common.HexToAddress(testAdapter)
 	signer := common.HexToAddress(testSwapper)
 	cases := map[string][]byte{
-		"fields":   packSwapDomainOutput(t, 0x1f, "LiquidLaneAdapter", "1", 1, adapterAddress, [32]byte{}, nil),
-		"name":     packSwapDomainOutput(t, 0x0f, "", "1", 1, adapterAddress, [32]byte{}, nil),
-		"chain":    packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", "1", 2, adapterAddress, [32]byte{}, nil),
-		"verifier": packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", "1", 1, common.HexToAddress(testRouter), [32]byte{}, nil),
+		"fields":   packSwapDomainOutput(t, 0x1f, "LiquidLaneAdapter", 1, adapterAddress, [32]byte{}, nil),
+		"name":     packSwapDomainOutput(t, 0x0f, "", 1, adapterAddress, [32]byte{}, nil),
+		"chain":    packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", 2, adapterAddress, [32]byte{}, nil),
+		"verifier": packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", 1, common.HexToAddress(testRouter), [32]byte{}, nil),
 		"salt": func() []byte {
 			var salt [32]byte
 			salt[0] = 1
-			return packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", "1", 1, adapterAddress, salt, nil)
+			return packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", 1, adapterAddress, salt, nil)
 		}(),
-		"extensions": packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", "1", 1, adapterAddress, [32]byte{}, []*big.Int{big.NewInt(1)}),
+		"extensions": packSwapDomainOutput(t, 0x0f, "LiquidLaneAdapter", 1, adapterAddress, [32]byte{}, []*big.Int{big.NewInt(1)}),
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -108,7 +108,7 @@ func TestSwapOnchainReaderReadFillQuoteRequiresExactRouteAndAmount(t *testing.T)
 		t.Fatal("multiple exact-route quotes were accepted")
 	}
 	wrong := quote
-	wrong.Route.Adapter = common.HexToAddress(testRouter)
+	wrong.Adapter = common.HexToAddress(testRouter)
 	reader.ll = &fakeSwapLiquidLaneReader{quotes: []liquidlane.FillQuote{wrong}}
 	if _, err := reader.readFillQuote(t.Context(), route, big.NewInt(10)); err == nil {
 		t.Fatal("changed route identity was accepted")
@@ -171,7 +171,6 @@ func packSwapDomainOutput(
 	t *testing.T,
 	fields byte,
 	name string,
-	version string,
 	chainID int64,
 	verifyingContract common.Address,
 	salt [32]byte,
@@ -183,7 +182,7 @@ func packSwapDomainOutput(
 		t.Fatal(err)
 	}
 	data, err := parsed.Methods["eip712Domain"].Outputs.Pack(
-		[1]byte{fields}, name, version, big.NewInt(chainID), verifyingContract, salt, extensions,
+		[1]byte{fields}, name, "1", big.NewInt(chainID), verifyingContract, salt, extensions,
 	)
 	if err != nil {
 		t.Fatal(err)

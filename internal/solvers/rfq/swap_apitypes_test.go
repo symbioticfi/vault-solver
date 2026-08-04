@@ -219,15 +219,16 @@ func TestSwapResponseJSONPinsV2FieldNamesAndLowercaseValues(t *testing.T) {
 
 func TestSwapCallResponseJSONPinsRouterAuthorizationFields(t *testing.T) {
 	call := swapCallResponse{
-		To: testAdapter, Data: "0x9a4568b6", AuthSigner: testSwapper, AuthSignature: "0x1234",
-		AmountIn: "10", AmountOut: "19", TokenOut: testTokenOut,
+		To: testAdapter, Data: "0x9a4568b6", AuthSigner: testSwapper, AuthDeadline: 2_000_000_000,
+		AuthSignature: "0x1234",
+		AmountIn:      "10", AmountOut: "19", TokenOut: testTokenOut,
 		LiquidityDomain: "capacity:1:" + testVault + ":" + testTokenOut, ValidUntil: 2_000_000_000,
 	}
 	body, err := json.Marshal(call)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"to"`, `"data"`, `"authSigner"`, `"authSignature"`, `"amountIn"`,
+	for _, field := range []string{`"to"`, `"data"`, `"authSigner"`, `"authDeadline"`, `"authSignature"`, `"amountIn"`,
 		`"amountOut"`, `"tokenOut"`, `"liquidityDomain"`, `"validUntil"`} {
 		if !strings.Contains(string(body), field) {
 			t.Fatalf("call JSON missing %s: %s", field, body)

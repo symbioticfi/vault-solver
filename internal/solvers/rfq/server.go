@@ -35,7 +35,7 @@ type server struct {
 }
 
 type swapHandler interface {
-	swap(context.Context, *swapRequest) (*swapResponse, error)
+	swap(ctx context.Context, request *swapRequest) (*swapResponse, error)
 }
 
 /* ───────── Huma I/O types (drive both validation and the generated spec) ───────── */

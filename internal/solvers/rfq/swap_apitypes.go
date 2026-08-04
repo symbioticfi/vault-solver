@@ -2,7 +2,7 @@ package rfq
 
 import (
 	"math/big"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +57,7 @@ type swapCallResponse struct {
 	To              string `json:"to"`
 	Data            string `json:"data"`
 	AuthSigner      string `json:"authSigner"`
+	AuthDeadline    int64  `json:"authDeadline"`
 	AuthSignature   string `json:"authSignature"`
 	AmountIn        string `json:"amountIn"`
 	AmountOut       string `json:"amountOut"`
@@ -105,6 +106,12 @@ type parsedSwapRequest struct {
 	Inventory          []solverInventory
 	LiquidityDomains   []liquidlane.CapacityID
 	Router             common.Address
+}
+
+type exactSwapFields struct {
+	AmountIn     *big.Int
+	MinAmountOut *big.Int
+	Deadline     time.Time
 }
 
 func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*parsedSwapRequest, error) {
@@ -163,7 +170,9 @@ func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*pa
 		}
 		parsed.DiscoveryRequestID, err = parseCanonicalUUID(*r.DiscoveryRequestID, "discoveryRequestId")
 		if err == nil {
-			parsed.AmountIn, parsed.MinAmountOut, parsed.Deadline, err = parseExactSwapFields(r)
+			var exact exactSwapFields
+			exact, err = parseExactSwapFields(r)
+			parsed.AmountIn, parsed.MinAmountOut, parsed.Deadline = exact.AmountIn, exact.MinAmountOut, exact.Deadline
 		}
 		if err == nil {
 			parsed.Inventory, err = parseSwapAdapters(r.Adapters, r.ChainID, tokenIn, tokenOut)
@@ -178,7 +187,9 @@ func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*pa
 			parsed.BuildID, err = parseCanonicalUUID(*r.BuildID, "buildId")
 		}
 		if err == nil {
-			parsed.AmountIn, parsed.MinAmountOut, parsed.Deadline, err = parseExactSwapFields(r)
+			var exact exactSwapFields
+			exact, err = parseExactSwapFields(r)
+			parsed.AmountIn, parsed.MinAmountOut, parsed.Deadline = exact.AmountIn, exact.MinAmountOut, exact.Deadline
 		}
 		if err == nil {
 			parsed.LiquidityDomains, err = parseCapacityDomains(r.LiquidityDomains, r.ChainID)
@@ -252,7 +263,7 @@ func parseCapacityDomains(raw []string, chainID int64) ([]liquidlane.CapacityID,
 		seen[canonical] = true
 		out = append(out, liquidlane.CapacityID(canonical))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out, nil
 }
 
@@ -263,20 +274,23 @@ func parseSwapDeadline(raw *int64, field string) (time.Time, error) {
 	return time.Unix(*raw, 0), nil
 }
 
-func parseExactSwapFields(r *swapRequest) (*big.Int, *big.Int, time.Time, error) {
+func parseExactSwapFields(r *swapRequest) (exactSwapFields, error) {
 	if r.AmountIn == nil || r.MinAmountOut == nil {
-		return nil, nil, time.Time{}, errors.New("amountIn and minAmountOut are required")
+		return exactSwapFields{}, errors.New("amountIn and minAmountOut are required")
 	}
 	amountIn, err := parseUint256(*r.AmountIn, "amountIn")
 	if err != nil || amountIn.Sign() <= 0 {
-		return nil, nil, time.Time{}, errors.New("amountIn must be positive")
+		return exactSwapFields{}, errors.New("amountIn must be positive")
 	}
 	minAmountOut, err := parseUint256(*r.MinAmountOut, "minAmountOut")
 	if err != nil || minAmountOut.Sign() <= 0 {
-		return nil, nil, time.Time{}, errors.New("minAmountOut must be positive")
+		return exactSwapFields{}, errors.New("minAmountOut must be positive")
 	}
 	deadline, err := parseSwapDeadline(r.Deadline, "deadline")
-	return amountIn, minAmountOut, deadline, err
+	if err != nil {
+		return exactSwapFields{}, err
+	}
+	return exactSwapFields{AmountIn: amountIn, MinAmountOut: minAmountOut, Deadline: deadline}, nil
 }
 
 func parseSwapAdapters(raw []quoteAdapter, chainID int64, tokenIn, tokenOut common.Address) ([]solverInventory, error) {

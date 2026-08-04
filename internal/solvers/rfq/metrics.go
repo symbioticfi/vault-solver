@@ -18,6 +18,18 @@ type httpMetrics struct {
 	swaps    *prometheus.CounterVec
 }
 
+const (
+	swapOutcomeSuccess         = "success"
+	swapOutcomeNoContent       = "no_content"
+	swapOutcomeBadRequest      = "bad_request"
+	swapOutcomeForbidden       = "forbidden"
+	swapOutcomeNotFound        = "not_found"
+	swapOutcomeConflict        = "conflict"
+	swapOutcomeExpired         = "expired"
+	swapOutcomeStoreFull       = "store_full"
+	swapOutcomeDependencyError = "dependency_error"
+)
+
 func newHTTPMetrics(reg prometheus.Registerer) (*httpMetrics, error) {
 	m := &httpMetrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -65,33 +77,35 @@ func swapPhaseLabel(phase swapPhase) string {
 
 func swapOutcomeLabel(outcome string) string {
 	switch outcome {
-	case "success", "no_content", "bad_request", "forbidden", "not_found", "conflict", "expired", "store_full", "dependency_error":
+	case swapOutcomeSuccess, swapOutcomeNoContent, swapOutcomeBadRequest, swapOutcomeForbidden,
+		swapOutcomeNotFound, swapOutcomeConflict, swapOutcomeExpired, swapOutcomeStoreFull,
+		swapOutcomeDependencyError:
 		return outcome
 	default:
-		return "dependency_error"
+		return swapOutcomeDependencyError
 	}
 }
 
 func swapOutcomeForStatus(status int) string {
 	switch status {
 	case http.StatusOK:
-		return "success"
+		return swapOutcomeSuccess
 	case http.StatusNoContent:
-		return "no_content"
+		return swapOutcomeNoContent
 	case http.StatusBadRequest:
-		return "bad_request"
+		return swapOutcomeBadRequest
 	case http.StatusForbidden:
-		return "forbidden"
+		return swapOutcomeForbidden
 	case http.StatusNotFound:
-		return "not_found"
+		return swapOutcomeNotFound
 	case http.StatusConflict:
-		return "conflict"
+		return swapOutcomeConflict
 	case http.StatusGone:
-		return "expired"
+		return swapOutcomeExpired
 	case http.StatusTooManyRequests:
-		return "store_full"
+		return swapOutcomeStoreFull
 	default:
-		return "dependency_error"
+		return swapOutcomeDependencyError
 	}
 }
 

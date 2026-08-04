@@ -160,12 +160,6 @@ func (s *swapStore) acquireBuild(id, buildID uuid.UUID, fingerprint common.Hash)
 	}, nil
 }
 
-func (s *swapStore) sweep() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sweepLocked()
-}
-
 func (s *swapStore) sweepLocked() {
 	now := s.now()
 	for id, record := range s.discoveries {

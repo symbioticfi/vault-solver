@@ -51,7 +51,7 @@ func TestSwapDirectLifecycleBuildsRouterBoundSignedCall(t *testing.T) {
 		t.Fatalf("confirm response = %+v", confirmResponse)
 	}
 
-	build := buildSwapRequest(confirmResponse, 1_020)
+	build := buildSwapRequest(confirmResponse)
 	buildResponse, err := service.swap(t.Context(), &build)
 	if err != nil {
 		t.Fatalf("BUILD: %v", err)
@@ -62,7 +62,8 @@ func TestSwapDirectLifecycleBuildsRouterBoundSignedCall(t *testing.T) {
 	call := (*buildResponse.Calls)[0]
 	if call.To != testAdapter || call.AmountIn != "100" || call.AmountOut != "200" ||
 		call.TokenOut != testTokenOut || len(call.Data) <= 10 || call.Data[:10] != "0x9a4568b6" ||
-		call.AuthSigner != strings.ToLower(signer.Address().Hex()) || len(call.AuthSignature) != 132 {
+		call.AuthSigner != strings.ToLower(signer.Address().Hex()) || call.AuthDeadline != 1_020 ||
+		len(call.AuthSignature) != 132 {
 		t.Fatalf("signed call = %+v", call)
 	}
 	decoded, _ := unpackSignedCall(t, common.FromHex(call.Data))
@@ -71,8 +72,10 @@ func TestSwapDirectLifecycleBuildsRouterBoundSignedCall(t *testing.T) {
 		t.Fatalf("decoded signed call = %+v", decoded)
 	}
 	authorization := routerSwapAuthorization{
-		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter), AmountIn: big.NewInt(100),
-		DataHash: crypto.Keccak256Hash(common.FromHex(call.Data)), Deadline: big.NewInt(1_020),
+		Swapper: common.HexToAddress(testSwapper), AuthSigner: signer.Address(), TokenIn: common.HexToAddress(testTokenIn),
+		Adapter: common.HexToAddress(testAdapter), AmountIn: big.NewInt(100),
+		DataHash: crypto.Keccak256Hash(common.FromHex(call.Data)), ExecutionDeadline: big.NewInt(1_020),
+		AuthorizationDeadline: big.NewInt(1_020),
 	}
 	digest, _ := routerSwapAuthorizationDigest(1, common.HexToAddress(testRouter), authorization)
 	authSignature := common.FromHex(call.AuthSignature)
@@ -115,7 +118,7 @@ func TestSwapConfirmReturnsNoContentWhenExactInputCannotBeCovered(t *testing.T) 
 		t.Fatal(err)
 	}
 	confirm := confirmSwapRequest(discovery.RequestID, 1_020)
-	if response, err := service.swap(t.Context(), &confirm); err != errSwapNoContent || response != nil {
+	if response, err := service.swap(t.Context(), &confirm); !errors.Is(err, errSwapNoContent) || response != nil {
 		t.Fatalf("confirm response = %+v, err %v", response, err)
 	}
 }
@@ -152,7 +155,7 @@ func TestSwapBuildRejectsChangedTupleAndSecondBuildID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	build := buildSwapRequest(confirmed, 1_020)
+	build := buildSwapRequest(confirmed)
 	changed := build
 	changed.MinAmountOut = stringPtr("199")
 	if _, err := service.swap(t.Context(), &changed); err == nil {
@@ -177,7 +180,7 @@ func TestSwapBuildRejectsUsedNonceAndStaleLeg(t *testing.T) {
 	_, _ = service.swap(t.Context(), &discovery)
 	confirm := confirmSwapRequest(discovery.RequestID, 1_020)
 	confirmed, _ := service.swap(t.Context(), &confirm)
-	build := buildSwapRequest(confirmed, 1_020)
+	build := buildSwapRequest(confirmed)
 	state.used = []bool{true}
 	if _, err := service.swap(t.Context(), &build); err == nil {
 		t.Fatal("used deterministic nonce was accepted")
@@ -203,7 +206,7 @@ func TestSwapBuildUsesEligibleDiscountOnPersistedAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	build := buildSwapRequest(confirmed, 1_020)
+	build := buildSwapRequest(confirmed)
 	response, err := service.swap(t.Context(), &build)
 	if err != nil {
 		t.Fatalf("BUILD discount: %v", err)
@@ -211,7 +214,8 @@ func TestSwapBuildUsesEligibleDiscountOnPersistedAdapter(t *testing.T) {
 	if response.Calls == nil || len(*response.Calls) != 1 || (*response.Calls)[0].Data[:10] != "0x8fa5c671" {
 		t.Fatalf("discount response = %+v", response)
 	}
-	if call := (*response.Calls)[0]; call.AuthSigner != strings.ToLower(signer.Address().Hex()) || len(call.AuthSignature) != 132 {
+	if call := (*response.Calls)[0]; call.AuthSigner != strings.ToLower(signer.Address().Hex()) ||
+		call.AuthDeadline != 1_020 || len(call.AuthSignature) != 132 {
 		t.Fatalf("discount Router authorization = %+v", call)
 	}
 	if signer.calls != 1 || state.nonceReads != 0 {
@@ -236,7 +240,7 @@ func TestSwapBuildFallsBackToSignedSwapOnSameAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := service.swap(t.Context(), ptrBuild(buildSwapRequest(confirmed, 1_020)))
+	response, err := service.swap(t.Context(), ptrBuild(buildSwapRequest(confirmed)))
 	if err != nil {
 		t.Fatalf("BUILD fallback: %v", err)
 	}
@@ -264,7 +268,7 @@ func TestSwapBuildDiscountDependencyFailureReturnsBadGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.swap(t.Context(), ptrBuild(buildSwapRequest(confirmed, 1_020)))
+	_, err = service.swap(t.Context(), ptrBuild(buildSwapRequest(confirmed)))
 	var serviceErr *swapServiceError
 	if !errors.As(err, &serviceErr) || serviceErr.status != 502 {
 		t.Fatalf("dependency error = %v", err)
@@ -447,10 +451,10 @@ func confirmSwapRequestWithAdapters(discoveryID string, deadline int64, adapters
 	return r
 }
 
-func buildSwapRequest(confirmed *swapResponse, deadline int64) swapRequest {
+func buildSwapRequest(confirmed *swapResponse) swapRequest {
 	r := baseSwapRequest(swapPhaseBuild, testBuildRequestID)
 	r.SolverQuoteID, r.BuildID = stringPtr(confirmed.SolverQuoteID), stringPtr(testBuildID)
-	r.AmountIn, r.MinAmountOut, r.Deadline = stringPtr(confirmed.AmountIn), stringPtr(confirmed.AmountOut), int64Ptr(deadline)
+	r.AmountIn, r.MinAmountOut, r.Deadline = stringPtr(confirmed.AmountIn), stringPtr(confirmed.AmountOut), int64Ptr(1_020)
 	r.LiquidityDomains = append([]string(nil), confirmed.LiquidityDomains...)
 	r.Router = stringPtr(testRouter)
 	return r

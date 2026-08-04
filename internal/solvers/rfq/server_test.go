@@ -341,7 +341,7 @@ func TestServer_SwapOpenAPIPinsWireNames(t *testing.T) {
 		"protocol", "phase", "requestId", "discoveryRequestId", "quoteId", "solverQuoteId", "buildId",
 		"chainId", "swapper", "router", "tokenIn", "tokenOut", "sampleAmountsIn", "adapters", "points",
 		"amountIn", "minAmountOut", "amountOut", "liquidityDomains", "validUntil", "calls", "liquidityDomain",
-		"authSigner", "authSignature",
+		"authSigner", "authDeadline", "authSignature",
 	} {
 		if !strings.Contains(spec, `"`+field+`"`) {
 			t.Fatalf("OpenAPI missing wire field %q", field)
