@@ -18,6 +18,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	frameworksigner "github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -25,6 +26,10 @@ import (
 )
 
 var errSwapNoContent = errors.New("swap confirmation has no current liquidity")
+
+type swapDiscountBackend interface {
+	resolveDiscount(context.Context, string) (*resolveDiscountResponse, error)
+}
 
 type swapServiceError struct {
 	status  int
@@ -44,6 +49,7 @@ type swapService struct {
 	tokenPolicy      tokenpolicy.Policy
 	minAmountsIn     map[common.Address]*big.Int
 	discountsEnabled bool
+	discountBackend  swapDiscountBackend
 	reader           quoteCandidateReader
 	state            swapStateReader
 	strategy         strategytypes.Strategy
@@ -216,8 +222,6 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 	}
 
 	quotes := make([]liquidlane.FillQuote, len(record.Plan.Legs))
-	capacityUsed := make(map[liquidlane.CapacityID]*big.Int)
-	capacityAvailable := make(map[liquidlane.CapacityID]*big.Int)
 	for i, leg := range record.Plan.Legs {
 		quote, readErr := s.state.readFillQuote(ctx, leg.Route, leg.AmountIn)
 		if readErr != nil {
@@ -227,14 +231,24 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 			return nil, swapError(http.StatusConflict, "confirmed swap leg is below its floor", nil)
 		}
 		quotes[i] = quote
+	}
+	prepared := make([]preparedSwapLeg, len(record.Plan.Legs))
+	capacityUsed := make(map[liquidlane.CapacityID]*big.Int)
+	capacityAvailable := make(map[liquidlane.CapacityID]*big.Int)
+	for i, leg := range record.Plan.Legs {
+		preparedLeg, prepareErr := s.prepareSwapLeg(ctx, record, leg, quotes[i])
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		prepared[i] = preparedLeg
 		domain := liquidlane.RouteCapacityID(leg.Route)
 		if capacityUsed[domain] == nil {
 			capacityUsed[domain] = new(big.Int)
-			capacityAvailable[domain] = liquidlane.CloneBig(quote.MaxAssets)
-		} else if quote.MaxAssets.Cmp(capacityAvailable[domain]) < 0 {
-			capacityAvailable[domain] = liquidlane.CloneBig(quote.MaxAssets)
+			capacityAvailable[domain] = liquidlane.CloneBig(quotes[i].MaxAssets)
+		} else if quotes[i].MaxAssets.Cmp(capacityAvailable[domain]) < 0 {
+			capacityAvailable[domain] = liquidlane.CloneBig(quotes[i].MaxAssets)
 		}
-		capacityUsed[domain].Add(capacityUsed[domain], quote.MaxAmountOut)
+		capacityUsed[domain].Add(capacityUsed[domain], preparedLeg.amountOut)
 	}
 	for domain, used := range capacityUsed {
 		if used.Cmp(capacityAvailable[domain]) > 0 {
@@ -243,42 +257,63 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 	}
 
 	nonces := make([]*big.Int, len(record.Plan.Legs))
-	checks := make([]swapNonceCheck, len(record.Plan.Legs))
+	checks := make([]swapNonceCheck, 0, len(record.Plan.Legs))
 	for i, leg := range record.Plan.Legs {
+		if prepared[i].discount != nil {
+			continue
+		}
 		nonces[i] = signedSwapNonce(request.BuildID, record.ChainID, leg.Adapter, record.TokenIn, i)
-		checks[i] = swapNonceCheck{Adapter: leg.Adapter, TokenIn: record.TokenIn, Nonce: nonces[i]}
+		checks = append(checks, swapNonceCheck{Adapter: leg.Adapter, TokenIn: record.TokenIn, Nonce: nonces[i]})
 	}
-	usedNonces, err := s.state.readUsedNonces(ctx, checks)
-	if err != nil || len(usedNonces) != len(checks) {
-		return nil, swapError(http.StatusBadGateway, "swap nonce read failed", err)
-	}
-	for _, used := range usedNonces {
-		if used {
-			return nil, swapError(http.StatusConflict, "deterministic swap nonce is already used", nil)
+	if len(checks) > 0 {
+		usedNonces, nonceErr := s.state.readUsedNonces(ctx, checks)
+		if nonceErr != nil || len(usedNonces) != len(checks) {
+			return nil, swapError(http.StatusBadGateway, "swap nonce read failed", nonceErr)
+		}
+		for _, used := range usedNonces {
+			if used {
+				return nil, swapError(http.StatusConflict, "deterministic swap nonce is already used", nil)
+			}
 		}
 	}
 
 	calls := make([]swapCallResponse, len(record.Plan.Legs))
 	amountOut := new(big.Int)
 	for i, leg := range record.Plan.Legs {
-		domain, exists := domains[leg.Adapter]
-		if !exists {
-			return nil, swapError(http.StatusConflict, "confirmed swap adapter domain disappeared", nil)
+		var data []byte
+		var callValidUntil int64
+		if prepared[i].discount != nil {
+			value := discountBindingValue(prepared[i].discount)
+			var packErr error
+			data, packErr = packDiscountSwapCall(
+				value, prepared[i].discount.ProtocolSignature, s.router, liquidlane.CloneBig(leg.AmountIn),
+			)
+			if packErr != nil {
+				return nil, swapError(http.StatusBadGateway, "discount swap packing failed", packErr)
+			}
+			callValidUntil = discounts.ValidUntil(prepared[i].discount).Unix()
+		} else {
+			domain, exists := domains[leg.Adapter]
+			if !exists {
+				return nil, swapError(http.StatusConflict, "confirmed swap adapter domain disappeared", nil)
+			}
+			value := adapter.ILiquidLaneAdapterSignedSwap{
+				Recipient: s.router, TokenIn: record.TokenIn, AmountIn: liquidlane.CloneBig(leg.AmountIn),
+				AmountOut: liquidlane.CloneBig(prepared[i].amountOut), Caller: s.router, Signer: s.signer.Address(),
+				Nonce: nonces[i], Deadline: big.NewInt(record.PublicDeadline.Unix()),
+			}
+			var packErr error
+			data, packErr = packSignedSwapCall(s.signer, domain, value)
+			if packErr != nil {
+				return nil, swapError(http.StatusBadGateway, "swap signing failed", packErr)
+			}
+			callValidUntil = record.PublicDeadline.Unix()
 		}
-		value := adapter.ILiquidLaneAdapterSignedSwap{
-			Recipient: s.router, TokenIn: record.TokenIn, AmountIn: liquidlane.CloneBig(leg.AmountIn),
-			AmountOut: liquidlane.CloneBig(quotes[i].MaxAmountOut), Caller: s.router, Signer: s.signer.Address(),
-			Nonce: nonces[i], Deadline: big.NewInt(record.PublicDeadline.Unix()),
-		}
-		data, packErr := packSignedSwapCall(s.signer, domain, value)
-		if packErr != nil {
-			return nil, swapError(http.StatusBadGateway, "swap signing failed", packErr)
-		}
-		amountOut.Add(amountOut, value.AmountOut)
+		amountOut.Add(amountOut, prepared[i].amountOut)
 		calls[i] = swapCallResponse{
 			To: lowerAddr(leg.Adapter), Data: strings.ToLower(hexutil.Encode(data)), AmountIn: leg.AmountIn.String(),
-			AmountOut: value.AmountOut.String(), TokenOut: lowerAddr(record.TokenOut),
-			LiquidityDomain: string(liquidlane.RouteCapacityID(leg.Route)), ValidUntil: record.ValidUntil.Unix(),
+			AmountOut: prepared[i].amountOut.String(), TokenOut: lowerAddr(record.TokenOut),
+			LiquidityDomain: string(liquidlane.RouteCapacityID(leg.Route)), ValidUntil: callValidUntil,
 		}
 	}
 	if amountOut.Cmp(record.AmountOut) < 0 {
@@ -327,6 +362,58 @@ func (s *swapService) decidePlan(
 		return nil, nil, swapError(http.StatusBadGateway, "swap strategy returned an invalid allocation", err)
 	}
 	return plan, domains, nil
+}
+
+type preparedSwapLeg struct {
+	amountOut *big.Int
+	discount  *discounts.Signed
+}
+
+func (s *swapService) prepareSwapLeg(
+	ctx context.Context,
+	record *confirmationRecord,
+	leg fillLeg,
+	physical liquidlane.FillQuote,
+) (preparedSwapLeg, error) {
+	direct := preparedSwapLeg{amountOut: liquidlane.CloneBig(physical.MaxAmountOut)}
+	if leg.DiscountID == nil || !s.discountsEnabled {
+		return direct, nil
+	}
+	if s.discountBackend == nil {
+		return preparedSwapLeg{}, swapError(http.StatusBadGateway, "discount backend is unavailable", nil)
+	}
+	resolved, err := s.discountBackend.resolveDiscount(ctx, leg.DiscountID.Hex())
+	if err != nil {
+		return preparedSwapLeg{}, swapError(http.StatusBadGateway, "discount resolution failed", err)
+	}
+	signed, parseErr := discounts.ParseSigned(resolved)
+	if parseErr == nil {
+		selection := discounts.Selection{
+			DiscountID: *leg.DiscountID, Adapter: leg.Adapter, TokenIn: record.TokenIn, TokenOut: record.TokenOut,
+			AmountIn: leg.AmountIn, MinAmountOut: leg.AmountOut,
+		}
+		if discountedOut, validationErr := discounts.ValidateSigned(signed, selection, physical, record.PublicDeadline); validationErr == nil {
+			return preparedSwapLeg{amountOut: discountedOut, discount: signed}, nil
+		}
+	}
+	if direct.amountOut != nil && direct.amountOut.Cmp(leg.AmountOut) >= 0 {
+		return direct, nil
+	}
+	return preparedSwapLeg{}, swapError(
+		http.StatusConflict, "discount swap is stale and its direct fallback is below the confirmed floor", parseErr,
+	)
+}
+
+func discountBindingValue(signed *discounts.Signed) adapter.ILiquidLaneAdapterDiscountSwap {
+	return adapter.ILiquidLaneAdapterDiscountSwap{
+		Discount: adapter.ILiquidLaneAdapterDiscount{
+			TokenToRedeem: signed.Terms.TokenToRedeem, Discount: liquidlane.CloneBig(signed.Terms.Discount),
+			Signer: signed.Terms.Signer, Protocol: signed.Terms.Protocol, Nonce: liquidlane.CloneBig(signed.Terms.Nonce),
+			Deadline: liquidlane.CloneBig(signed.Terms.Deadline),
+		},
+		SignerSignature:  append([]byte(nil), signed.SignerSignature...),
+		ProtocolDeadline: liquidlane.CloneBig(signed.ProtocolDeadline),
+	}
 }
 
 func (s *swapService) validatePolicy(request *parsedSwapRequest) error {
