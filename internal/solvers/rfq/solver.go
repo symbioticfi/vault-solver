@@ -166,6 +166,7 @@ func buildServicesWithSwap(
 		discountsEnabled: cfg.usesDiscounts(),
 		reader:           rdr,
 		state:            state,
+		discounts:        backend.discounts,
 		strategy:         quoteStrategy,
 		store:            newSwapStore(time.Now),
 		signer:           signer,

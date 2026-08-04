@@ -18,6 +18,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	frameworksigner "github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -46,6 +47,7 @@ type swapService struct {
 	discountsEnabled bool
 	reader           quoteCandidateReader
 	state            swapStateReader
+	discounts        discounts.Provider
 	strategy         strategytypes.Strategy
 	store            *swapStore
 	signer           frameworksigner.Signer
@@ -150,7 +152,7 @@ func (s *swapService) confirm(ctx context.Context, request *parsedSwapRequest) (
 	if !equalCapacityDomains(domains, point.Domains) {
 		return nil, swapError(http.StatusConflict, "swap liquidity domains changed", nil)
 	}
-	adapters := planAdapters(plan)
+	adapters := directPlanAdapters(plan)
 	if _, err := s.state.validateAdapters(ctx, adapters, s.signer.Address()); err != nil {
 		return nil, swapError(http.StatusBadGateway, "swap adapter authorization failed", err)
 	}
@@ -209,7 +211,7 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 		return swapBuildResponse(request, cached), nil
 	}
 	record := lease.Record()
-	adapters := planAdapters(record.Plan)
+	adapters := directPlanAdapters(record.Plan)
 	domains, err := s.state.validateAdapters(ctx, adapters, s.signer.Address())
 	if err != nil {
 		return nil, swapError(http.StatusBadGateway, "swap adapter authorization failed", err)
@@ -414,13 +416,15 @@ func validateSwapPlan(
 	return domains, nil
 }
 
-func planAdapters(plan *fillPlan) []common.Address {
+func directPlanAdapters(plan *fillPlan) []common.Address {
 	if plan == nil {
 		return nil
 	}
-	out := make([]common.Address, len(plan.Legs))
-	for i, leg := range plan.Legs {
-		out[i] = leg.Adapter
+	out := make([]common.Address, 0, len(plan.Legs))
+	for _, leg := range plan.Legs {
+		if leg.DiscountID == nil {
+			out = append(out, leg.Adapter)
+		}
 	}
 	return out
 }

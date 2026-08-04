@@ -400,6 +400,20 @@ func TestValidateSwapPlanRejectsMoreThan64Legs(t *testing.T) {
 	}
 }
 
+func TestDirectPlanAdaptersExcludesDiscountLegs(t *testing.T) {
+	directAdapter := common.HexToAddress(testAdapter)
+	discountAdapter := common.HexToAddress("0x8888888888888888888888888888888888888888")
+	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	got := directPlanAdapters(&fillPlan{Legs: []fillLeg{
+		{Adapter: directAdapter},
+		{Adapter: discountAdapter, DiscountID: &discountID},
+	}})
+	if len(got) != 1 || got[0] != directAdapter {
+		t.Fatalf("directPlanAdapters = %v, want [%s]", got, directAdapter.Hex())
+	}
+}
+
 func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	candidate := discountedSwapCandidate(now.Add(30 * time.Second))

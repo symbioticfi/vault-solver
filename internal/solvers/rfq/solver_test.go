@@ -191,6 +191,9 @@ func TestFactoryWiresSwapOnlyWhenEnabledAndSharesBackend(t *testing.T) {
 	if swaps.signer != signer || swaps.reader != rdr || swaps.state != rdr.swapState || swaps.strategy != quotes.strategy {
 		t.Fatal("swap service did not receive the framework signer and shared quote dependencies")
 	}
+	if swaps.discounts != backend.discounts {
+		t.Fatal("swap service does not share the backend discount provider")
+	}
 	if swaps.router != cfg.Router || swaps.quoteTTL != cfg.SwapQuoteTTL || swaps.store == nil {
 		t.Fatalf("swap configuration not wired: %+v", swaps)
 	}
