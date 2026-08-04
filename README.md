@@ -90,18 +90,19 @@ LiquidLane state at fill time; the solver does not retain quote-time route plans
 `swapEnabled: true` additionally exposes authenticated `POST /swap` for user-directed Router
 transactions. The same `x-rfq-shared-secret` header protects it. The backend first sends `DISCOVERY`
 sample amounts, then `CONFIRM`s one exact point, and finally sends `BUILD` for immutable adapter
-calldata. Each built call carries a framework-signer authorization binding that call to the intended
-swapper, so a copied quote cannot be rebound to another payer. Every leg—including one selected from
-discount inventory—is emitted as same-adapter signed-swap calldata; private discount payloads are never
-returned to the user-directed path. `CONFIRM.deadline` is a requested maximum: the solver returns the
-earlier local validity cap, and `BUILD` selects one exact unexpired deadline at or before that cap so
-aggregated solver calls can share the earliest validity. A retry keeps the same build ID and economic
-tuple but uses a fresh transport-only `requestId`; cached calls and signatures are reused under the new
-response envelope. Requests and confirmed plans are limited to 64 adapter calls. The solver never broadcasts
-the transaction or transfers the user's tokens. Confirmations live only for `swapQuoteTtlMs`
-and are invalidated by a solver restart.
-Startup validates deployed Router bytecode plus signer authorization and EIP-712 domains for configured
-adapters; request-local internal-mode adapters are checked again during confirmation and build.
+calldata. Each response call exposes `to`, opaque signed adapter `data`, and accounting metadata; the
+backend maps `to`, `amountIn`, and `data` to the Router's three-field call tuple. No separate Router
+authorization or signature is returned. Every leg—including one selected from discount inventory—is
+emitted as same-adapter signed-swap calldata with the Router as recipient and caller; private discount
+payloads are never returned to the user-directed path. `CONFIRM.deadline` is a requested maximum: the
+solver returns the earlier local validity cap, and `BUILD` selects one exact unexpired deadline at or
+before that cap so aggregated solver calls can share the earliest validity. A retry keeps the same build
+ID and economic tuple but uses a fresh transport-only `requestId`; cached calls and adapter signatures
+are reused under the new response envelope. Requests and confirmed plans are limited to 64 adapter calls.
+The solver never broadcasts the transaction or transfers the user's tokens. Confirmations live only for
+`swapQuoteTtlMs` and are invalidated by a solver restart. Startup validates deployed Router bytecode plus
+adapter signer authorization and EIP-712 domains for configured adapters; request-local internal-mode
+adapters are checked again during confirmation and build.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

@@ -341,13 +341,14 @@ func TestServer_SwapOpenAPIPinsWireNames(t *testing.T) {
 		"protocol", "phase", "requestId", "discoveryRequestId", "quoteId", "solverQuoteId", "buildId",
 		"chainId", "swapper", "router", "tokenIn", "tokenOut", "sampleAmountsIn", "adapters", "points",
 		"amountIn", "minAmountOut", "amountOut", "liquidityDomains", "validUntil", "calls", "liquidityDomain",
-		"authSigner", "authDeadline", "authSignature",
 	} {
 		if !strings.Contains(spec, `"`+field+`"`) {
 			t.Fatalf("OpenAPI missing wire field %q", field)
 		}
 	}
-	for _, forbidden := range []string{`"validity"`, `"nativeValue"`} {
+	for _, forbidden := range []string{
+		`"validity"`, `"nativeValue"`, `"authSigner"`, `"authDeadline"`, `"authSignature"`,
+	} {
 		if strings.Contains(spec, forbidden) {
 			t.Fatalf("OpenAPI contains forbidden wire field %s", forbidden)
 		}

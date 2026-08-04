@@ -31,8 +31,8 @@ The existing `/quote` endpoint and open-order polling/execution path remain unch
 - Give the backend a cheap cumulative exact-input curve before it selects a size.
 - Turn an exact confirmation into a short-lived, immutable allocation.
 - Build calldata idempotently for a backend-supplied `buildId`.
-- Bind every direct authorization to the intended Router, adapter, chain, token, allocation, and quote
-  deadline.
+- Bind every adapter `SignedSwap` to the intended Router as recipient and caller and to the exact adapter
+  domain, chain, token, allocation, and quote deadline.
 - Reuse current candidate normalization, capacity accounting, strategies, generated adapter bindings,
   and signer infrastructure.
 - Expose canonical shared-capacity domains so the backend cannot select the same vault/output capacity
@@ -304,6 +304,10 @@ Successful response:
 For readability the example `data` values show only the four-byte selector; production responses contain
 the complete ABI-encoded arguments and signatures.
 
+The backend maps each response call's `to`, `amountIn`, and opaque `data` to the Router's three-field
+`SwapCall(adapter, amountIn, data)` tuple. BUILD returns no separate Router authorization signer,
+deadline, or signature.
+
 The request tuple must exactly match the stored confirmation: quote, swapper, chain, tokens, `amountIn`,
 and `minAmountOut == confirmed amountOut`. BUILD chooses one exact deadline satisfying
 `now < deadline <= confirmation.validUntil`; an aggregate quote therefore uses the earliest selected
@@ -381,7 +385,7 @@ The framework signer's `SignHash` output is the 65-byte `r || s || v` signature 
 Encode the struct and signature with the generated binding's `TryPackSwap1`; the selector is `0x9a4568b6`.
 The ordinary unauthenticated `swap(Swap)` overload is never used for this API.
 
-### EIP-712 domain and signer authorization
+### Adapter EIP-712 domain and signer authorization
 
 For every configured swap adapter, read `eip712Domain()` from chain and cache the validated result. Do not
 hardcode a name, version, chain, or verifying contract. Require the advertised chain ID to equal the
@@ -445,8 +449,8 @@ No mode emits `DiscountSwap` calldata through the user-directed endpoint.
   enabling the API does not require a static adapter list.
 - CONFIRM caps a requested maximum deadline at `validUntil`; it does not reject a longer maximum.
 - A confirmation may be built only with `now < BUILD.deadline <= validUntil`.
-- `SignedSwap.deadline`, Router execution deadline, Router authorization deadline, response `validUntil`,
-  and every call `validUntil` equal that exact chosen BUILD deadline.
+- `SignedSwap.deadline`, Router execution deadline, response `validUntil`, and every call `validUntil`
+  equal that exact chosen BUILD deadline.
 - BUILD rechecks the chosen deadline after dependencies and immediately before caching or returning.
   It is not a reservation or guarantee against intervening chain state.
 - Expired confirmations and build-cache entries are swept. The store has a fixed upper bound; once full,

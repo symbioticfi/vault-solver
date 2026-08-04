@@ -47,11 +47,9 @@ register the route or advertise it in OpenAPI. The backend authenticates with th
    byte-identical, while a second build ID or changed economic tuple conflicts.
 
 For a signed adapter call, recipient and caller are the configured Router. The adapter nonce is
-deterministic over build ID, chain, adapter, input token, and call index. Every signed call also includes
-an EIP-712 Router authorization from the framework signer over the intended swapper, adapter, exact
-input, calldata hash, and chosen BUILD deadline. The Router checks that signer is
-currently the adapter owner, market maker, or delegated filler before accepting the authorization.
-This extra binding prevents another account from copying and rebinding Router-held output calldata.
+deterministic over build ID, chain, adapter, input token, and call index. The BUILD response returns `to`,
+opaque adapter `data`, and accounting metadata; the backend maps `to`, `amountIn`, and `data` to the
+Router's three-field call tuple. There is no separate Router authorization signer, deadline, or signature.
 
 The solver signs calldata only: it neither performs the Router's transfer-before-call funding nor
 broadcasts a transaction. The public transaction uses ordinary ERC-20 approval and zero native value;
@@ -326,7 +324,7 @@ dropping features.
    immutable bounded confirmation state, capacity-domain-preserving aggregation, signed-only adapter
    calldata even for discount-selected plans, capped confirmation validity plus one chosen aggregate BUILD
    deadline, transport-only request-ID retries over immutable cached payloads, a 64-call bound,
-   swapper-bound Router authorizations, and fail-fast Router/static adapter validation. This path never
+   three-field Router calls, and fail-fast Router/static adapter validation. This path never
    sends a transaction and does not alter the legacy fill poller or its private discount execution.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared

@@ -51,7 +51,9 @@ solvers:
       # User-directed swap calldata is opt-in. Enabling it mounts authenticated POST /swap and makes
       # startup fail unless Router bytecode exists and this framework signer is authorized by every
       # configured adapter. BUILD always returns same-adapter signed-swap calldata (never private discount
-      # payloads), caps plans at 64 calls, and never broadcasts the user's Router transaction.
+      # payloads). The backend maps each response call's to, amountIn, and data to the Router's three-field
+      # call tuple; no separate Router authorization is returned. Plans are capped at 64 calls, and the
+      # solver never broadcasts the user's Router transaction.
       swapEnabled: false
       router: ""                        # deployed user-directed Router; required when swapEnabled: true
       swapQuoteTtlMs: 30000             # maximum confirmation lifetime; longer requested deadlines are shortened
