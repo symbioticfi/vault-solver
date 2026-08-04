@@ -4,9 +4,10 @@
 
 **Goal:** Add an authenticated RFQ `POST /swap` v2 discovery/confirmation/build lifecycle that returns immutable, Router-bound LiquidLane adapter calldata without broadcasting transactions.
 
-**Implementation status:** Complete, including the post-audit signed-only, deadline-capping, retry-envelope, and 64-call amendments.
+**Implementation status:** Complete. The signed-only authorization result documented in historical Task 9
+was superseded on 2026-08-04 by `2026-08-04-per-leg-swap-authorization.md`.
 
-**Architecture:** Add a swap service beside the existing quote and execution services. It parses one phase-tagged Huma contract, prices backend-supplied sample grids with the existing strategy, stores short-lived discovery and immutable confirmation records, then rebuilds only the persisted allocation as solver-signed `SignedSwap` calls. Discount-selected plans preserve their exact route identity but never resolve or expose private discount payloads. A dedicated chain-read seam validates Router bytecode, adapter EIP-712 domains, signer authorization, and nonce availability; the existing `/quote`, order poller, Executor fill path, and transaction manager remain untouched.
+**Architecture:** Add a swap service beside the existing quote and execution services. It parses one phase-tagged Huma contract, prices backend-supplied sample grids with the existing strategy, stores short-lived discovery and immutable confirmation records, then rebuilds only the persisted allocation. Direct legs become solver-signed `SignedSwap` calls; discount-selected legs resolve and return their exact signed `DiscountSwap` payload. A dedicated chain-read seam validates Router bytecode, direct-adapter EIP-712 domains, signer authorization, and nonce availability; the existing `/quote`, order poller, Executor fill path, and transaction manager remain untouched.
 
 **Tech Stack:** Go 1.26.5, Huma v2, go-ethereum ABI/crypto/apitypes, generated abigen v2 LiquidLane bindings, existing LiquidLane strategy/discount packages, Prometheus, and standard-library concurrency primitives.
 
@@ -22,14 +23,16 @@
 - Treat CONFIRM `deadline` as a requested maximum and cap `validUntil` at the earliest local validity; BUILD chooses one exact unexpired deadline at or before that cap.
 - Set `SignedSwap.recipient` and `SignedSwap.caller` to the configured Router, use the existing framework signer, and set its deadline to the chosen BUILD deadline.
 - Derive direct nonces exactly from `buildId`, chain, adapter, input token, and zero-based persisted call index; never substitute another nonce after a collision or use.
-- Always emit fresh `SignedSwap` calldata on the persisted adapter, including discount-selected confirmations; never resolve or return private `DiscountSwap` payloads.
+- Select authorization per persisted leg: direct legs emit fresh `SignedSwap` calldata; discount-selected
+  legs resolve the exact persisted discount ID and emit `DiscountSwap` calldata without substitution.
 - Exclude transport-only `requestId` from BUILD idempotency, cache immutable payload only, and rebuild the response envelope for each retry.
 - Reject swap requests or plans that could produce more than 64 calls.
 - `DISCOVERY` creates no authorization or liquidity reservation; confirmation records are bounded in-memory state and become unknown after restart.
 - The user-directed path must never call `TxManager`, Executor, Reactor, or any transaction-send API.
 - Cross-solver capacity-domain rejection, Router transaction assembly, token transfers, aggregate output
   enforcement, submission, and monitoring remain RFQ-backend responsibilities outside this solver repository.
-- Do not edit generated files under `api/bindings`; use `TryPackSwap1` from the existing adapter binding.
+- Do not edit generated files under `api/bindings`; use `TryPackSwap1` for direct legs and `TryPackSwap0`
+  for discount legs from the existing adapter binding.
 - Keep `swapEnabled` false by default. Disabled deployments must preserve existing `/quote` and order-execution behavior.
 - Follow repository conventions: absolute `internal/...` imports between packages, same-package relative files, `go-errors/errors` wrapping, `logr` logging, strict YAML decode, no raw secrets/calldata/signatures in errors or metric labels.
 - Use Go 1.26.5 for every build and test gate.
@@ -44,12 +47,12 @@
 - `internal/solvers/rfq/swap_apitypes_test.go` — wire-name, normalization, and phase-validation contract tests.
 - `internal/solvers/rfq/swap_store.go` — bounded discovery/confirmation/build-idempotency state with deep copies.
 - `internal/solvers/rfq/swap_store_test.go` — expiry, capacity, mutation isolation, and concurrent-build tests.
-- `internal/solvers/rfq/swap_signing.go` — EIP-712 domain model, `SignedSwap` digest, deterministic nonce, and adapter calldata encoders.
+- `internal/solvers/rfq/swap_signing.go` — EIP-712 domain model, `SignedSwap` digest, deterministic nonce, and direct/discount adapter calldata encoders.
 - `internal/solvers/rfq/swap_signing_test.go` — independent apitypes cross-checks, golden nonce/selector tests, and signature recovery.
 - `internal/solvers/rfq/swap_chainreader.go` — Router-code, EIP-5267 domain, signer-authorization, and used-nonce reads.
 - `internal/solvers/rfq/swap_chainreader_test.go` — multicall packing/unpacking and fail-closed validation tests.
-- `internal/solvers/rfq/swap.go` — discovery, confirmation, exact-allocation refresh, and signed-only build orchestration.
-- `internal/solvers/rfq/swap_test.go` — service-level lifecycle, allocation immutability, signed-only discount selection, and no-broadcast tests.
+- `internal/solvers/rfq/swap.go` — discovery, confirmation, exact-allocation refresh, and per-leg build orchestration.
+- `internal/solvers/rfq/swap_test.go` — service-level lifecycle, allocation immutability, mixed direct/discount selection, and no-broadcast tests.
 - `internal/solvers/rfq/docs_test.go` — source-level contract for swap operator documentation.
 
 ### Modify
@@ -988,6 +991,10 @@ Expected: PASS; retry payloads are byte-identical under fresh request envelopes 
 
 ### Task 9: Sign discount-selected legs without exposing private payloads
 
+> **Superseded result:** This historical task produced the signed-only behavior at initial delivery.
+> `2026-08-04-per-leg-swap-authorization.md` replaces its resulting behavior with exact resolved
+> `DiscountSwap` calldata for discount-selected legs.
+
 **Files:**
 - Modify: `internal/solvers/rfq/swap.go`
 - Modify: `internal/solvers/rfq/swap_test.go`
@@ -1140,7 +1147,7 @@ func TestSwapDocumentationPinsConfigurationAndSecurityContract(t *testing.T) {
 	checks := map[string][]string{
 		"../../../config/rfq.example.yaml": {"swapEnabled", "router", "swapQuoteTtlMs", "30000"},
 		"../../../README.md": {"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "never broadcasts", "transport-only"},
-		"../../../docs/RFQ-PLAN.md": {"in-memory", "0x9a4568b6", "Private discount calldata is never", "restart"},
+		"../../../docs/RFQ-PLAN.md": {"in-memory", "0x9a4568b6", "0x8fa5c671", "resolved signed discount", "restart"},
 	}
 	for path, required := range checks {
 		body, err := os.ReadFile(path)
@@ -1179,7 +1186,7 @@ swapQuoteTtlMs: 30000
 
 In `README.md`, document opt-in configuration, startup requirements, shared-secret authentication, and
 the discovery/confirm/build lifecycle. In `docs/RFQ-PLAN.md`, record the allocation invariants,
-deterministic nonce and fresh-request-envelope retry rule, signed-only selector, dynamic-adapter validation, and the fact
+deterministic nonce and fresh-request-envelope retry rule, per-leg direct/discount selectors, dynamic-adapter validation, and the fact
 that the solver signs calldata but neither transfers Router inputs nor broadcasts a transaction.
 
 - [ ] **Step 4: Run documentation and package tests**

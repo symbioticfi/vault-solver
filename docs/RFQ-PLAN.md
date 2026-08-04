@@ -36,28 +36,35 @@ register the route or advertise it in OpenAPI. The backend authenticates with th
    performs one coherent largest-sample read and returns attainable points plus canonical shared-vault
    capacity domains.
 2. `CONFIRM` selects one exact discovery point. The solver re-reads current liquidity, re-runs the
-   configured strategy, verifies the same domains and output floor, validates every selected adapter,
+   configured strategy, verifies the same domains and output floor, validates framework-signer
+   authorization for every selected direct adapter,
    and stores the ordered allocation in-memory until the earliest of the requested maximum deadline,
    configured TTL, and route validity. A longer requested deadline is shortened rather than rejected.
 3. `BUILD` is bound to that immutable confirmation, Router, domains, one chosen unexpired deadline, and
-   one build ID. It revalidates adapter state and exact capacity, then returns only signed-swap selector
-   `0x9a4568b6`, including for plans selected from discount inventory. Private discount calldata is never
-   exposed through this user-directed API. The backend may choose the earliest confirmation validity as
-   one aggregate deadline. A retry may use a fresh transport-only request ID; the immutable payload is
-   byte-identical, while a second build ID or changed economic tuple conflicts.
+   one build ID. It revalidates adapter state and exact capacity, then preserves authorization per leg:
+   direct legs use signed-swap selector `0x9a4568b6`, while discount legs resolve the exact persisted
+   discount ID and use selector `0x8fa5c671`. A mixed response preserves confirmed order. A retry may use
+   a fresh transport-only request ID; the immutable payload is byte-identical, while a second build ID or
+   changed economic tuple conflicts.
 
 For a signed adapter call, recipient and caller are the configured Router. The adapter nonce is
 deterministic over build ID, chain, adapter, input token, and call index. The BUILD response returns `to`,
 opaque adapter `data`, and accounting metadata; the backend maps `to`, `amountIn`, and `data` to the
 Router's three-field call tuple. There is no separate Router authorization signer, deadline, or signature.
 
+For a discount adapter call, BUILD fetches the resolved signed discount, validates its identity, exact
+route, current adapter minimum, output floor, nonce state, and both deadlines, then packs the unchanged
+terms and signatures with the Router recipient and persisted input amount. Both signed deadlines must be
+strictly later than the chosen BUILD deadline. The existing discount ABI does not sign the outer recipient
+or amount and does not consume the nonce, so the resolved signed discount remains replayable bearer data
+until expiry; this accepted limitation is documented in the per-leg design spec.
+
 The solver signs calldata only: it neither performs the Router's transfer-before-call funding nor
 broadcasts a transaction. The public transaction uses ordinary ERC-20 approval and zero native value;
 the Router transfers each exact leg directly from the user to its adapter, invokes the returned data,
 then transfers exact declared outputs to recipients. Plans contain at most 64 calls, and BUILD
-independently enforces its confirmed
-aggregate output floor before returning. Aggregation across solvers is safe only when selected
-liquidity-domain sets are disjoint.
+independently enforces its confirmed aggregate output floor before returning. The backend selects one
+solver response; a solver response may itself contain multiple adapter calls.
 
 Discovery and confirmation records are bounded, expiring, in-memory state. A process restart
 invalidates them, so the backend must repeat `DISCOVERY` and `CONFIRM`; it must never reuse an old
@@ -321,9 +328,9 @@ dropping features.
    planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
    single-route capped output, webhook rejection, and fresh planning.
 6. **(done) User-directed swap calldata** — opt-in authenticated `DISCOVERY`/`CONFIRM`/`BUILD`,
-   immutable bounded confirmation state, capacity-domain-preserving aggregation, signed-only adapter
-   calldata even for discount-selected plans, capped confirmation validity plus one chosen aggregate BUILD
-   deadline, transport-only request-ID retries over immutable cached payloads, a 64-call bound,
+   immutable bounded confirmation state, per-leg direct `SignedSwap` or resolved `DiscountSwap` calldata,
+   capped confirmation validity plus one chosen BUILD deadline, transport-only request-ID retries over
+   immutable cached payloads, a 64-call bound,
    three-field Router calls, and fail-fast Router/static adapter validation. This path never
    sends a transaction and does not alter the legacy fill poller or its private discount execution.
 

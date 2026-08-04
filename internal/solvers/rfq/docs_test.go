@@ -13,10 +13,11 @@ func TestSwapDocumentationPinsConfigurationAndSecurityContract(t *testing.T) {
 		},
 		"../../../README.md": {
 			"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "never broadcasts",
-			"x-rfq-shared-secret", "transport-only", "64 adapter calls",
+			"x-rfq-shared-secret", "transport-only", "64 adapter calls", "per leg",
+			"0x9a4568b6", "0x8fa5c671", "resolved signed discount",
 		},
 		"../../../docs/RFQ-PLAN.md": {
-			"in-memory", "0x9a4568b6", "Private discount calldata is never", "restart", "transfer-before-call",
+			"in-memory", "0x9a4568b6", "0x8fa5c671", "resolved signed discount", "restart", "transfer-before-call",
 			"zero native value", "aggregate output floor", "transport-only request ID",
 		},
 	}
