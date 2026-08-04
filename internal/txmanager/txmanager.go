@@ -675,14 +675,16 @@ func (m *Manager) nextReplacementFees(
 	previous feeQuote,
 	limit *big.Int,
 ) (feeQuote, error) {
-	current, err := m.currentFees(ctx, limit)
+	current, err := m.currentFees(ctx, nil)
 	if err != nil && !errors.Is(err, errFreshFeesUnavailable) {
 		return feeQuote{}, err
 	}
+	requiredTip := bumpFee(previous.tip)
+	requiredMaxFee := bumpFee(previous.maxFee)
 	next := feeQuote{
 		baseFee: new(big.Int).Set(previous.baseFee),
-		tip:     bumpFee(previous.tip),
-		maxFee:  bumpFee(previous.maxFee),
+		tip:     new(big.Int).Set(requiredTip),
+		maxFee:  new(big.Int).Set(requiredMaxFee),
 	}
 	if err == nil {
 		next.baseFee.Set(current.baseFee)
@@ -703,7 +705,7 @@ func (m *Manager) nextReplacementFees(
 	if next.tip.Cmp(maxTip) > 0 {
 		next.tip.Set(maxTip)
 	}
-	if next.maxFee.Cmp(previous.maxFee) <= 0 || next.tip.Cmp(previous.tip) <= 0 {
+	if next.maxFee.Cmp(requiredMaxFee) < 0 || next.tip.Cmp(requiredTip) < 0 {
 		return feeQuote{}, errors.Errorf(
 			"%w: previous max fee %s tip %s, limit %s",
 			errReplacementLimitReached,
@@ -1072,6 +1074,12 @@ func (m *Manager) waitForConfirmations(
 	defer ticker.Stop()
 
 	for {
+		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+		head, headErr := m.backend.BlockNumber(lookupCtx)
+		cancel()
+		if headErr != nil {
+			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
+		}
 		refreshed, err := m.canonicalReceipt(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errReceiptReorged) {
@@ -1080,12 +1088,7 @@ func (m *Manager) waitForConfirmations(
 			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
 		} else {
 			receipt = refreshed
-			lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-			head, headErr := m.backend.BlockNumber(lookupCtx)
-			cancel()
-			if headErr != nil {
-				m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
-			} else if head >= receipt.BlockNumber.Uint64()+confirmations {
+			if headErr == nil && head >= receipt.BlockNumber.Uint64()+confirmations {
 				return receipt, nil
 			}
 		}

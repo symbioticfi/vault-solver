@@ -14,7 +14,7 @@ chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary RPC for gas, receipts, and contract reads
   chainId: 1                       # must match the RPC's chain id (asserted at startup)
   # writeRpcUrl carries broadcasts and latest/pending nonce reads; other reads stay on rpcUrl.
-  writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy?softCancellations=true
+  writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
 

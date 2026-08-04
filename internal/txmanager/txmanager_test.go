@@ -38,6 +38,8 @@ type mockBackend struct {
 	head          uint64
 	reorgedHeader bool
 
+	reorgOnHeadRead bool
+
 	sendErrs  []error // returned, in order, by successive SendTransaction calls
 	sendCalls int
 	sent      []*types.Transaction
@@ -133,6 +135,9 @@ func (b *mockBackend) TransactionReceipt(_ context.Context, h common.Hash) (*typ
 func (b *mockBackend) BlockNumber(context.Context) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.reorgOnHeadRead {
+		b.reorgedHeader = true
+	}
 	return b.head, nil
 }
 
@@ -617,6 +622,52 @@ func TestNormalFeeLimitReservesOneCancellationBump(t *testing.T) {
 	}
 }
 
+func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
+	quote := func(baseFee, tip, maxFee float64) feeQuote {
+		return feeQuote{baseFee: gweiToWei(baseFee), tip: gweiToWei(tip), maxFee: gweiToWei(maxFee)}
+	}
+	tests := map[string]struct {
+		previous feeQuote
+		current  feeQuote
+		want     feeQuote
+		wantErr  bool
+	}{
+		"fresh tip is bounded by the cap": {
+			previous: quote(20, 1, 44), current: quote(20, 40, 0), want: quote(20, 30, 50),
+		},
+		"tip bump does not fit": {
+			previous: quote(20, 10, 44), current: quote(39.5, 1, 0), wantErr: true,
+		},
+		"max fee bump does not fit": {
+			previous: quote(20, 1, 45), current: quote(20, 1, 0), wantErr: true,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			b := newMockBackend()
+			b.baseFee = test.current.baseFee
+			b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{{test.current.tip}}}
+			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+
+			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50))
+			if test.wantErr {
+				if !errors.Is(err, errReplacementLimitReached) {
+					t.Fatalf("nextReplacementFees error = %v, want replacement limit", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("nextReplacementFees: %v", err)
+			}
+			if got.baseFee.Cmp(test.want.baseFee) != 0 || got.tip.Cmp(test.want.tip) != 0 ||
+				got.maxFee.Cmp(test.want.maxFee) != 0 {
+				t.Fatalf("fees = %s/%s/%s, want %s/%s/%s",
+					got.baseFee, got.tip, got.maxFee, test.want.baseFee, test.want.tip, test.want.maxFee)
+			}
+		})
+	}
+}
+
 func TestInitializeRejectsUnknownPendingNonceGap(t *testing.T) {
 	b := newMockBackend()
 	b.pendingNonce = b.latestNonce + 1
@@ -796,6 +847,10 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 		"receipt disappears": func(b *mockBackend) Backend {
 			return &disappearingReceiptBackend{mockBackend: b}
 		},
+		"receipt reorgs during head read": func(b *mockBackend) Backend {
+			b.reorgOnHeadRead = true
+			return b
+		},
 		"receipt block is no longer canonical": func(b *mockBackend) Backend {
 			b.reorgedHeader = true
 			return b
@@ -812,7 +867,7 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 				ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
 				Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
 			})
-			b.receipts[tx.Hash()] = successfulReceipt(tx, b.head)
+			b.receipts[tx.Hash()] = successfulReceipt(tx, b.head-2)
 			pending := &pendingTransaction{
 				req: Request{Label: "reorged"}, nonce: 7,
 				attempts: []txAttempt{{hash: tx.Hash(), tx: tx}},
