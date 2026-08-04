@@ -29,6 +29,9 @@ type rawConfig struct {
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
 	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
+	SwapEnabled            bool              `yaml:"swapEnabled"`
+	Router                 string            `yaml:"router"`
+	SwapQuoteTTLms         int               `yaml:"swapQuoteTtlMs"`
 	Strategy               rawStrategyConfig `yaml:"strategy"`
 }
 
@@ -78,7 +81,13 @@ type Config struct {
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
 	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables direct fill planning.
 	Adapters []recoveryVault
-	Strategy StrategyConfig
+	// SwapEnabled exposes the authenticated user-directed calldata endpoint.
+	SwapEnabled bool
+	// Router is the only permitted caller and recipient encoded into signed swap legs.
+	Router common.Address
+	// SwapQuoteTTL bounds advisory discovery and immutable confirmation records.
+	SwapQuoteTTL time.Duration
+	Strategy     StrategyConfig
 }
 
 type StrategyConfig struct {
@@ -99,6 +108,7 @@ const (
 	defaultOrderLimit   = 20
 	defaultSolverMode   = solverModeExternal
 	defaultStrategyName = "default"
+	defaultSwapQuoteTTL = 30 * time.Second
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
@@ -135,6 +145,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
 		TokenPolicy:            tokenPolicy,
+		SwapEnabled:            raw.SwapEnabled,
+		SwapQuoteTTL:           defaultSwapQuoteTTL,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
@@ -145,6 +157,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
+	}
+	if raw.SwapQuoteTTLms < 0 {
+		return nil, errors.New("swapQuoteTtlMs must be non-negative")
+	}
+	if raw.SwapQuoteTTLms > 0 {
+		cfg.SwapQuoteTTL = time.Duration(raw.SwapQuoteTTLms) * time.Millisecond
+	}
+	if raw.Router != "" {
+		if cfg.Router, err = parse.NonZeroAddress(raw.Router, "router"); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.SwapEnabled && cfg.Router == (common.Address{}) {
+		return nil, errors.New("router is required when swapEnabled is true")
 	}
 	if raw.Reactor != "" {
 		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
