@@ -131,23 +131,24 @@ func TestPackDiscountSwapCallUsesExactResolvedPayload(t *testing.T) {
 	if got := common.Bytes2Hex(data[:4]); got != "8fa5c671" {
 		t.Fatalf("selector = 0x%s", got)
 	}
-	decoded, protocolSignature, gotRecipient, gotAmountIn := unpackDiscountCall(t, data)
-	if decoded.Discount.TokenToRedeem != signed.Terms.TokenToRedeem ||
-		decoded.Discount.Discount.Cmp(signed.Terms.Discount) != 0 ||
-		decoded.Discount.Signer != signed.Terms.Signer || decoded.Discount.Protocol != signed.Terms.Protocol ||
-		decoded.Discount.Nonce.Cmp(signed.Terms.Nonce) != 0 ||
-		decoded.Discount.Deadline.Cmp(signed.Terms.Deadline) != 0 ||
-		!bytes.Equal(decoded.SignerSignature, signed.SignerSignature) ||
-		decoded.ProtocolDeadline.Cmp(signed.ProtocolDeadline) != 0 {
-		t.Fatalf("decoded discount swap = %+v", decoded)
+	decoded := unpackDiscountCall(t, data)
+	if decoded.value.Discount.TokenToRedeem != signed.Terms.TokenToRedeem ||
+		decoded.value.Discount.Discount.Cmp(signed.Terms.Discount) != 0 ||
+		decoded.value.Discount.Signer != signed.Terms.Signer ||
+		decoded.value.Discount.Protocol != signed.Terms.Protocol ||
+		decoded.value.Discount.Nonce.Cmp(signed.Terms.Nonce) != 0 ||
+		decoded.value.Discount.Deadline.Cmp(signed.Terms.Deadline) != 0 ||
+		!bytes.Equal(decoded.value.SignerSignature, signed.SignerSignature) ||
+		decoded.value.ProtocolDeadline.Cmp(signed.ProtocolDeadline) != 0 {
+		t.Fatalf("decoded discount swap = %+v", decoded.value)
 	}
-	if !bytes.Equal(protocolSignature, signed.ProtocolSignature) || gotRecipient != recipient ||
-		gotAmountIn.Cmp(amountIn) != 0 {
+	if !bytes.Equal(decoded.protocolSignature, signed.ProtocolSignature) || decoded.recipient != recipient ||
+		decoded.amountIn.Cmp(amountIn) != 0 {
 		t.Fatalf(
 			"outer discount arguments = protocolSig %x recipient %v amountIn %v",
-			protocolSignature,
-			gotRecipient,
-			gotAmountIn,
+			decoded.protocolSignature,
+			decoded.recipient,
+			decoded.amountIn,
 		)
 	}
 }
@@ -232,10 +233,14 @@ func unpackSignedCall(t *testing.T, data []byte) (adapter.ILiquidLaneAdapterSign
 	return value, values[1].([]byte)
 }
 
-func unpackDiscountCall(
-	t *testing.T,
-	data []byte,
-) (adapter.ILiquidLaneAdapterDiscountSwap, []byte, common.Address, *big.Int) {
+type decodedDiscountCall struct {
+	value             adapter.ILiquidLaneAdapterDiscountSwap
+	protocolSignature []byte
+	recipient         common.Address
+	amountIn          *big.Int
+}
+
+func unpackDiscountCall(t *testing.T, data []byte) decodedDiscountCall {
 	t.Helper()
 	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
 	if err != nil {
@@ -248,5 +253,10 @@ func unpackDiscountCall(
 	value := *abi.ConvertType(
 		values[0], new(adapter.ILiquidLaneAdapterDiscountSwap),
 	).(*adapter.ILiquidLaneAdapterDiscountSwap)
-	return value, values[1].([]byte), values[2].(common.Address), values[3].(*big.Int)
+	return decodedDiscountCall{
+		value:             value,
+		protocolSignature: values[1].([]byte),
+		recipient:         values[2].(common.Address),
+		amountIn:          values[3].(*big.Int),
+	}
 }

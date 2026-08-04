@@ -423,7 +423,7 @@ func TestSwapBuildReturnsResolvedDiscountCall(t *testing.T) {
 	signer := newSwapTestSigner(t)
 	service := newTestSwapService(now, reader, state, signer)
 	service.discountsEnabled = true
-	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate, 0, 1_021, 1_022)}
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate)}
 	service.discounts = provider
 
 	discovery := discoverySwapRequestWithDiscount(candidate)
@@ -444,13 +444,14 @@ func TestSwapBuildReturnsResolvedDiscountCall(t *testing.T) {
 		t.Fatalf("discount response = %+v", response)
 	}
 	call := (*response.Calls)[0]
-	decoded, protocolSignature, recipient, amountIn := unpackDiscountCall(t, common.FromHex(call.Data))
-	if call.To != testAdapter || recipient != common.HexToAddress(testRouter) || amountIn.Cmp(big.NewInt(100)) != 0 ||
-		decoded.Discount.TokenToRedeem != common.HexToAddress(testTokenIn) ||
-		decoded.Discount.Discount.Sign() != 0 || decoded.Discount.Nonce.Cmp(big.NewInt(7)) != 0 ||
-		decoded.Discount.Deadline.Cmp(big.NewInt(1_021)) != 0 ||
-		decoded.ProtocolDeadline.Cmp(big.NewInt(1_022)) != 0 || len(protocolSignature) == 0 {
-		t.Fatalf("Router-bound adapter discount swap = %+v, decoded %+v", call, decoded)
+	decoded := unpackDiscountCall(t, common.FromHex(call.Data))
+	if call.To != testAdapter || decoded.recipient != common.HexToAddress(testRouter) ||
+		decoded.amountIn.Cmp(big.NewInt(100)) != 0 ||
+		decoded.value.Discount.TokenToRedeem != common.HexToAddress(testTokenIn) ||
+		decoded.value.Discount.Discount.Sign() != 0 || decoded.value.Discount.Nonce.Cmp(big.NewInt(7)) != 0 ||
+		decoded.value.Discount.Deadline.Cmp(big.NewInt(1_021)) != 0 ||
+		decoded.value.ProtocolDeadline.Cmp(big.NewInt(1_022)) != 0 || len(decoded.protocolSignature) == 0 {
+		t.Fatalf("Router-bound adapter discount swap = %+v, decoded %+v", call, decoded.value)
 	}
 	if signer.calls != 0 || provider.resolveCalls != 1 || state.nonceReads != 1 {
 		t.Fatalf(
@@ -531,7 +532,7 @@ func TestSwapBuildPreservesMixedAuthorizationOrder(t *testing.T) {
 	}
 	signer := newSwapTestSigner(t)
 	service := newTestSwapService(now, &fakeSwapCandidateReader{}, state, signer)
-	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(discountCandidate, 0, 1_021, 1_022)}
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(discountCandidate)}
 	service.discounts = provider
 	domains := []liquidlane.CapacityID{discountLeg.Route.CapacityID, directLeg.Route.CapacityID}
 	record := confirmationRecord{
@@ -652,7 +653,9 @@ func TestSwapBuildRejectsStaleOrMalformedResolvedDiscount(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service, build, provider, state, signer, candidate := newDiscountBuildFixture(t)
+			fixture := newDiscountBuildFixture(t)
+			service, build := fixture.service, fixture.build
+			provider, state, signer, candidate := fixture.provider, fixture.state, fixture.signer, fixture.candidate
 			test.mutate(provider, state)
 
 			response, err := service.swap(t.Context(), &build)
@@ -665,7 +668,7 @@ func TestSwapBuildRejectsStaleOrMalformedResolvedDiscount(t *testing.T) {
 			}
 
 			provider.err = nil
-			provider.resolved = resolvedSwapDiscount(candidate, 0, 1_021, 1_022)
+			provider.resolved = resolvedSwapDiscount(candidate)
 			state.fill.MinDiscount = big.NewInt(0)
 			state.used = nil
 			retry, retryErr := service.swap(t.Context(), &build)
@@ -677,7 +680,8 @@ func TestSwapBuildRejectsStaleOrMalformedResolvedDiscount(t *testing.T) {
 }
 
 func TestSwapBuildConcurrentDiscountRetriesResolveOnce(t *testing.T) {
-	service, build, provider, state, _, _ := newDiscountBuildFixture(t)
+	fixture := newDiscountBuildFixture(t)
+	service, build, provider, state := fixture.service, fixture.build, fixture.provider, fixture.state
 	provider.resolveStarted = make(chan struct{})
 	provider.resolveRelease = make(chan struct{})
 	type result struct {
@@ -851,9 +855,16 @@ func (f *fakeSwapDiscountProvider) Resolve(context.Context, string) (*discounts.
 	return f.resolved, f.err
 }
 
-func newDiscountBuildFixture(
-	t *testing.T,
-) (*swapService, swapRequest, *fakeSwapDiscountProvider, *fakeSwapState, *swapTestSigner, liquidlane.QuoteCandidate) {
+type discountBuildFixture struct {
+	service   *swapService
+	build     swapRequest
+	provider  *fakeSwapDiscountProvider
+	state     *fakeSwapState
+	signer    *swapTestSigner
+	candidate liquidlane.QuoteCandidate
+}
+
+func newDiscountBuildFixture(t *testing.T) discountBuildFixture {
 	t.Helper()
 	now := time.Unix(1_000, 0)
 	candidate := discountedSwapCandidate(now.Add(30 * time.Second))
@@ -862,7 +873,7 @@ func newDiscountBuildFixture(
 	signer := newSwapTestSigner(t)
 	service := newTestSwapService(now, reader, state, signer)
 	service.discountsEnabled = true
-	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate, 0, 1_021, 1_022)}
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate)}
 	service.discounts = provider
 	discovery := discoverySwapRequestWithDiscount(candidate)
 	if _, err := service.swap(t.Context(), &discovery); err != nil {
@@ -875,29 +886,27 @@ func newDiscountBuildFixture(
 	if err != nil {
 		t.Fatalf("CONFIRM: %v", err)
 	}
-	return service, buildSwapRequest(confirmed), provider, state, signer, candidate
+	return discountBuildFixture{
+		service: service, build: buildSwapRequest(confirmed), provider: provider,
+		state: state, signer: signer, candidate: candidate,
+	}
 }
 
-func resolvedSwapDiscount(
-	candidate liquidlane.QuoteCandidate,
-	discount int64,
-	deadline int64,
-	protocolDeadline int64,
-) *discounts.Resolved {
+func resolvedSwapDiscount(candidate liquidlane.QuoteCandidate) *discounts.Resolved {
 	return &discounts.Resolved{
 		RequestID:  testBuildRequestID,
 		DiscountID: candidate.DiscountID.Hex(),
 		Discount: discounts.Terms{
 			Adapter:       candidate.Route.Adapter.Hex(),
 			TokenToRedeem: candidate.Route.TokenIn.Hex(),
-			Discount:      big.NewInt(discount).String(),
+			Discount:      "0",
 			Signer:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Protocol:      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			Nonce:         "0x7",
-			Deadline:      deadline,
+			Deadline:      1_021,
 		},
 		SignerSignature:   "0x0102",
-		ProtocolDeadline:  protocolDeadline,
+		ProtocolDeadline:  1_022,
 		ProtocolSignature: "0x0304",
 	}
 }
