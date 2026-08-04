@@ -86,6 +86,16 @@ When an exact-input request exceeds the advertised adapter capacity, the default
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
 LiquidLane state at fill time; the solver does not retain quote-time route plans.
+
+`swapEnabled: true` additionally exposes authenticated `POST /swap` for user-directed Router
+transactions. The same `x-rfq-shared-secret` header protects it. The backend first sends `DISCOVERY`
+sample amounts, then `CONFIRM`s one exact point, and finally sends `BUILD` for immutable adapter
+calldata. Each built call carries a framework-signer authorization binding that call to the intended
+swapper, so a copied quote cannot be rebound to another payer. The solver signs direct or discounted
+adapter calls and the Router authorization, but it does not broadcast the transaction or transfer the
+user's tokens. Confirmations live only for `swapQuoteTtlMs` and are invalidated by a solver restart.
+Startup validates deployed Router bytecode plus signer authorization and EIP-712 domains for configured
+adapters; request-local internal-mode adapters are checked again during confirmation and build.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
