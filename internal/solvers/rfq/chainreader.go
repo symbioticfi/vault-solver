@@ -19,10 +19,13 @@ type reader struct {
 	ll            *liquidlane.Reader
 	chainID       int64
 	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
+	swapState     swapStateReader
 }
 
 func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
-	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chainID: c.ChainID().Int64()}
+	ll := liquidlane.NewReader(c, log, liquidityLens)
+	chainID := c.ChainID().Int64()
+	return &reader{ll: ll, chainID: chainID, swapState: newSwapOnchainReader(c, ll, chainID)}
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
