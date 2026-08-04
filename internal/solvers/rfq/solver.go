@@ -9,11 +9,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
+	frameworksigner "github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
@@ -32,6 +35,7 @@ type Solver struct {
 	cfg    *Config
 	server *server
 	exec   *executionService
+	swaps  *swapService
 	log    logr.Logger
 }
 
@@ -43,6 +47,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	secret := os.Getenv(cfg.BackendSharedSecretEnv)
 	if secret == "" {
 		return nil, errors.Errorf("%s: backend shared secret env %q is empty", Name, cfg.BackendSharedSecretEnv)
+	}
+	if cfg.SwapEnabled && deps.Signer == nil {
+		return nil, errors.Errorf("%s: framework signer is required when swapEnabled is true", Name)
 	}
 
 	chainID := deps.Chain.ChainID().Int64()
@@ -61,13 +68,18 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}
 
-	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
+	backend := newBackendClient(cfg.BackendURL)
+	quotes, exec, swaps := buildServicesWithSwap(
+		cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, backend, deps.Signer, log,
+	)
 	return &Solver{
-		cfg:  cfg,
-		exec: exec,
+		cfg:   cfg,
+		exec:  exec,
+		swaps: swaps,
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
+			swaps:        swaps,
 			metrics:      metrics,
 			log:          log,
 		},
@@ -81,6 +93,23 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func buildServices(
 	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, quoteStrategy types.Strategy, log logr.Logger,
 ) (*quoteService, *executionService) {
+	quotes, exec, _ := buildServicesWithSwap(
+		cfg, chainID, st, rdr, txm, quoteStrategy, newBackendClient(cfg.BackendURL), nil, log,
+	)
+	return quotes, exec
+}
+
+func buildServicesWithSwap(
+	cfg *Config,
+	chainID int64,
+	st *store,
+	rdr *reader,
+	txm txSender,
+	quoteStrategy types.Strategy,
+	backend *backendClient,
+	signer frameworksigner.Signer,
+	log logr.Logger,
+) (*quoteService, *executionService, *swapService) {
 	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
 	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
 	// universe; execution uses restrictsToAdapters() (external-only) so internal-mode discount recovery can
@@ -108,7 +137,7 @@ func buildServices(
 		whitelist:        execWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		discountsEnabled: cfg.usesDiscounts(),
-		backend:          newBackendClient(cfg.BackendURL),
+		backend:          backend,
 		store:            st,
 		reader:           rdr,
 		strategy:         quoteStrategy,
@@ -117,7 +146,33 @@ func buildServices(
 		now:              time.Now,
 		inflight:         make(map[string]bool),
 	}
-	return quotes, exec
+	if !cfg.SwapEnabled {
+		return quotes, exec, nil
+	}
+	var state swapStateReader
+	if rdr != nil {
+		state = rdr.swapState
+	}
+	swaps := &swapService{
+		chainID:          chainID,
+		executor:         cfg.Executor,
+		router:           cfg.Router,
+		quoteTTL:         cfg.SwapQuoteTTL,
+		whitelist:        quoteWhitelist,
+		tokenPolicy:      cfg.TokenPolicy,
+		minAmountsIn:     cfg.MinAmountsIn,
+		discountsEnabled: cfg.usesDiscounts(),
+		discountBackend:  backend,
+		reader:           rdr,
+		state:            state,
+		strategy:         quoteStrategy,
+		store:            newSwapStore(time.Now),
+		signer:           signer,
+		now:              time.Now,
+		newID:            uuid.New,
+		log:              log,
+	}
+	return quotes, exec, swaps
 }
 
 // Name identifies the solver.
@@ -126,6 +181,32 @@ func (s *Solver) Name() string { return Name }
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
+	if s.swaps != nil {
+		if s.swaps.state == nil {
+			return errors.New("rfq: swap state reader is unavailable")
+		}
+		if err := s.swaps.state.validateRouter(ctx, s.cfg.Router); err != nil {
+			startupErr := errors.Errorf("rfq: validate swap Router: %w", err)
+			s.log.Error(startupErr, "swap Router validation failed", "router", s.cfg.Router.Hex())
+			return startupErr
+		}
+		if s.swaps.signer == nil {
+			return errors.New("rfq: swap signer is unavailable")
+		}
+		adapters := make([]common.Address, len(s.cfg.Adapters))
+		for i := range s.cfg.Adapters {
+			adapters[i] = s.cfg.Adapters[i].Adapter
+		}
+		if len(adapters) > 0 {
+			if _, err := s.swaps.state.validateAdapters(ctx, adapters, s.swaps.signer.Address()); err != nil {
+				startupErr := errors.Errorf("rfq: validate swap adapters: %w", err)
+				s.log.Error(startupErr, "swap adapter validation failed", "router", s.cfg.Router.Hex(),
+					"adapters", adapters)
+				return startupErr
+			}
+		}
+	}
+
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A

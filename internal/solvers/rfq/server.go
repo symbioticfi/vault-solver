@@ -12,7 +12,7 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// sharedSecretHeader authenticates the backend peer on /quote.
+// sharedSecretHeader authenticates the backend peer on /quote and /swap.
 const sharedSecretHeader = "x-rfq-shared-secret" //nolint:gosec // header NAME, not a credential.
 
 // badRequestError marks a client (4xx) error so the HTTP layer can distinguish it from an upstream
@@ -29,8 +29,13 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
+	swaps        swapHandler  // nil keeps the user-directed swap API disabled
 	metrics      *httpMetrics // nil disables HTTP instrumentation (e.g. in tests)
 	log          logr.Logger
+}
+
+type swapHandler interface {
+	swap(context.Context, *swapRequest) (*swapResponse, error)
 }
 
 /* ───────── Huma I/O types (drive both validation and the generated spec) ───────── */
@@ -55,6 +60,16 @@ type quoteOutput struct {
 	Body   *quoteResponse
 }
 
+type swapInput struct {
+	Secret string      `header:"x-rfq-shared-secret" doc:"Backend shared secret"`
+	Body   swapRequest `contentType:"application/json"`
+}
+
+type swapOutput struct {
+	Status int
+	Body   *swapResponse
+}
+
 // handler builds the Huma API on a stdlib ServeMux and returns it. Huma serves /openapi.json,
 // /openapi.yaml, and /docs automatically.
 func (s *server) handler() http.Handler {
@@ -70,6 +85,12 @@ func (s *server) handler() http.Handler {
 		OperationID: "quote", Method: http.MethodPost, Path: "/quote", Summary: "Request a filler quote",
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
+	if s.swaps != nil {
+		huma.Register(api, huma.Operation{
+			OperationID: "swap", Method: http.MethodPost, Path: "/swap", Summary: "Build user-directed swap calldata",
+			Description: "Runs the v2 DISCOVERY, CONFIRM, and BUILD phases without broadcasting a transaction.",
+		}, s.handleSwap)
+	}
 
 	// Middleware chain (outer → inner): body cap, access log + request-id, metrics, panic recovery.
 	var h = recoverPanics(mux, s.log)
@@ -108,6 +129,42 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		return &quoteOutput{Status: http.StatusNoContent}, nil // well-formed, nothing to quote
 	}
 	return &quoteOutput{Status: http.StatusOK, Body: resp}, nil
+}
+
+func (s *server) handleSwap(ctx context.Context, in *swapInput) (*swapOutput, error) {
+	if !s.authorized(in.Secret) {
+		s.observeSwap(in.Body.Phase, http.StatusForbidden)
+		s.log.V(1).Info("rejected /swap: bad shared secret", "requestId", requestID(ctx))
+		return nil, huma.Error403Forbidden("forbidden")
+	}
+	resp, err := s.swaps.swap(ctx, &in.Body)
+	if errors.Is(err, errSwapNoContent) {
+		s.observeSwap(in.Body.Phase, http.StatusNoContent)
+		return &swapOutput{Status: http.StatusNoContent}, nil
+	}
+	if err != nil {
+		var serviceErr *swapServiceError
+		if errors.As(err, &serviceErr) {
+			s.observeSwap(in.Body.Phase, serviceErr.status)
+			if serviceErr.status >= http.StatusInternalServerError {
+				s.log.Error(err, "swap failed", "phase", in.Body.Phase, "quoteId", in.Body.QuoteID,
+					"requestId", requestID(ctx))
+			}
+			return nil, huma.NewError(serviceErr.status, serviceErr.message)
+		}
+		s.observeSwap(in.Body.Phase, http.StatusBadGateway)
+		s.log.Error(err, "swap failed", "phase", in.Body.Phase, "quoteId", in.Body.QuoteID,
+			"requestId", requestID(ctx))
+		return nil, huma.Error502BadGateway("swap failed")
+	}
+	s.observeSwap(in.Body.Phase, http.StatusOK)
+	return &swapOutput{Status: http.StatusOK, Body: resp}, nil
+}
+
+func (s *server) observeSwap(phase swapPhase, status int) {
+	if s.metrics != nil {
+		s.metrics.observeSwap(phase, swapOutcomeForStatus(status))
+	}
 }
 
 // authorized constant-time-compares the shared secret header.

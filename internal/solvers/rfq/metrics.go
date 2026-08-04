@@ -15,6 +15,7 @@ import (
 type httpMetrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
+	swaps    *prometheus.CounterVec
 }
 
 func newHTTPMetrics(reg prometheus.Registerer) (*httpMetrics, error) {
@@ -28,6 +29,10 @@ func newHTTPMetrics(reg prometheus.Registerer) (*httpMetrics, error) {
 			Help:    "RFQ filler HTTP request duration in seconds.",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 		}, []string{"method", "route", "status"}),
+		swaps: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "rfq_filler_swap_requests_total",
+			Help: "Total user-directed swap requests by protocol phase and bounded outcome.",
+		}, []string{"phase", "outcome"}),
 	}
 	if err := reg.Register(m.requests); err != nil {
 		return nil, errors.Errorf("rfq: register http requests metric: %w", err)
@@ -35,7 +40,59 @@ func newHTTPMetrics(reg prometheus.Registerer) (*httpMetrics, error) {
 	if err := reg.Register(m.duration); err != nil {
 		return nil, errors.Errorf("rfq: register http duration metric: %w", err)
 	}
+	if err := reg.Register(m.swaps); err != nil {
+		return nil, errors.Errorf("rfq: register swap requests metric: %w", err)
+	}
 	return m, nil
+}
+
+func (m *httpMetrics) observeSwap(phase swapPhase, outcome string) {
+	m.swaps.WithLabelValues(swapPhaseLabel(phase), swapOutcomeLabel(outcome)).Inc()
+}
+
+func swapPhaseLabel(phase swapPhase) string {
+	switch phase {
+	case swapPhaseDiscovery:
+		return "discovery"
+	case swapPhaseConfirm:
+		return "confirm"
+	case swapPhaseBuild:
+		return "build"
+	default:
+		return "invalid"
+	}
+}
+
+func swapOutcomeLabel(outcome string) string {
+	switch outcome {
+	case "success", "no_content", "bad_request", "forbidden", "not_found", "conflict", "expired", "store_full", "dependency_error":
+		return outcome
+	default:
+		return "dependency_error"
+	}
+}
+
+func swapOutcomeForStatus(status int) string {
+	switch status {
+	case http.StatusOK:
+		return "success"
+	case http.StatusNoContent:
+		return "no_content"
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusGone:
+		return "expired"
+	case http.StatusTooManyRequests:
+		return "store_full"
+	default:
+		return "dependency_error"
+	}
 }
 
 // instrument wraps a handler to record per-request count + duration. The route label is drawn from a
@@ -74,7 +131,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 // routeLabel maps a path to a bounded set of route labels (known routes, else "other").
 func routeLabel(path string) string {
 	switch path {
-	case "/health", "/quote", "/openapi.json", "/openapi.yaml", "/docs":
+	case "/health", "/quote", "/swap", "/openapi.json", "/openapi.yaml", "/docs":
 		return path
 	default:
 		return "other"

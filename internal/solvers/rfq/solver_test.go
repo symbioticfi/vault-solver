@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"context"
 	"math/big"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
 func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
@@ -152,5 +155,142 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	}
 	if resp.AmountOut != "1000000" {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", resp.AmountOut)
+	}
+}
+
+func TestFactoryWiresSwapOnlyWhenEnabledAndSharesBackend(t *testing.T) {
+	cfg := &Config{
+		BackendURL:   "https://rfq-backend.example",
+		Executor:     common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		Router:       common.HexToAddress("0x0000000000000000000000000000000000000055"),
+		SwapQuoteTTL: 30 * time.Second,
+		SolverMode:   solverModeInternal,
+		Adapters:     []recoveryVault{{Adapter: vlt}},
+	}
+	st := newStore(time.Now)
+	rdr := &reader{swapState: newFakeSwapState(directSwapCandidate().Route)}
+	backend := newBackendClient(cfg.BackendURL)
+	signer := newSwapTestSigner(t)
+
+	_, exec, swaps := buildServicesWithSwap(cfg, 1, st, rdr, nil, nil, backend, signer, logr.Discard())
+	if swaps != nil {
+		t.Fatal("disabled config unexpectedly wired swap service")
+	}
+	if exec.backend != backend {
+		t.Fatal("execution service did not receive the shared backend client")
+	}
+
+	cfg.SwapEnabled = true
+	quotes, exec, swaps := buildServicesWithSwap(cfg, 1, st, rdr, nil, nil, backend, signer, logr.Discard())
+	if swaps == nil {
+		t.Fatal("enabled config did not wire swap service")
+	}
+	if exec.backend != backend || swaps.discountBackend != backend {
+		t.Fatal("execution and swap services do not share one backend client")
+	}
+	if swaps.signer != signer || swaps.reader != rdr || swaps.state != rdr.swapState || swaps.strategy != quotes.strategy {
+		t.Fatal("swap service did not receive the framework signer and shared quote dependencies")
+	}
+	if swaps.router != cfg.Router || swaps.quoteTTL != cfg.SwapQuoteTTL || swaps.store == nil {
+		t.Fatalf("swap configuration not wired: %+v", swaps)
+	}
+	if swaps.whitelist == nil || !swaps.whitelist.allows(vlt) {
+		t.Fatal("swap service did not receive quote adapter scope")
+	}
+}
+
+type startupSwapState struct {
+	routerErr    error
+	adapterErr   error
+	routerCalls  int
+	adapterCalls int
+	adapters     []common.Address
+}
+
+func (s *startupSwapState) validateRouter(context.Context, common.Address) error {
+	s.routerCalls++
+	return s.routerErr
+}
+
+func (s *startupSwapState) validateAdapters(
+	_ context.Context, adapters []common.Address, _ common.Address,
+) (map[common.Address]swapDomain, error) {
+	s.adapterCalls++
+	s.adapters = append([]common.Address(nil), adapters...)
+	return nil, s.adapterErr
+}
+
+func (*startupSwapState) readFillQuote(context.Context, liquidlane.Route, *big.Int) (liquidlane.FillQuote, error) {
+	return liquidlane.FillQuote{}, nil
+}
+
+func (*startupSwapState) readUsedNonces(context.Context, []swapNonceCheck) ([]bool, error) {
+	return nil, nil
+}
+
+func TestSolverRunValidatesRouterAndStaticAdaptersBeforeListening(t *testing.T) {
+	adapter := common.HexToAddress("0x0000000000000000000000000000000000000042")
+	state := &startupSwapState{adapterErr: errors.New("unauthorized signer")}
+	signer := newSwapTestSigner(t)
+	s := &Solver{
+		cfg: &Config{
+			Executor:    common.HexToAddress("0x0000000000000000000000000000000000000010"),
+			Router:      common.HexToAddress("0x0000000000000000000000000000000000000055"),
+			SwapEnabled: true, SolverMode: solverModeExternal,
+			Adapters: []recoveryVault{{Adapter: adapter}},
+		},
+		exec:  &executionService{reader: &fakeRecoveryReader{}},
+		swaps: &swapService{state: state, signer: signer},
+		log:   logr.Discard(),
+	}
+
+	err := s.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "validate swap adapters: unauthorized signer") {
+		t.Fatalf("Run() error = %v, want swap adapter startup failure", err)
+	}
+	if state.routerCalls != 1 || state.adapterCalls != 1 || len(state.adapters) != 1 || state.adapters[0] != adapter {
+		t.Fatalf("startup validation calls: router=%d adapters=%d values=%v", state.routerCalls, state.adapterCalls, state.adapters)
+	}
+}
+
+func TestSolverRunRejectsInvalidRouterBeforeListening(t *testing.T) {
+	state := &startupSwapState{routerErr: errors.New("no bytecode")}
+	s := &Solver{
+		cfg:  &Config{Router: common.HexToAddress("0x0000000000000000000000000000000000000055"), SwapEnabled: true},
+		exec: &executionService{reader: &fakeRecoveryReader{}}, swaps: &swapService{state: state}, log: logr.Discard(),
+	}
+	if err := s.Run(t.Context()); err == nil || !strings.Contains(err.Error(), "validate swap Router: no bytecode") {
+		t.Fatalf("Run() error = %v, want Router validation failure", err)
+	}
+	if state.routerCalls != 1 || state.adapterCalls != 0 {
+		t.Fatalf("validation order: router=%d adapters=%d", state.routerCalls, state.adapterCalls)
+	}
+}
+
+func TestSolverRunAllowsInternalSwapWithoutStaticAdapters(t *testing.T) {
+	state := &startupSwapState{}
+	signer := newSwapTestSigner(t)
+	swaps := &swapService{state: state, signer: signer}
+	srv := testServer()
+	srv.swaps = swaps
+	s := &Solver{
+		cfg: &Config{
+			ListenAddr: "127.0.0.1:0", Executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
+			Router: common.HexToAddress("0x0000000000000000000000000000000000000055"), SwapEnabled: true,
+			SolverMode: solverModeInternal, PollInterval: time.Hour,
+		},
+		exec: &executionService{
+			backend: &fakeBackend{}, store: newStore(time.Now), reader: &fakeRecoveryReader{},
+			log: logr.Discard(), now: time.Now, inflight: make(map[string]bool),
+		},
+		swaps: swaps, server: srv, log: logr.Discard(),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() = %v, want canceled clean shutdown", err)
+	}
+	if state.routerCalls != 1 || state.adapterCalls != 0 {
+		t.Fatalf("dynamic internal validation: router=%d adapters=%d", state.routerCalls, state.adapterCalls)
 	}
 }
