@@ -37,25 +37,27 @@ register the route or advertise it in OpenAPI. The backend authenticates with th
    capacity domains.
 2. `CONFIRM` selects one exact discovery point. The solver re-reads current liquidity, re-runs the
    configured strategy, verifies the same domains and output floor, validates every selected adapter,
-   and stores the ordered allocation in-memory until the earlier of its configured TTL and route
-   validity.
-3. `BUILD` is bound to that immutable confirmation, public deadline, Router, domains, and one build ID.
-   It revalidates adapter state and exact capacity, then returns calls using only signed-swap selector
-   `0x9a4568b6` or eligible discounted-swap selector `0x8fa5c671`. A stale or ineligible discount may
-   fall back only to a fresh signed call on the same adapter. Retrying the same build is byte-identical;
-   a second build ID or changed tuple conflicts.
+   and stores the ordered allocation in-memory until the earliest of the requested maximum deadline,
+   configured TTL, and route validity. A longer requested deadline is shortened rather than rejected.
+3. `BUILD` is bound to that immutable confirmation, Router, domains, one chosen unexpired deadline, and
+   one build ID. It revalidates adapter state and exact capacity, then returns only signed-swap selector
+   `0x9a4568b6`, including for plans selected from discount inventory. Private discount calldata is never
+   exposed through this user-directed API. The backend may choose the earliest confirmation validity as
+   one aggregate deadline. A retry may use a fresh transport-only request ID; the immutable payload is
+   byte-identical, while a second build ID or changed economic tuple conflicts.
 
 For a signed adapter call, recipient and caller are the configured Router. The adapter nonce is
-deterministic over build ID, chain, adapter, input token, and call index. Every direct or discounted
-call also includes an EIP-712 Router authorization from the framework signer over the intended
-swapper, adapter, exact input, calldata hash, and public deadline. The Router checks that signer is
+deterministic over build ID, chain, adapter, input token, and call index. Every signed call also includes
+an EIP-712 Router authorization from the framework signer over the intended swapper, adapter, exact
+input, calldata hash, and chosen BUILD deadline. The Router checks that signer is
 currently the adapter owner, market maker, or delegated filler before accepting the authorization.
 This extra binding prevents another account from copying and rebinding Router-held output calldata.
 
 The solver signs calldata only: it neither performs the Router's transfer-before-call funding nor
 broadcasts a transaction. The public transaction uses ordinary ERC-20 approval and zero native value;
 the Router transfers each exact leg directly from the user to its adapter, invokes the returned data,
-then transfers exact declared outputs to recipients. BUILD independently enforces its confirmed
+then transfers exact declared outputs to recipients. Plans contain at most 64 calls, and BUILD
+independently enforces its confirmed
 aggregate output floor before returning. Aggregation across solvers is safe only when selected
 liquidity-domain sets are disjoint.
 
@@ -231,7 +233,7 @@ solvers:
       orderLimit: 20
       swapEnabled: false                                # opt-in authenticated POST /swap
       router: ""                                        # required deployed Router when enabled
-      swapQuoteTtlMs: 30000                             # in-memory discovery/confirmation TTL
+      swapQuoteTtlMs: 30000                             # maximum in-memory discovery/confirmation lifetime
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -321,9 +323,11 @@ dropping features.
    planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
    single-route capped output, webhook rejection, and fresh planning.
 6. **(done) User-directed swap calldata** — opt-in authenticated `DISCOVERY`/`CONFIRM`/`BUILD`,
-   immutable bounded confirmation state, capacity-domain-preserving aggregation, signed and discounted
-   adapter calldata, swapper-bound Router authorizations, idempotent builds, and fail-fast Router/static
-   adapter validation. This path never sends a transaction and does not alter the legacy fill poller.
+   immutable bounded confirmation state, capacity-domain-preserving aggregation, signed-only adapter
+   calldata even for discount-selected plans, capped confirmation validity plus one chosen aggregate BUILD
+   deadline, transport-only request-ID retries over immutable cached payloads, a 64-call bound,
+   swapper-bound Router authorizations, and fail-fast Router/static adapter validation. This path never
+   sends a transaction and does not alter the legacy fill poller or its private discount execution.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

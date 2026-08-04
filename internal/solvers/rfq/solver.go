@@ -164,7 +164,6 @@ func buildServicesWithSwap(
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
 		discountsEnabled: cfg.usesDiscounts(),
-		discountBackend:  backend,
 		reader:           rdr,
 		state:            state,
 		strategy:         quoteStrategy,

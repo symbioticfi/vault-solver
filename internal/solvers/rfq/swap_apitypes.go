@@ -23,6 +23,7 @@ const (
 	swapPhaseConfirm    swapPhase = "CONFIRM"
 	swapPhaseBuild      swapPhase = "BUILD"
 	maxDiscoverySamples           = 32
+	maxSwapCalls                  = 64
 	maxUint48                     = int64(1<<48 - 1)
 )
 
@@ -42,8 +43,8 @@ type swapRequest struct {
 	AmountIn           *string        `json:"amountIn,omitempty" pattern:"^[0-9]+$"`
 	MinAmountOut       *string        `json:"minAmountOut,omitempty" pattern:"^[0-9]+$"`
 	Deadline           *int64         `json:"deadline,omitempty"`
-	Adapters           []quoteAdapter `json:"adapters,omitempty" maxItems:"256"`
-	LiquidityDomains   []string       `json:"liquidityDomains,omitempty" maxItems:"256"`
+	Adapters           []quoteAdapter `json:"adapters,omitempty" maxItems:"64"`
+	LiquidityDomains   []string       `json:"liquidityDomains,omitempty" maxItems:"64"`
 	Router             *string        `json:"router,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
 }
 
@@ -155,7 +156,7 @@ func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*pa
 	switch r.Phase {
 	case swapPhaseDiscovery:
 		if r.DiscoveryRequestID != nil || r.SolverQuoteID != nil || r.BuildID != nil || r.AmountIn != nil ||
-			r.MinAmountOut != nil || r.Deadline != nil || len(r.LiquidityDomains) != 0 || r.Router != nil {
+			r.MinAmountOut != nil || r.Deadline != nil || r.LiquidityDomains != nil || r.Router != nil {
 			return nil, errors.New("DISCOVERY contains fields from another phase")
 		}
 		parsed.SampleAmountsIn, err = parseSampleAmounts(r.SampleAmountsIn)
@@ -165,7 +166,7 @@ func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*pa
 		parsed.Inventory, err = parseSwapAdapters(r.Adapters, r.ChainID, tokenIn, tokenOut)
 	case swapPhaseConfirm:
 		if r.DiscoveryRequestID == nil || r.SolverQuoteID != nil || r.BuildID != nil ||
-			len(r.SampleAmountsIn) != 0 || len(r.LiquidityDomains) != 0 || r.Router != nil {
+			r.SampleAmountsIn != nil || r.LiquidityDomains != nil || r.Router != nil {
 			return nil, errors.New("CONFIRM has missing or inadmissible phase fields")
 		}
 		parsed.DiscoveryRequestID, err = parseCanonicalUUID(*r.DiscoveryRequestID, "discoveryRequestId")
@@ -179,7 +180,7 @@ func (r *swapRequest) parse(chainID int64, configuredRouter common.Address) (*pa
 		}
 	case swapPhaseBuild:
 		if r.DiscoveryRequestID != nil || r.SolverQuoteID == nil || r.BuildID == nil ||
-			len(r.SampleAmountsIn) != 0 || len(r.Adapters) != 0 || r.Router == nil {
+			r.SampleAmountsIn != nil || r.Adapters != nil || r.Router == nil {
 			return nil, errors.New("BUILD has missing or inadmissible phase fields")
 		}
 		parsed.SolverQuoteID, err = parseCanonicalUUID(*r.SolverQuoteID, "solverQuoteId")
@@ -234,8 +235,8 @@ func parseSampleAmounts(raw []string) ([]*big.Int, error) {
 }
 
 func parseCapacityDomains(raw []string, chainID int64) ([]liquidlane.CapacityID, error) {
-	if len(raw) == 0 {
-		return nil, errors.New("liquidityDomains must not be empty")
+	if len(raw) == 0 || len(raw) > maxSwapCalls {
+		return nil, errors.Errorf("liquidityDomains must contain 1 to %d values", maxSwapCalls)
 	}
 	seen := make(map[string]bool, len(raw))
 	out := make([]liquidlane.CapacityID, 0, len(raw))
@@ -294,6 +295,9 @@ func parseExactSwapFields(r *swapRequest) (exactSwapFields, error) {
 }
 
 func parseSwapAdapters(raw []quoteAdapter, chainID int64, tokenIn, tokenOut common.Address) ([]solverInventory, error) {
+	if len(raw) > maxSwapCalls {
+		return nil, errors.Errorf("adapters must contain at most %d values", maxSwapCalls)
+	}
 	out := make([]solverInventory, 0, len(raw))
 	for i := range raw {
 		entry, err := raw[i].parse(i, chainID, tokenIn)

@@ -12,12 +12,12 @@ func TestSwapDocumentationPinsConfigurationAndSecurityContract(t *testing.T) {
 			"swapEnabled", "router", "swapQuoteTtlMs", "30000",
 		},
 		"../../../README.md": {
-			"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "does not broadcast",
-			"x-rfq-shared-secret",
+			"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "never broadcasts",
+			"x-rfq-shared-secret", "transport-only", "64 adapter calls",
 		},
 		"../../../docs/RFQ-PLAN.md": {
-			"in-memory", "0x9a4568b6", "0x8fa5c671", "restart", "transfer-before-call",
-			"zero native value", "aggregate output floor",
+			"in-memory", "0x9a4568b6", "Private discount calldata is never", "restart", "transfer-before-call",
+			"zero native value", "aggregate output floor", "transport-only request ID",
 		},
 	}
 	for path, required := range checks {

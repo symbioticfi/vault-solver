@@ -180,42 +180,6 @@ func TestPackSignedSwapCallUsesBindingSelectorAndFrameworkSigner(t *testing.T) {
 	}
 }
 
-func TestPackDiscountSwapCallUsesBindingSelectorAndRouterRecipient(t *testing.T) {
-	value := adapter.ILiquidLaneAdapterDiscountSwap{
-		Discount: adapter.ILiquidLaneAdapterDiscount{
-			TokenToRedeem: common.HexToAddress(testTokenIn), Discount: big.NewInt(1_000),
-			Signer: common.HexToAddress(testSwapper), Protocol: common.HexToAddress(testAdapter),
-			Nonce: big.NewInt(9), Deadline: big.NewInt(2_000_000_000),
-		},
-		SignerSignature: []byte{0x01, 0x02}, ProtocolDeadline: big.NewInt(2_000_000_000),
-	}
-	protocolSignature := []byte{0x03, 0x04}
-	router := common.HexToAddress(testRouter)
-	data, err := packDiscountSwapCall(value, protocolSignature, router, big.NewInt(10))
-	if err != nil {
-		t.Fatalf("packDiscountSwapCall: %v", err)
-	}
-	if got := common.Bytes2Hex(data[:4]); got != "8fa5c671" {
-		t.Fatalf("selector = 0x%s", got)
-	}
-	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
-	if err != nil {
-		t.Fatal(err)
-	}
-	values, err := parsed.Methods["swap0"].Inputs.Unpack(data[4:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded := *abi.ConvertType(values[0], new(adapter.ILiquidLaneAdapterDiscountSwap)).(*adapter.ILiquidLaneAdapterDiscountSwap)
-	if decoded.Discount.TokenToRedeem != value.Discount.TokenToRedeem || decoded.Discount.Nonce.Cmp(value.Discount.Nonce) != 0 ||
-		values[2].(common.Address) != router || values[3].(*big.Int).Cmp(big.NewInt(10)) != 0 {
-		t.Fatalf("decoded discount call = %+v, values %+v", decoded, values)
-	}
-	if string(values[1].([]byte)) != string(protocolSignature) {
-		t.Fatalf("protocol signature = %x", values[1].([]byte))
-	}
-}
-
 func TestPackSignedSwapCallPropagatesSigningFailure(t *testing.T) {
 	signer := newSwapTestSigner(t)
 	signer.err = errors.New("sign failed")

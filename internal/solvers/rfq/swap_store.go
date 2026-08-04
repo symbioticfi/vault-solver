@@ -48,7 +48,6 @@ type confirmationRecord struct {
 	TokenOut           common.Address
 	AmountIn           *big.Int
 	AmountOut          *big.Int
-	PublicDeadline     time.Time
 	ValidUntil         time.Time
 	Domains            []liquidlane.CapacityID
 	Plan               *fillPlan
@@ -60,7 +59,16 @@ type confirmationEntry struct {
 	buildMu          sync.Mutex
 	buildID          uuid.UUID
 	buildFingerprint common.Hash
-	built            *swapResponse
+	built            *swapBuildPayload
+}
+
+type swapBuildPayload struct {
+	Router           string
+	AmountIn         string
+	AmountOut        string
+	LiquidityDomains []string
+	ValidUntil       int64
+	Calls            []swapCallResponse
 }
 
 type swapStore struct {
@@ -156,7 +164,7 @@ func (s *swapStore) acquireBuild(id, buildID uuid.UUID, fingerprint common.Hash)
 		return nil, errSwapBuildConflict
 	}
 	return &buildLease{
-		entry: entry, record: cloneConfirmationRecord(entry.record), cached: cloneSwapResponse(entry.built),
+		entry: entry, record: cloneConfirmationRecord(entry.record), cached: cloneSwapBuildPayload(entry.built),
 	}, nil
 }
 
@@ -177,7 +185,7 @@ func (s *swapStore) sweepLocked() {
 type buildLease struct {
 	entry   *confirmationEntry
 	record  confirmationRecord
-	cached  *swapResponse
+	cached  *swapBuildPayload
 	release sync.Once
 }
 
@@ -186,11 +194,11 @@ func (l *buildLease) Record() *confirmationRecord {
 	return &cloned
 }
 
-func (l *buildLease) Cached() *swapResponse { return cloneSwapResponse(l.cached) }
+func (l *buildLease) Cached() *swapBuildPayload { return cloneSwapBuildPayload(l.cached) }
 
-func (l *buildLease) Complete(response *swapResponse) {
-	l.entry.built = cloneSwapResponse(response)
-	l.cached = cloneSwapResponse(response)
+func (l *buildLease) Complete(payload *swapBuildPayload) {
+	l.entry.built = cloneSwapBuildPayload(payload)
+	l.cached = cloneSwapBuildPayload(payload)
 }
 
 func (l *buildLease) Release() {
@@ -237,23 +245,12 @@ func cloneFillPlan(plan *fillPlan) *fillPlan {
 	return &out
 }
 
-func cloneSwapResponse(response *swapResponse) *swapResponse {
-	if response == nil {
+func cloneSwapBuildPayload(payload *swapBuildPayload) *swapBuildPayload {
+	if payload == nil {
 		return nil
 	}
-	out := *response
-	out.LiquidityDomains = append([]string(nil), response.LiquidityDomains...)
-	if response.Points != nil {
-		points := make([]swapPointResponse, len(*response.Points))
-		for i, point := range *response.Points {
-			points[i] = point
-			points[i].LiquidityDomains = append([]string(nil), point.LiquidityDomains...)
-		}
-		out.Points = &points
-	}
-	if response.Calls != nil {
-		calls := append([]swapCallResponse(nil), (*response.Calls)...)
-		out.Calls = &calls
-	}
+	out := *payload
+	out.LiquidityDomains = append([]string(nil), payload.LiquidityDomains...)
+	out.Calls = append([]swapCallResponse(nil), payload.Calls...)
 	return &out
 }

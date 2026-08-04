@@ -111,8 +111,8 @@ func TestSwapStoreBuildLeaseCachesIdenticalResponse(t *testing.T) {
 	if err != nil || lease.Cached() != nil {
 		t.Fatalf("first lease = %+v, err %v", lease, err)
 	}
-	response := sampleBuildResponse()
-	lease.Complete(response)
+	payload := sampleBuildPayload()
+	lease.Complete(payload)
 	lease.Release()
 
 	cachedLease, err := store.acquireBuild(record.SolverQuoteID, buildID, fingerprint)
@@ -121,12 +121,12 @@ func TestSwapStoreBuildLeaseCachesIdenticalResponse(t *testing.T) {
 	}
 	cached := cachedLease.Cached()
 	cachedLease.Release()
-	if cached == nil || (*cached.Calls)[0].Data != "0x1234" {
+	if cached == nil || cached.Calls[0].Data != "0x1234" {
 		t.Fatalf("cached response = %+v", cached)
 	}
-	(*cached.Calls)[0].Data = "0xffff"
+	cached.Calls[0].Data = "0xffff"
 	again, _ := store.acquireBuild(record.SolverQuoteID, buildID, fingerprint)
-	if (*again.Cached().Calls)[0].Data != "0x1234" {
+	if again.Cached().Calls[0].Data != "0x1234" {
 		t.Fatal("cached response returned a mutable alias")
 	}
 	again.Release()
@@ -181,7 +181,7 @@ func TestSwapStoreBuildLeaseSerializesConcurrentIdenticalBuilds(t *testing.T) {
 		t.Fatal("second build did not wait for the first")
 	case <-time.After(20 * time.Millisecond):
 	}
-	first.Complete(sampleBuildResponse())
+	first.Complete(sampleBuildPayload())
 	first.Release()
 	second := <-done
 	if second.err != nil || second.lease.Cached() == nil {
@@ -199,8 +199,8 @@ func sampleConfirmation(now time.Time) confirmationRecord {
 	return confirmationRecord{
 		SolverQuoteID: uuid.New(), DiscoveryRequestID: uuid.New(), QuoteID: uuid.New(), ChainID: 1,
 		Swapper: common.HexToAddress(testSwapper), TokenIn: route.TokenIn, TokenOut: route.TokenOut,
-		AmountIn: big.NewInt(10), AmountOut: big.NewInt(19), PublicDeadline: now.Add(30 * time.Second),
-		ValidUntil: now.Add(time.Minute), Domains: []liquidlane.CapacityID{route.CapacityID},
+		AmountIn: big.NewInt(10), AmountOut: big.NewInt(19), ValidUntil: now.Add(time.Minute),
+		Domains: []liquidlane.CapacityID{route.CapacityID},
 		Plan: &fillPlan{
 			QuoteID: "quote", RequestID: "request", TokenIn: route.TokenIn, TokenOut: route.TokenOut,
 			AmountIn: big.NewInt(10), QuotedAmountOut: big.NewInt(19),
@@ -212,10 +212,9 @@ func sampleConfirmation(now time.Time) confirmationRecord {
 	}
 }
 
-func sampleBuildResponse() *swapResponse {
-	calls := []swapCallResponse{{
+func sampleBuildPayload() *swapBuildPayload {
+	return &swapBuildPayload{Calls: []swapCallResponse{{
 		To: testAdapter, Data: "0x1234", AmountIn: "10", AmountOut: "19", TokenOut: testTokenOut,
 		LiquidityDomain: "capacity:1:" + testVault + ":" + testTokenOut, ValidUntil: 1_030,
-	}}
-	return &swapResponse{Protocol: swapProtocolV2, Phase: swapPhaseBuild, Calls: &calls}
+	}}}
 }

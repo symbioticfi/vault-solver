@@ -2,12 +2,24 @@ package rfq
 
 import (
 	"encoding/json"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
+
+func TestParseUint256RejectsValuesAboveMaximum(t *testing.T) {
+	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	if parsed, err := parseUint256(maximum.String(), "amount"); err != nil || parsed.Cmp(maximum) != 0 {
+		t.Fatalf("maximum uint256 = %v, err %v", parsed, err)
+	}
+	overflow := new(big.Int).Add(maximum, big.NewInt(1))
+	if parsed, err := parseUint256(overflow.String(), "amount"); err == nil {
+		t.Fatalf("overflow parsed as %v", parsed)
+	}
+}
 
 const (
 	testDiscoveryRequestID = "8fcc1d0d-246d-4e8e-9620-13c76857b31a"
@@ -40,6 +52,33 @@ func TestSwapRequestParseDiscovery(t *testing.T) {
 	}
 	if parsed.SampleAmountsIn[0].String() != "4" || parsed.SampleAmountsIn[1].String() != "10" {
 		t.Fatalf("samples = %v", parsed.SampleAmountsIn)
+	}
+}
+
+func TestSwapRequestParseRejectsMoreThan64Adapters(t *testing.T) {
+	r := baseSwapRequest(swapPhaseDiscovery, testDiscoveryRequestID)
+	r.SampleAmountsIn = []string{"10"}
+	adapter := quoteAdapter{
+		Adapter: testAdapter, Asset: testTokenOut, AssetDecimals: 6, MaxAssets: "200", MaxRate: "1000000000000000000",
+	}
+	r.Adapters = make([]quoteAdapter, 65)
+	for i := range r.Adapters {
+		r.Adapters[i] = adapter
+	}
+	if parsed, err := r.parse(1, common.HexToAddress(testRouter)); err == nil {
+		t.Fatalf("65 adapters parsed as %+v", parsed)
+	}
+}
+
+func TestSwapRequestParseRejectsMoreThan64LiquidityDomains(t *testing.T) {
+	r := validBuildRequest()
+	r.LiquidityDomains = make([]string, maxSwapCalls+1)
+	for i := range r.LiquidityDomains {
+		vault := strings.ToLower(common.BigToAddress(big.NewInt(int64(i + 1))).Hex())
+		r.LiquidityDomains[i] = "capacity:1:" + vault + ":" + testTokenOut
+	}
+	if parsed, err := r.parse(1, common.HexToAddress(testRouter)); err == nil {
+		t.Fatalf("65 liquidity domains parsed as %+v", parsed)
 	}
 }
 
@@ -90,6 +129,12 @@ func TestSwapRequestParseRejectsPhaseMismatches(t *testing.T) {
 			r.SampleAmountsIn, r.AmountIn = []string{"1"}, ptr("1")
 			return r
 		}(),
+		"discovery with empty domains": func() swapRequest {
+			r := baseSwapRequest(swapPhaseDiscovery, testDiscoveryRequestID)
+			r.SampleAmountsIn = []string{"1"}
+			r.LiquidityDomains = []string{}
+			return r
+		}(),
 		"confirm without discovery": func() swapRequest {
 			r := baseSwapRequest(swapPhaseConfirm, testConfirmRequestID)
 			r.AmountIn, r.MinAmountOut, r.Deadline = ptr("1"), ptr("1"), int64Ptr(2_000_000_000)
@@ -100,6 +145,11 @@ func TestSwapRequestParseRejectsPhaseMismatches(t *testing.T) {
 			r.LiquidityDomains = []string{"capacity:1:" + testVault + ":" + testTokenOut}
 			return r
 		}(),
+		"confirm with empty samples": func() swapRequest {
+			r := validConfirmRequest()
+			r.SampleAmountsIn = []string{}
+			return r
+		}(),
 		"build with adapters": func() swapRequest {
 			r := validBuildRequest()
 			r.Adapters = []quoteAdapter{{Adapter: testAdapter}}
@@ -108,6 +158,11 @@ func TestSwapRequestParseRejectsPhaseMismatches(t *testing.T) {
 		"build with samples": func() swapRequest {
 			r := validBuildRequest()
 			r.SampleAmountsIn = []string{"1"}
+			return r
+		}(),
+		"build with empty adapters": func() swapRequest {
+			r := validBuildRequest()
+			r.Adapters = []quoteAdapter{}
 			return r
 		}(),
 	}

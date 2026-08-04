@@ -185,8 +185,8 @@ func TestFactoryWiresSwapOnlyWhenEnabledAndSharesBackend(t *testing.T) {
 	if swaps == nil {
 		t.Fatal("enabled config did not wire swap service")
 	}
-	if exec.backend != backend || swaps.discountBackend != backend {
-		t.Fatal("execution and swap services do not share one backend client")
+	if exec.backend != backend {
+		t.Fatal("execution service did not retain its backend client")
 	}
 	if swaps.signer != signer || swaps.reader != rdr || swaps.state != rdr.swapState || swaps.strategy != quotes.strategy {
 		t.Fatal("swap service did not receive the framework signer and shared quote dependencies")

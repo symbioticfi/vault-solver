@@ -4,7 +4,9 @@
 
 **Goal:** Add an authenticated RFQ `POST /swap` v2 discovery/confirmation/build lifecycle that returns immutable, Router-bound LiquidLane adapter calldata without broadcasting transactions.
 
-**Architecture:** Add a swap service beside the existing quote and execution services. It parses one phase-tagged Huma contract, prices backend-supplied sample grids with the existing strategy, stores short-lived discovery and immutable confirmation records, then rebuilds only the persisted allocation as either backend-resolved `DiscountSwap` or solver-signed `SignedSwap` calls. A dedicated chain-read seam validates Router bytecode, adapter EIP-712 domains, signer authorization, and nonce availability; the existing `/quote`, order poller, Executor fill path, and transaction manager remain untouched.
+**Implementation status:** Complete, including the post-audit signed-only, deadline-capping, retry-envelope, and 64-call amendments.
+
+**Architecture:** Add a swap service beside the existing quote and execution services. It parses one phase-tagged Huma contract, prices backend-supplied sample grids with the existing strategy, stores short-lived discovery and immutable confirmation records, then rebuilds only the persisted allocation as solver-signed `SignedSwap` calls. Discount-selected plans preserve their exact route identity but never resolve or expose private discount payloads. A dedicated chain-read seam validates Router bytecode, adapter EIP-712 domains, signer authorization, and nonce availability; the existing `/quote`, order poller, Executor fill path, and transaction manager remain untouched.
 
 **Tech Stack:** Go 1.26.5, Huma v2, go-ethereum ABI/crypto/apitypes, generated abigen v2 LiquidLane bindings, existing LiquidLane strategy/discount packages, Prometheus, and standard-library concurrency primitives.
 
@@ -17,14 +19,17 @@
 - Normalize every response address, capacity domain, and calldata hex string to lowercase.
 - `liquidityDomain` is the canonical `liquidlane.CapacityID`, not an adapter address; backend dedupe keys are `(chainId, CapacityID)`.
 - `CONFIRM` persists the exact ordered candidate allocation; `BUILD` may improve a leg's output but must not change its candidate, adapter, input split, domain, token, order, or confirmed per-leg floor.
-- Set `SignedSwap.recipient` and `SignedSwap.caller` to the configured Router, use the existing framework signer, and set its deadline to the immutable public BUILD deadline.
+- Treat CONFIRM `deadline` as a requested maximum and cap `validUntil` at the earliest local validity; BUILD chooses one exact unexpired deadline at or before that cap.
+- Set `SignedSwap.recipient` and `SignedSwap.caller` to the configured Router, use the existing framework signer, and set its deadline to the chosen BUILD deadline.
 - Derive direct nonces exactly from `buildId`, chain, adapter, input token, and zero-based persisted call index; never substitute another nonce after a collision or use.
-- Use fresh existing-backend resolution for an eligible selected discount and fall back only to `SignedSwap` on the same persisted adapter when its direct route still meets the leg floor.
+- Always emit fresh `SignedSwap` calldata on the persisted adapter, including discount-selected confirmations; never resolve or return private `DiscountSwap` payloads.
+- Exclude transport-only `requestId` from BUILD idempotency, cache immutable payload only, and rebuild the response envelope for each retry.
+- Reject swap requests or plans that could produce more than 64 calls.
 - `DISCOVERY` creates no authorization or liquidity reservation; confirmation records are bounded in-memory state and become unknown after restart.
 - The user-directed path must never call `TxManager`, Executor, Reactor, or any transaction-send API.
 - Cross-solver capacity-domain rejection, Router transaction assembly, token transfers, aggregate output
   enforcement, submission, and monitoring remain RFQ-backend responsibilities outside this solver repository.
-- Do not edit generated files under `api/bindings`; use `TryPackSwap0` and `TryPackSwap1` from the existing adapter binding.
+- Do not edit generated files under `api/bindings`; use `TryPackSwap1` from the existing adapter binding.
 - Keep `swapEnabled` false by default. Disabled deployments must preserve existing `/quote` and order-execution behavior.
 - Follow repository conventions: absolute `internal/...` imports between packages, same-package relative files, `go-errors/errors` wrapping, `logr` logging, strict YAML decode, no raw secrets/calldata/signatures in errors or metric labels.
 - Use Go 1.26.5 for every build and test gate.
@@ -43,8 +48,8 @@
 - `internal/solvers/rfq/swap_signing_test.go` — independent apitypes cross-checks, golden nonce/selector tests, and signature recovery.
 - `internal/solvers/rfq/swap_chainreader.go` — Router-code, EIP-5267 domain, signer-authorization, and used-nonce reads.
 - `internal/solvers/rfq/swap_chainreader_test.go` — multicall packing/unpacking and fail-closed validation tests.
-- `internal/solvers/rfq/swap.go` — discovery, confirmation, exact-allocation refresh, build, and discount fallback orchestration.
-- `internal/solvers/rfq/swap_test.go` — service-level lifecycle, allocation immutability, discount/direct, and no-broadcast tests.
+- `internal/solvers/rfq/swap.go` — discovery, confirmation, exact-allocation refresh, and signed-only build orchestration.
+- `internal/solvers/rfq/swap_test.go` — service-level lifecycle, allocation immutability, signed-only discount selection, and no-broadcast tests.
 - `internal/solvers/rfq/docs_test.go` — source-level contract for swap operator documentation.
 
 ### Modify
@@ -67,8 +72,6 @@
 - `config/rfq.example.yaml` — document the disabled-by-default switch, Router, and 30-second quote TTL.
 - `README.md` — describe the three private phases and Router execution responsibility.
 - `docs/RFQ-PLAN.md` — record the v2 calldata lifecycle and its non-broadcasting boundary.
-- `internal/liquidlane/discounts/client.go` — classify an ordinary missing discount separately from dependency failures.
-- `internal/liquidlane/discounts/client_test.go` — pin missing-versus-outage classification.
 
 ### Create for documentation verification
 
@@ -605,8 +608,8 @@ Expected: PASS with no races or mutable aliases.
 - Create: `internal/solvers/rfq/swap_signing_test.go`
 
 **Interfaces:**
-- Consumes: framework `signer.Signer`, generated LiquidLane adapter bindings, parsed discounts, UUID build IDs.
-- Produces: deterministic nonce, EIP-712 digest, signed-swap calldata, and discount-swap calldata helpers.
+- Consumes: framework `signer.Signer`, generated LiquidLane adapter bindings, and UUID build IDs.
+- Produces: deterministic nonce, EIP-712 digest, and signed-swap calldata helpers.
 
 - [ ] **Step 1: Write independent digest, nonce, and calldata tests**
 
@@ -617,7 +620,6 @@ the production helpers:
 func TestSignedSwapDigestMatchesEIP712Reference(t *testing.T)
 func TestSignedSwapNonceMatchesGoldenVector(t *testing.T)
 func TestPackSignedSwapCallUsesBindingSelectorAndFrameworkSigner(t *testing.T)
-func TestPackDiscountSwapCallUsesBindingSelectorAndRouterRecipient(t *testing.T)
 func TestPackSignedSwapCallPropagatesSigningFailure(t *testing.T)
 ```
 
@@ -631,13 +633,13 @@ const swapNonceGoldenHex = "0x60e388e6f57a7f56b02157a0756e27a89e584029632d086f9a
 
 The nonce golden input is build ID `7423df2b-957b-47d5-acbc-21c3bd8a614e`, chain ID `1`, adapter
 `0x3333333333333333333333333333333333333333`, token input
-`0x1111111111111111111111111111111111111111`, and call index `0`. ABI-unpack both generated call
-payloads and assert every tuple field and signature byte. Assert selectors `0x9a4568b6` and `0x8fa5c671`.
+`0x1111111111111111111111111111111111111111`, and call index `0`. ABI-unpack the generated call
+payload and assert every tuple field and signature byte. Assert signed selector `0x9a4568b6`.
 
 - [ ] **Step 2: Verify the tests fail**
 
 ```bash
-go test ./internal/solvers/rfq -run 'Test(SignedSwap|PackSignedSwap|PackDiscountSwap)' -count=1
+go test ./internal/solvers/rfq -run 'Test(SignedSwap|PackSignedSwap)' -count=1
 ```
 
 Expected: compilation fails because the signing helpers do not exist.
@@ -659,12 +661,6 @@ func packSignedSwapCall(
 	domain swapDomain,
 	value adapter.ILiquidLaneAdapterSignedSwap,
 ) ([]byte, error)
-func packDiscountSwapCall(
-	value adapter.ILiquidLaneAdapterDiscountSwap,
-	protocolSignature []byte,
-	recipient common.Address,
-	amountIn *big.Int,
-) ([]byte, error)
 ```
 
 Hash `SignedSwap(address recipient,address tokenIn,uint256 amountIn,uint256 amountOut,address caller,address signer,uint256 nonce,uint48 deadline)` using the standard EIP-712 domain
@@ -677,7 +673,7 @@ Use `adapter.NewLiquidLaneAdapter()` only as the generated ABI packer; do not ed
 
 ```bash
 gofmt -w internal/solvers/rfq/swap_signing.go internal/solvers/rfq/swap_signing_test.go
-go test ./internal/solvers/rfq -run 'Test(SignedSwap|PackSignedSwap|PackDiscountSwap)' -count=1
+go test ./internal/solvers/rfq -run 'Test(SignedSwap|PackSignedSwap)' -count=1
 git add internal/solvers/rfq/swap_signing.go internal/solvers/rfq/swap_signing_test.go
 git commit -m "feat(rfq): encode signed swap adapter calls"
 ```
@@ -875,9 +871,10 @@ to identify a returned point, and require `minAmountOut` to equal its output. Re
 exact size. Return no-content if it is not fully coverable. Otherwise require the fresh output to meet
 the requested floor and the fresh unique capacity-domain set to equal the discovery set.
 
-Validate all selected adapter domains and signer authorization before storing. Set `validUntil` to the
-minimum of public deadline, `now + swapQuoteTTL`, and every nonzero selected candidate `ValidUntil`;
-reject if it is not in the future or does not fit `uint48`. Generate `solverQuoteId`, deep-store the
+Validate all selected adapter domains and signer authorization before storing. Treat the request deadline
+as a maximum and set `validUntil` to the minimum of that maximum, `now + swapQuoteTTL`, and every nonzero
+selected candidate `ValidUntil`; shorten a longer maximum rather than rejecting it. Reject only if the
+result is not in the future or does not fit `uint48`. Generate `solverQuoteId`, deep-store the
 ordered exact plan and the response floor, and return the exact CONFIRM wire response.
 
 - [ ] **Step 7: Run service tests and commit**
@@ -926,16 +923,17 @@ is authorized for that adapter. Assert the aggregate input and output equations 
 - [ ] **Step 2: Write failing idempotency and concurrency tests**
 
 ```go
-func TestSwapBuildIdenticalRetryReturnsByteIdenticalCachedResponse(t *testing.T)
-func TestSwapBuildConcurrentIdenticalRequestsSignOnce(t *testing.T)
+func TestSwapBuildRetryWithFreshRequestIDEchoesNewEnvelope(t *testing.T)
+func TestSwapBuildConcurrentFreshRequestIDsShareImmutablePayload(t *testing.T)
 func TestSwapBuildRejectsSecondBuildID(t *testing.T)
 func TestSwapBuildRejectsSameBuildIDWithDifferentNormalizedRequest(t *testing.T)
 func TestSwapBuildFailedAttemptRetriesOnlySameBuildIDAndFingerprint(t *testing.T)
 ```
 
-Count physical reads and signer calls. The successful concurrent case must perform each once. Normalize
-addresses, decimal amounts, UUIDs, and sorted domains before hashing the request fingerprint, so textual
-case or leading decimal zeros cannot create a second semantic request.
+Count physical reads and signer calls. The successful concurrent case must perform each once. Exclude
+transport-only `requestId` from the fingerprint, but normalize addresses, decimal amounts, UUIDs, and
+sorted domains before hashing every economic field. Cache only immutable calls/signatures and reconstruct
+each response envelope with the current request ID.
 
 - [ ] **Step 3: Verify BUILD tests fail**
 
@@ -953,9 +951,10 @@ func buildFingerprint(request *parsedBuildRequest) common.Hash
 ```
 
 Require exact stored quote ID, solver quote ID, chain, swapper, tokens, input, confirmed output floor,
-public deadline, sorted domain set, and configured Router. Acquire the per-confirmation lease before any
-fresh read or signature. Return its deep-copied cached response immediately; otherwise defer `Release`
-and call `Complete` only after every leg succeeds.
+sorted domain set, and configured Router. Require `now < deadline <= confirmation.validUntil`; the first
+build fingerprint freezes that chosen deadline. Acquire the per-confirmation lease before any fresh read
+or signature. Rebuild an envelope around a deep-copied cached payload; otherwise defer `Release` and call
+`Complete` only after every leg succeeds and the chosen deadline is rechecked.
 
 - [ ] **Step 5: Revalidate and encode direct legs**
 
@@ -970,9 +969,9 @@ their capacity IDs match. Derive each nonce from the zero-based persisted call i
 `isUsedNonce`, and reject any used nonce without trying another value.
 
 Build `adapter.ILiquidLaneAdapterSignedSwap` with Router recipient/caller, common token input, leg input,
-fresh conservative output, framework signer, deterministic nonce, and stored public deadline. Sign
+fresh conservative output, framework signer, deterministic nonce, and chosen BUILD deadline. Sign
 and pack every call, then construct the response from those same values. Verify sums and top-level floor
-before caching. The service has no `txSender` dependency and never broadcasts.
+and recheck the deadline before caching. The service has no `txSender` dependency and never broadcasts.
 
 - [ ] **Step 6: Run BUILD tests and commit**
 
@@ -983,83 +982,44 @@ git add internal/solvers/rfq/swap.go internal/solvers/rfq/swap_test.go
 git commit -m "feat(rfq): build idempotent swap calldata"
 ```
 
-Expected: PASS; identical retries are byte-identical and stale allocations emit no calldata.
+Expected: PASS; retry payloads are byte-identical under fresh request envelopes and stale allocations emit no calldata.
 
 ---
 
-### Task 9: Use eligible discount calldata with same-route signed fallback
+### Task 9: Sign discount-selected legs without exposing private payloads
 
 **Files:**
 - Modify: `internal/solvers/rfq/swap.go`
 - Modify: `internal/solvers/rfq/swap_test.go`
-- Modify: `internal/solvers/rfq/backend.go`
-- Modify: `internal/solvers/rfq/backend_test.go`
 
 **Interfaces:**
-- Consumes: existing backend discount response, `discounts.ParseSigned`, `discounts.ValidateSigned`,
-  `discounts.ResolveSelected`, and `discounts.ValidUntil`.
-- Produces: eligible `DiscountSwap` calldata or a direct `SignedSwap` on the same persisted adapter.
+- Consumes: persisted candidate identity and a fresh physical quote for the same route.
+- Produces: only `SignedSwap` calldata on the persisted adapter.
 
-- [ ] **Step 1: Expose the existing discount lookup through a narrow interface**
-
-Add without duplicating HTTP logic:
+- [x] **Step 1: Write the failing signed-only discount-selection test**
 
 ```go
-type swapDiscountBackend interface {
-	resolveDiscount(context.Context, string) (*resolveDiscountResponse, error)
-}
+func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T)
 ```
 
-Keep `backendClient.resolveDiscount` as the implementation. Add backend tests proving non-2xx,
-malformed payload, cancellation, and transport errors remain distinguishable from a successful lookup.
+Confirm from discount inventory without configuring any discount resolver. BUILD must succeed with
+selector `0x9a4568b6`, preserve adapter/route/split/domain/order, use the original call index for its
+deterministic nonce, and create both adapter and Router signatures.
 
-- [ ] **Step 2: Write failing discount/fallback tests**
+- [x] **Step 2: Remove the private discount BUILD surface**
 
-```go
-func TestSwapBuildUsesEligibleDiscountOnPersistedAdapter(t *testing.T)
-func TestSwapBuildValidatesDiscountSelectionAndBothDeadlines(t *testing.T)
-func TestSwapBuildFallsBackToSignedSwapOnSameAdapter(t *testing.T)
-func TestSwapBuildRejectsFallbackBelowConfirmedLegFloor(t *testing.T)
-func TestSwapBuildExternalModeNeverCallsDiscountBackend(t *testing.T)
-func TestSwapBuildDiscountDependencyFailureReturnsBadGateway(t *testing.T)
-func TestSwapBuildKeepsDiscountLegIndexInSignedFallbackNonce(t *testing.T)
-```
+Remove discount resolution, `TryPackSwap0`, and discount calldata tests from the user-directed path.
+Re-read the same physical route and require its fresh conservative output to meet the persisted leg
+floor; otherwise return a stale-confirmation conflict. Legacy awarded-order discount execution remains
+unchanged.
 
-Decode eligible calls and assert selector `0x8fa5c671`, exact signed discount/protocol signatures,
-Router recipient, and exact input. Decode fallback calls and assert selector `0x9a4568b6`, unchanged
-adapter/route/split/domain/order, and nonce call index including earlier discount legs.
-
-- [ ] **Step 3: Verify the tests fail**
+- [x] **Step 3: Run signed-only BUILD tests**
 
 ```bash
-go test ./internal/solvers/rfq -run 'TestSwapBuild(UsesEligibleDiscount|ValidatesDiscount|FallsBack|RejectsFallback|ExternalMode|DiscountDependency|KeepsDiscount)' -count=1
+go test ./internal/solvers/rfq -run 'TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter' -count=1
 ```
 
-Expected: discount legs are not yet encoded or fallback semantics are absent.
-
-- [ ] **Step 4: Implement discount eligibility and fallback**
-
-For an internal-mode leg with a persisted discount ID, fetch the current signed discount once. Parse it
-with existing helpers, validate signatures and exact adapter/token/amount/output selection, and require
-both discount and protocol validity to cover the immutable public deadline. An eligible offer
-packs `DiscountSwap` with Router recipient and the persisted input, while reporting the validated
-conservative leg output.
-
-If a successful backend response contains no still-eligible selected discount, use the fresh direct quote
-from that same persisted route. Only emit the signed fallback when it meets that leg's confirmed floor;
-otherwise return a stale-confirmation conflict. A backend transport/non-2xx dependency failure is 502,
-not fallback. External mode neither resolves nor emits discount calldata and always uses signed swaps.
-
-- [ ] **Step 5: Run discount tests and commit**
-
-```bash
-gofmt -w internal/solvers/rfq/swap.go internal/solvers/rfq/swap_test.go internal/solvers/rfq/backend.go internal/solvers/rfq/backend_test.go
-go test ./internal/solvers/rfq -run 'TestSwapBuild|TestBackendClientResolveDiscount' -count=1
-git add internal/solvers/rfq/swap.go internal/solvers/rfq/swap_test.go internal/solvers/rfq/backend.go internal/solvers/rfq/backend_test.go
-git commit -m "feat(rfq): build eligible discount swap calls"
-```
-
-Expected: PASS with exact selectors and same-route fallback only.
+Expected: PASS with only selector `0x9a4568b6` and no discount-backend dependency.
 
 ---
 
@@ -1179,8 +1139,8 @@ Add a focused source test if no existing documentation test covers these files:
 func TestSwapDocumentationPinsConfigurationAndSecurityContract(t *testing.T) {
 	checks := map[string][]string{
 		"../../../config/rfq.example.yaml": {"swapEnabled", "router", "swapQuoteTtlMs", "30000"},
-		"../../../README.md": {"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "does not broadcast"},
-		"../../../docs/RFQ-PLAN.md": {"in-memory", "0x9a4568b6", "0x8fa5c671", "restart"},
+		"../../../README.md": {"POST /swap", "DISCOVERY", "CONFIRM", "BUILD", "never broadcasts", "transport-only"},
+		"../../../docs/RFQ-PLAN.md": {"in-memory", "0x9a4568b6", "Private discount calldata is never", "restart"},
 	}
 	for path, required := range checks {
 		body, err := os.ReadFile(path)
@@ -1219,7 +1179,7 @@ swapQuoteTtlMs: 30000
 
 In `README.md`, document opt-in configuration, startup requirements, shared-secret authentication, and
 the discovery/confirm/build lifecycle. In `docs/RFQ-PLAN.md`, record the allocation invariants,
-deterministic nonce and retry rule, direct/discount selectors, dynamic-adapter validation, and the fact
+deterministic nonce and fresh-request-envelope retry rule, signed-only selector, dynamic-adapter validation, and the fact
 that the solver signs calldata but neither transfers Router inputs nor broadcasts a transaction.
 
 - [ ] **Step 4: Run documentation and package tests**
@@ -1249,7 +1209,7 @@ Expected: every command passes; status contains only intentional implementation/
 - [ ] **Step 6: Audit the final diff against protocol invariants**
 
 ```bash
-rg -n '0x9a4568b6|0x8fa5c671|VaultSolverSwapNonce|swapEnabled|swapQuoteTtlMs|POST /swap' internal/solvers/rfq README.md docs/RFQ-PLAN.md config/rfq.example.yaml
+rg -n '0x9a4568b6|VaultSolverSwapNonce|transport-only|swapEnabled|swapQuoteTtlMs|POST /swap' internal/solvers/rfq README.md docs/RFQ-PLAN.md config/rfq.example.yaml
 rg -n 'TODO|FIXME|TBD|placeholder|similar to' internal/solvers/rfq README.md docs/RFQ-PLAN.md config/rfq.example.yaml
 git diff --stat
 git log --oneline --max-count=12

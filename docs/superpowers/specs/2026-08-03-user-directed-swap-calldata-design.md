@@ -1,7 +1,7 @@
 # User-directed swap calldata design
 
-**Status:** Approved design  
-**Date:** 2026-08-03  
+**Status:** Implemented design
+**Date:** 2026-08-03
 **Scope:** RFQ solver private API and LiquidLane adapter calldata construction
 
 ## Summary
@@ -16,13 +16,11 @@ raise quoted output when fresh state is better, but it must not change adapters,
 token, call order, or lower any leg below its confirmed floor. If the stored allocation is no longer
 executable, the solver returns a stale-quote error and the backend starts again at discovery.
 
-Each built leg uses one of the adapter's authorized entrypoints:
+Every built leg uses `swap(SignedSwap,bytes)` signed by the solver's existing framework signer. This
+includes allocations selected from discount inventory: the solver preserves their adapter, route,
+input split, domain, order, and floor, but never resolves or returns a private signed-discount payload.
 
-- `swap(DiscountSwap,bytes,address,uint256)` when the selected discount can be freshly resolved and is
-  still eligible; or
-- `swap(SignedSwap,bytes)` signed by the solver's existing framework signer otherwise.
-
-In both cases the caller and recipient are the backend-supplied Router. The Router transfers the
+The caller and recipient are the backend-supplied Router. The Router transfers the
 ordinary ERC-20 input to the adapter before invoking the returned calldata. The solver never includes
 that transfer in `data`, never invokes the transaction manager, and never broadcasts these calls.
 
@@ -35,8 +33,8 @@ The existing `/quote` endpoint and open-order polling/execution path remain unch
 - Build calldata idempotently for a backend-supplied `buildId`.
 - Bind every direct authorization to the intended Router, adapter, chain, token, allocation, and quote
   deadline.
-- Reuse current candidate normalization, capacity accounting, strategies, discount resolution, generated
-  adapter bindings, and signer infrastructure.
+- Reuse current candidate normalization, capacity accounting, strategies, generated adapter bindings,
+  and signer infrastructure.
 - Expose canonical shared-capacity domains so the backend cannot select the same vault/output capacity
   through more than one solver.
 
@@ -60,13 +58,15 @@ The existing `/quote` endpoint and open-order polling/execution path remain unch
 - `protocol` is required and equals `"v2"`; `phase` is required and is exactly one of
   `DISCOVERY`, `CONFIRM`, or `BUILD`.
 - `requestId`, `quoteId`, `solverQuoteId`, and `buildId` use canonical UUID strings where present.
-- Each phase attempt has a fresh `requestId`; `discoveryRequestId` binds confirmation back to the
-  discovery batch whose floor and domains it must reproduce.
+- Each phase attempt has a fresh transport-only `requestId`; it is excluded from BUILD idempotency.
+  `discoveryRequestId` binds confirmation back to the discovery batch whose floor and domains it must
+  reproduce.
 - Addresses are validated EVM addresses. Response addresses are lowercase `0x` strings.
 - Amounts are unsigned `uint256` values encoded as base-10 strings. Zero input is invalid.
 - Calldata is a lowercase, even-length `0x` hex string.
 - Timestamps are Unix seconds and must fit `uint48` when used in adapter calldata.
 - Only same-chain, exact-input, single-output-token swaps with distinct input and output tokens are supported.
+- Requests, confirmed plans, and BUILD responses contain at most 64 adapters/calls.
 - The response repeats its phase. Phase-specific fields are required exactly as described below; a field
   from another phase does not change the operation's meaning.
 
@@ -226,8 +226,10 @@ The record is held in the solver's bounded, concurrency-safe in-memory store unt
 liquidity reservation. A process restart invalidates outstanding `solverQuoteId` values, after which the
 backend must discover and confirm again.
 
-`validUntil` is the earlier of the configured swap-quote TTL and any selected authorization constraint
-known at confirmation time. It is fixed in the record and is never extended by `BUILD`.
+`deadline` is a requested maximum. `validUntil` is the earliest of that maximum, the configured
+swap-quote TTL, and any selected authorization constraint known at confirmation time. A request beyond
+the local validity horizon is shortened, not rejected. The cap is fixed in the record and is never
+extended by `BUILD`.
 
 ### `BUILD`
 
@@ -288,7 +290,7 @@ Successful response:
     },
     {
       "to": "0x4444444444444444444444444444444444444444",
-      "data": "0x8fa5c671",
+      "data": "0x9a4568b6",
       "amountIn": "600000000000000000",
       "amountOut": "1198000000",
       "tokenOut": "0x2222222222222222222222222222222222222222",
@@ -303,8 +305,10 @@ For readability the example `data` values show only the four-byte selector; prod
 the complete ABI-encoded arguments and signatures.
 
 The request tuple must exactly match the stored confirmation: quote, swapper, chain, tokens, `amountIn`,
-and `minAmountOut == confirmed amountOut`; `deadline` must equal the stored public deadline and cannot
-exceed `validUntil`. This prevents a retry or compromised caller from weakening a confirmed quote.
+and `minAmountOut == confirmed amountOut`. BUILD chooses one exact deadline satisfying
+`now < deadline <= confirmation.validUntil`; an aggregate quote therefore uses the earliest selected
+solver validity. The first build ID and economic fingerprint freeze that choice. A later retry changes
+only its transport `requestId`.
 `router` must equal the solver's configured nonzero Router contract.
 
 The response preserves the stored leg order. The sum of call `amountIn` values equals the top-level
@@ -323,9 +327,9 @@ The Router executes each call in order:
 2. call `to` with `data` and zero native value; and
 3. enforce its own aggregate output-floor/balance-delta check.
 
-This transfer is required because both adapter entrypoints consume tokens already present at the adapter.
-`DiscountSwap` calldata has no output-floor field, so the Router's aggregate check remains necessary even
-though the solver reports a conservative per-leg `amountOut`.
+This transfer is required because the signed adapter entrypoint consumes tokens already present at the
+adapter. The Router's aggregate check remains necessary even though every signed call carries a
+conservative per-leg `amountOut`.
 
 ## Allocation, identity, and deduplication
 
@@ -352,7 +356,7 @@ backend must not drop a conflicting leg or silently reallocate it.
 
 ## Direct `SignedSwap` construction
 
-For a leg without an eligible resolved discount, construct:
+For every persisted leg, construct:
 
 ```text
 SignedSwap(
@@ -363,7 +367,7 @@ SignedSwap(
   caller    = router,
   signer    = framework signer address,
   nonce     = deterministic nonce described below,
-  deadline  = immutable public deadline from BUILD (never after confirmation validUntil)
+  deadline  = exact chosen BUILD deadline (never after confirmation validUntil)
 )
 ```
 
@@ -410,36 +414,27 @@ nonce = uint256(keccak256(abi.encode(
 )))
 ```
 
-`callIndex` is the zero-based position in the persisted allocation, including discount legs. It therefore
-does not change between retries or when an adjacent leg uses a different authorization type. The adapter
-consumes nonces per input token.
+`callIndex` is the zero-based position in the persisted allocation, including legs originally selected
+from discount inventory. It does not change between retries. The adapter consumes nonces per input token.
 
-The confirmation store binds the first successful `buildId` to `solverQuoteId` and caches the complete
-response. Concurrent or repeated identical requests return that same response and never create another
-allocation or nonce. Reusing either ID with different request fields is an idempotency conflict. A second
-`buildId` cannot build the same confirmation.
+The confirmation store binds the first successful `buildId` to `solverQuoteId` and caches only the
+immutable build payload. Concurrent or repeated requests with the same economic fingerprint return the
+same calls and signatures without creating another allocation or nonce; each response envelope echoes
+its current transport-only `requestId`. Reusing either ID with different economic fields is an
+idempotency conflict. A second `buildId` cannot build the same confirmation.
 
 Before first returning a signed leg, query `isUsedNonce(tokenIn, nonce)`. A used nonce is a conflict; do
 not probe a new nonce, alter the call index, or issue a replacement authorization. Once an on-chain
 execution consumes the nonce, replay is impossible by contract even if a previously cached response is
 presented again.
 
-## Discount construction and fallback
+## Discount-selected allocations
 
-In internal solver mode, a persisted discount candidate is resolved through the existing RFQ backend
-discount client at build time. Use the existing signed-discount parsing and validation path, including
-route/token matching, backend signer and protocol signatures, minimum-discount checks, amount math, and
-deadlines.
-
-A discount is eligible only when it applies to the persisted adapter and input token, covers the exact
-persisted input, yields at least the persisted leg floor under fresh state, and both signed deadlines cover
-the immutable public BUILD deadline. Encode an eligible discount with `TryPackSwap0`; the selector is
-`0x8fa5c671`, recipient is the Router, and amount is the persisted leg input.
-
-If the selected discount cannot be resolved or is no longer eligible, the solver may fall back to
-`SignedSwap` on the same adapter only when the current direct route can still satisfy that leg's input and
-floor. The fallback changes authorization, not allocation. If it cannot satisfy the floor, `BUILD` returns
-a stale-confirmation conflict. External mode never calls the discount API and always uses `SignedSwap`.
+Discount candidates remain valid strategy inputs and retain their distinct candidate identity during
+discovery and confirmation. BUILD does not resolve their private signatures. It re-reads the persisted
+physical route and emits a fresh `SignedSwap` on that exact adapter only when the current conservative
+output still meets the persisted per-leg floor. Otherwise BUILD returns a stale-confirmation conflict.
+No mode emits `DiscountSwap` calldata through the user-directed endpoint.
 
 ## Validity and state races
 
@@ -448,11 +443,11 @@ a stale-confirmation conflict. External mode never calls the discount API and al
   Configured adapters are domain/signer validated during startup. Internal-mode adapters supplied
   dynamically by the backend are validated and cached before confirmation and revalidated for build;
   enabling the API does not require a static adapter list.
-- A confirmation may be built only before its `validUntil`.
-- `SignedSwap.deadline` equals the immutable public BUILD deadline, which cannot exceed confirmation
-  `validUntil`.
-- A discount is used only if both of its deadlines last through that public deadline.
-- Each call's `validUntil` reports its actual authorization bound and cannot precede the public deadline.
+- CONFIRM caps a requested maximum deadline at `validUntil`; it does not reject a longer maximum.
+- A confirmation may be built only with `now < BUILD.deadline <= validUntil`.
+- `SignedSwap.deadline`, Router execution deadline, Router authorization deadline, response `validUntil`,
+  and every call `validUntil` equal that exact chosen BUILD deadline.
+- BUILD rechecks the chosen deadline after dependencies and immediately before caching or returning.
   It is not a reservation or guarantee against intervening chain state.
 - Expired confirmations and build-cache entries are swept. The store has a fixed upper bound; once full,
   it rejects new confirmations rather than evicting live ones.
@@ -520,15 +515,16 @@ minimum-output enforcement, global domain collision rejection, submission, and p
 
 - Golden EIP-712 tests independently reconstruct the domain, type hash, struct hash, digest, recovered
   signer, `v`, deadline, Router caller/recipient, and all signed amounts.
-- Binding round-trip tests pin `SignedSwap` selector `0x9a4568b6`, `DiscountSwap` selector `0x8fa5c671`,
-  lowercase calldata, `to`, output token, and domain fields.
+- Binding round-trip tests pin the signed-only selector `0x9a4568b6`, lowercase calldata, `to`, output
+  token, and domain fields, including confirmations selected from discount inventory.
 - Domain tests reject wrong chain, wrong verifying contract, unsupported fields/salt/extensions, and RPC
   failure. Authorization tests cover owner, market maker, delegated filler, unauthorized signer, and the
   fact that Router filler authorization is not required.
-- Nonce tests pin the derivation byte-for-byte, stable zero-based call indexes, concurrent identical
-  builds, field-conflicting reuse, second build IDs, per-token used-nonce checks, and no replacement nonce.
-- Discount tests cover fresh resolution, signature/deadline validation, output-floor math, same-adapter
-  signed fallback, external-mode bypass, and stale failure when fallback cannot meet the leg floor.
+- Nonce tests pin the derivation byte-for-byte, stable zero-based call indexes, concurrent retries with
+  fresh request IDs, field-conflicting reuse, second build IDs, per-token used-nonce checks, and no
+  replacement nonce.
+- Discount-selection tests prove BUILD never calls the discount resolver and always emits same-adapter
+  signed calldata while retaining the confirmed floor.
 - Domain tests reject duplicate adapters within one plan and backend contract tests reject intersecting
   canonical capacity-domain sets across solvers before and after build.
 
@@ -544,6 +540,6 @@ minimum-output enforcement, global domain collision rejection, submission, and p
 
 The design is complete when an authenticated backend can discover a cumulative curve, confirm an exact
 short-lived floor and globally unique adapter domains, and idempotently build the exact stored allocation
-as lowercase adapter calls. Every direct leg is a valid Router-bound `SignedSwap`; every eligible discount
-leg uses the existing backend-resolved `DiscountSwap`; no leg drops below its own confirmed floor; no
-duplicate domain is accepted; and no new path broadcasts a transaction or changes legacy RFQ execution.
+as lowercase adapter calls. Every leg is a valid Router-bound `SignedSwap`, including legs selected from
+discount inventory; no private discount payload is exposed; no leg drops below its own confirmed floor;
+no duplicate domain is accepted; and no new path broadcasts a transaction or changes legacy RFQ execution.

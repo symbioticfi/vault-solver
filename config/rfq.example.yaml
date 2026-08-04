@@ -50,10 +50,11 @@ solvers:
 
       # User-directed swap calldata is opt-in. Enabling it mounts authenticated POST /swap and makes
       # startup fail unless Router bytecode exists and this framework signer is authorized by every
-      # configured adapter. The solver signs calls but never broadcasts the user's Router transaction.
+      # configured adapter. BUILD always returns same-adapter signed-swap calldata (never private discount
+      # payloads), caps plans at 64 calls, and never broadcasts the user's Router transaction.
       swapEnabled: false
       router: ""                        # deployed user-directed Router; required when swapEnabled: true
-      swapQuoteTtlMs: 30000             # discovery/confirmation lifetime; state is intentionally in-memory
+      swapQuoteTtlMs: 30000             # maximum confirmation lifetime; longer requested deadlines are shortened
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle

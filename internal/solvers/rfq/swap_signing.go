@@ -165,22 +165,6 @@ func validEthereumSignature(signature []byte) bool {
 	return len(signature) == 65 && (signature[64] == 27 || signature[64] == 28)
 }
 
-func packDiscountSwapCall(
-	value adapter.ILiquidLaneAdapterDiscountSwap,
-	protocolSignature []byte,
-	recipient common.Address,
-	amountIn *big.Int,
-) ([]byte, error) {
-	if recipient == (common.Address{}) || !validUint256(amountIn) {
-		return nil, errors.New("invalid discount swap call")
-	}
-	data, err := swapAdapterBinding.TryPackSwap0(value, protocolSignature, recipient, amountIn)
-	if err != nil {
-		return nil, errors.Errorf("pack discount swap: %w", err)
-	}
-	return data, nil
-}
-
 func validUint256(value *big.Int) bool {
 	return value != nil && value.Sign() >= 0 && value.BitLen() <= 256
 }
