@@ -68,7 +68,7 @@ No historical event indexer, no DB.
 
 ```
 vault-solver/
-├── cmd/vault-solver/main.go         # bootstrap: config → chain → signer → txmanager → init solver → run
+├── cmd/vault-solver/                # bootstrap: config → chain → signer → solvers → txmanager init → run
 ├── internal/
 │   ├── config/                    # env + YAML loader; per-instance VAULT SELECTION; two-stage solver decode
 │   ├── chain/                     # GENERIC eth client primitives (Dial, ChainID). Solver-specific
@@ -106,17 +106,20 @@ vault-solver/
 
 ### 5.1 `txmanager` — nonce-serialized sender
 
-A single service owns the on-chain sending EOA. It initializes only when the write endpoint's latest
-and pending nonces agree, then admits one signed lifecycle at a time. The worker sets EIP-1559 fees,
-signs via the `Signer`, broadcasts, replaces or cancels the same nonce, and tracks exact signed hashes
-through a terminal receipt. Solvers **never** send directly — they build calldata (packed via the abigen
-ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
-a `TxResult{Hash, Receipt, Err}`. Serializing the complete lifecycle eliminates parallel-nonce races
-and prevents later calldata from remaining queued behind a missing lower nonce.
+A single service owns the on-chain sending EOA. Before readiness it requires the latest and pending
+nonces from one non-fallback write endpoint to agree, then admits one signed lifecycle at a time. The
+worker signs, broadcasts, replaces or cancels that nonce, and tracks every exact signed hash through a
+terminal receipt. The configured `tipGwei` is a floor under the node suggestion; normal replacements
+respect both request and global fee caps, while cancellation may leave the request's profitability cap
+but never the global cap. During replacement, a fresh-fee timeout falls back to bumping the last signed
+fees. Solvers **never** send directly — they build calldata (packed via the abigen ABI, e.g.
+`adapter.PackMulticall(finalizeRequest…)`) and receive a `txmanager.Result`. Serializing the complete
+lifecycle eliminates parallel-nonce races and prevents later calldata from being signed behind a
+missing lower nonce. Shutdown joins the active replacement/cancellation drain before the RPC clients
+are closed.
 
-> The **offerSigner** (EIP-712 offer signing, off-chain, gasless) and the **tx-sending
-> EOA** are distinct roles behind the same `Signer` interface, possibly the same key.
-> txmanager owns only the on-chain nonce.
+> The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
+> current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
 
 ### 5.2 `solver` — generic interface + registry
 
@@ -140,7 +143,9 @@ type Factory func(raw yaml.Node, deps Deps) (Solver, error)
 
 A `registry` maps name→`Factory`. The 3F package self-registers in `init()`; `main`
 blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the only line referencing 3F.
-Adding a future solver is a register + config switch, no framework edit.
+Adding a future solver is a register + config switch, no framework edit. Solvers require txmanager by
+default; an externally submitted integration can implement `RequiresTxManager() bool` and return false,
+so an external-only process does not initialize or start the nonce lane.
 
 ---
 
@@ -151,9 +156,9 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 the chosen solver decodes it into its own typed struct.
 
 ```yaml
-chain: { rpcUrl, chainId, rpcFallbackUrls?, wsUrl? }   # rpcFallbackUrls: HTTP(S), tried on primary failure
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei }
+txManager: { confirmations: 2, maxFeeGwei, tipGwei, replacementIntervalMs, pendingTimeoutMs }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl

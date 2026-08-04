@@ -56,8 +56,9 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 
 - **`Run(ctx)`** connects to the LI.FI order server (WebSocket order feed), refreshes standing quotes,
   and evaluates every admitted order once for immediate execution; blocks until ctx cancels.
-- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata;
-  txmanager owns the nonce, send, and receipt/revert. Same nonce-serialized EOA as every other solver.
+- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata and
+  its validity deadline; txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed
+  receipt. Same nonce-serialized EOA as every other transaction-sending solver.
 - **On-chain reads use `chain.Multicall`** — adapter `getAmountOut` / `minDiscount` / `getMaxAssets` /
   `getMaxRate`, executor immutables/caller authorization, and filler authorization are batched where appropriate.
 - **Signer/caller** — the framework EOA is the tx sender and must be authorized through
@@ -324,8 +325,9 @@ type Strategy interface {
 
 - **`QuoteInput`** = shared `[]liquidlane.Inventory`, latest LiquidLane gas snapshot
   (adapter-local owner/market-maker `acquireBalance` and vault-level shared `freeAssets`/`withdrawable`), vault-level in-flight capacity
-  reservations, chain time, server wall time, solver-owned quote expiry, and raw current
-  `txmanager.MaxFeePerGas`. The shared LiquidLane predictor derives every adapter swap route as
+  reservations, chain time, server wall time, solver-owned quote expiry, and the current
+  `txmanager.MaxFeePerGas` profitability ceiling, including one ordinary replacement when the cap permits.
+  The shared LiquidLane predictor derives every adapter swap route as
   acquire/allocate/deallocate/unknown. The solver reads Chainlink native/USD and token/USD feeds at the
   latest state and passes a `tokenOut per native` snapshot to the strategy. Every distinct resolved
   adapter `tokenOut` must have a configured feed; missing coverage fails startup and stale/invalid rounds
@@ -421,31 +423,26 @@ Split the strategy plan into direct executor `FillRoute[]` and discount-backed `
 `DiscountID` → require the combined input sum to equal the gross order input → pack
 `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` via generated bindings
 → read `InputSettlerEscrowLIFI.orderStatus(orderId)` again → submit only when the status is `Deposited`.
-The executor derives the solver identifier from `address(this)`. The WS handler
-places parsed orders into an in-memory FIFO without blocking the socket reader, so ping/pong and later messages
-continue while one planner evaluates accepted orders in arrival order. It reads
-fresh state and gas, asks the strategy, builds calldata, and hands the result to txmanager. No `FillPlan`,
-gas cap, adapter snapshot, discount resolution, or calldata waits in a second queue. The solver has no local
-in-flight limit: every accepted order is handed to the shared txmanager as soon as planning finishes, but it
-stays unsigned while another transaction lifecycle is active.
+The executor derives the solver identifier from `address(this)`. The WS handler places parsed orders into an
+in-memory FIFO without blocking the socket reader, so ping/pong and later messages continue while one planner
+evaluates orders in arrival order. It reads fresh state and gas, asks the strategy, builds calldata, and calls
+`SendAsync`. If another transaction lifecycle is active, that planned request waits for admission without being
+signed; its `CancelAt` can expire the wait, and the single planner does not plan another order meanwhile.
 An admitted order first verifies `governanceFee() == 0`, then derives the canonical ID and verifies
 `orderStatus == Deposited` before expensive route reads. It selects only configured routes matching both
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
-time before each strategy decision. That decision-time max fee is passed as a hard per-request cap to `txmanager`.
-Before broadcast, txmanager reserves replacement headroom inside that budget and rejects the fill if the current
-base fee and priority fee no longer fit. It verifies `Deposited` again immediately before async submission. The
-shared txmanager
-serializes the complete signed lifecycle, so later fills wait unsigned until the active nonce reaches a terminal
-receipt. Pending calls are fee-bumped within their decision cap. After the shared pending timeout, txmanager
-cancels the active nonce with a same-nonce self-transfer; this cancellation is outside the fill's profitability
-cap but remains bounded by the operator's required global `txManager.maxFeeGwei`. Normal sends reserve one
-replacement bump below that global ceiling so cancellation still has fee headroom. LI.FI
-requests use the earliest order or selected-discount deadline for admission and same-nonce cancellation, then
-complete after the configured confirmation depth; the planner releases that fill's reservation only then.
-Every later fill decision subtracts aggregate pending
-capacity before route allocation. At inclusion, the LiquidLane adapter and OutputSettler enforce the requested
-swap and resolved output; stale state therefore reverts atomically rather than being repriced by the executor.
+time before each strategy decision. That decision-time max fee is a hard per-request cap. Before signing,
+txmanager recomputes current fees and rejects the fill if base fee plus the selected priority fee cannot fit
+while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
+Pending calls are bumped within the request cap. After the shared pending timeout, txmanager replaces the call
+with a same-nonce self-transfer; cancellation may exceed the profitability cap but not the operator's global
+`txManager.maxFeeGwei`. LI.FI uses the earliest order or selected-discount deadline for both admission and
+cancellation and releases the reservation on the terminal txmanager result. A receipted fill, revert, or
+cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast failure does not.
+Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
+LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
+reverts atomically rather than being repriced by the executor.
 There is no solver-level pending plan, timer, future-auction scheduling, or new fill attempt. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
@@ -759,9 +756,10 @@ still requires the redeploy in phase 0.
    asset match, immediate OutputSettlerSimple context resolution
    for limit and exclusive-limit outputs, with Dutch contexts rejected at WebSocket admission);
    executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
-   early/final `orderStatus == Deposited` checks; latest-state snapshots; raw live txmanager fee input; dynamic
-   ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
-   pending-capacity-aware one-shot planning, confirmation-time reservation release, and execution-time contract validation.
+   early/final `orderStatus == Deposited` checks; latest-state snapshots; txmanager profitability-ceiling fee
+   input; dynamic ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
+   pending-capacity-aware one-shot planning, terminal-result reservation release (receipted outcomes wait for
+   configured confirmations), and execution-time contract validation.
    The ladder is quote-only: an awarded order is greedily replanned from current amount-specific quotes,
    and output above the resolved order amount remains in the executor; the current ABI has no sweep entrypoint.
    Unit-tested through the solver-level submit path and validated end-to-end on Sepolia with a

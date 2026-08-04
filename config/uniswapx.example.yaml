@@ -4,9 +4,9 @@
 
 chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET} # state, fees, and receipts
-  # rpcFallbackUrls:             # optional read fallbacks; signed broadcasts never use them
+  # rpcFallbackUrls:             # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
-  writeRpcUrl: ${WRITE_RPC_URL}  # use a private relay that supports same-nonce replacements/cancellations
+  writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts + nonce reads; must support same-nonce replacement/cancellation
   chainId: 1                     # must match the RPC chain ID
 
 signer:
@@ -14,10 +14,10 @@ signer:
 
 txManager:
   confirmations: 2               # confirmations awaited before capacity is released
-  maxFeeGwei: 50                  # cancellation cap; normal lifecycle reserves one bump below it
-  replacementIntervalMs: 5000    # replace within the solver's 12s execution buffer
-  pendingTimeoutMs: 300000        # cancel the active nonce after 5m before admitting the next request
-  tipGwei: 1                      # minimum priority fee; the node suggestion may raise it
+  maxFeeGwei: 50                  # global fee cap; the normal lifecycle stops one bump below it
+  replacementIntervalMs: 5000    # attempt a capped fee bump every 5s
+  pendingTimeoutMs: 300000        # switch the active nonce to cancellation after 5m
+  tipGwei: 1                      # priority-fee floor and fallback; a higher node suggestion wins
 
 observability:
   addr: ":9090"                  # framework metrics and health endpoints
