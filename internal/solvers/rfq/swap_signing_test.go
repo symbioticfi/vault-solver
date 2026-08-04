@@ -23,6 +23,72 @@ const (
 	swapNonceGoldenHex    = "0x60e388e6f57a7f56b02157a0756e27a89e584029632d086f9a5c3fc1c47ab643"
 )
 
+func TestRouterSwapAuthorizationDigestMatchesEIP712Reference(t *testing.T) {
+	value := routerSwapAuthorization{
+		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter),
+		AmountIn: big.NewInt(10), DataHash: crypto.Keccak256Hash([]byte{0x12, 0x34}),
+		Deadline: big.NewInt(2_000_000_000),
+	}
+	got, err := routerSwapAuthorizationDigest(1, common.HexToAddress(testRouter), value)
+	if err != nil {
+		t.Fatalf("routerSwapAuthorizationDigest: %v", err)
+	}
+	typed := apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"}, {Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"}, {Name: "verifyingContract", Type: "address"},
+			},
+			"SwapAuthorization": {
+				{Name: "swapper", Type: "address"}, {Name: "adapter", Type: "address"},
+				{Name: "amountIn", Type: "uint256"}, {Name: "dataHash", Type: "bytes32"},
+				{Name: "deadline", Type: "uint256"},
+			},
+		},
+		PrimaryType: "SwapAuthorization",
+		Domain: apitypes.TypedDataDomain{
+			Name: "Router", Version: "1", ChainId: (*math.HexOrDecimal256)(big.NewInt(1)),
+			VerifyingContract: testRouter,
+		},
+		Message: apitypes.TypedDataMessage{
+			"swapper": value.Swapper.Hex(), "adapter": value.Adapter.Hex(), "amountIn": value.AmountIn.String(),
+			"dataHash": value.DataHash.Hex(), "deadline": value.Deadline.String(),
+		},
+	}
+	domainHash, err := typed.HashStruct("EIP712Domain", typed.Domain.Map())
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageHash, err := typed.HashStruct("SwapAuthorization", typed.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := crypto.Keccak256Hash([]byte{0x19, 0x01}, domainHash, messageHash)
+	if got != want {
+		t.Fatalf("digest = %s, want %s", got.Hex(), want.Hex())
+	}
+}
+
+func TestSignRouterSwapAuthorizationUsesFrameworkSigner(t *testing.T) {
+	signer := newSwapTestSigner(t)
+	value := routerSwapAuthorization{
+		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter),
+		AmountIn: big.NewInt(10), DataHash: crypto.Keccak256Hash([]byte{0x12, 0x34}),
+		Deadline: big.NewInt(2_000_000_000),
+	}
+	signature, err := signRouterSwapAuthorization(signer, 1, common.HexToAddress(testRouter), value)
+	if err != nil {
+		t.Fatalf("signRouterSwapAuthorization: %v", err)
+	}
+	digest, _ := routerSwapAuthorizationDigest(1, common.HexToAddress(testRouter), value)
+	recoverySignature := append([]byte(nil), signature...)
+	recoverySignature[64] -= 27
+	publicKey, err := crypto.SigToPub(digest.Bytes(), recoverySignature)
+	if err != nil || crypto.PubkeyToAddress(*publicKey) != signer.Address() {
+		t.Fatalf("signature recovery = %v, err %v", publicKey, err)
+	}
+}
+
 func TestSignedSwapDigestMatchesEIP712Reference(t *testing.T) {
 	domain := sampleSwapDomain()
 	value := sampleSignedSwap(common.HexToAddress(testSwapper))

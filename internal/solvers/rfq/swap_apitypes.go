@@ -56,6 +56,8 @@ type swapPointResponse struct {
 type swapCallResponse struct {
 	To              string `json:"to"`
 	Data            string `json:"data"`
+	AuthSigner      string `json:"authSigner"`
+	AuthSignature   string `json:"authSignature"`
 	AmountIn        string `json:"amountIn"`
 	AmountOut       string `json:"amountOut"`
 	TokenOut        string `json:"tokenOut"`

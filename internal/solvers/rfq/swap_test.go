@@ -3,10 +3,12 @@ package rfq
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
@@ -59,7 +61,8 @@ func TestSwapDirectLifecycleBuildsRouterBoundSignedCall(t *testing.T) {
 	}
 	call := (*buildResponse.Calls)[0]
 	if call.To != testAdapter || call.AmountIn != "100" || call.AmountOut != "200" ||
-		call.TokenOut != testTokenOut || len(call.Data) <= 10 || call.Data[:10] != "0x9a4568b6" {
+		call.TokenOut != testTokenOut || len(call.Data) <= 10 || call.Data[:10] != "0x9a4568b6" ||
+		call.AuthSigner != strings.ToLower(signer.Address().Hex()) || len(call.AuthSignature) != 132 {
 		t.Fatalf("signed call = %+v", call)
 	}
 	decoded, _ := unpackSignedCall(t, common.FromHex(call.Data))
@@ -67,15 +70,26 @@ func TestSwapDirectLifecycleBuildsRouterBoundSignedCall(t *testing.T) {
 		decoded.Signer != signer.Address() || decoded.Deadline.Cmp(big.NewInt(1_020)) != 0 {
 		t.Fatalf("decoded signed call = %+v", decoded)
 	}
-	if signer.calls != 1 || state.nonceReads != 1 || state.fillReads != 1 {
+	authorization := routerSwapAuthorization{
+		Swapper: common.HexToAddress(testSwapper), Adapter: common.HexToAddress(testAdapter), AmountIn: big.NewInt(100),
+		DataHash: crypto.Keccak256Hash(common.FromHex(call.Data)), Deadline: big.NewInt(1_020),
+	}
+	digest, _ := routerSwapAuthorizationDigest(1, common.HexToAddress(testRouter), authorization)
+	authSignature := common.FromHex(call.AuthSignature)
+	authSignature[64] -= 27
+	publicKey, recoverErr := crypto.SigToPub(digest.Bytes(), authSignature)
+	if recoverErr != nil || crypto.PubkeyToAddress(*publicKey) != signer.Address() {
+		t.Fatalf("Router authorization recovery = %v, err %v", publicKey, recoverErr)
+	}
+	if signer.calls != 2 || state.nonceReads != 1 || state.fillReads != 1 {
 		t.Fatalf("build dependencies: signer=%d nonce=%d fill=%d", signer.calls, state.nonceReads, state.fillReads)
 	}
 
 	retry, err := service.swap(t.Context(), &build)
-	if err != nil || (*retry.Calls)[0].Data != call.Data {
+	if err != nil || (*retry.Calls)[0].Data != call.Data || (*retry.Calls)[0].AuthSignature != call.AuthSignature {
 		t.Fatalf("idempotent BUILD = %+v, err %v", retry, err)
 	}
-	if signer.calls != 1 || state.nonceReads != 1 || state.fillReads != 1 {
+	if signer.calls != 2 || state.nonceReads != 1 || state.fillReads != 1 {
 		t.Fatal("cached BUILD repeated reads or signing")
 	}
 }
@@ -197,8 +211,11 @@ func TestSwapBuildUsesEligibleDiscountOnPersistedAdapter(t *testing.T) {
 	if response.Calls == nil || len(*response.Calls) != 1 || (*response.Calls)[0].Data[:10] != "0x8fa5c671" {
 		t.Fatalf("discount response = %+v", response)
 	}
-	if signer.calls != 0 || state.nonceReads != 0 {
-		t.Fatalf("discount leg used direct signing: signer=%d nonces=%d", signer.calls, state.nonceReads)
+	if call := (*response.Calls)[0]; call.AuthSigner != strings.ToLower(signer.Address().Hex()) || len(call.AuthSignature) != 132 {
+		t.Fatalf("discount Router authorization = %+v", call)
+	}
+	if signer.calls != 1 || state.nonceReads != 0 {
+		t.Fatalf("discount leg signing/nonces = %d/%d, want one Router authorization and no adapter nonce", signer.calls, state.nonceReads)
 	}
 }
 
@@ -226,7 +243,7 @@ func TestSwapBuildFallsBackToSignedSwapOnSameAdapter(t *testing.T) {
 	if (*response.Calls)[0].Data[:10] != "0x9a4568b6" || (*response.Calls)[0].To != testAdapter {
 		t.Fatalf("fallback call = %+v", (*response.Calls)[0])
 	}
-	if signer.calls != 1 || state.nonceReads != 1 {
+	if signer.calls != 2 || state.nonceReads != 1 {
 		t.Fatalf("fallback did not use signed path: signer=%d nonces=%d", signer.calls, state.nonceReads)
 	}
 }

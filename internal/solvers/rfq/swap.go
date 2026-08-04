@@ -309,9 +309,18 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 			}
 			callValidUntil = record.PublicDeadline.Unix()
 		}
+		authSignature, authErr := signRouterSwapAuthorization(s.signer, record.ChainID, s.router, routerSwapAuthorization{
+			Swapper: record.Swapper, Adapter: leg.Adapter, AmountIn: liquidlane.CloneBig(leg.AmountIn),
+			DataHash: crypto.Keccak256Hash(data), Deadline: big.NewInt(record.PublicDeadline.Unix()),
+		})
+		if authErr != nil {
+			return nil, swapError(http.StatusBadGateway, "Router swap authorization signing failed", authErr)
+		}
 		amountOut.Add(amountOut, prepared[i].amountOut)
 		calls[i] = swapCallResponse{
-			To: lowerAddr(leg.Adapter), Data: strings.ToLower(hexutil.Encode(data)), AmountIn: leg.AmountIn.String(),
+			To: lowerAddr(leg.Adapter), Data: strings.ToLower(hexutil.Encode(data)),
+			AuthSigner: lowerAddr(s.signer.Address()), AuthSignature: strings.ToLower(hexutil.Encode(authSignature)),
+			AmountIn:  leg.AmountIn.String(),
 			AmountOut: prepared[i].amountOut.String(), TokenOut: lowerAddr(record.TokenOut),
 			LiquidityDomain: string(liquidlane.RouteCapacityID(leg.Route)), ValidUntil: callValidUntil,
 		}

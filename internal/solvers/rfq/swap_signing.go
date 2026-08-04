@@ -13,16 +13,20 @@ import (
 )
 
 const (
-	signedSwapTypeString = "SignedSwap(address recipient,address tokenIn,uint256 amountIn,uint256 amountOut,address caller,address signer,uint256 nonce,uint48 deadline)"
-	swapNonceTypeString  = "VaultSolverSwapNonce(bytes16 buildId,uint256 chainId,address adapter,address tokenIn,uint256 callIndex)"
-	swapDomainTypeString = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+	signedSwapTypeString              = "SignedSwap(address recipient,address tokenIn,uint256 amountIn,uint256 amountOut,address caller,address signer,uint256 nonce,uint48 deadline)"
+	routerSwapAuthorizationTypeString = "SwapAuthorization(address swapper,address adapter,uint256 amountIn,bytes32 dataHash,uint256 deadline)"
+	swapNonceTypeString               = "VaultSolverSwapNonce(bytes16 buildId,uint256 chainId,address adapter,address tokenIn,uint256 callIndex)"
+	swapDomainTypeString              = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+	routerDomainName                  = "Router"
+	routerDomainVersion               = "1"
 )
 
 var (
-	signedSwapTypeHash = crypto.Keccak256Hash([]byte(signedSwapTypeString))
-	swapNonceTypeHash  = crypto.Keccak256Hash([]byte(swapNonceTypeString))
-	swapDomainTypeHash = crypto.Keccak256Hash([]byte(swapDomainTypeString))
-	swapAdapterBinding = adapter.NewLiquidLaneAdapter()
+	signedSwapTypeHash              = crypto.Keccak256Hash([]byte(signedSwapTypeString))
+	routerSwapAuthorizationTypeHash = crypto.Keccak256Hash([]byte(routerSwapAuthorizationTypeString))
+	swapNonceTypeHash               = crypto.Keccak256Hash([]byte(swapNonceTypeString))
+	swapDomainTypeHash              = crypto.Keccak256Hash([]byte(swapDomainTypeString))
+	swapAdapterBinding              = adapter.NewLiquidLaneAdapter()
 )
 
 type swapDomain struct {
@@ -30,6 +34,14 @@ type swapDomain struct {
 	Version           string
 	ChainID           *big.Int
 	VerifyingContract common.Address
+}
+
+type routerSwapAuthorization struct {
+	Swapper  common.Address
+	Adapter  common.Address
+	AmountIn *big.Int
+	DataHash common.Hash
+	Deadline *big.Int
 }
 
 func signedSwapDigest(domain swapDomain, value adapter.ILiquidLaneAdapterSignedSwap) (common.Hash, error) {
@@ -42,16 +54,63 @@ func signedSwapDigest(domain swapDomain, value adapter.ILiquidLaneAdapterSignedS
 		!validUint256(value.Nonce) || value.Deadline == nil || value.Deadline.Sign() < 0 || value.Deadline.BitLen() > 48 {
 		return common.Hash{}, errors.New("invalid signed swap value")
 	}
-	domainSeparator := crypto.Keccak256Hash(
-		swapDomainTypeHash.Bytes(), crypto.Keccak256([]byte(domain.Name)), crypto.Keccak256([]byte(domain.Version)),
-		eip712Word(domain.ChainID.Bytes()), eip712Word(domain.VerifyingContract.Bytes()),
-	)
+	domainSeparator := swapDomainSeparator(domain)
 	structHash := crypto.Keccak256Hash(
 		signedSwapTypeHash.Bytes(), eip712Word(value.Recipient.Bytes()), eip712Word(value.TokenIn.Bytes()),
 		eip712Word(value.AmountIn.Bytes()), eip712Word(value.AmountOut.Bytes()), eip712Word(value.Caller.Bytes()),
 		eip712Word(value.Signer.Bytes()), eip712Word(value.Nonce.Bytes()), eip712Word(value.Deadline.Bytes()),
 	)
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSeparator.Bytes(), structHash.Bytes()), nil
+}
+
+func routerSwapAuthorizationDigest(
+	chainID int64,
+	router common.Address,
+	value routerSwapAuthorization,
+) (common.Hash, error) {
+	if chainID <= 0 || router == (common.Address{}) || value.Swapper == (common.Address{}) ||
+		value.Adapter == (common.Address{}) || !validUint256(value.AmountIn) || value.AmountIn.Sign() <= 0 ||
+		value.DataHash == (common.Hash{}) || !validUint256(value.Deadline) {
+		return common.Hash{}, errors.New("invalid Router swap authorization")
+	}
+	domainSeparator := swapDomainSeparator(swapDomain{
+		Name: routerDomainName, Version: routerDomainVersion, ChainID: big.NewInt(chainID), VerifyingContract: router,
+	})
+	structHash := crypto.Keccak256Hash(
+		routerSwapAuthorizationTypeHash.Bytes(), eip712Word(value.Swapper.Bytes()), eip712Word(value.Adapter.Bytes()),
+		eip712Word(value.AmountIn.Bytes()), value.DataHash.Bytes(), eip712Word(value.Deadline.Bytes()),
+	)
+	return crypto.Keccak256Hash([]byte{0x19, 0x01}, domainSeparator.Bytes(), structHash.Bytes()), nil
+}
+
+func signRouterSwapAuthorization(
+	signer frameworksigner.Signer,
+	chainID int64,
+	router common.Address,
+	value routerSwapAuthorization,
+) ([]byte, error) {
+	if signer == nil || signer.Address() == (common.Address{}) {
+		return nil, errors.New("Router authorization signer is unavailable")
+	}
+	digest, err := routerSwapAuthorizationDigest(chainID, router, value)
+	if err != nil {
+		return nil, err
+	}
+	signature, err := signer.SignHash(digest)
+	if err != nil {
+		return nil, errors.Errorf("sign Router swap authorization: %w", err)
+	}
+	if !validEthereumSignature(signature) {
+		return nil, errors.New("framework signer returned an invalid Ethereum signature")
+	}
+	return signature, nil
+}
+
+func swapDomainSeparator(domain swapDomain) common.Hash {
+	return crypto.Keccak256Hash(
+		swapDomainTypeHash.Bytes(), crypto.Keccak256([]byte(domain.Name)), crypto.Keccak256([]byte(domain.Version)),
+		eip712Word(domain.ChainID.Bytes()), eip712Word(domain.VerifyingContract.Bytes()),
+	)
 }
 
 func signedSwapNonce(
@@ -86,7 +145,7 @@ func packSignedSwapCall(
 	if err != nil {
 		return nil, errors.Errorf("sign signed swap: %w", err)
 	}
-	if len(signature) != 65 || (signature[64] != 27 && signature[64] != 28) {
+	if !validEthereumSignature(signature) {
 		return nil, errors.New("framework signer returned an invalid Ethereum signature")
 	}
 	data, err := swapAdapterBinding.TryPackSwap1(value, signature)
@@ -94,6 +153,10 @@ func packSignedSwapCall(
 		return nil, errors.Errorf("pack signed swap: %w", err)
 	}
 	return data, nil
+}
+
+func validEthereumSignature(signature []byte) bool {
+	return len(signature) == 65 && (signature[64] == 27 || signature[64] == 28)
 }
 
 func packDiscountSwapCall(
