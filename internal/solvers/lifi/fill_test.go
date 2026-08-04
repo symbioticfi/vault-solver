@@ -226,7 +226,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 			Protocol: common.HexToAddress("0x2222222222222222222222222222222222222222"),
 			Nonce:    big.NewInt(7), Deadline: big.NewInt(1_900_000_000),
 		},
-		SignerSignature: []byte{0x12, 0x34}, ProtocolDeadline: big.NewInt(1_900_000_001),
+		SignerSignature: []byte{0x12, 0x34}, ProtocolDeadline: big.NewInt(1_799_999_999),
 		ProtocolSignature: []byte{0x56, 0x78},
 	}
 
@@ -238,6 +238,9 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("buildFillCalldata: %v", err)
+	}
+	if want := time.Unix(1_799_999_999, 0); !calldata.CancelAt.Equal(want) {
+		t.Fatalf("CancelAt = %v, want selected discount deadline %v", calldata.CancelAt, want)
 	}
 	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, calldata.Finalise)
 	if len(directRoutes) != 1 || directRoutes[0].Adapter != directAdapter ||

@@ -375,9 +375,20 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 	txm := &fakeLifiTxSender{result: txmanager.Result{Err: errors.New("send failed")}}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 
-	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), order)
 	if len(txm.reqs) != 1 {
 		t.Fatalf("failed send attempts = %d, want 1", len(txm.reqs))
+	}
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	}
+}
+
+func TestOrderDeadlineUsesEarliestDeadline(t *testing.T) {
+	order := &submittedOrder{Order: inputsettler.StandardOrder{Expires: 200, FillDeadline: 100}}
+	if got, want := orderDeadline(order), time.Unix(100, 0); !got.Equal(want) {
+		t.Fatalf("CancelAt = %v, want %v", got, want)
 	}
 }
 

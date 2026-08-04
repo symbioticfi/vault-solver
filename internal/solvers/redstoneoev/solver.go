@@ -56,3 +56,6 @@ type Solver struct {
 
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
+
+// RequiresTxManager is false because RedStone's auctioneer submits settlement transactions.
+func (*Solver) RequiresTxManager() bool { return false }

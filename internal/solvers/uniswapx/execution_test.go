@@ -3,6 +3,8 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -31,7 +33,14 @@ type executionTestReader struct {
 	fillQuoteAmounts []*big.Int
 	snapshot         fillSnapshot
 	fillSnapshotFn   func([]liquidlane.Route, *big.Int) fillSnapshot
+	now              time.Time
 }
+
+type failingListener struct{ err error }
+
+func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
+func (failingListener) Close() error                { return nil }
+func (failingListener) Addr() net.Addr              { return &net.TCPAddr{} }
 
 func (r *executionTestReader) resolveRoutes(
 	_ context.Context,
@@ -43,8 +52,12 @@ func (r *executionTestReader) resolveRoutes(
 
 func (r *executionTestReader) validateGasTokens([]liquidlane.Route) error { return nil }
 
+func (r *executionTestReader) latestBlockTime(context.Context) (time.Time, error) {
+	return r.now, nil
+}
+
 func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
-	now := time.Unix(1_000, 0)
+	now := time.Now().Truncate(time.Second)
 	route := testDiscountRoute()
 	configuredRoute := liquidlane.NewRoute(
 		1,
@@ -61,7 +74,8 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 		ReservedAmountOut: big.NewInt(100), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
 	}}}}
 	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
-	deadline := now.Add(time.Minute).Unix()
+	termsDeadline := now.Add(50 * time.Second).Unix()
+	protocolDeadline := now.Add(45 * time.Second).Unix()
 	provider := &fakeDiscountProvider{
 		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
 			testDiscountOffer(route, now.Add(time.Minute), "100", "1000000000000000000"),
@@ -72,9 +86,9 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
 				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-				Nonce:    "0x1", Deadline: deadline,
+				Nonce:    "0x1", Deadline: termsDeadline,
 			},
-			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
+			SignerSignature: "0x01", ProtocolDeadline: protocolDeadline, ProtocolSignature: "0x02",
 		},
 	}
 	physicalQuote := liquidlane.FillQuote{
@@ -92,6 +106,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 			Physical: []liquidlane.FillQuote{physicalQuote},
 		},
 	}
+	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1)}
 	solver := &Solver{
 		cfg: &Config{
 			Executor: common.HexToAddress("0x7777777777777777777777777777777777777777"), TokenPolicy: policy,
@@ -114,7 +129,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 			return nil, nil
 		}),
 		reader:   reader,
-		strategy: strategy, txm: &executionTestTxManager{result: make(chan txmanager.Result, 1)},
+		strategy: strategy, txm: txm,
 		discounts: provider, log: logr.Discard(),
 		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
 		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
@@ -138,6 +153,9 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	if len(packed.Routes) != 0 || len(packed.DiscountRoutes) != 1 {
 		t.Fatalf("packed fill call = %+v", packed)
 	}
+	if len(txm.reqs) != 1 || !txm.reqs[0].CancelAt.Equal(time.Unix(protocolDeadline, 0)) {
+		t.Fatalf("discount fill cancelAt = %v, want %s", txm.reqs, time.Unix(protocolDeadline, 0))
+	}
 	discountRoute := packed.DiscountRoutes[0]
 	if discountRoute.Adapter != route.Adapter ||
 		discountRoute.AmountIn.Cmp(big.NewInt(100)) != 0 ||
@@ -147,7 +165,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 }
 
 func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
-	now := time.Unix(1_000, 0)
+	now := time.Now().Truncate(time.Second)
 	discountRoute := testDiscountRoute()
 	directRoute := liquidlane.NewRoute(
 		1,
@@ -326,6 +344,27 @@ func TestStartFillRejectsExpiredOrderBeforeStrategy(t *testing.T) {
 	}
 }
 
+func TestFillCancellationDeadlineUsesChainClock(t *testing.T) {
+	chainObservedAt := time.Unix(1_000, 0)
+	chainNow := time.Unix(1_010, 0)
+	deadline := time.Unix(1_030, 0)
+	cancelAt, ok := fillCancellationDeadline(deadline, chainNow, chainObservedAt, chainObservedAt)
+	if !ok || !cancelAt.Equal(time.Unix(1_020, 0)) {
+		t.Fatalf("cancelAt = %s, %v; want 1020, true", cancelAt, ok)
+	}
+
+	wallNow := chainObservedAt.Add(15 * time.Second)
+	cancelAt, ok = fillCancellationDeadline(deadline, chainNow, chainObservedAt, wallNow)
+	if !ok || !cancelAt.Equal(time.Unix(1_020, 0)) {
+		t.Fatalf("cancelAt after planning = %s, %v; want 1020, true", cancelAt, ok)
+	}
+	if _, valid := fillCancellationDeadline(
+		deadline, chainNow, chainObservedAt, chainObservedAt.Add(20*time.Second),
+	); valid {
+		t.Fatal("expired chain deadline was accepted")
+	}
+}
+
 type executionTestStrategy struct {
 	input strategytypes.FillInput
 	plan  *strategytypes.FillPlan
@@ -348,26 +387,30 @@ func (s *executionTestStrategy) DecideFill(
 
 type executionTestTxManager struct {
 	result      chan txmanager.Result
-	maxFee      *big.Int
 	maxFeeReads int
-	sent        int
 	reqs        []txmanager.Request
+	unavailable bool
+	accepted    chan<- struct{}
 }
 
 func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error) {
 	m.maxFeeReads++
-	if m.maxFee != nil {
-		return new(big.Int).Set(m.maxFee), nil
-	}
 	return new(big.Int), nil
 }
+
+func (m *executionTestTxManager) Available() bool { return !m.unavailable }
 
 func (m *executionTestTxManager) SendAsync(
 	_ context.Context,
 	request txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
-	m.sent++
 	m.reqs = append(m.reqs, request)
+	if m.accepted != nil {
+		select {
+		case m.accepted <- struct{}{}:
+		default:
+		}
+	}
 	return m.result, true
 }
 
@@ -381,7 +424,18 @@ func (f contractCallerFunc) CallContract(
 	return f(ctx, call, blockNumber)
 }
 
-func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
+type directExecutionFixture struct {
+	now      time.Time
+	route    liquidlane.Route
+	order    *resolvedOrder
+	solver   *Solver
+	strategy *executionTestStrategy
+	txm      *executionTestTxManager
+	packed   *uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+}
+
+func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
+	t.Helper()
 	now := time.Now()
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -396,8 +450,8 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 		AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100), MinAmountOut: big.NewInt(90),
 		ReservedAmountOut: big.NewInt(100),
 	}}}}
-	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1), maxFee: big.NewInt(123)}
-	var packed uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1)}
+	packed := new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
 	solver := &Solver{
 		cfg:           &Config{Executor: executor, OrderServer: OrderServerConfig{PollInterval: time.Second}},
 		solverAddress: common.HexToAddress("0x5555555555555555555555555555555555555555"),
@@ -410,12 +464,12 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			packed = *abi.ConvertType(
+			*packed = *abi.ConvertType(
 				values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall),
 			).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
 			return nil, nil
 		}),
-		reader: &executionTestReader{snapshot: fillSnapshot{Direct: []liquidlane.FillQuote{{
+		reader: &executionTestReader{now: now, snapshot: fillSnapshot{Direct: []liquidlane.FillQuote{{
 			Inventory: liquidlane.DirectInventory(route, big.NewInt(100), big.NewInt(1_000_000_000_000_000_000)),
 			AmountIn:  big.NewInt(100), MaxAmountOut: big.NewInt(100),
 		}}}}, strategy: strategy, txm: txm, log: logr.Discard(),
@@ -429,41 +483,143 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 		Deadline: uint32(now.Add(time.Minute).Unix()), ExclusiveUntil: uint64(now.Add(30 * time.Second).Unix()),
 	}
 	solver.trackExclusive(order, now)
-	pending, err := solver.startFill(t.Context(), []liquidlane.Route{route}, order, now)
+	return &directExecutionFixture{
+		now: now, route: route, order: order, solver: solver, strategy: strategy, txm: txm, packed: packed,
+	}
+}
+
+func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	pending, err := fixture.solver.startFill(
+		t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now,
+	)
 	if err != nil {
 		t.Fatalf("startFill: %v", err)
 	}
-	if pending == nil || txm.sent != 1 {
-		t.Fatalf("pending/sent = %v/%d", pending, txm.sent)
+	if pending == nil || len(fixture.txm.reqs) != 1 {
+		t.Fatalf("pending/requests = %v/%d", pending, len(fixture.txm.reqs))
 	}
-	if strategy.input.MaxFeePerGas.Sign() != 0 {
-		t.Fatalf("strategy max fee = %v, want zero with gas accounting disabled", strategy.input.MaxFeePerGas)
+	if fixture.strategy.input.MaxFeePerGas.Sign() != 0 {
+		t.Fatalf("strategy max fee = %v, want zero with gas accounting disabled", fixture.strategy.input.MaxFeePerGas)
 	}
-	if txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(123)) != 0 {
-		t.Fatalf("transaction max fee = %s, want 123", txm.reqs[0].MaxFeePerGas)
+	if fixture.txm.maxFeeReads != 0 {
+		t.Fatalf("gas-disabled fill read max fee %d times", fixture.txm.maxFeeReads)
 	}
-	if txm.reqs[0].Confirmations != nil {
-		t.Fatalf("fill confirmations override = %d, want global txmanager configuration", *txm.reqs[0].Confirmations)
+	if fixture.txm.reqs[0].MaxFeePerGas != nil {
+		t.Fatalf("gas-disabled transaction hard-capped fees at %s", fixture.txm.reqs[0].MaxFeePerGas)
 	}
-	if len(packed.Routes) != 1 || packed.Routes[0].AmountOut.Cmp(big.NewInt(90)) != 0 ||
-		len(packed.DiscountRoutes) != 0 {
-		t.Fatalf("packed direct fill call = %+v", packed)
+	wantCancelAt := time.Unix(int64(fixture.order.Deadline), 0)
+	if !fixture.txm.reqs[0].CancelAt.Equal(wantCancelAt) {
+		t.Fatalf("transaction cancelAt = %s, want %s", fixture.txm.reqs[0].CancelAt, wantCancelAt)
 	}
-	if got := solver.capacity.Snapshot()[route.CapacityID]; got == nil || got.Cmp(big.NewInt(100)) != 0 {
+	if fixture.txm.reqs[0].Confirmations != nil {
+		t.Fatalf("fill confirmations override = %d, want global txmanager configuration", *fixture.txm.reqs[0].Confirmations)
+	}
+	if len(fixture.packed.Routes) != 1 || fixture.packed.Routes[0].AmountOut.Cmp(big.NewInt(90)) != 0 ||
+		len(fixture.packed.DiscountRoutes) != 0 {
+		t.Fatalf("packed direct fill call = %+v", fixture.packed)
+	}
+	if got := fixture.solver.capacity.Snapshot()[fixture.route.CapacityID]; got == nil || got.Cmp(big.NewInt(100)) != 0 {
 		t.Fatalf("pending reservation = %v", got)
 	}
-	if reservations := strategy.input.Reservations; len(reservations) != 0 {
+	if reservations := fixture.strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	fixture.txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
 	result := <-pending.result
-	solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
-	if solver.capacity.Len() != 0 {
+	fixture.solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
+	if fixture.solver.capacity.Len() != 0 {
 		t.Fatal("pending reservation was not released")
 	}
-	if _, pending := solver.exclusiveUntil[order.Hash]; !pending {
+	if _, pending := fixture.solver.exclusiveUntil[fixture.order.Hash]; !pending {
 		t.Fatal("successful tx cleared exclusive obligation before its canonical block time was reconciled")
 	}
+}
+
+func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	accepted := make(chan struct{}, 1)
+	fixture.txm.accepted = accepted
+	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
+		t.Fatal("order was not claimed")
+	}
+	orders := make(chan *resolvedOrder, 1)
+	orders <- fixture.order
+	close(orders)
+	runCtx, reportFatal := context.WithCancelCause(t.Context())
+	fixture.solver.reportFatal = reportFatal
+	done := make(chan error, 1)
+	go func() { done <- fixture.solver.fillLoop(runCtx, []liquidlane.Route{fixture.route}, orders) }()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("fill was not accepted")
+	}
+	waitForExecutionCondition(t, func() bool {
+		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
+	})
+	listenErr := errors.New("accept failed")
+	server := &http.Server{ReadHeaderTimeout: time.Second}
+	serveErr := fixture.solver.serveQuoteServer(runCtx, server, failingListener{err: listenErr})
+	if !errors.Is(serveErr, listenErr) {
+		t.Fatalf("serve error = %v, want %v", serveErr, listenErr)
+	}
+	if cause := context.Cause(runCtx); !errors.Is(cause, listenErr) {
+		t.Fatalf("runtime cancellation cause = %v, want %v", cause, listenErr)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("fill loop returned before accepted lifecycle completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	fixture.txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("fill loop result = %v, want context cancellation after drain", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fill loop did not finish after accepted lifecycle completed")
+	}
+	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+		t.Fatal("drained fill retained reservation or in-flight state")
+	}
+	if _, filled := fixture.solver.filled[fixture.order.Hash]; !filled {
+		t.Fatal("drained fill was not terminalized")
+	}
+}
+
+func TestFillLoopDropsQueuedOrderAfterCancellation(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
+		t.Fatal("order was not claimed")
+	}
+	orders := make(chan *resolvedOrder, 1)
+	orders <- fixture.order
+	close(orders)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := fixture.solver.fillLoop(ctx, []liquidlane.Route{fixture.route}, orders)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("fill loop result = %v, want context cancellation", err)
+	}
+	if len(fixture.txm.reqs) != 0 || fixture.solver.planningFills.Load() != 0 ||
+		fixture.solver.inFlight[fixture.order.Hash] {
+		t.Fatal("queued order was submitted or retained after cancellation")
+	}
+}
+
+func waitForExecutionCondition(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("execution condition was not met")
 }
 
 func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {

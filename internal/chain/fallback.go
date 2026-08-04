@@ -13,8 +13,7 @@ import (
 )
 
 // rpcAttemptTimeout bounds a single endpoint attempt so a hung endpoint fails over instead of
-// blocking. JSON-RPC reads (incl. a batched Multicall) comfortably fit; a slower response is treated
-// as the endpoint being unhealthy.
+// blocking. Short caller deadlines are divided across the remaining endpoints.
 const rpcAttemptTimeout = 20 * time.Second
 
 // fallbackTransport is a barebones, viem-style RPC fallback. It POSTs each JSON-RPC request to the
@@ -22,8 +21,8 @@ const rpcAttemptTimeout = 20 * time.Second
 // response (HTTP 5xx / 429). A normal HTTP 200 — including a JSON-RPC error body such as a revert —
 // is returned as-is and never triggers fallover, so application errors are surfaced unchanged.
 //
-// It plugs in below go-ethereum's rpc/ethclient as the HTTP RoundTripper, so every existing read/send
-// path gains fallback without any other change.
+// It plugs in below go-ethereum's read client. Signed broadcasts and startup nonce reads use an
+// isolated single-endpoint write client.
 type fallbackTransport struct {
 	endpoints []*url.URL
 	base      http.RoundTripper
@@ -44,7 +43,15 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 	var lastErr error
 	for i, ep := range t.endpoints {
-		ctx, cancel := context.WithTimeout(req.Context(), rpcAttemptTimeout)
+		attemptTimeout := endpointAttemptTimeout(req.Context(), len(t.endpoints)-i)
+		if attemptTimeout <= 0 {
+			lastErr = req.Context().Err()
+			if lastErr == nil {
+				lastErr = context.DeadlineExceeded
+			}
+			break
+		}
+		ctx, cancel := context.WithTimeout(req.Context(), attemptTimeout)
 		attempt := req.Clone(ctx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
@@ -72,6 +79,21 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 	}
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
+}
+
+func endpointAttemptTimeout(ctx context.Context, endpointsLeft int) time.Duration {
+	if endpointsLeft <= 0 {
+		return 0
+	}
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return rpcAttemptTimeout
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0
+	}
+	return min(rpcAttemptTimeout, remaining/time.Duration(endpointsLeft))
 }
 
 // cancelOnClose cancels the per-attempt context when the response body is closed, so the timeout

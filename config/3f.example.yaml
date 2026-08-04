@@ -12,8 +12,8 @@ chain:
   chainId: 11155111                # must match the RPC's chain id (asserted at startup)
   # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
-  # writeRpcUrl: ${WRITE_RPC_URL}  # optional; broadcasts transactions here while every read stays on
-  #                                # rpcUrl. Point at a private/MEV-protected relay to submit privately.
+  # writeRpcUrl: ${WRITE_RPC_URL}  # optional; broadcasts and startup nonce reads use this endpoint;
+  #                                # other reads stay on rpcUrl. Use a private relay for submission.
   # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
@@ -29,8 +29,8 @@ txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
   maxFeeGwei: 50                   # required absolute ceiling; normal sends reserve one bump for cancellation
   replacementIntervalMs: 30000     # fee-bump pending transactions every 30s
-  pendingTimeoutMs: 300000         # cancel the lowest blocked nonce after 5m
-  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+  pendingTimeoutMs: 300000         # cancel the active nonce after 5m before admitting the next request
+  # tipGwei: 1                     # minimum priority fee; the node suggestion may raise it
 
 observability:
   addr: ":9090"                    # bind address for /metrics, /healthz, /readyz

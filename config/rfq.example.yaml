@@ -11,11 +11,10 @@
 # ${VAR} fields are expanded from the environment at load time. Never commit a real key or endpoint.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary READ RPC (nonce, gas, receipts, and all contract reads)
+  rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary RPC for gas, receipts, and contract reads
   chainId: 1                       # must match the RPC's chain id (asserted at startup)
-  # writeRpcUrl carries ONLY transaction broadcasts (eth_sendRawTransaction); every read stays on
-  # rpcUrl. Point at a private/MEV-protected relay to submit fills privately. Omit to send via rpcUrl.
-  writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy
+  # writeRpcUrl carries broadcasts and startup nonce reads; other reads stay on rpcUrl.
+  writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy?softCancellations=true
   # rpcFallbackUrls:               # optional HTTP(S) read fallbacks, tried in order when rpcUrl is down
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
 
@@ -27,8 +26,8 @@ txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
   maxFeeGwei: 50                   # required absolute ceiling; normal sends reserve one bump for cancellation
   replacementIntervalMs: 30000     # fee-bump pending transactions every 30s
-  pendingTimeoutMs: 300000         # cancel the lowest blocked nonce after 5m
-  # tipGwei: 1                     # priority fee; omit to use the node's suggestion
+  pendingTimeoutMs: 300000         # cancel the active nonce after 5m before admitting the next request
+  # tipGwei: 1                     # minimum priority fee; the node suggestion may raise it
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)

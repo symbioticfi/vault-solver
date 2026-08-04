@@ -106,14 +106,13 @@ vault-solver/
 
 ### 5.1 `txmanager` — nonce-serialized sender
 
-A single service owns the on-chain sending EOA. One worker goroutine drains a queue
-of `TxRequest{To, Data, Value, GasLimit?, Label}`; for each it tracks the nonce
-locally (seeded from the pending nonce, monotonic), sets EIP-1559 fees, signs via the
-`Signer`, sends, waits for the receipt, and handles `nonce too low` / stuck-tx bump +
-resync. Solvers **never** send directly — they build calldata (packed via the abigen
+A single service owns the on-chain sending EOA. It initializes only when the write endpoint's latest
+and pending nonces agree, then admits one signed lifecycle at a time. The worker sets EIP-1559 fees,
+signs via the `Signer`, broadcasts, replaces or cancels the same nonce, and tracks exact signed hashes
+through a terminal receipt. Solvers **never** send directly — they build calldata (packed via the abigen
 ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
-a `TxResult{Hash, Receipt, Err}`. Serializing through one worker eliminates
-parallel-nonce races across solvers.
+a `TxResult{Hash, Receipt, Err}`. Serializing the complete lifecycle eliminates parallel-nonce races
+and prevents later calldata from remaining queued behind a missing lower nonce.
 
 > The **offerSigner** (EIP-712 offer signing, off-chain, gasless) and the **tx-sending
 > EOA** are distinct roles behind the same `Signer` interface, possibly the same key.
@@ -128,6 +127,7 @@ type Deps struct {
     Signer    signer.Signer
     Log       logr.Logger
     Metrics   *observability.Metrics
+    ReportFatal func(error)
 }
 
 type Solver interface {

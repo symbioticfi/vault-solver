@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -49,8 +50,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if debugFlagSet {
 		debug = debugFlag
 	}
-	log, sync := observability.NewLogger(debug)
-	defer sync()
+	log, syncLog := observability.NewLogger(debug)
+	defer syncLog()
 
 	solverNames := make([]string, len(cfg.Solvers))
 	for i, s := range cfg.Solvers {
@@ -73,7 +74,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
-	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
+	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
 	if err != nil {
@@ -99,28 +100,72 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 	}, log)
-	go txm.Start(ctx)
+	runCtx, reportFatal := context.WithCancelCause(ctx)
+	defer reportFatal(nil)
 
-	// Build every configured solver. They share the chain client, signer, and the single
-	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
-	// shared txManager exists for, so they never race on nonces.
-	deps := solver.Deps{Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics}
+	// Build every configured solver. Transaction-sending solvers share the single nonce-serialized
+	// txManager so they never race on nonces.
+	deps := solver.Deps{
+		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
+		ReportFatal: reportFatal,
+	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
 		slv, err := solver.New(sc.Name, sc.Config, deps)
 		if err != nil {
 			return err
 		}
 		solvers = append(solvers, slv)
+		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+	}
+	if requiresTxManager {
+		if err := cfg.ValidateTxManager(); err != nil {
+			return errors.Errorf("invalid config %q: %w", configPath, err)
+		}
+		if err := txm.Initialize(runCtx); err != nil {
+			return errors.Errorf("initialize tx manager: %w", err)
+		}
 	}
 
 	health.SetReady(true)
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
-	g, gctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(runCtx)
+	var background sync.WaitGroup
+	if requiresTxManager {
+		background.Go(func() { txm.Start(gctx) })
+	}
+	background.Go(func() {
+		watchReadiness(gctx, txm.AvailabilityChanged(), txm.Available, health.SetReady)
+	})
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}
-	return g.Wait()
+	err = g.Wait()
+	background.Wait()
+	if err == nil {
+		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return cause
+		}
+	}
+	return err
+}
+
+func watchReadiness(
+	ctx context.Context,
+	availabilityChanged <-chan struct{},
+	available func() bool,
+	setReady func(bool),
+) {
+	for {
+		select {
+		case <-availabilityChanged:
+			setReady(available())
+		case <-ctx.Done():
+			setReady(false)
+			return
+		}
+	}
 }

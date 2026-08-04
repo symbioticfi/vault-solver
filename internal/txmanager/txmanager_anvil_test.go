@@ -101,16 +101,45 @@ func testAnvilCancellation(t *testing.T) {
 	if !accepted {
 		t.Fatal("first transaction was not accepted")
 	}
-	second, accepted := manager.SendAsync(t.Context(), Request{
-		To:       common.HexToAddress("0x000000000000000000000000000000000000bEEF"),
-		GasLimit: 21_000,
-		Label:    "later",
-	})
-	if !accepted {
-		t.Fatal("second transaction was not accepted")
+	type submission struct {
+		result   <-chan Result
+		accepted bool
 	}
+	secondSubmission := make(chan submission, 1)
+	go func() {
+		second, secondAccepted := manager.SendAsync(t.Context(), Request{
+			To:       common.HexToAddress("0x000000000000000000000000000000000000bEEF"),
+			GasLimit: 21_000,
+			Label:    "later",
+		})
+		secondSubmission <- submission{result: second, accepted: secondAccepted}
+	}()
 
-	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
+	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+		return !strings.EqualFold(tx.To, sgnr.Address().Hex())
+	})
+	dropAnvilTransaction(t, rpcClient, initial.Hash)
+	latest, err := ethClient.NonceAt(t.Context(), sgnr.Address(), nil)
+	if err != nil {
+		t.Fatalf("latest nonce: %v", err)
+	}
+	pending, err := ethClient.PendingNonceAt(t.Context(), sgnr.Address())
+	if err != nil {
+		t.Fatalf("pending nonce: %v", err)
+	}
+	if latest != 0 || pending != 0 {
+		t.Fatalf("nonce after dropping blocker = latest %d pending %d, want 0/0", latest, pending)
+	}
+	if _, exists, err := poolTransactionAt(t.Context(), rpcClient, sgnr.Address(), 1); err != nil {
+		t.Fatalf("inspect future nonce: %v", err)
+	} else if exists {
+		t.Fatal("future nonce was signed and queued behind the dropped blocker")
+	}
+	select {
+	case got := <-secondSubmission:
+		t.Fatalf("future request was admitted before nonce 0 completed: %+v", got)
+	default:
+	}
 	cancellation := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
 		return strings.EqualFold(tx.To, sgnr.Address().Hex()) && tx.Input == "0x" && tx.Value == "0x0"
 	})
@@ -123,7 +152,18 @@ func testAnvilCancellation(t *testing.T) {
 	if firstResult.Err == nil || !strings.Contains(firstResult.Err.Error(), "cancelled at nonce 0") {
 		t.Fatalf("first result = %+v, want cancellation", firstResult)
 	}
-	if secondResult := waitForTxResult(t, second); secondResult.Err != nil {
+	var second submission
+	select {
+	case second = <-secondSubmission:
+		if !second.accepted {
+			t.Fatal("second transaction was not accepted after nonce 0 completed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second transaction remained blocked after nonce 0 completed")
+	}
+	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
+	mineAnvilBlock(t, rpcClient)
+	if secondResult := waitForTxResult(t, second.result); secondResult.Err != nil {
 		t.Fatalf("later transaction remained blocked: %v", secondResult.Err)
 	}
 }
@@ -183,7 +223,9 @@ func poolTransactionAt(
 				continue
 			}
 			tx, ok := transactions[nonceKey]
-			return tx, ok, nil
+			if ok {
+				return tx, true, nil
+			}
 		}
 	}
 	return poolTransaction{}, false, nil
@@ -202,6 +244,17 @@ func mineAnvilBlock(t *testing.T, client *rpc.Client) {
 	t.Helper()
 	if err := client.CallContext(t.Context(), nil, "anvil_mine", 1); err != nil {
 		t.Fatalf("anvil_mine: %v", err)
+	}
+}
+
+func dropAnvilTransaction(t *testing.T, client *rpc.Client, hash string) {
+	t.Helper()
+	var dropped string
+	if err := client.CallContext(t.Context(), &dropped, "anvil_dropTransaction", hash); err != nil {
+		t.Fatalf("anvil_dropTransaction: %v", err)
+	}
+	if !strings.EqualFold(dropped, hash) {
+		t.Fatalf("anvil dropped %s, want %s", dropped, hash)
 	}
 }
 

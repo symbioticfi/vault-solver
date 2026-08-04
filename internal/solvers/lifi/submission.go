@@ -39,7 +39,7 @@ func (s *Solver) submitFill(
 	reservationKey := calldata.OrderID.Hex()
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
 		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: new(big.Int).Set(maxFeePerGas),
-		Label: "lifi-fill",
+		CancelAt: calldata.CancelAt, Label: "lifi-fill",
 	})
 	if !accepted {
 		s.log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,

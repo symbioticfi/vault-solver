@@ -68,7 +68,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
+  builds the `Executor.fill` calldata and supplies the earliest order or selected-discount deadline;
+  txmanager owns admission, nonce, send, cancellation, and receipt/revert.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.
@@ -300,9 +301,11 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
-  JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
+  JSON-RPC error such as a revert), so read paths inherit it unchanged. Broadcasts and startup nonce
+  reads use one non-fallback write endpoint. Endpoints are
   operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
-  chain. A single `rpcUrl` keeps the plain dial (any scheme).
+  chain. A single non-HTTP `rpcUrl` keeps the plain dial; HTTP(S) uses the bounded transport even
+  with one endpoint.
 - **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
   single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy

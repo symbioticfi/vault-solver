@@ -424,24 +424,26 @@ Split the strategy plan into direct executor `FillRoute[]` and discount-backed `
 The executor derives the solver identifier from `address(this)`. The WS handler
 places parsed orders into an in-memory FIFO without blocking the socket reader, so ping/pong and later messages
 continue while one planner evaluates accepted orders in arrival order. It reads
-fresh state and gas, asks the strategy, builds calldata, and immediately submits the result. No `FillPlan`,
+fresh state and gas, asks the strategy, builds calldata, and hands the result to txmanager. No `FillPlan`,
 gas cap, adapter snapshot, discount resolution, or calldata waits in a second queue. The solver has no local
-in-flight limit: every accepted order is handed to the shared txmanager as soon as planning finishes.
+in-flight limit: every accepted order is handed to the shared txmanager as soon as planning finishes, but it
+stays unsigned while another transaction lifecycle is active.
 An admitted order first verifies `governanceFee() == 0`, then derives the canonical ID and verifies
 `orderStatus == Deposited` before expensive route reads. It selects only configured routes matching both
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
 time before each strategy decision. That decision-time max fee is passed as a hard per-request cap to `txmanager`.
-Before broadcast, txmanager clamps its fee cap and tip to that budget and drops the fill only if the current base
-fee itself no longer fits. It verifies `Deposited` again immediately before async submission. The shared txmanager
-serializes fee selection, signing, nonce assignment,
-and broadcast, but waits for receipts independently, allowing consecutive nonces to be pending together. Pending
-calls are fee-bumped within their decision cap. After the shared pending timeout, txmanager cancels only the
-lowest unresolved nonce with a same-nonce self-transfer; this cancellation is outside the fill's profitability
+Before broadcast, txmanager reserves replacement headroom inside that budget and rejects the fill if the current
+base fee and priority fee no longer fit. It verifies `Deposited` again immediately before async submission. The
+shared txmanager
+serializes the complete signed lifecycle, so later fills wait unsigned until the active nonce reaches a terminal
+receipt. Pending calls are fee-bumped within their decision cap. After the shared pending timeout, txmanager
+cancels the active nonce with a same-nonce self-transfer; this cancellation is outside the fill's profitability
 cap but remains bounded by the operator's required global `txManager.maxFeeGwei`. Normal sends reserve one
 replacement bump below that global ceiling so cancellation still has fee headroom. LI.FI
-requests complete at inclusion/revert rather than waiting for the txmanager's extra confirmation depth; the
-planner then releases that fill's reservation. Every later fill decision subtracts aggregate pending
+requests use the earliest order or selected-discount deadline for admission and same-nonce cancellation, then
+complete after the configured confirmation depth; the planner releases that fill's reservation only then.
+Every later fill decision subtracts aggregate pending
 capacity before route allocation. At inclusion, the LiquidLane adapter and OutputSettler enforce the requested
 swap and resolved output; stale state therefore reverts atomically rather than being repriced by the executor.
 There is no solver-level pending plan, timer, future-auction scheduling, or new fill attempt. The txmanager
@@ -759,7 +761,7 @@ still requires the redeploy in phase 0.
    executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
    early/final `orderStatus == Deposited` checks; latest-state snapshots; raw live txmanager fee input; dynamic
    ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
-   pending-capacity-aware one-shot planning, inclusion-time reservation release, and fresh state for every admitted order.
+   pending-capacity-aware one-shot planning, confirmation-time reservation release, and execution-time contract validation.
    The ladder is quote-only: an awarded order is greedily replanned from current amount-specific quotes,
    and output above the resolved order amount remains in the executor; the current ABI has no sweep entrypoint.
    Unit-tested through the solver-level submit path and validated end-to-end on Sepolia with a

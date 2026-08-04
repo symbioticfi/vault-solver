@@ -102,7 +102,7 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
 - **The solver sends no transactions** â€” RedStone's auctioneer submits the settlement tx; Executor deposit
   management is out-of-band. `deps.TxManager` is therefore unused, and the OEV config carries no
-  `txManager` section.
+  `txManager` section. In an OEV-only process the framework does not initialize or start txmanager.
 - **`deps.Signer` is the EXECUTOR_V6 signer.** The bid digest is `keccak256(abi.encode("EXECUTOR_V6",
   chainId, callback, keccak256(operationData), bidWei, nonce, maxTxGasPrice))` wrapped in EIP-191
   (`personal_sign`), signed via `Signer.SignHash`. The signer EOA **is** the wallet holding the Executor

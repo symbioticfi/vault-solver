@@ -21,10 +21,10 @@ txManager:
   confirmations: 2
   maxFeeGwei: 50              # required absolute ceiling; normal sends reserve one bump for cancellation
   replacementIntervalMs: 30000 # replace a pending call with higher fees every 30s
-  pendingTimeoutMs: 300000     # after 5m, cancel the lowest blocked nonce
-  # Each LI.FI fill also pins its own decision-time fee cap; txmanager clamps fee and tip to that
-  # budget and drops only when it no longer covers base fee.
-  # tipGwei: 1
+  pendingTimeoutMs: 300000     # after 5m, cancel the active nonce before admitting the next request
+  # Each LI.FI fill also pins its decision-time fee cap; txmanager reserves a replacement bump
+  # inside that budget and rejects the fill when current fees no longer fit.
+  # tipGwei: 1                # minimum priority fee; the node suggestion may raise it
 
 observability:
   addr: ":9090"

@@ -161,7 +161,7 @@ solvers:
 	if cfg.Chain.WriteRPCURL != "https://write.from.env" {
 		t.Fatalf("writeRpcUrl not expanded from env: %q", cfg.Chain.WriteRPCURL)
 	}
-	// The read RPC is untouched — writeRpcUrl only affects broadcasts.
+	// The general read RPC is untouched — writeRpcUrl affects broadcasts and account nonce reads.
 	if cfg.Chain.RPCURL != "https://read.example" {
 		t.Fatalf("rpcUrl changed unexpectedly: %q", cfg.Chain.RPCURL)
 	}
@@ -250,9 +250,10 @@ signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100}
 solvers: [{}]
 `,
-		"missing max fee cap": `
+		"negative max fee cap": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
+txManager: {maxFeeGwei: -1}
 solvers: [{name: x}]
 `,
 		"non-finite max fee cap": `
@@ -292,5 +293,24 @@ solvers: [{name: x}]
 				t.Fatalf("expected error for %q", name)
 			}
 		})
+	}
+}
+
+func TestValidateTxManagerRequiresMaxFeeOnlyWhenUsed(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+solvers: [{name: x}]
+`))
+	if err != nil {
+		t.Fatalf("Load without txManager: %v", err)
+	}
+	if err := cfg.ValidateTxManager(); err == nil {
+		t.Fatal("expected maxFeeGwei to be required for a transaction-sending solver")
+	}
+
+	cfg.TxManager.MaxFeeGwei = 100
+	if err := cfg.ValidateTxManager(); err != nil {
+		t.Fatalf("valid txManager: %v", err)
 	}
 }

@@ -19,8 +19,8 @@ are listed under [Solvers](#solvers).
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
-  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster with independent
-  receipt waits, shared across solvers.
+  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster with one
+  fail-closed signed lifecycle at a time, shared across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -30,9 +30,10 @@ the relevant protocol API on each tick; no database.
 ## Solvers
 
 Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver in the process shares the chain client, signer, and the single nonce-serialized
-`txManager`, so multiple solvers on one EOA never race on nonces. Each entry's `config` block is typed
-and validated by its own solver. Adding a solver touches **no** framework code — see the recipe in
+Every solver shares the chain client and signer. Transaction-sending solvers also share the single
+nonce-serialized `txManager`, so multiple solvers on one EOA never race on nonces; external submitters
+do not start it. Each entry's `config` block is typed and validated by its own solver. Adding a solver
+touches **no** framework code — see the recipe in
 [`CLAUDE.md`](./CLAUDE.md).
 
 | `solver.name` | Integration | Docs | Example config |
@@ -250,10 +251,15 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared `txManager` fee-bumps pending transactions on `replacementIntervalMs`. After
-`pendingTimeoutMs`, it cancels only the lowest unresolved nonce before allowing later queued nonces
-to proceed. The required `maxFeeGwei` is the absolute ceiling; normal sends reserve one fee bump
-inside that ceiling so cancellation still has headroom.
+When used, the shared `txManager` fee-bumps the active transaction on `replacementIntervalMs`.
+Later submissions wait before acceptance and signing until that lifecycle is terminal, so a crash
+cannot leave a future fund-moving nonce queued behind a missing lower transaction. After
+`pendingTimeoutMs`, it cancels the active nonce before broadcasting the next request. Its required
+`maxFeeGwei` is the absolute cancellation ceiling: when the fee budget permits it, the initial quote includes one
+ordinary 12.5% replacement, while the normal lifecycle reserves another bump for cancellation.
+A solver-supplied request cap limits the normal lifecycle, not cancellation. `tipGwei` floors the
+node's priority-fee suggestion and is used directly when that suggestion is unavailable; omit it to
+use the suggestion without a floor. Fee selection never raises a request or global fee ceiling.
 
 ## Requirements
 
@@ -286,11 +292,23 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. Each solver has its
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
-including the shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
+including the applicable shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order when the primary is unavailable. LiquidLane state reads always use RPC `latest`; an archive
-node is not required. **Never commit a real key or live config** — keys are
-supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
+in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
+are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
+endpoints. Startup fails closed when the pending nonce differs from the latest mined nonce
+because txManager cannot safely recover an unknown signed transaction lifecycle. The sending EOA
+must be exclusive to this process; txManager does not admit or sign a later request until the active
+lifecycle is terminal because standard nonce reads cannot reveal transactions queued beyond a gap.
+Before upgrading from a build that allowed several unresolved signed nonces, drain that EOA's
+write-endpoint pool; `latest`/`pending` alone cannot prove a gapped future nonce is absent.
+At runtime, a post-signing `nonce too low` pauses new transactions and readiness while txManager
+reconciles the exact signed hashes. An exact confirmed receipt resumes the lane; an unresolved
+conflict stays fail-closed for operator investigation. The original calldata is never re-signed at
+another nonce
+solely from that response. LiquidLane state reads always use RPC `latest`; an archive node is not required.
+**Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
+interface; `*.local.*` and `.env` are gitignored.
 
 ## Code generation
 
