@@ -67,7 +67,7 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the minimum EIP-1559 priority fee; 0 uses the node suggestion without a floor.
+	// TipGwei is the minimum EIP-1559 priority fee; 0 derives it from recent fee history.
 	TipGwei float64 `yaml:"tipGwei"`
 	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`

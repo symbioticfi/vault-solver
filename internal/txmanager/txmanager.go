@@ -7,6 +7,7 @@ package txmanager
 import (
 	"context"
 	"math/big"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ import (
 type Backend interface {
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
+	FeeHistory(
+		ctx context.Context,
+		blockCount uint64,
+		lastBlock *big.Int,
+		rewardPercentiles []float64,
+	) (*ethereum.FeeHistory, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
@@ -39,7 +46,7 @@ type Backend interface {
 type Config struct {
 	Confirmations       uint64        // blocks to wait past inclusion before returning
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
-	TipGwei             float64       // minimum priority fee; 0 => use the node suggestion without a floor
+	TipGwei             float64       // minimum priority fee; 0 => derive it from recent fee history
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
 	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
@@ -130,6 +137,8 @@ const (
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
 	maxBroadcastTimeout        = 3 * time.Second
+	feeHistoryBlocks           = 5
+	feeHistoryPercentile       = 75.0
 	replacementBumpNumerator   = 9
 	replacementBumpDenominator = 8
 	cancellationGasLimit       = 21_000
@@ -770,19 +779,28 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 	baseFee := new(big.Int).Set(head.BaseFee)
 
 	tipFloor := gweiToWei(m.cfg.TipGwei)
-	suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
 	var tip *big.Int
-	switch {
-	case tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0:
-		tip = maxBigCopy(suggestedTip, tipFloor)
-	case ctx.Err() != nil:
-		return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
-	case tipFloor.Sign() > 0:
-		tip = tipFloor
-	case tipErr != nil:
-		return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, tipErr)
-	default:
-		return feeQuote{}, errors.Errorf("%w: suggested gas tip must be non-negative", errFreshFeesUnavailable)
+	if tipFloor.Sign() == 0 {
+		history, historyErr := m.backend.FeeHistory(
+			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
+		)
+		if historyErr != nil {
+			return feeQuote{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
+		}
+		var valid bool
+		tip, valid = feeHistoryTip(history)
+		if !valid {
+			return feeQuote{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
+		}
+	} else {
+		suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
+		if tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
+			tip = maxBigCopy(suggestedTip, tipFloor)
+		} else if ctx.Err() != nil {
+			return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
+		} else {
+			tip = tipFloor
+		}
 	}
 
 	// 2*baseFee + tip leaves headroom for one base-fee doubling between now and inclusion.
@@ -805,6 +823,26 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 		)
 	}
 	return feeQuote{baseFee: baseFee, tip: tip, maxFee: maxFee}, nil
+}
+
+func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
+	if history == nil || len(history.Reward) == 0 || len(history.Reward) > feeHistoryBlocks {
+		return nil, false
+	}
+	rewards := make([]*big.Int, len(history.Reward))
+	for i, blockRewards := range history.Reward {
+		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
+			return nil, false
+		}
+		rewards[i] = new(big.Int).Set(blockRewards[0])
+	}
+	slices.SortFunc(rewards, func(left, right *big.Int) int { return left.Cmp(right) })
+	middle := len(rewards) / 2
+	tip := new(big.Int).Set(rewards[middle])
+	if len(rewards)%2 == 0 {
+		tip.Add(tip, rewards[middle-1]).Div(tip, big.NewInt(2))
+	}
+	return tip, true
 }
 
 func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) {

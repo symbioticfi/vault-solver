@@ -261,9 +261,11 @@ the request's earlier deadline), replacements switch to a same-nonce cancellatio
 The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation. Normal transactions
 stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump
 inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
-and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. `tipGwei` is a
-priority-fee floor: a higher node suggestion wins, while the floor is used if the suggestion is
-unavailable. Omit it to require the node suggestion without a floor.
+and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
+`tipGwei` is a priority-fee floor: a higher node suggestion wins, while the floor is used if that
+suggestion is unavailable. With `tipGwei: 0` (or the field omitted), txmanager instead uses the median
+p75 priority reward from the latest five blocks. Invalid or unavailable `eth_feeHistory` fails new
+submissions closed; setting a positive floor provides the operator-controlled fallback.
 
 ## Requirements
 

@@ -27,8 +27,11 @@ type mockBackend struct {
 
 	latestNonce   uint64
 	pendingNonce  uint64
+	history       *ethereum.FeeHistory
+	historyErr    error
 	tip           *big.Int
 	tipErr        error
+	tipCalls      int
 	baseFee       *big.Int
 	gasEstimate   uint64
 	estimateCalls atomic.Int64
@@ -45,6 +48,7 @@ func newMockBackend() *mockBackend {
 	return &mockBackend{
 		latestNonce:  7,
 		pendingNonce: 7,
+		history:      &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(1e9)}}},
 		tip:          big.NewInt(1e9),
 		baseFee:      big.NewInt(20e9),
 		gasEstimate:  50_000,
@@ -65,9 +69,21 @@ func (b *mockBackend) PendingNonceAt(context.Context, common.Address) (uint64, e
 	return b.pendingNonce, nil
 }
 
+func (b *mockBackend) FeeHistory(
+	_ context.Context,
+	_ uint64,
+	_ *big.Int,
+	_ []float64,
+) (*ethereum.FeeHistory, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.history, b.historyErr
+}
+
 func (b *mockBackend) SuggestGasTipCap(context.Context) (*big.Int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.tipCalls++
 	return b.tip, b.tipErr
 }
 
@@ -227,6 +243,38 @@ func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
 				t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
 			}
 		})
+	}
+}
+
+func TestTipGweiZeroUsesRecentFeeHistory(t *testing.T) {
+	b := newMockBackend()
+	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{
+		{big.NewInt(3_000_000_000)},
+		{big.NewInt(500_000_000)},
+		{big.NewInt(2_000_000_000)},
+		{big.NewInt(1_000_000_000)},
+		{big.NewInt(1_500_000_000)},
+	}}
+	b.tip = big.NewInt(1_500)
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	limit := big.NewInt(40_500_000_000)
+
+	fees, err := m.currentFees(t.Context(), limit)
+	if err != nil {
+		t.Fatalf("currentFees: %v", err)
+	}
+	if want := big.NewInt(1_500_000_000); fees.tip.Cmp(want) != 0 {
+		t.Fatalf("tip = %s, want median p75 reward %s", fees.tip, want)
+	}
+	if fees.maxFee.Cmp(limit) != 0 {
+		t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
+	}
+	b.historyErr = errors.New("fee history unavailable")
+	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
+		t.Fatalf("history error = %v, want fresh-fees error", err)
+	}
+	if b.tipCalls != 0 {
+		t.Fatalf("node suggestion called %d times", b.tipCalls)
 	}
 }
 

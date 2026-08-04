@@ -27,7 +27,7 @@ txManager:
   maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
   replacementIntervalMs: 30000     # attempt a capped fee bump every 30s
   pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
-  # tipGwei: 1                     # priority-fee floor and fallback; a higher node suggestion wins
+  # tipGwei: 1                     # optional floor; omit/zero to use recent eth_feeHistory rewards
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)

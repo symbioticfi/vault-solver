@@ -137,9 +137,11 @@ assertion because the PR19 ABI has no getter.
   signed-discount, or protocol-signature deadline. It is derived from chain time, translated to a wall-clock
   deadline without extending the remaining validity, and also bounds the pre-sign wait. The active lifecycle
   is replaced by a same-nonce cancellation on expiry or shutdown and drained to a terminal result.
-- **Fees remain dynamic within explicit ceilings.** `tipGwei` is a minimum over the node suggestion.
-  Replacements use the greater of fresh fees and a 12.5% bump; when a replacement fee read is unavailable,
-  the cached fees are bumped instead. `maxFeeGwei` is the absolute global ceiling and normal sends reserve
+- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is a minimum over the node
+  suggestion; zero uses the median p75 priority reward from the latest five blocks and fails new submissions
+  closed when `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a
+  12.5% bump; when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei`
+  is the absolute global ceiling and normal sends reserve
   cancellation headroom below it. With gas accounting disabled, UniswapX supplies no request ceiling. With
   gas accounting enabled, `MaxFeePerGas` returns the profitability ceiling including one normal replacement,
   and the initial send reserves that replacement inside the ceiling. Cancellation may exceed the request
@@ -191,7 +193,7 @@ chain: { rpcUrl: "${ETH_RPC_URL_MAINNET}", writeRpcUrl: "${WRITE_RPC_URL}", chai
 txManager:
   confirmations: 2
   maxFeeGwei: 50
-  tipGwei: 1
+  tipGwei: 0
   replacementIntervalMs: 5000
   pendingTimeoutMs: 300000
 
@@ -222,8 +224,9 @@ solvers:
 The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
 skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
 quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
-the quote. `tipGwei` protects that path from an unusably low node suggestion; setting it to zero deliberately
-removes the floor. `maxFeeGwei` remains the absolute ceiling described in §2.2.
+the quote. With `tipGwei: 0`, recent fee-history rewards avoid relying on a potentially unusable node tip
+suggestion. A positive value remains an operator-controlled floor and fallback. `maxFeeGwei` remains the
+absolute ceiling described in §2.2.
 
 The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
 account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read
