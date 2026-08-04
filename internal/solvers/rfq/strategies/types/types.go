@@ -73,9 +73,12 @@ type FillPlan struct {
 }
 
 type FillLeg struct {
-	Adapter    common.Address
-	AmountIn   *big.Int
-	AmountOut  *big.Int
-	MaxRate    *big.Int
-	DiscountID *common.Hash
+	CandidateID liquidlane.CandidateID
+	Route       liquidlane.Route
+	ValidUntil  time.Time
+	Adapter     common.Address
+	AmountIn    *big.Int
+	AmountOut   *big.Int
+	MaxRate     *big.Int
+	DiscountID  *common.Hash
 }

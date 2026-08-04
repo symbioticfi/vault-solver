@@ -3,6 +3,7 @@ package strategies
 import (
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -16,13 +17,15 @@ func TestFillPlanFromQuote(t *testing.T) {
 	adapter := common.HexToAddress("0x03")
 	route := liquidlane.NewRoute(1, adapter, common.HexToAddress("0x04"), tokenIn, tokenOut, 18, 18)
 	candidateID := liquidlane.NewCandidateID(route, nil)
+	validUntil := time.Unix(2_000_000_000, 0)
+	candidate := liquidlane.QuoteCandidate{
+		ID: candidateID, Route: route, Rate: big.NewInt(1_000_000_000_000_000_000),
+		MaxAmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100), ValidUntil: validUntil,
+	}
 	input := types.QuoteInput{
 		RequestID: "request", QuoteID: "quote", TokenIn: tokenIn, TokenOut: tokenOut,
 		AmountIn: big.NewInt(100), RequiredAmountOut: big.NewInt(90),
-		Candidates: []liquidlane.QuoteCandidate{{
-			ID: candidateID, Route: route, Rate: big.NewInt(1_000_000_000_000_000_000),
-			MaxAmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100),
-		}},
+		Candidates: []liquidlane.QuoteCandidate{candidate},
 	}
 	out := types.QuoteOutput{
 		Decision: types.DecisionQuote, QuotedAmountOut: big.NewInt(95),
@@ -36,6 +39,10 @@ func TestFillPlanFromQuote(t *testing.T) {
 	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != adapter ||
 		plan.AmountIn.Cmp(input.AmountIn) != 0 || plan.QuotedAmountOut.Cmp(out.QuotedAmountOut) != 0 {
 		t.Fatalf("plan = %+v", plan)
+	}
+	leg := plan.Legs[0]
+	if leg.CandidateID != candidate.ID || leg.Route != candidate.Route || !leg.ValidUntil.Equal(validUntil) {
+		t.Fatalf("leg identity = %+v, want candidate %+v", leg, candidate)
 	}
 }
 
