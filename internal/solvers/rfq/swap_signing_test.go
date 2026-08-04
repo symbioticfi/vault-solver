@@ -154,8 +154,9 @@ func TestPackSignedSwapCallPropagatesSigningFailure(t *testing.T) {
 }
 
 type swapTestSigner struct {
-	key *ecdsa.PrivateKey
-	err error
+	key   *ecdsa.PrivateKey
+	err   error
+	calls int
 }
 
 func newSwapTestSigner(t *testing.T) *swapTestSigner {
@@ -170,6 +171,7 @@ func newSwapTestSigner(t *testing.T) *swapTestSigner {
 func (s *swapTestSigner) Address() common.Address { return crypto.PubkeyToAddress(s.key.PublicKey) }
 
 func (s *swapTestSigner) SignHash(hash common.Hash) ([]byte, error) {
+	s.calls++
 	if s.err != nil {
 		return nil, s.err
 	}
