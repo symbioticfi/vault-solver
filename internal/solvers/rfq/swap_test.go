@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 )
 
@@ -414,7 +415,7 @@ func TestDirectPlanAdaptersExcludesDiscountLegs(t *testing.T) {
 	}
 }
 
-func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T) {
+func TestSwapBuildReturnsResolvedDiscountCall(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	candidate := discountedSwapCandidate(now.Add(30 * time.Second))
 	reader := &fakeSwapCandidateReader{responses: [][]liquidlane.QuoteCandidate{{candidate}, {candidate}}}
@@ -422,6 +423,8 @@ func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T) {
 	signer := newSwapTestSigner(t)
 	service := newTestSwapService(now, reader, state, signer)
 	service.discountsEnabled = true
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate, 0, 1_021, 1_022)}
+	service.discounts = provider
 
 	discovery := discoverySwapRequestWithDiscount(candidate)
 	if _, err := service.swap(t.Context(), &discovery); err != nil {
@@ -435,19 +438,282 @@ func TestSwapBuildSignsDiscountSelectedLegOnPersistedAdapter(t *testing.T) {
 	build := buildSwapRequest(confirmed)
 	response, err := service.swap(t.Context(), &build)
 	if err != nil {
-		t.Fatalf("BUILD signed fallback: %v", err)
+		t.Fatalf("BUILD discount: %v", err)
 	}
-	if response.Calls == nil || len(*response.Calls) != 1 || (*response.Calls)[0].Data[:10] != "0x9a4568b6" {
-		t.Fatalf("signed response = %+v", response)
+	if response.Calls == nil || len(*response.Calls) != 1 || (*response.Calls)[0].Data[:10] != "0x8fa5c671" {
+		t.Fatalf("discount response = %+v", response)
 	}
 	call := (*response.Calls)[0]
-	decoded, _ := unpackSignedCall(t, common.FromHex(call.Data))
-	if call.To != testAdapter || decoded.Recipient != common.HexToAddress(testRouter) ||
-		decoded.Caller != common.HexToAddress(testRouter) || decoded.Signer != signer.Address() {
-		t.Fatalf("Router-bound adapter signed swap = %+v, decoded %+v", call, decoded)
+	decoded, protocolSignature, recipient, amountIn := unpackDiscountCall(t, common.FromHex(call.Data))
+	if call.To != testAdapter || recipient != common.HexToAddress(testRouter) || amountIn.Cmp(big.NewInt(100)) != 0 ||
+		decoded.Discount.TokenToRedeem != common.HexToAddress(testTokenIn) ||
+		decoded.Discount.Discount.Sign() != 0 || decoded.Discount.Nonce.Cmp(big.NewInt(7)) != 0 ||
+		decoded.Discount.Deadline.Cmp(big.NewInt(1_021)) != 0 ||
+		decoded.ProtocolDeadline.Cmp(big.NewInt(1_022)) != 0 || len(protocolSignature) == 0 {
+		t.Fatalf("Router-bound adapter discount swap = %+v, decoded %+v", call, decoded)
 	}
-	if signer.calls != 1 || state.nonceReads != 1 {
-		t.Fatalf("signed leg signing/nonces = %d/%d, want adapter signature only", signer.calls, state.nonceReads)
+	if signer.calls != 0 || provider.resolveCalls != 1 || state.nonceReads != 1 {
+		t.Fatalf(
+			"discount dependencies: signer=%d resolve=%d nonce=%d",
+			signer.calls,
+			provider.resolveCalls,
+			state.nonceReads,
+		)
+	}
+	if len(state.validatedAdapters) != 2 || len(state.validatedAdapters[0]) != 0 ||
+		len(state.validatedAdapters[1]) != 0 {
+		t.Fatalf("discount adapter entered direct authorization: %v", state.validatedAdapters)
+	}
+	retry, err := service.swap(t.Context(), &build)
+	if err != nil || (*retry.Calls)[0].Data != call.Data {
+		t.Fatalf("cached discount BUILD = %+v, err %v", retry, err)
+	}
+	if provider.resolveCalls != 1 || state.fillReads != 1 || state.nonceReads != 1 {
+		t.Fatalf(
+			"cached discount BUILD repeated dependencies: resolve=%d fill=%d nonce=%d",
+			provider.resolveCalls,
+			state.fillReads,
+			state.nonceReads,
+		)
+	}
+}
+
+func TestSwapBuildPreservesMixedAuthorizationOrder(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	tokenIn := common.HexToAddress(testTokenIn)
+	tokenOut := common.HexToAddress(testTokenOut)
+	discountCandidate := discountedSwapCandidate(now.Add(30 * time.Second))
+	directRoute := liquidlane.NewRoute(
+		1,
+		common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		tokenIn,
+		tokenOut,
+		0,
+		0,
+	)
+	directID := liquidlane.NewCandidateID(directRoute, nil)
+	discountLeg := fillLeg{
+		CandidateID: discountCandidate.ID,
+		Route:       discountCandidate.Route,
+		Adapter:     discountCandidate.Route.Adapter,
+		AmountIn:    big.NewInt(40),
+		AmountOut:   big.NewInt(80),
+		DiscountID:  liquidlane.CloneHash(discountCandidate.DiscountID),
+	}
+	directLeg := fillLeg{
+		CandidateID: directID,
+		Route:       directRoute,
+		Adapter:     directRoute.Adapter,
+		AmountIn:    big.NewInt(60),
+		AmountOut:   big.NewInt(120),
+	}
+	directDomain := sampleSwapDomain()
+	directDomain.VerifyingContract = directRoute.Adapter
+	state := &fakeSwapState{
+		domains: map[common.Address]swapDomain{directRoute.Adapter: directDomain},
+		fills: map[liquidlane.RouteID]liquidlane.FillQuote{
+			discountLeg.Route.ID: {
+				Inventory:      liquidlane.DirectInventory(discountLeg.Route, big.NewInt(1_000), big.NewInt(1)),
+				AmountIn:       big.NewInt(40),
+				GrossAmountOut: big.NewInt(80),
+				MaxAmountOut:   big.NewInt(80),
+				MinDiscount:    big.NewInt(0),
+			},
+			directLeg.Route.ID: {
+				Inventory:      liquidlane.DirectInventory(directLeg.Route, big.NewInt(1_000), big.NewInt(1)),
+				AmountIn:       big.NewInt(60),
+				GrossAmountOut: big.NewInt(120),
+				MaxAmountOut:   big.NewInt(120),
+				MinDiscount:    big.NewInt(0),
+			},
+		},
+	}
+	signer := newSwapTestSigner(t)
+	service := newTestSwapService(now, &fakeSwapCandidateReader{}, state, signer)
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(discountCandidate, 0, 1_021, 1_022)}
+	service.discounts = provider
+	domains := []liquidlane.CapacityID{discountLeg.Route.CapacityID, directLeg.Route.CapacityID}
+	record := confirmationRecord{
+		SolverQuoteID:      uuid.MustParse(testSolverQuoteID),
+		DiscoveryRequestID: uuid.MustParse(testDiscoveryRequestID),
+		QuoteID:            uuid.MustParse(testQuoteID),
+		ChainID:            1,
+		Swapper:            common.HexToAddress(testSwapper),
+		TokenIn:            tokenIn,
+		TokenOut:           tokenOut,
+		AmountIn:           big.NewInt(100),
+		AmountOut:          big.NewInt(200),
+		ValidUntil:         time.Unix(1_030, 0),
+		Domains:            domains,
+		Plan: &fillPlan{
+			TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), QuotedAmountOut: big.NewInt(200),
+			Legs: []fillLeg{discountLeg, directLeg},
+		},
+	}
+	if err := service.store.putConfirmation(record); err != nil {
+		t.Fatal(err)
+	}
+	build := buildSwapRequest(&swapResponse{
+		SolverQuoteID:    testSolverQuoteID,
+		AmountIn:         "100",
+		AmountOut:        "200",
+		LiquidityDomains: capacityStrings(domains),
+	})
+
+	response, err := service.swap(t.Context(), &build)
+	if err != nil {
+		t.Fatalf("mixed BUILD: %v", err)
+	}
+	if response.Calls == nil || len(*response.Calls) != 2 || (*response.Calls)[0].Data[:10] != "0x8fa5c671" ||
+		(*response.Calls)[1].Data[:10] != "0x9a4568b6" {
+		t.Fatalf("mixed call order = %+v", response)
+	}
+	if len(state.validatedAdapters) != 1 || len(state.validatedAdapters[0]) != 1 ||
+		state.validatedAdapters[0][0] != directRoute.Adapter {
+		t.Fatalf("direct authorization = %v, want only %s", state.validatedAdapters, directRoute.Adapter.Hex())
+	}
+	directSwap, _ := unpackSignedCall(t, common.FromHex((*response.Calls)[1].Data))
+	wantNonce := signedSwapNonce(uuid.MustParse(testBuildID), 1, directRoute.Adapter, tokenIn, 1)
+	if directSwap.Nonce.Cmp(wantNonce) != 0 {
+		t.Fatalf("direct nonce = %s, want full-plan index nonce %s", directSwap.Nonce, wantNonce)
+	}
+	if signer.calls != 1 || provider.resolveCalls != 1 {
+		t.Fatalf("mixed authorizations: signer=%d resolve=%d", signer.calls, provider.resolveCalls)
+	}
+}
+
+func TestSwapBuildRejectsStaleOrMalformedResolvedDiscount(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		mutate func(*fakeSwapDiscountProvider, *fakeSwapState)
+	}{
+		{
+			name: "provider error", status: http.StatusBadGateway,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.err = errors.New("backend unavailable")
+			},
+		},
+		{
+			name: "malformed payload", status: http.StatusBadGateway,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.Discount.Adapter = "not-an-address"
+			},
+		},
+		{
+			name: "mismatched id", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.DiscountID = common.HexToHash("0xbb").Hex()
+			},
+		},
+		{
+			name: "mismatched adapter", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.Discount.Adapter = "0x8888888888888888888888888888888888888888"
+			},
+		},
+		{
+			name: "mismatched token", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.Discount.TokenToRedeem = testTokenOut
+			},
+		},
+		{
+			name: "discount deadline does not cover build", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.Discount.Deadline = 1_020
+			},
+		},
+		{
+			name: "protocol deadline does not cover build", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.ProtocolDeadline = 1_020
+			},
+		},
+		{
+			name: "below current minimum discount", status: http.StatusConflict,
+			mutate: func(_ *fakeSwapDiscountProvider, state *fakeSwapState) {
+				state.fill.MinDiscount = big.NewInt(1)
+			},
+		},
+		{
+			name: "discounted output below leg floor", status: http.StatusConflict,
+			mutate: func(provider *fakeSwapDiscountProvider, _ *fakeSwapState) {
+				provider.resolved.Discount.Discount = "1"
+			},
+		},
+		{
+			name: "discount nonce invalidated", status: http.StatusConflict,
+			mutate: func(_ *fakeSwapDiscountProvider, state *fakeSwapState) {
+				state.used = []bool{true}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, build, provider, state, signer, candidate := newDiscountBuildFixture(t)
+			test.mutate(provider, state)
+
+			response, err := service.swap(t.Context(), &build)
+			var serviceErr *swapServiceError
+			if response != nil || !errors.As(err, &serviceErr) || serviceErr.status != test.status {
+				t.Fatalf("BUILD response = %+v, err %v, want status %d", response, err, test.status)
+			}
+			if signer.calls != 0 {
+				t.Fatalf("stale discount invoked framework signer %d times", signer.calls)
+			}
+
+			provider.err = nil
+			provider.resolved = resolvedSwapDiscount(candidate, 0, 1_021, 1_022)
+			state.fill.MinDiscount = big.NewInt(0)
+			state.used = nil
+			retry, retryErr := service.swap(t.Context(), &build)
+			if retryErr != nil || retry.Calls == nil || (*retry.Calls)[0].Data[:10] != "0x8fa5c671" {
+				t.Fatalf("failed BUILD did not remain retryable: response %+v, err %v", retry, retryErr)
+			}
+		})
+	}
+}
+
+func TestSwapBuildConcurrentDiscountRetriesResolveOnce(t *testing.T) {
+	service, build, provider, state, _, _ := newDiscountBuildFixture(t)
+	provider.resolveStarted = make(chan struct{})
+	provider.resolveRelease = make(chan struct{})
+	type result struct {
+		response *swapResponse
+		err      error
+	}
+	results := make(chan result, 2)
+	for i := range 2 {
+		request := build
+		request.RequestID = uuid.NewString()
+		go func() {
+			response, err := service.swap(t.Context(), &request)
+			results <- result{response: response, err: err}
+		}()
+		if i == 0 {
+			<-provider.resolveStarted
+		}
+	}
+	close(provider.resolveRelease)
+	first := <-results
+	second := <-results
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent discount BUILD errors: %v / %v", first.err, second.err)
+	}
+	firstCall := (*first.response.Calls)[0]
+	secondCall := (*second.response.Calls)[0]
+	if firstCall.Data != secondCall.Data {
+		t.Fatalf("concurrent discount calls differ: %+v / %+v", firstCall, secondCall)
+	}
+	if provider.resolveCalls != 1 || state.fillReads != 1 || state.nonceReads != 1 {
+		t.Fatalf(
+			"concurrent dependencies: resolve=%d fill=%d nonce=%d",
+			provider.resolveCalls,
+			state.fillReads,
+			state.nonceReads,
+		)
 	}
 }
 
@@ -489,15 +755,18 @@ func (f *fakeSwapCandidateReader) read(ctx context.Context, inventory []solverIn
 }
 
 type fakeSwapState struct {
-	domains     map[common.Address]swapDomain
-	fill        liquidlane.FillQuote
-	used        []bool
-	err         error
-	fillReads   int
-	nonceReads  int
-	afterFill   func()
-	fillStarted chan struct{}
-	fillRelease <-chan struct{}
+	domains           map[common.Address]swapDomain
+	fill              liquidlane.FillQuote
+	fills             map[liquidlane.RouteID]liquidlane.FillQuote
+	used              []bool
+	err               error
+	fillReads         int
+	nonceReads        int
+	validatedAdapters [][]common.Address
+	nonceChecks       [][]swapNonceCheck
+	afterFill         func()
+	fillStarted       chan struct{}
+	fillRelease       <-chan struct{}
 }
 
 func newFakeSwapState(route liquidlane.Route) *fakeSwapState {
@@ -515,14 +784,23 @@ func newFakeSwapState(route liquidlane.Route) *fakeSwapState {
 
 func (f *fakeSwapState) validateRouter(context.Context, common.Address) error { return f.err }
 
-func (f *fakeSwapState) validateAdapters(context.Context, []common.Address, common.Address) (map[common.Address]swapDomain, error) {
+func (f *fakeSwapState) validateAdapters(
+	_ context.Context,
+	adapters []common.Address,
+	_ common.Address,
+) (map[common.Address]swapDomain, error) {
+	f.validatedAdapters = append(f.validatedAdapters, append([]common.Address(nil), adapters...))
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.domains, nil
 }
 
-func (f *fakeSwapState) readFillQuote(context.Context, liquidlane.Route, *big.Int) (liquidlane.FillQuote, error) {
+func (f *fakeSwapState) readFillQuote(
+	_ context.Context,
+	route liquidlane.Route,
+	_ *big.Int,
+) (liquidlane.FillQuote, error) {
 	f.fillReads++
 	if f.err != nil {
 		return liquidlane.FillQuote{}, f.err
@@ -534,18 +812,94 @@ func (f *fakeSwapState) readFillQuote(context.Context, liquidlane.Route, *big.In
 	if f.afterFill != nil {
 		f.afterFill()
 	}
+	if f.fills != nil {
+		return cloneFillQuote(f.fills[route.ID]), nil
+	}
 	return cloneFillQuote(f.fill), nil
 }
 
-func (f *fakeSwapState) readUsedNonces(context.Context, []swapNonceCheck) ([]bool, error) {
+func (f *fakeSwapState) readUsedNonces(_ context.Context, checks []swapNonceCheck) ([]bool, error) {
 	f.nonceReads++
+	f.nonceChecks = append(f.nonceChecks, append([]swapNonceCheck(nil), checks...))
 	if f.err != nil {
 		return nil, f.err
 	}
 	if f.used != nil {
 		return append([]bool(nil), f.used...), nil
 	}
-	return []bool{false}, nil
+	return make([]bool, len(checks)), nil
+}
+
+type fakeSwapDiscountProvider struct {
+	resolved       *discounts.Resolved
+	err            error
+	resolveCalls   int
+	resolveStarted chan struct{}
+	resolveRelease chan struct{}
+}
+
+func (*fakeSwapDiscountProvider) ListDiscounts(context.Context) (*discounts.List, error) {
+	return nil, nil
+}
+
+func (f *fakeSwapDiscountProvider) Resolve(context.Context, string) (*discounts.Resolved, error) {
+	f.resolveCalls++
+	if f.resolveStarted != nil {
+		close(f.resolveStarted)
+		<-f.resolveRelease
+	}
+	return f.resolved, f.err
+}
+
+func newDiscountBuildFixture(
+	t *testing.T,
+) (*swapService, swapRequest, *fakeSwapDiscountProvider, *fakeSwapState, *swapTestSigner, liquidlane.QuoteCandidate) {
+	t.Helper()
+	now := time.Unix(1_000, 0)
+	candidate := discountedSwapCandidate(now.Add(30 * time.Second))
+	reader := &fakeSwapCandidateReader{responses: [][]liquidlane.QuoteCandidate{{candidate}, {candidate}}}
+	state := newFakeSwapState(candidate.Route)
+	signer := newSwapTestSigner(t)
+	service := newTestSwapService(now, reader, state, signer)
+	service.discountsEnabled = true
+	provider := &fakeSwapDiscountProvider{resolved: resolvedSwapDiscount(candidate, 0, 1_021, 1_022)}
+	service.discounts = provider
+	discovery := discoverySwapRequestWithDiscount(candidate)
+	if _, err := service.swap(t.Context(), &discovery); err != nil {
+		t.Fatalf("DISCOVERY: %v", err)
+	}
+	confirmed, err := service.swap(
+		t.Context(),
+		ptrBuild(confirmSwapRequestWithAdapters(discovery.RequestID, 1_020, discovery.Adapters)),
+	)
+	if err != nil {
+		t.Fatalf("CONFIRM: %v", err)
+	}
+	return service, buildSwapRequest(confirmed), provider, state, signer, candidate
+}
+
+func resolvedSwapDiscount(
+	candidate liquidlane.QuoteCandidate,
+	discount int64,
+	deadline int64,
+	protocolDeadline int64,
+) *discounts.Resolved {
+	return &discounts.Resolved{
+		RequestID:  testBuildRequestID,
+		DiscountID: candidate.DiscountID.Hex(),
+		Discount: discounts.Terms{
+			Adapter:       candidate.Route.Adapter.Hex(),
+			TokenToRedeem: candidate.Route.TokenIn.Hex(),
+			Discount:      big.NewInt(discount).String(),
+			Signer:        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Protocol:      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			Nonce:         "0x7",
+			Deadline:      deadline,
+		},
+		SignerSignature:   "0x0102",
+		ProtocolDeadline:  protocolDeadline,
+		ProtocolSignature: "0x0304",
+	}
 }
 
 func newTestSwapService(

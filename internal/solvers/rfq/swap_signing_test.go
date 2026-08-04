@@ -131,17 +131,7 @@ func TestPackDiscountSwapCallUsesExactResolvedPayload(t *testing.T) {
 	if got := common.Bytes2Hex(data[:4]); got != "8fa5c671" {
 		t.Fatalf("selector = 0x%s", got)
 	}
-	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
-	if err != nil {
-		t.Fatal(err)
-	}
-	values, err := parsed.Methods["swap0"].Inputs.Unpack(data[4:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded := *abi.ConvertType(
-		values[0], new(adapter.ILiquidLaneAdapterDiscountSwap),
-	).(*adapter.ILiquidLaneAdapterDiscountSwap)
+	decoded, protocolSignature, gotRecipient, gotAmountIn := unpackDiscountCall(t, data)
 	if decoded.Discount.TokenToRedeem != signed.Terms.TokenToRedeem ||
 		decoded.Discount.Discount.Cmp(signed.Terms.Discount) != 0 ||
 		decoded.Discount.Signer != signed.Terms.Signer || decoded.Discount.Protocol != signed.Terms.Protocol ||
@@ -151,9 +141,14 @@ func TestPackDiscountSwapCallUsesExactResolvedPayload(t *testing.T) {
 		decoded.ProtocolDeadline.Cmp(signed.ProtocolDeadline) != 0 {
 		t.Fatalf("decoded discount swap = %+v", decoded)
 	}
-	if !bytes.Equal(values[1].([]byte), signed.ProtocolSignature) || values[2].(common.Address) != recipient ||
-		values[3].(*big.Int).Cmp(amountIn) != 0 {
-		t.Fatalf("outer discount arguments = protocolSig %x recipient %v amountIn %v", values[1], values[2], values[3])
+	if !bytes.Equal(protocolSignature, signed.ProtocolSignature) || gotRecipient != recipient ||
+		gotAmountIn.Cmp(amountIn) != 0 {
+		t.Fatalf(
+			"outer discount arguments = protocolSig %x recipient %v amountIn %v",
+			protocolSignature,
+			gotRecipient,
+			gotAmountIn,
+		)
 	}
 }
 
@@ -235,4 +230,23 @@ func unpackSignedCall(t *testing.T, data []byte) (adapter.ILiquidLaneAdapterSign
 	}
 	value := *abi.ConvertType(values[0], new(adapter.ILiquidLaneAdapterSignedSwap)).(*adapter.ILiquidLaneAdapterSignedSwap)
 	return value, values[1].([]byte)
+}
+
+func unpackDiscountCall(
+	t *testing.T,
+	data []byte,
+) (adapter.ILiquidLaneAdapterDiscountSwap, []byte, common.Address, *big.Int) {
+	t.Helper()
+	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := parsed.Methods["swap0"].Inputs.Unpack(data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := *abi.ConvertType(
+		values[0], new(adapter.ILiquidLaneAdapterDiscountSwap),
+	).(*adapter.ILiquidLaneAdapterDiscountSwap)
+	return value, values[1].([]byte), values[2].(common.Address), values[3].(*big.Int)
 }

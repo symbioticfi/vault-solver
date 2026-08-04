@@ -56,6 +56,12 @@ type swapService struct {
 	log              logr.Logger
 }
 
+type swapBuildLeg struct {
+	amountOut *big.Int
+	nonce     *big.Int
+	discount  *discounts.Signed
+}
+
 func (s *swapService) swap(ctx context.Context, request *swapRequest) (*swapResponse, error) {
 	parsed, err := request.parse(s.chainID, s.router)
 	if err != nil {
@@ -218,21 +224,57 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 	}
 
 	quotes := make([]liquidlane.FillQuote, len(record.Plan.Legs))
+	builtLegs := make([]swapBuildLeg, len(record.Plan.Legs))
 	for i, leg := range record.Plan.Legs {
 		quote, readErr := s.state.readFillQuote(ctx, leg.Route, leg.AmountIn)
 		if readErr != nil {
 			return nil, swapError(http.StatusConflict, "confirmed swap route is stale", readErr)
 		}
-		if quote.MaxAmountOut == nil || quote.MaxAmountOut.Cmp(leg.AmountOut) < 0 || quote.MaxAssets == nil {
+		if quote.MaxAssets == nil {
 			return nil, swapError(http.StatusConflict, "confirmed swap leg is below its floor", nil)
 		}
 		quotes[i] = quote
+		if leg.DiscountID == nil {
+			if quote.MaxAmountOut == nil || quote.MaxAmountOut.Cmp(leg.AmountOut) < 0 {
+				return nil, swapError(http.StatusConflict, "confirmed swap leg is below its floor", nil)
+			}
+			builtLegs[i] = swapBuildLeg{
+				amountOut: liquidlane.CloneBig(quote.MaxAmountOut),
+				nonce:     signedSwapNonce(request.BuildID, record.ChainID, leg.Adapter, record.TokenIn, i),
+			}
+			continue
+		}
+		if s.discounts == nil {
+			return nil, swapError(http.StatusBadGateway, "swap discount resolution failed", nil)
+		}
+		resolved, resolveErr := s.discounts.Resolve(ctx, leg.DiscountID.Hex())
+		if resolveErr != nil {
+			return nil, swapError(http.StatusBadGateway, "swap discount resolution failed", resolveErr)
+		}
+		parsed, parseErr := discounts.ParseSigned(resolved)
+		if parseErr != nil {
+			return nil, swapError(http.StatusBadGateway, "swap discount response is malformed", parseErr)
+		}
+		amountOut, validationErr := discounts.ValidateSigned(parsed, discounts.Selection{
+			DiscountID:   *leg.DiscountID,
+			Adapter:      leg.Adapter,
+			TokenIn:      record.TokenIn,
+			TokenOut:     record.TokenOut,
+			AmountIn:     leg.AmountIn,
+			MinAmountOut: leg.AmountOut,
+		}, quote, request.Deadline)
+		if validationErr != nil {
+			return nil, swapError(http.StatusConflict, "confirmed swap discount is stale", validationErr)
+		}
+		builtLegs[i] = swapBuildLeg{
+			amountOut: amountOut,
+			nonce:     liquidlane.CloneBig(parsed.Terms.Nonce),
+			discount:  parsed,
+		}
 	}
-	amountsOut := make([]*big.Int, len(record.Plan.Legs))
 	capacityUsed := make(map[liquidlane.CapacityID]*big.Int)
 	capacityAvailable := make(map[liquidlane.CapacityID]*big.Int)
 	for i, leg := range record.Plan.Legs {
-		amountsOut[i] = liquidlane.CloneBig(quotes[i].MaxAmountOut)
 		domain := liquidlane.RouteCapacityID(leg.Route)
 		if capacityUsed[domain] == nil {
 			capacityUsed[domain] = new(big.Int)
@@ -240,7 +282,7 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 		} else if quotes[i].MaxAssets.Cmp(capacityAvailable[domain]) < 0 {
 			capacityAvailable[domain] = liquidlane.CloneBig(quotes[i].MaxAssets)
 		}
-		capacityUsed[domain].Add(capacityUsed[domain], amountsOut[i])
+		capacityUsed[domain].Add(capacityUsed[domain], builtLegs[i].amountOut)
 	}
 	for domain, used := range capacityUsed {
 		if used.Cmp(capacityAvailable[domain]) > 0 {
@@ -248,18 +290,19 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 		}
 	}
 
-	nonces := make([]*big.Int, len(record.Plan.Legs))
 	checks := make([]swapNonceCheck, len(record.Plan.Legs))
 	for i, leg := range record.Plan.Legs {
-		nonces[i] = signedSwapNonce(request.BuildID, record.ChainID, leg.Adapter, record.TokenIn, i)
-		checks[i] = swapNonceCheck{Adapter: leg.Adapter, TokenIn: record.TokenIn, Nonce: nonces[i]}
+		checks[i] = swapNonceCheck{Adapter: leg.Adapter, TokenIn: record.TokenIn, Nonce: builtLegs[i].nonce}
 	}
 	usedNonces, nonceErr := s.state.readUsedNonces(ctx, checks)
 	if nonceErr != nil || len(usedNonces) != len(checks) {
 		return nil, swapError(http.StatusBadGateway, "swap nonce read failed", nonceErr)
 	}
-	for _, used := range usedNonces {
+	for i, used := range usedNonces {
 		if used {
+			if record.Plan.Legs[i].DiscountID != nil {
+				return nil, swapError(http.StatusConflict, "resolved swap discount nonce is invalidated", nil)
+			}
 			return nil, swapError(http.StatusConflict, "deterministic swap nonce is already used", nil)
 		}
 	}
@@ -267,24 +310,34 @@ func (s *swapService) build(ctx context.Context, request *parsedSwapRequest) (*s
 	calls := make([]swapCallResponse, len(record.Plan.Legs))
 	amountOut := new(big.Int)
 	for i, leg := range record.Plan.Legs {
-		domain, exists := domains[leg.Adapter]
-		if !exists {
-			return nil, swapError(http.StatusConflict, "confirmed swap adapter domain disappeared", nil)
+		var data []byte
+		if leg.DiscountID != nil {
+			var packErr error
+			data, packErr = packDiscountSwapCall(builtLegs[i].discount, s.router, leg.AmountIn)
+			if packErr != nil {
+				return nil, swapError(http.StatusBadGateway, "swap discount packing failed", packErr)
+			}
+		} else {
+			domain, exists := domains[leg.Adapter]
+			if !exists {
+				return nil, swapError(http.StatusConflict, "confirmed swap adapter domain disappeared", nil)
+			}
+			value := adapter.ILiquidLaneAdapterSignedSwap{
+				Recipient: s.router, TokenIn: record.TokenIn, AmountIn: liquidlane.CloneBig(leg.AmountIn),
+				AmountOut: liquidlane.CloneBig(builtLegs[i].amountOut), Caller: s.router, Signer: s.signer.Address(),
+				Nonce: builtLegs[i].nonce, Deadline: big.NewInt(request.Deadline.Unix()),
+			}
+			var packErr error
+			data, packErr = packSignedSwapCall(s.signer, domain, value)
+			if packErr != nil {
+				return nil, swapError(http.StatusBadGateway, "swap signing failed", packErr)
+			}
 		}
-		value := adapter.ILiquidLaneAdapterSignedSwap{
-			Recipient: s.router, TokenIn: record.TokenIn, AmountIn: liquidlane.CloneBig(leg.AmountIn),
-			AmountOut: liquidlane.CloneBig(amountsOut[i]), Caller: s.router, Signer: s.signer.Address(),
-			Nonce: nonces[i], Deadline: big.NewInt(request.Deadline.Unix()),
-		}
-		data, packErr := packSignedSwapCall(s.signer, domain, value)
-		if packErr != nil {
-			return nil, swapError(http.StatusBadGateway, "swap signing failed", packErr)
-		}
-		amountOut.Add(amountOut, amountsOut[i])
+		amountOut.Add(amountOut, builtLegs[i].amountOut)
 		calls[i] = swapCallResponse{
 			To: lowerAddr(leg.Adapter), Data: strings.ToLower(hexutil.Encode(data)),
 			AmountIn:  leg.AmountIn.String(),
-			AmountOut: amountsOut[i].String(), TokenOut: lowerAddr(record.TokenOut),
+			AmountOut: builtLegs[i].amountOut.String(), TokenOut: lowerAddr(record.TokenOut),
 			LiquidityDomain: string(liquidlane.RouteCapacityID(leg.Route)), ValidUntil: request.Deadline.Unix(),
 		}
 	}
