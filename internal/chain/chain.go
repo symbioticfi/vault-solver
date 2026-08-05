@@ -120,13 +120,6 @@ func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (ui
 	return c.writeClient.PendingNonceAt(ctx, account)
 }
 
-// PinReadEndpoint returns a context whose first successful HTTP read selects the fallback endpoint
-// used by every later read carrying that context. A pinned endpoint failure is returned as-is; callers
-// may start a new pinned context to select another healthy endpoint.
-func (c *Client) PinReadEndpoint(ctx context.Context) context.Context {
-	return withPinnedReadEndpoint(ctx)
-}
-
 // Close closes the primary client and, when a separate write client was dialed, that one too. It
 // overrides the promoted ethclient method so the write client is not leaked.
 func (c *Client) Close() {

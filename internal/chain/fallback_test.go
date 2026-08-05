@@ -92,12 +92,12 @@ func TestFallbackTransport_PrimaryOKNoFallover(t *testing.T) {
 	}
 }
 
-func TestFallbackTransport_PinnedEndpointDoesNotChangeMidSnapshot(t *testing.T) {
-	primaryHealthy := true
+func TestFallbackTransport_EachReadCanSelectAHealthyEndpoint(t *testing.T) {
 	var primaryHits, fallbackHits int
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		primaryHits++
-		if !primaryHealthy {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "eth_getTransactionReceipt") {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -112,44 +112,23 @@ func TestFallbackTransport_PinnedEndpointDoesNotChangeMidSnapshot(t *testing.T) 
 
 	eps := mustEndpoints(t, primary.URL, fallback.URL)
 	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
-	client := new(Client)
-	request := func(ctx context.Context) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, primary.URL, strings.NewReader(`{}`))
+	request := func(payload string) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, primary.URL, strings.NewReader(payload))
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
-		return rt.RoundTrip(req)
-	}
-
-	primarySnapshot := client.PinReadEndpoint(t.Context())
-	resp, err := request(primarySnapshot)
-	if err != nil {
-		t.Fatalf("pin primary: %v", err)
-	}
-	_ = resp.Body.Close()
-	primaryHealthy = false
-	if resp, err = request(primarySnapshot); err == nil {
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
 		_ = resp.Body.Close()
-		t.Fatal("pinned primary failure switched to fallback")
-	}
-	if fallbackHits != 0 {
-		t.Fatalf("fallback hits in primary snapshot = %d, want 0", fallbackHits)
 	}
 
-	fallbackSnapshot := client.PinReadEndpoint(t.Context())
-	resp, err = request(fallbackSnapshot)
-	if err != nil {
-		t.Fatalf("pin fallback: %v", err)
-	}
-	_ = resp.Body.Close()
-	primaryHealthy = true
-	resp, err = request(fallbackSnapshot)
-	if err != nil {
-		t.Fatalf("reuse pinned fallback: %v", err)
-	}
-	_ = resp.Body.Close()
-	if primaryHits != 3 || fallbackHits != 2 {
-		t.Fatalf("endpoint hits primary/fallback = %d/%d, want 3/2", primaryHits, fallbackHits)
+	request(`{"method":"eth_getBlockByNumber"}`)
+	request(`{"method":"eth_getTransactionReceipt"}`)
+	request(`{"method":"eth_getBlockByNumber"}`)
+	if primaryHits != 3 || fallbackHits != 1 {
+		t.Fatalf("endpoint hits primary/fallback = %d/%d, want 3/1", primaryHits, fallbackHits)
 	}
 }
 

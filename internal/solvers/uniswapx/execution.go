@@ -69,6 +69,7 @@ func (s *Solver) fillLoop(
 				"orderHash", order.Hash.Hex(),
 				"quoteId", order.QuoteID,
 			)
+			chainObservedAt := time.Now()
 			now, err := s.reader.latestBlockTime(ctx)
 			if err != nil {
 				s.endFillPlanning()
@@ -76,7 +77,7 @@ func (s *Solver) fillLoop(
 				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
 				continue
 			}
-			fill, err := s.startFill(ctx, routes, order, now)
+			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
@@ -115,6 +116,7 @@ func (s *Solver) startFill(
 	routes []liquidlane.Route,
 	order *resolvedOrder,
 	now time.Time,
+	chainObservedAt time.Time,
 ) (*pendingUniswapFill, error) {
 	if order.TokenOut == (common.Address{}) {
 		return nil, errOrderNotFillable
@@ -122,7 +124,6 @@ func (s *Solver) startFill(
 	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
 		return nil, errOrderNotFillable
 	}
-	chainObservedAt := time.Now()
 	decisionRoutes, listed, discountErr := s.fillRoutesWithDiscounts(
 		ctx,
 		routes,

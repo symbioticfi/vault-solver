@@ -139,7 +139,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 		Executor: solver.cfg.Executor, TokenIn: route.TokenIn, TokenOut: route.TokenOut,
 		AmountIn: big.NewInt(100), AmountOut: big.NewInt(90), Deadline: uint32(now.Add(time.Minute).Unix()),
 	}
-	if _, err := solver.startFill(t.Context(), []liquidlane.Route{configuredRoute}, order, now); err != nil {
+	if _, err := solver.startFill(t.Context(), []liquidlane.Route{configuredRoute}, order, now, now); err != nil {
 		t.Fatalf("startFill: %v", err)
 	}
 	if len(reader.adapters) != 1 || reader.adapters[0] != route.Adapter ||
@@ -277,7 +277,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		AmountIn: big.NewInt(100), AmountOut: big.NewInt(90), Deadline: uint32(now.Add(time.Minute).Unix()),
 	}
 
-	if _, err := solver.startFill(t.Context(), []liquidlane.Route{directRoute}, order, now); err != nil {
+	if _, err := solver.startFill(t.Context(), []liquidlane.Route{directRoute}, order, now, now); err != nil {
 		t.Fatalf("startFill: %v", err)
 	}
 	if len(reader.fillAmounts) != 1 || reader.fillAmounts[0].Cmp(big.NewInt(100)) != 0 ||
@@ -336,7 +336,7 @@ func TestStartFillRejectsExpiredOrderBeforeStrategy(t *testing.T) {
 		Deadline: uint32(now.Unix()),
 	}
 
-	if _, err := solver.startFill(t.Context(), nil, order, now); !errors.Is(err, errOrderNotFillable) {
+	if _, err := solver.startFill(t.Context(), nil, order, now, now); !errors.Is(err, errOrderNotFillable) {
 		t.Fatalf("startFill error = %v, want %v", err, errOrderNotFillable)
 	}
 	if strategy.input.OrderID != "" {
@@ -490,8 +490,9 @@ func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
 
 func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	chainObservedAt := fixture.now.Add(-10 * time.Second)
 	pending, err := fixture.solver.startFill(
-		t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now,
+		t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, chainObservedAt,
 	)
 	if err != nil {
 		t.Fatalf("startFill: %v", err)
@@ -508,9 +509,9 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if fixture.txm.reqs[0].MaxFeePerGas != nil {
 		t.Fatalf("gas-disabled transaction hard-capped fees at %s", fixture.txm.reqs[0].MaxFeePerGas)
 	}
-	wantCancelAt := time.Unix(int64(fixture.order.Deadline), 0)
-	if !fixture.txm.reqs[0].CancelAt.Equal(wantCancelAt) {
-		t.Fatalf("transaction cancelAt = %s, want %s", fixture.txm.reqs[0].CancelAt, wantCancelAt)
+	wantCancelAt := time.Unix(int64(fixture.order.Deadline), 0).Add(-10 * time.Second)
+	if got := fixture.txm.reqs[0].CancelAt; got.Sub(wantCancelAt).Abs() > time.Millisecond {
+		t.Fatalf("transaction cancelAt = %s, want %s", got, wantCancelAt)
 	}
 	if fixture.txm.reqs[0].Confirmations != nil {
 		t.Fatalf("fill confirmations override = %d, want global txmanager configuration", *fixture.txm.reqs[0].Confirmations)

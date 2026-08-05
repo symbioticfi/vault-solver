@@ -135,10 +135,13 @@ assertion because the PR19 ABI has no getter.
   at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process
   cannot create a future transaction queued behind a missing lower nonce. `CancelAt` is the earliest order,
   signed-discount, or protocol-signature deadline. It is derived from chain time, translated to a wall-clock
-  deadline without extending the remaining validity, and also bounds the pre-sign wait. The active lifecycle
-  is replaced by a same-nonce cancellation on expiry or shutdown and drained to a terminal result.
-- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is a minimum over the node
-  suggestion; zero uses the median p75 priority reward from the latest five blocks and fails new submissions
+  deadline without extending the remaining validity, and also bounds the pre-sign wait. The wall-clock
+  observation anchor is captured before the chain-time RPC so lookup and planning latency consume, rather
+  than extend, the remaining validity. The active lifecycle is replaced by a same-nonce cancellation on
+  expiry or shutdown and drained to a terminal result.
+- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
+  floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
+  median p75 priority reward from the latest five blocks, also clamped to headroom, and fails new submissions
   closed when `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a
   12.5% bump; when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei`
   is the absolute global ceiling and normal sends reserve
@@ -150,11 +153,14 @@ assertion because the PR19 ABI has no getter.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
   re-signed at another nonce. A consumed/colliding nonce pauses further sends, quotes, and readiness until an
   exact attempt has a canonical receipt at the configured confirmation depth; unresolved ownership stays
-  fail-closed. Each confirmation consistency check pins one read endpoint for its head/receipt/block reads;
-  an endpoint failure retries a fresh pinned snapshot rather than mixing fallback forks. Startup likewise
-  rejects any write-endpoint latest/pending nonce mismatch before readiness. Exact-attempt ownership is
-  in-memory: after an unclean exit, the same EOA must not restart until any private submission is reconciled
-  or can no longer execute because nonce equality cannot prove that hidden attempt is gone.
+  fail-closed. Each confirmation check requires a stable head and proves that the receipt block is in its
+  ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
+  or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
+  read fallbacks. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
+  Exact-attempt ownership is in-memory: the packaged Compose deployment restarts automatically after an
+  unclean exit even though nonce equality cannot prove that a private hidden attempt is gone. If such an
+  attempt later consumes the reused nonce, admission and readiness remain fail-closed for operator
+  reconciliation; automatic restart does not reconstruct ownership.
 - **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
   until a fresh post-fill snapshot is published.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives
@@ -230,8 +236,9 @@ The `gas:` block is optional. When omitted, quote and fill decisions do not subt
 skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
 quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
 the quote. With `tipGwei: 0`, recent fee-history rewards avoid relying on a potentially unusable node tip
-suggestion. A positive value remains an operator-controlled floor and fallback. `maxFeeGwei` remains the
-absolute ceiling described in §2.2.
+suggestion. Suggestions and rewards are advisory and are clamped to available headroom; a positive value
+remains the mandatory operator-controlled floor and fallback. `maxFeeGwei` remains the absolute ceiling
+described in §2.2.
 
 The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
 account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read

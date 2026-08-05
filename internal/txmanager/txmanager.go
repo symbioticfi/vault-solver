@@ -36,13 +36,10 @@ type Backend interface {
 	) (*ethereum.FeeHistory, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
-}
-
-type readEndpointPinner interface {
-	PinReadEndpoint(ctx context.Context) context.Context
 }
 
 // Config tunes fee selection and confirmation behavior.
@@ -838,11 +835,14 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 			"fee limit reached: current base fee %s exceeds tx manager max fee %s", baseFee, maxFee,
 		)
 	}
-	if tip.Cmp(maxTip) > 0 {
+	if tipFloor.Sign() > 0 && tipFloor.Cmp(maxTip) > 0 {
 		return feeQuote{}, errors.Errorf(
-			"fee limit reached: fee limit %s cannot cover base fee %s plus priority fee %s",
-			maxFee, baseFee, tip,
+			"fee limit reached: fee limit %s cannot cover base fee %s plus priority fee floor %s",
+			maxFee, baseFee, tipFloor,
 		)
+	}
+	if tip.Cmp(maxTip) > 0 {
+		tip.Set(maxTip)
 	}
 	return feeQuote{baseFee: baseFee, tip: tip, maxFee: maxFee}, nil
 }
@@ -1094,15 +1094,11 @@ func (m *Manager) waitForConfirmations(
 	defer ticker.Stop()
 
 	for {
-		confirmationCtx := ctx
-		if pinner, ok := m.backend.(readEndpointPinner); ok {
-			confirmationCtx = pinner.PinReadEndpoint(ctx)
-		}
-		headBefore, headErr := m.confirmationHead(confirmationCtx)
+		headBefore, headErr := m.confirmationHead(ctx)
 		if headErr != nil {
 			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
 		}
-		refreshed, err := m.canonicalReceipt(confirmationCtx, hash)
+		refreshed, err := m.confirmationReceipt(ctx, hash)
 		if err != nil {
 			if errors.Is(err, errReceiptReorged) {
 				return receipt, err
@@ -1110,14 +1106,23 @@ func (m *Manager) waitForConfirmations(
 			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
 		} else {
 			receipt = refreshed
-			headAfter, afterErr := m.confirmationHead(confirmationCtx)
-			if afterErr != nil {
-				m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
-			} else if headErr == nil && headBefore.Hash() == headAfter.Hash() {
-				head := headAfter.Number.Uint64()
+			if headErr == nil {
+				head := headBefore.Number.Uint64()
 				included := receipt.BlockNumber.Uint64()
 				if head >= included && head-included >= confirmations {
-					return receipt, nil
+					if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
+						if errors.Is(err, errReceiptReorged) {
+							return receipt, err
+						}
+						m.log.Error(err, "receipt ancestry check unavailable", "hash", hash.Hex())
+					} else {
+						headAfter, afterErr := m.confirmationHead(ctx)
+						if afterErr != nil {
+							m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
+						} else if headBefore.Hash() == headAfter.Hash() {
+							return receipt, nil
+						}
+					}
 				}
 			}
 		}
@@ -1142,7 +1147,7 @@ func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
 	return header, nil
 }
 
-func (m *Manager) canonicalReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+func (m *Manager) confirmationReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	receiptCtx, cancelReceipt := context.WithTimeout(ctx, m.receiptReadTimeout())
 	receipt, err := m.backend.TransactionReceipt(receiptCtx, hash)
 	cancelReceipt()
@@ -1155,21 +1160,43 @@ func (m *Manager) canonicalReceipt(ctx context.Context, hash common.Hash) (*type
 	if err := validateReceipt(hash, receipt); err != nil {
 		return nil, err
 	}
-	headerCtx, cancelHeader := context.WithTimeout(ctx, m.receiptReadTimeout())
-	header, err := m.backend.HeaderByNumber(headerCtx, receipt.BlockNumber)
-	cancelHeader()
-	if err != nil {
-		return nil, errors.Errorf("canonical block %s: %w", receipt.BlockNumber, err)
+	return receipt, nil
+}
+
+func (m *Manager) confirmReceiptAncestry(
+	ctx context.Context,
+	head *types.Header,
+	receipt *types.Receipt,
+) error {
+	if head == nil || head.Number == nil || receipt == nil || receipt.BlockNumber == nil {
+		return errors.New("confirmation ancestry requires head and receipt block numbers")
 	}
-	if header == nil {
-		return nil, errors.Errorf("canonical block %s is nil", receipt.BlockNumber)
+	if !head.Number.IsUint64() || !receipt.BlockNumber.IsUint64() {
+		return errors.New("confirmation ancestry block number exceeds uint64")
 	}
-	if header.Hash() != receipt.BlockHash {
-		return receipt, errors.Errorf(
+	included := receipt.BlockNumber.Uint64()
+	current := head
+	for current.Number.Uint64() > included {
+		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+		parent, err := m.backend.HeaderByHash(lookupCtx, current.ParentHash)
+		cancel()
+		if err != nil {
+			return errors.Errorf("parent header %s: %w", current.ParentHash.Hex(), err)
+		}
+		if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
+			return errors.Errorf("parent header %s is invalid", current.ParentHash.Hex())
+		}
+		if parent.Hash() != current.ParentHash || parent.Number.Uint64() != current.Number.Uint64()-1 {
+			return errors.Errorf("parent header %s does not link to block %s", parent.Hash(), current.Hash())
+		}
+		current = parent
+	}
+	if current.Number.Uint64() != included || current.Hash() != receipt.BlockHash {
+		return errors.Errorf(
 			"%w: receipt block %s is no longer canonical", errReceiptReorged, receipt.BlockHash.Hex(),
 		)
 	}
-	return receipt, nil
+	return nil
 }
 
 func validateReceipt(hash common.Hash, receipt *types.Receipt) error {

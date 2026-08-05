@@ -40,6 +40,7 @@ type mockBackend struct {
 
 	reorgOnHeadRead bool
 	latestHeads     []uint64
+	headerHashReads int
 
 	sendErrs  []error // returned, in order, by successive SendTransaction calls
 	sendCalls int
@@ -96,7 +97,7 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 	if number != nil {
 		header := receiptTestHeader(number.Uint64())
 		if b.reorgedHeader {
-			header.Extra = []byte("reorged")
+			header = forkedReceiptHeader(number.Uint64(), "reorged")
 		}
 		return header, nil
 	}
@@ -108,7 +109,30 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 		head = b.latestHeads[0]
 		b.latestHeads = b.latestHeads[1:]
 	}
-	return &types.Header{Number: new(big.Int).SetUint64(head), BaseFee: b.baseFee}, nil
+	header := receiptTestHeader(head)
+	if b.reorgedHeader {
+		header = forkedReceiptHeader(head, "reorged")
+	}
+	header.BaseFee = new(big.Int).Set(b.baseFee)
+	return header, nil
+}
+
+func (b *mockBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.headerHashReads++
+	for number := b.head; ; number-- {
+		header := receiptTestHeader(number)
+		if b.reorgedHeader {
+			header = forkedReceiptHeader(number, "reorged")
+		}
+		if header.Hash() == hash {
+			return header, nil
+		}
+		if number == 0 {
+			return nil, ethereum.NotFound
+		}
+	}
 }
 
 func (b *mockBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, error) {
@@ -228,6 +252,7 @@ func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
 	}{
 		"low suggestion":         {tip: big.NewInt(1_500), wantTip: 1_000_000_000},
 		"higher suggestion":      {tip: big.NewInt(2_000_000_000), wantTip: 2_000_000_000},
+		"suggestion above cap":   {tip: big.NewInt(30_000_000_000), wantTip: 20_500_000_000},
 		"suggestion unavailable": {tipErr: context.DeadlineExceeded, wantTip: 1_000_000_000},
 	}
 	for name, test := range tests {
@@ -274,12 +299,31 @@ func TestTipGweiZeroUsesRecentFeeHistory(t *testing.T) {
 	if fees.maxFee.Cmp(limit) != 0 {
 		t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
 	}
+	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(30_000_000_000)}}}
+	fees, err = m.currentFees(t.Context(), limit)
+	if err != nil {
+		t.Fatalf("currentFees with reward above cap: %v", err)
+	}
+	if want := big.NewInt(20_500_000_000); fees.tip.Cmp(want) != 0 {
+		t.Fatalf("tip = %s, want reward clamped to %s", fees.tip, want)
+	}
 	b.historyErr = errors.New("fee history unavailable")
 	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
 		t.Fatalf("history error = %v, want fresh-fees error", err)
 	}
 	if b.tipCalls != 0 {
 		t.Fatalf("node suggestion called %d times", b.tipCalls)
+	}
+}
+
+func TestCurrentFeesRejectConfiguredFloorAboveFeeHeadroom(t *testing.T) {
+	b := newMockBackend()
+	b.tip = big.NewInt(30_000_000_000)
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{TipGwei: 21}, logr.Discard())
+
+	_, err := m.currentFees(t.Context(), big.NewInt(40_500_000_000))
+	if err == nil || !strings.Contains(err.Error(), "priority fee floor") {
+		t.Fatalf("currentFees error = %v, want configured-floor error", err)
 	}
 }
 
@@ -912,6 +956,7 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 
 func TestConfirmationsRequireStableHead(t *testing.T) {
 	b := newMockBackend()
+	b.head = 102
 	b.latestHeads = []uint64{102, 100, 102, 102}
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
@@ -933,27 +978,28 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 	if len(b.latestHeads) != 0 {
 		t.Fatalf("confirmation returned before stable head snapshot; unread heads = %v", b.latestHeads)
 	}
+	if b.headerHashReads != 4 {
+		t.Fatalf("ancestry reads = %d, want 4 before both final head checks", b.headerHashReads)
+	}
 }
 
-func TestConfirmationsKeepFallbackSnapshotOnOneEndpoint(t *testing.T) {
+func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
 		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
 	})
 	receipt := successfulReceipt(tx, 100)
 	receipt.BlockHash = forkedReceiptHeader(100, "fallback").Hash()
-	backend := &mixedForkBackend{mockBackend: newMockBackend(), receipt: receipt}
+	backend := &mixedForkBackend{mockBackend: newMockBackend()}
+	backend.receipts[tx.Hash()] = receipt
 	m := New(
 		backend, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
 
 	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
-	if err != nil || got != receipt {
-		t.Fatalf("waitForConfirmations = (%+v, %v), want fallback receipt", got, err)
-	}
-	if pins := backend.pinCalls.Load(); pins != 2 {
-		t.Fatalf("pinned snapshots = %d, want 2", pins)
+	if got != receipt || !errors.Is(err, errReceiptReorged) {
+		t.Fatalf("waitForConfirmations = (%+v, %v), want reorg error", got, err)
 	}
 }
 
@@ -1092,53 +1138,47 @@ type disappearingReceiptBackend struct {
 	receiptReads atomic.Int64
 }
 
-type confirmationEndpointPinKey struct{}
+type mixedForkBackend struct{ *mockBackend }
 
-type mixedForkBackend struct {
-	*mockBackend
-
-	receipt  *types.Receipt
-	pinCalls atomic.Int64
-}
-
-func (b *mixedForkBackend) PinReadEndpoint(ctx context.Context) context.Context {
-	return context.WithValue(ctx, confirmationEndpointPinKey{}, b.pinCalls.Add(1) > 1)
-}
-
-func (b *mixedForkBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	fallback, pinned := ctx.Value(confirmationEndpointPinKey{}).(bool)
-	if !pinned {
-		if number == nil {
-			return forkedReceiptHeader(102, "primary"), nil
-		}
-		fallback = true
-	}
-	if !fallback && number != nil {
-		return nil, errors.New("primary block unavailable")
-	}
+func (b *mixedForkBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
 	height := uint64(102)
 	if number != nil {
 		height = number.Uint64()
 	}
-	fork := "primary"
-	if fallback {
-		fork = "fallback"
-	}
-	return forkedReceiptHeader(height, fork), nil
+	return forkedReceiptHeader(height, "primary"), nil
 }
 
-func (b *mixedForkBackend) TransactionReceipt(ctx context.Context, _ common.Hash) (*types.Receipt, error) {
-	fallback, pinned := ctx.Value(confirmationEndpointPinKey{}).(bool)
-	if pinned && !fallback {
-		return nil, errors.New("primary receipt unavailable")
+func (b *mixedForkBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
+	for number := uint64(102); ; number-- {
+		header := forkedReceiptHeader(number, "primary")
+		if header.Hash() == hash {
+			return header, nil
+		}
+		if number == 0 {
+			return nil, ethereum.NotFound
+		}
 	}
-	return b.receipt, nil
 }
+
+var receiptHeaderCache sync.Map
 
 func forkedReceiptHeader(number uint64, fork string) *types.Header {
-	header := receiptTestHeader(number)
-	header.Extra = []byte(fork)
-	return header
+	key := struct {
+		number uint64
+		fork   string
+	}{number: number, fork: fork}
+	if cached, ok := receiptHeaderCache.Load(key); ok {
+		return types.CopyHeader(cached.(*types.Header))
+	}
+	header := &types.Header{Number: new(big.Int).SetUint64(number), BaseFee: big.NewInt(20e9)}
+	if number > 0 {
+		header.ParentHash = forkedReceiptHeader(number-1, fork).Hash()
+	}
+	if fork != "" {
+		header.Extra = []byte(fork)
+	}
+	actual, _ := receiptHeaderCache.LoadOrStore(key, header)
+	return types.CopyHeader(actual.(*types.Header))
 }
 
 func (b *blockedFeeBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -1298,7 +1338,7 @@ func successfulReceipt(tx *types.Transaction, block uint64) *types.Receipt {
 }
 
 func receiptTestHeader(block uint64) *types.Header {
-	return &types.Header{Number: new(big.Int).SetUint64(block), BaseFee: big.NewInt(20e9)}
+	return forkedReceiptHeader(block, "")
 }
 
 func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {

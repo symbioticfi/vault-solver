@@ -175,7 +175,9 @@ requires that block; direct routes are authorization-filtered from each snapshot
 routes remain usable. In internal
 mode `adapters` is optional: a non-empty list scopes quotes and direct fills, while fill-time signed-discount
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
-discount-only. Every fill is simulated again immediately before submission.
+discount-only. Every fill is simulated again immediately before submission. The wall-clock anchor for
+a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
+validity instead of extending it.
 
 The quote path is stateless and uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
@@ -262,11 +264,13 @@ The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation
 stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump
 inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
 and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
-`tipGwei` is a priority-fee floor: a higher node suggestion wins, while the floor is used if that
-suggestion is unavailable. Startup rejects a positive floor that cannot fit after both reserved bumps.
-With `tipGwei: 0` (or the field omitted), txmanager instead uses the median p75 priority reward from
-the latest five blocks. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting
-a positive floor provides the operator-controlled fallback.
+`tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
+to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
+positive floor that cannot fit after both reserved bumps, and runtime submission fails when the current
+base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
+instead uses the median p75 priority reward from the latest five blocks, likewise clamped to available
+headroom. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor
+provides the operator-controlled fallback.
 
 ## Requirements
 
@@ -305,17 +309,22 @@ inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Receipt confirmation keeps each head/receipt/block consistency check on one selected read
-endpoint; if it fails mid-check, a later poll may select another endpoint. An explicit write endpoint
-must report the same chain ID as the read endpoint.
+endpoints. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
+that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
+normal read fallback behavior, while an unavailable or incoherent snapshot is retried on a later poll. An
+explicit write endpoint must report the same chain ID as the read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
 from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
 must be exclusive to this process: standard nonce reads cannot reveal a future transaction queued
 beyond a gap. Before upgrading from a build that allowed several unresolved signed nonces, drain that
 EOA's write-endpoint pool. After an unclean exit, nonce equality alone cannot rule out a private
-submission hidden by its relay; do not restart the same EOA until that submission is reconciled or can
-no longer execute.
+submission hidden by its relay. The packaged Docker Compose deployment restarts automatically with
+`unless-stopped`, so it can resume and reuse that nonce before the hidden submission becomes visible. If
+the old attempt later consumes the nonce, `txManager` pauses admissions and readiness and remains
+fail-closed for operator investigation; automatic restart does not recover the lost in-memory ownership.
+For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
+the EOA back.
 
 At runtime, a post-signing `nonce too low` pauses new transactions and readiness while `txManager`
 checks every exact signed attempt. A confirmed receipt for one of those hashes resumes the lane;

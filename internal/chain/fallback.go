@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -30,25 +29,6 @@ type fallbackTransport struct {
 	log       logr.Logger
 }
 
-// endpointPin is shared by requests derived from one read-snapshot context; mu serializes endpoint
-// selection and guards transport/index when those requests are issued concurrently.
-type endpointPin struct {
-	mu        sync.Mutex
-	transport *fallbackTransport
-	index     int
-}
-
-type endpointPinKey struct{}
-
-func withPinnedReadEndpoint(ctx context.Context) context.Context {
-	return context.WithValue(ctx, endpointPinKey{}, &endpointPin{index: -1})
-}
-
-func endpointPinFromContext(ctx context.Context) *endpointPin {
-	pin, _ := ctx.Value(endpointPinKey{}).(*endpointPin)
-	return pin
-}
-
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Buffer the body once so it can be replayed against each endpoint.
 	var body []byte
@@ -61,27 +41,9 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		body = b
 	}
 
-	pin := endpointPinFromContext(req.Context())
-	if pin != nil {
-		pin.mu.Lock()
-		defer pin.mu.Unlock()
-		if pin.transport != nil && pin.transport != t {
-			return nil, errors.New("rpc fallback: endpoint pin belongs to another transport")
-		}
-	}
-
-	start, end := 0, len(t.endpoints)
-	if pin != nil && pin.index >= 0 {
-		if pin.index >= len(t.endpoints) {
-			return nil, errors.New("rpc fallback: invalid pinned endpoint")
-		}
-		start, end = pin.index, pin.index+1
-	}
-
 	var lastErr error
-	for i := start; i < end; i++ {
-		ep := t.endpoints[i]
-		attemptTimeout := endpointAttemptTimeout(req.Context(), end-i)
+	for i, ep := range t.endpoints {
+		attemptTimeout := endpointAttemptTimeout(req.Context(), len(t.endpoints)-i)
 		if attemptTimeout <= 0 {
 			lastErr = req.Context().Err()
 			if lastErr == nil {
@@ -100,10 +62,6 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 		resp, err := t.base.RoundTrip(attempt)
 		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			if pin != nil && pin.index < 0 {
-				pin.transport = t
-				pin.index = i
-			}
 			// Success: keep the attempt context alive until the rpc layer finishes reading the body.
 			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
@@ -115,13 +73,10 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			lastErr = errors.Errorf("status %d", resp.StatusCode)
 			_ = resp.Body.Close()
 		}
-		if i < end-1 {
+		if i < len(t.endpoints)-1 {
 			t.log.V(1).Info("rpc endpoint failed; trying fallback",
 				"endpoint", ep.Redacted(), "err", lastErr.Error())
 		}
-	}
-	if pin != nil && pin.index >= 0 {
-		return nil, errors.Errorf("rpc fallback: pinned endpoint failed: %w", lastErr)
 	}
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
 }
