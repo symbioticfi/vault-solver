@@ -73,6 +73,10 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
+- **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
+  the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
+  records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
+  stop for an unresolved lifecycle.
 - **Quotes follow transaction-lane readiness.** `/quote` preserves pure request validation, then returns the
   normal no-quote `204` before chain reads or strategy work while the lane is occupied or conflicted. Readiness
   is checked again after strategy planning so a pass that observes a mid-plan state change is discarded before

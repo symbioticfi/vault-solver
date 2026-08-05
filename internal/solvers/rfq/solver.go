@@ -19,8 +19,11 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
-// Name is the registry key that selects this solver from config.
-const Name = "rfq-filler"
+const (
+	// Name is the registry key that selects this solver from config.
+	Name                       = "rfq-filler"
+	quoteServerShutdownTimeout = 5 * time.Second
+)
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
@@ -29,10 +32,11 @@ func init() {
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
-	cfg    *Config
-	server *server
-	exec   *executionService
-	log    logr.Logger
+	cfg         *Config
+	server      *server
+	exec        *executionService
+	log         logr.Logger
+	reportFatal func(error)
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -73,7 +77,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			metrics:      metrics,
 			log:          log,
 		},
-		log: log,
+		log:         log,
+		reportFatal: deps.ReportFatal,
 	}, nil
 }
 
@@ -133,6 +138,10 @@ func buildServices(
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
+func (s *Solver) ShutdownPreparationTimeout() time.Duration {
+	return quoteServerShutdownTimeout
+}
+
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
@@ -184,18 +193,37 @@ func (s *Solver) Run(ctx context.Context) error {
 	}()
 	s.log.Info("quote server listening", "addr", s.cfg.ListenAddr)
 
-	// Backend order poll + fill loop (P2). Stops when ctx is cancelled.
-	go s.exec.run(ctx, s.cfg.PollInterval)
+	// Stop new polling on shutdown, but join the execution loop before returning. A txmanager Send
+	// that reached admission still waits for the manager's terminal or bounded-shutdown result after
+	// execCtx is cancelled, so this join preserves RFQ bookkeeping for already-accepted fills.
+	execCtx, stopExec := context.WithCancel(ctx)
+	execDone := make(chan struct{})
+	go func() {
+		defer close(execDone)
+		s.exec.run(execCtx, s.cfg.PollInterval)
+	}()
 
+	var runErr error
 	select {
 	case <-ctx.Done():
+		runErr = ctx.Err()
 	case err := <-errCh:
-		return errors.Errorf("rfq: quote server failed: %w", err)
+		runErr = errors.Errorf("rfq: quote server failed: %w", err)
+		if s.reportFatal != nil && ctx.Err() == nil {
+			s.reportFatal(runErr)
+		}
 	}
+	stopExec()
 
-	// Fresh context: the parent is already cancelled, so deriving from it would abort the drain.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use a fresh bounded context because shutdown may follow parent cancellation.
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quoteServerShutdownTimeout)
 	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx) //nolint:contextcheck // fresh deadline for post-cancellation drain
-	return ctx.Err()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		s.log.Error(err, "quote server graceful shutdown failed")
+		if closeErr := httpSrv.Close(); closeErr != nil {
+			s.log.Error(closeErr, "quote server forced shutdown failed")
+		}
+	}
+	<-execDone
+	return runErr
 }
