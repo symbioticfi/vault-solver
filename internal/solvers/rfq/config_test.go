@@ -54,6 +54,78 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigSwapDefaults(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+oneAdapter)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.SwapEnabled {
+		t.Fatal("swapEnabled = true, want false")
+	}
+	if cfg.Router != (common.Address{}) {
+		t.Fatalf("router = %s, want zero address", cfg.Router.Hex())
+	}
+	if cfg.SwapQuoteTTL != 30*time.Second {
+		t.Fatalf("swapQuoteTTL = %s, want 30s", cfg.SwapQuoteTTL)
+	}
+}
+
+func TestParseConfigSwapEnabled(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+oneAdapter+`
+swapEnabled: true
+router: "0x0000000000000000000000000000000000000055"
+swapQuoteTtlMs: 45000
+`)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if !cfg.SwapEnabled {
+		t.Fatal("swapEnabled = false, want true")
+	}
+	if cfg.Router != common.HexToAddress("0x0000000000000000000000000000000000000055") {
+		t.Fatalf("router = %s", cfg.Router.Hex())
+	}
+	if cfg.SwapQuoteTTL != 45*time.Second {
+		t.Fatalf("swapQuoteTTL = %s, want 45s", cfg.SwapQuoteTTL)
+	}
+}
+
+func TestParseConfigSwapRejectsInvalidSettings(t *testing.T) {
+	cases := map[string]string{
+		"enabled without router": minimalConfig + oneAdapter + "swapEnabled: true\n",
+		"enabled with zero router": minimalConfig + oneAdapter + `
+swapEnabled: true
+router: "0x0000000000000000000000000000000000000000"
+`,
+		"invalid router": minimalConfig + oneAdapter + `
+swapEnabled: true
+router: "not-an-address"
+`,
+		"negative ttl": minimalConfig + oneAdapter + "swapQuoteTtlMs: -1\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseCfg(t, body); err == nil {
+				t.Fatal("expected swap config error")
+			}
+		})
+	}
+}
+
+func TestParseConfigSwapAllowsDynamicInternalAdapters(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+`
+solverMode: internal
+swapEnabled: true
+router: "0x0000000000000000000000000000000000000055"
+`)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if len(cfg.Adapters) != 0 || !cfg.SwapEnabled {
+		t.Fatalf("config = %+v, want enabled dynamic-adapter mode", cfg)
+	}
+}
+
 func TestParseConfig_Strategy(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+`
 strategy:

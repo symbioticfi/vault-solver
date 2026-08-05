@@ -86,6 +86,26 @@ When an exact-input request exceeds the advertised adapter capacity, the default
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
 LiquidLane state at fill time; the solver does not retain quote-time route plans.
+
+`swapEnabled: true` additionally exposes authenticated `POST /swap` for user-directed Router
+transactions. The same `x-rfq-shared-secret` header protects it. The backend first sends `DISCOVERY`
+sample amounts, then `CONFIRM`s one exact point, and finally sends `BUILD` for immutable adapter
+calldata. Each response call exposes `to`, opaque signed adapter `data`, and accounting metadata; the
+backend maps `to`, `amountIn`, and `data` to the Router's three-field call tuple. No separate Router
+authorization or signature is returned. Authorization is selected per leg: direct legs use Router-bound
+signed-swap selector `0x9a4568b6`, while a discount-selected leg resolves its persisted signed discount
+and returns selector `0x8fa5c671` with the Router recipient and confirmed input amount. One response may
+mix both call types in confirmed order. A resolved signed discount is a replayable bearer authorization
+until its signed deadlines because the existing discount ABI does not bind the outer recipient or amount.
+`CONFIRM.deadline` is a requested maximum: the
+solver returns the earlier local validity cap, and `BUILD` selects one exact unexpired deadline at or
+before that cap for every call in the selected solver response. A retry keeps the same build
+ID and economic tuple but uses a fresh transport-only `requestId`; cached calls and adapter signatures
+or resolved discount payloads are reused under the new response envelope. Requests and confirmed plans are limited to 64 adapter calls.
+The solver never broadcasts the transaction or transfers the user's tokens. Confirmations live only for
+`swapQuoteTtlMs` and are invalidated by a solver restart. Startup validates deployed Router bytecode plus
+adapter signer authorization and EIP-712 domains for configured adapters; request-local direct adapters
+are checked again during confirmation and build, while discount legs use their resolved signatures.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

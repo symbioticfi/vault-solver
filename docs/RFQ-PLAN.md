@@ -16,7 +16,8 @@ push path; orders are found exclusively by polling the backend.
   inventory snapshot in `adapters[]`; the filler prices it, applies a discount, selects the best
   adapter legs, and returns an `amountOut`), `GET /health`, and
   the code-first OpenAPI surface (`/openapi.json`, `/openapi.yaml`, `/docs`). `/quote` is gated by an
-  `x-rfq-shared-secret` header (the backend peer). There is **no `/notify` endpoint**.
+  `x-rfq-shared-secret` header (the backend peer). When explicitly enabled, authenticated `POST /swap`
+  returns user-directed calldata without submitting it. There is **no `/notify` endpoint**.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
@@ -24,6 +25,50 @@ push path; orders are found exclusively by polling the backend.
   adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
   leg's **adapter** address.
 - **State** — in-memory only: `orders` (state machine) and `attempts`.
+
+### User-directed swap calldata
+
+`swapEnabled: true` adds a protocol-exact `v2` lifecycle on `POST /swap`; disabled deployments do not
+register the route or advertise it in OpenAPI. The backend authenticates with the same
+`x-rfq-shared-secret` used by `/quote`:
+
+1. `DISCOVERY` supplies strictly increasing exact-input samples and an adapter inventory. The solver
+   performs one coherent largest-sample read and returns attainable points plus canonical shared-vault
+   capacity domains.
+2. `CONFIRM` selects one exact discovery point. The solver re-reads current liquidity, re-runs the
+   configured strategy, verifies the same domains and output floor, validates framework-signer
+   authorization for every selected direct adapter,
+   and stores the ordered allocation in-memory until the earliest of the requested maximum deadline,
+   configured TTL, and route validity. A longer requested deadline is shortened rather than rejected.
+3. `BUILD` is bound to that immutable confirmation, Router, domains, one chosen unexpired deadline, and
+   one build ID. It revalidates adapter state and exact capacity, then preserves authorization per leg:
+   direct legs use signed-swap selector `0x9a4568b6`, while discount legs resolve the exact persisted
+   discount ID and use selector `0x8fa5c671`. A mixed response preserves confirmed order. A retry may use
+   a fresh transport-only request ID; the immutable payload is byte-identical, while a second build ID or
+   changed economic tuple conflicts.
+
+For a signed adapter call, recipient and caller are the configured Router. The adapter nonce is
+deterministic over build ID, chain, adapter, input token, and call index. The BUILD response returns `to`,
+opaque adapter `data`, and accounting metadata; the backend maps `to`, `amountIn`, and `data` to the
+Router's three-field call tuple. There is no separate Router authorization signer, deadline, or signature.
+
+For a discount adapter call, BUILD fetches the resolved signed discount, validates its identity, exact
+route, current adapter minimum, output floor, nonce state, and both deadlines, then packs the unchanged
+terms and signatures with the Router recipient and persisted input amount. Both signed deadlines must be
+strictly later than the chosen BUILD deadline. The existing discount ABI does not sign the outer recipient
+or amount and does not consume the nonce, so the resolved signed discount remains replayable bearer data
+until expiry; this accepted limitation is documented in the per-leg design spec.
+
+The solver signs calldata only: it neither performs the Router's transfer-before-call funding nor
+broadcasts a transaction. The public transaction uses ordinary ERC-20 approval and zero native value;
+the Router transfers each exact leg directly from the user to its adapter, invokes the returned data,
+then transfers exact declared outputs to recipients. Plans contain at most 64 calls, and BUILD
+independently enforces its confirmed aggregate output floor before returning. The backend selects one
+solver response; a solver response may itself contain multiple adapter calls.
+
+Discovery and confirmation records are bounded, expiring, in-memory state. A process restart
+invalidates them, so the backend must repeat `DISCOVERY` and `CONFIRM`; it must never reuse an old
+`BUILD` against a restarted solver.
 
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
 solver maps that boundary shape into the shared LiquidLane terms from
@@ -41,7 +86,7 @@ the direct path is solid; they are sequenced last, not dropped.
 A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no framework edits
 (CLAUDE.md modularity rule). The generic layer is reused as-is:
 
-- **`Run(ctx)`** starts the RFQ **HTTP listener** (`/quote` + `/health` + OpenAPI) *and* the poll
+- **`Run(ctx)`** starts the RFQ **HTTP listener** (`/quote` + optional `/swap` + `/health` + OpenAPI) *and* the poll
   loop, blocking until ctx cancels. The HTTP server is an RFQ-specific concern and lives in the RFQ
   package; the framework's observability server (`:9090`, metrics/health/ready) stays separate.
 - **OpenAPI is code-first via Huma**: the request/response structs in `apitypes.go` carry validation
@@ -191,6 +236,9 @@ solvers:
       reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
+      swapEnabled: false                                # opt-in authenticated POST /swap
+      router: ""                                        # required deployed Router when enabled
+      swapQuoteTtlMs: 30000                             # maximum in-memory discovery/confirmation lifetime
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -279,6 +327,12 @@ dropping features.
    output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
    planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
    single-route capped output, webhook rejection, and fresh planning.
+6. **(done) User-directed swap calldata** — opt-in authenticated `DISCOVERY`/`CONFIRM`/`BUILD`,
+   immutable bounded confirmation state, per-leg direct `SignedSwap` or resolved `DiscountSwap` calldata,
+   capped confirmation validity plus one chosen BUILD deadline, transport-only request-ID retries over
+   immutable cached payloads, a 64-call bound,
+   three-field Router calls, and fail-fast Router/static adapter validation. This path never
+   sends a transaction and does not alter the legacy fill poller or its private discount execution.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

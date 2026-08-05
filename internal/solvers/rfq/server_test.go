@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -16,6 +17,19 @@ import (
 )
 
 const testSecret = "s3cr3t"
+
+type fakeSwapHandler struct {
+	response *swapResponse
+	err      error
+	calls    int
+	phases   []swapPhase
+}
+
+func (f *fakeSwapHandler) swap(_ context.Context, request *swapRequest) (*swapResponse, error) {
+	f.calls++
+	f.phases = append(f.phases, request.Phase)
+	return f.response, f.err
+}
 
 func testServer() *server {
 	execAddr := common.HexToAddress("0x0000000000000000000000000000000000000010")
@@ -45,6 +59,24 @@ func validQuoteBody() quoteRequest {
 	}
 }
 
+func validSwapDiscoveryBody() swapRequest {
+	return swapRequest{
+		Protocol:        swapProtocolV2,
+		Phase:           swapPhaseDiscovery,
+		RequestID:       "33333333-3333-4333-8333-333333333333",
+		QuoteID:         "44444444-4444-4444-8444-444444444444",
+		ChainID:         1,
+		Swapper:         "0x0000000000000000000000000000000000000099",
+		TokenIn:         tIn.Hex(),
+		TokenOut:        tOut.Hex(),
+		SampleAmountsIn: []string{"1000000000000000000"},
+		Adapters: []quoteAdapter{{
+			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
+			MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		}},
+	}
+}
+
 func do(t *testing.T, h http.Handler, method, path, secret string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
@@ -59,6 +91,18 @@ func do(t *testing.T, h http.Handler, method, path, secret string, body any) *ht
 	if secret != "" {
 		req.Header.Set(sharedSecretHeader, secret)
 	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+func doRaw(t *testing.T, h http.Handler, method, path, secret, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+	if secret != "" {
+		req.Header.Set(sharedSecretHeader, secret)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	return rr
@@ -127,6 +171,187 @@ func TestServer_ServesOpenAPISpec(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, "\"openapi\"") || !strings.Contains(body, "/quote") {
 		t.Fatalf("/openapi.json missing expected content")
+	}
+}
+
+func TestServer_SwapRouteIsConditional(t *testing.T) {
+	disabled := testServer()
+	if rr := do(t, disabled.handler(), http.MethodPost, "/swap", testSecret, validSwapDiscoveryBody()); rr.Code != http.StatusNotFound {
+		t.Fatalf("disabled /swap = %d, want 404", rr.Code)
+	}
+	if rr := do(t, disabled.handler(), http.MethodGet, "/openapi.json", "", nil); strings.Contains(rr.Body.String(), `"/swap"`) {
+		t.Fatal("disabled OpenAPI unexpectedly advertises /swap")
+	}
+
+	enabled := testServer()
+	enabled.swaps = &fakeSwapHandler{response: &swapResponse{
+		Protocol: swapProtocolV2, Phase: swapPhaseDiscovery,
+		RequestID: "33333333-3333-4333-8333-333333333333",
+		QuoteID:   "44444444-4444-4444-8444-444444444444",
+		ChainID:   1,
+		Swapper:   "0x0000000000000000000000000000000000000099",
+		TokenIn:   tIn.Hex(), TokenOut: tOut.Hex(),
+		Points: &[]swapPointResponse{},
+	}}
+	if rr := do(t, enabled.handler(), http.MethodGet, "/openapi.json", "", nil); !strings.Contains(rr.Body.String(), `"/swap"`) {
+		t.Fatal("enabled OpenAPI does not advertise /swap")
+	}
+}
+
+func TestServer_SwapAuthAndSuccess(t *testing.T) {
+	srv := testServer()
+	handler := &fakeSwapHandler{response: &swapResponse{
+		Protocol: swapProtocolV2, Phase: swapPhaseDiscovery,
+		RequestID: "33333333-3333-4333-8333-333333333333",
+		QuoteID:   "44444444-4444-4444-8444-444444444444",
+		ChainID:   1,
+		Swapper:   "0x0000000000000000000000000000000000000099",
+		TokenIn:   tIn.Hex(), TokenOut: tOut.Hex(),
+		Points: &[]swapPointResponse{},
+	}}
+	srv.swaps = handler
+	h := srv.handler()
+
+	for name, secret := range map[string]string{"missing": "", "wrong": "wrong"} {
+		t.Run(name, func(t *testing.T) {
+			if rr := do(t, h, http.MethodPost, "/swap", secret, validSwapDiscoveryBody()); rr.Code != http.StatusForbidden {
+				t.Fatalf("/swap = %d, want 403 (body %s)", rr.Code, rr.Body.String())
+			}
+		})
+	}
+	if handler.calls != 0 {
+		t.Fatalf("unauthorized requests reached swap service %d times", handler.calls)
+	}
+
+	rr := do(t, h, http.MethodPost, "/swap", testSecret, validSwapDiscoveryBody())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/swap = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+	var response swapResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode /swap response: %v", err)
+	}
+	if response.Points == nil || len(*response.Points) != 0 {
+		t.Fatalf("points = %#v, want explicit empty array", response.Points)
+	}
+	if handler.calls != 1 {
+		t.Fatalf("authorized calls = %d, want 1", handler.calls)
+	}
+}
+
+func TestServer_SwapRoutesAllThreePhases(t *testing.T) {
+	srv := testServer()
+	handler := &fakeSwapHandler{response: &swapResponse{
+		Protocol: swapProtocolV2, RequestID: "33333333-3333-4333-8333-333333333333",
+		QuoteID: "44444444-4444-4444-8444-444444444444", ChainID: 1,
+		Swapper: "0x0000000000000000000000000000000000000099", TokenIn: tIn.Hex(), TokenOut: tOut.Hex(),
+	}}
+	srv.swaps = handler
+	h := srv.handler()
+
+	discovery := validSwapDiscoveryBody()
+	discoveryID := discovery.RequestID
+	amountIn, minAmountOut, deadline := discovery.SampleAmountsIn[0], "1000000", int64(2_000_000_000)
+	confirm := discovery
+	confirm.Phase = swapPhaseConfirm
+	confirm.DiscoveryRequestID = &discoveryID
+	confirm.SampleAmountsIn = nil
+	confirm.AmountIn = &amountIn
+	confirm.MinAmountOut = &minAmountOut
+	confirm.Deadline = &deadline
+
+	solverQuoteID := "55555555-5555-4555-8555-555555555555"
+	buildID := "66666666-6666-4666-8666-666666666666"
+	router := "0x0000000000000000000000000000000000000077"
+	build := confirm
+	build.Phase = swapPhaseBuild
+	build.DiscoveryRequestID = nil
+	build.SolverQuoteID = &solverQuoteID
+	build.BuildID = &buildID
+	build.Adapters = nil
+	build.Router = &router
+	build.LiquidityDomains = []string{"capacity:1:0x0000000000000000000000000000000000000042:0x0000000000000000000000000000000000000043"}
+
+	for _, body := range []swapRequest{discovery, confirm, build} {
+		if rr := do(t, h, http.MethodPost, "/swap", testSecret, body); rr.Code != http.StatusOK {
+			t.Fatalf("%s /swap = %d, want 200 (body %s)", body.Phase, rr.Code, rr.Body.String())
+		}
+	}
+	want := []swapPhase{swapPhaseDiscovery, swapPhaseConfirm, swapPhaseBuild}
+	if len(handler.phases) != len(want) {
+		t.Fatalf("routed phases = %v, want %v", handler.phases, want)
+	}
+	for i := range want {
+		if handler.phases[i] != want[i] {
+			t.Fatalf("routed phases = %v, want %v", handler.phases, want)
+		}
+	}
+}
+
+func TestServer_SwapServiceOutcomes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err      error
+		wantCode int
+	}{
+		"no content":  {err: errSwapNoContent, wantCode: http.StatusNoContent},
+		"bad request": {err: &swapServiceError{status: http.StatusBadRequest, message: "invalid swap request"}, wantCode: http.StatusBadRequest},
+		"not found":   {err: &swapServiceError{status: http.StatusNotFound, message: "swap record not found"}, wantCode: http.StatusNotFound},
+		"gone":        {err: &swapServiceError{status: http.StatusGone, message: "swap quote expired"}, wantCode: http.StatusGone},
+		"conflict":    {err: &swapServiceError{status: http.StatusConflict, message: "swap state changed"}, wantCode: http.StatusConflict},
+		"store full":  {err: &swapServiceError{status: http.StatusTooManyRequests, message: "swap record store is full"}, wantCode: http.StatusTooManyRequests},
+		"dependency":  {err: &swapServiceError{status: http.StatusBadGateway, message: "swap build failed"}, wantCode: http.StatusBadGateway},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := testServer()
+			srv.swaps = &fakeSwapHandler{err: tc.err}
+			rr := do(t, srv.handler(), http.MethodPost, "/swap", testSecret, validSwapDiscoveryBody())
+			if rr.Code != tc.wantCode {
+				t.Fatalf("/swap = %d, want %d (body %s)", rr.Code, tc.wantCode, rr.Body.String())
+			}
+			if tc.wantCode == http.StatusNoContent && rr.Body.Len() != 0 {
+				t.Fatalf("204 body = %q, want empty", rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestServer_SwapRejectsOversizeAndMalformedBodies(t *testing.T) {
+	srv := testServer()
+	srv.swaps = &fakeSwapHandler{}
+	h := srv.handler()
+
+	if rr := doRaw(t, h, http.MethodPost, "/swap", testSecret, `{`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("malformed /swap = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	}
+	oversize := `{"protocol":"v2","phase":"DISCOVERY","padding":"` + strings.Repeat("x", maxRequestBytes) + `"}`
+	if rr := doRaw(t, h, http.MethodPost, "/swap", testSecret, oversize); rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize /swap = %d, want 413 (body %s)", rr.Code, rr.Body.String())
+	}
+}
+
+func TestServer_SwapOpenAPIPinsWireNames(t *testing.T) {
+	srv := testServer()
+	srv.swaps = &fakeSwapHandler{}
+	rr := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/openapi.json = %d, want 200", rr.Code)
+	}
+	spec := rr.Body.String()
+	for _, field := range []string{
+		"protocol", "phase", "requestId", "discoveryRequestId", "quoteId", "solverQuoteId", "buildId",
+		"chainId", "swapper", "router", "tokenIn", "tokenOut", "sampleAmountsIn", "adapters", "points",
+		"amountIn", "minAmountOut", "amountOut", "liquidityDomains", "validUntil", "calls", "liquidityDomain",
+	} {
+		if !strings.Contains(spec, `"`+field+`"`) {
+			t.Fatalf("OpenAPI missing wire field %q", field)
+		}
+	}
+	for _, forbidden := range []string{
+		`"validity"`, `"nativeValue"`, `"authSigner"`, `"authDeadline"`, `"authSignature"`,
+	} {
+		if strings.Contains(spec, forbidden) {
+			t.Fatalf("OpenAPI contains forbidden wire field %s", forbidden)
+		}
 	}
 }
 

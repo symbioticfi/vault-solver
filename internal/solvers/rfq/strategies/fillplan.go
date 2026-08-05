@@ -47,11 +47,14 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		sumIn.Add(sumIn, leg.AmountIn)
 		sumOut.Add(sumOut, leg.AmountOut)
 		legs = append(legs, types.FillLeg{
-			Adapter:    candidate.Route.Adapter,
-			AmountIn:   liquidlane.CloneBig(leg.AmountIn),
-			AmountOut:  liquidlane.CloneBig(leg.AmountOut),
-			MaxRate:    liquidlane.CloneBig(candidate.Rate),
-			DiscountID: liquidlane.CloneHash(candidate.DiscountID),
+			CandidateID: candidate.ID,
+			Route:       candidate.Route,
+			ValidUntil:  candidate.ValidUntil,
+			Adapter:     candidate.Route.Adapter,
+			AmountIn:    liquidlane.CloneBig(leg.AmountIn),
+			AmountOut:   liquidlane.CloneBig(leg.AmountOut),
+			MaxRate:     liquidlane.CloneBig(candidate.Rate),
+			DiscountID:  liquidlane.CloneHash(candidate.DiscountID),
 		})
 	}
 	if input.AmountIn == nil || sumIn.Cmp(input.AmountIn) != 0 {

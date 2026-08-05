@@ -7,7 +7,7 @@
 # Provide secrets by env-var NAME (read at point of use, never in the parsed config):
 #   SOLVER_PRIVATE_KEY          — the caller EOA; must be an authorized caller of the Executor
 #                                 (the Executor `setCallers` allowlist), granted out-of-band by its owner
-#   RFQ_BACKEND_SHARED_SECRET   — shared secret authenticating the backend peer on POST /quote
+#   RFQ_BACKEND_SHARED_SECRET   — shared secret authenticating the backend peer on POST /quote and POST /swap
 # ${VAR} fields are expanded from the environment at load time. Never commit a real key or endpoint.
 
 chain:
@@ -43,10 +43,21 @@ solvers:
         config: {}                     #   opaque to the framework; parsed by the named strategy
 
       backendUrl: ${RFQ_BACKEND_URL}   # RFQ backend base URL (host root; the client adds the /api/v1 prefix)
-      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
-      listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote + POST /swap secret
+      listenAddr: ":42073"             # bind address for POST /quote, optional POST /swap, /health, /docs
       pollIntervalMs: 3000             # how often to poll the backend for awarded open orders
       orderLimit: 20                   # max open orders fetched per poll
+
+      # User-directed swap calldata is opt-in. Enabling it mounts authenticated POST /swap and makes
+      # startup fail unless Router bytecode exists and this framework signer is authorized by every
+      # configured adapter. BUILD returns a direct signed-swap call or the exact resolved signed-discount
+      # call selected for each confirmed leg; one response may mix both in confirmed order. The backend
+      # maps each call's to, amountIn, and data to the Router's three-field tuple; no separate Router
+      # authorization is returned. Plans are capped at 64 calls, and the solver never broadcasts the
+      # user's Router transaction.
+      swapEnabled: false
+      router: ""                        # deployed user-directed Router; required when swapEnabled: true
+      swapQuoteTtlMs: 30000             # maximum confirmation lifetime; longer requested deadlines are shortened
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle

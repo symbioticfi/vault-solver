@@ -54,6 +54,7 @@ func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*typ
 			return nil, errors.Errorf("fill candidate %q lost its RFQ source", route.CandidateID)
 		}
 		legs = append(legs, types.FillLeg{
+			CandidateID: source.ID, Route: source.Route, ValidUntil: source.ValidUntil,
 			Adapter: source.Route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
 			MaxRate: liquidlane.CloneBig(source.Rate), DiscountID: liquidlane.CloneHash(source.DiscountID),
 		})

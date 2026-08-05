@@ -153,11 +153,11 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 	return liquidlane.DirectInventory(route, maxAssets, maxRate), nil
 }
 
-// parseUint256 parses a base-10 non-negative integer string into a big.Int.
+// parseUint256 parses a base-10 uint256 string into a big.Int.
 func parseUint256(s, field string) (*big.Int, error) {
 	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid non-negative integer %q", field, s)
+	if !ok || n.Sign() < 0 || n.BitLen() > 256 {
+		return nil, errors.Errorf("%s: invalid uint256 %q", field, s)
 	}
 	return n, nil
 }
