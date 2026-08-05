@@ -223,7 +223,7 @@ func (s *Solver) startFill(
 		return nil, errors.Errorf("%w: %v", errFillPreflight, err)
 	}
 	deadline := fillDeadline(order, discountValidUntil)
-	cancelAt, ok := fillCancellationDeadline(deadline, now, chainObservedAt, time.Now())
+	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
 		return nil, errOrderNotFillable
 	}
@@ -352,21 +352,6 @@ func (s *Solver) buildExecutorCalldata(
 
 func fillDeadline(order *resolvedOrder, discountValidUntil time.Time) time.Time {
 	return earlierTime(time.Unix(int64(order.Deadline), 0), discountValidUntil)
-}
-
-func fillCancellationDeadline(deadline, chainNow, chainObservedAt, wallNow time.Time) (time.Time, bool) {
-	// Preserve positive chain/wall skew while fill planning is in progress.
-	if elapsed := wallNow.Sub(chainObservedAt); elapsed > 0 {
-		chainNow = chainNow.Add(elapsed)
-	}
-	reference := chainNow
-	if wallNow.After(reference) {
-		reference = wallNow
-	}
-	if !deadline.After(reference) {
-		return time.Time{}, false
-	}
-	return wallNow.Add(deadline.Sub(reference)), true
 }
 
 func earlierTime(left, right time.Time) time.Time {

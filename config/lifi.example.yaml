@@ -22,6 +22,7 @@ txManager:
   maxFeeGwei: 50               # global fee cap; the normal lifecycle stops one bump below it
   replacementIntervalMs: 30000 # attempt a capped fee bump every 30s
   pendingTimeoutMs: 300000     # switch the active nonce to cancellation after 5m
+  shutdownTimeoutMs: 60000     # bound SIGTERM cancellation + receipt drain to 60s
   # Each fill also supplies its decision-time cap. The initial send reserves one replacement inside
   # that cap; cancellation may exceed it but never maxFeeGwei.
   # tipGwei: 1                 # optional floor; omit/zero to use recent eth_feeHistory rewards

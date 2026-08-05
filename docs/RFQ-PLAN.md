@@ -69,7 +69,10 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
   builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
-  replacement/cancellation, and confirmed receipt.
+  replacement/cancellation, and confirmed receipt. Each request uses the earliest signed-order or selected
+  discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
+  expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
+  the shared nonce lane.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.

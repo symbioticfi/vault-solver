@@ -25,6 +25,7 @@ type fakeLifiReader struct {
 	orderIDFn        func(inputsettler.StandardOrder) common.Hash
 	status           uint8
 	statusErr        error
+	statusFn         func() (uint8, error)
 	latestBlock      uint64
 	latestBlockErr   error
 	fill             []liquidlane.FillQuote
@@ -98,6 +99,9 @@ func (f fakeLifiReader) orderIdentifier(
 }
 
 func (f fakeLifiReader) orderStatus(context.Context, common.Address, common.Hash) (uint8, error) {
+	if f.statusFn != nil {
+		return f.statusFn()
+	}
 	return f.status, f.statusErr
 }
 
@@ -167,6 +171,9 @@ func TestBuildFillCalldata(t *testing.T) {
 	if calldata.OrderID != orderID {
 		t.Fatalf("order id = %s", calldata.OrderID)
 	}
+	if got := calldata.Deadline.Unix(); got != int64(submitted.Order.Expires) {
+		t.Fatalf("transaction deadline = %d, want order expiry %d", got, submitted.Order.Expires)
+	}
 
 	encodedOrder, directRoutes, discountRoutes := unpackFinaliseCalldata(t, calldata.Finalise)
 	if encodedOrder.User != submitted.Order.User || encodedOrder.Nonce.Cmp(submitted.Order.Nonce) != 0 ||
@@ -224,7 +231,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 			TokenToRedeem: tokenIn, Discount: big.NewInt(100_000),
 			Signer:   common.HexToAddress("0x1111111111111111111111111111111111111111"),
 			Protocol: common.HexToAddress("0x2222222222222222222222222222222222222222"),
-			Nonce:    big.NewInt(7), Deadline: big.NewInt(1_900_000_000),
+			Nonce:    big.NewInt(7), Deadline: big.NewInt(1_799_999_999),
 		},
 		SignerSignature: []byte{0x12, 0x34}, ProtocolDeadline: big.NewInt(1_900_000_001),
 		ProtocolSignature: []byte{0x56, 0x78},
@@ -238,6 +245,9 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("buildFillCalldata: %v", err)
+	}
+	if got := calldata.Deadline.Unix(); got != 1_799_999_999 {
+		t.Fatalf("transaction deadline = %d, want selected discount deadline", got)
 	}
 	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, calldata.Finalise)
 	if len(directRoutes) != 1 || directRoutes[0].Adapter != directAdapter ||
@@ -262,5 +272,68 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 		discountRoute.DiscountSwap.ProtocolDeadline.Cmp(resolved.ProtocolDeadline) != 0 ||
 		!bytes.Equal(discountRoute.ProtocolSignature, resolved.ProtocolSignature) {
 		t.Fatalf("discount route = %+v", discountRoute)
+	}
+}
+
+func TestLifiFillDeadline(t *testing.T) {
+	t.Parallel()
+	discountID := common.HexToHash("0x01")
+	tests := []struct {
+		name             string
+		expires          uint32
+		fillDeadline     uint32
+		selectDiscount   bool
+		signerDeadline   int64
+		protocolDeadline int64
+		want             int64
+		wantZero         bool
+		wantErr          bool
+	}{
+		{name: "deadlines unset", wantZero: true},
+		{name: "expiry first", expires: 100, fillDeadline: 200, want: 100},
+		{name: "fill deadline first", expires: 200, fillDeadline: 100, want: 100},
+		{
+			name: "selected signer deadline first", expires: 300, fillDeadline: 250,
+			selectDiscount: true, signerDeadline: 100, protocolDeadline: 200, want: 100,
+		},
+		{
+			name: "selected protocol deadline first", expires: 300, fillDeadline: 250,
+			selectDiscount: true, signerDeadline: 200, protocolDeadline: 100, want: 100,
+		},
+		{
+			name: "unselected discount ignored", expires: 300, fillDeadline: 250,
+			signerDeadline: 100, protocolDeadline: 200, want: 250,
+		},
+		{
+			name: "selected discount deadline invalid", expires: 300, fillDeadline: 250,
+			selectDiscount: true, signerDeadline: 0, protocolDeadline: 200, wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			plan := &types.FillPlan{Routes: []types.FillRoute{{}}}
+			if tt.selectDiscount {
+				plan.Routes[0].DiscountID = &discountID
+			}
+			resolved := map[common.Hash]*discounts.Signed{
+				discountID: {
+					Terms:            discounts.SignedTerms{Deadline: big.NewInt(tt.signerDeadline)},
+					ProtocolDeadline: big.NewInt(tt.protocolDeadline),
+				},
+			}
+			got, err := lifiFillDeadline(submittedOrder{Order: inputsettler.StandardOrder{
+				Expires: tt.expires, FillDeadline: tt.fillDeadline,
+			}}, plan, resolved)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && got.IsZero() != tt.wantZero {
+				t.Fatalf("deadline zero = %v, want %v", got.IsZero(), tt.wantZero)
+			}
+			if err == nil && !tt.wantZero && got.Unix() != tt.want {
+				t.Fatalf("deadline = %d, want %d", got.Unix(), tt.want)
+			}
+		})
 	}
 }

@@ -17,6 +17,7 @@ txManager:
   maxFeeGwei: 50                  # global fee cap; the normal lifecycle stops one bump below it
   replacementIntervalMs: 5000    # attempt a capped fee bump every 5s
   pendingTimeoutMs: 300000        # switch the active nonce to cancellation after 5m
+  shutdownTimeoutMs: 60000        # bound SIGTERM cancellation + receipt drain to 60s
   tipGwei: 0                      # automatic median p75 tip from the latest five blocks
 
 observability:

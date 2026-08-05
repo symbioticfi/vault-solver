@@ -39,7 +39,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	if be.resolveCalls != 0 {
 		t.Fatalf("resolveDiscount calls = %d, want 0", be.resolveCalls)
 	}
-	if txm.lastData != nil {
+	if txm.lastReq.Data != nil {
 		t.Fatal("should not have sent a fill")
 	}
 }
@@ -62,7 +62,7 @@ func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 	if be.resolveCalls != 0 {
 		t.Fatalf("resolveDiscount calls = %d, want 0 (must not call the discounts API)", be.resolveCalls)
 	}
-	if txm.lastData != nil {
+	if txm.lastReq.Data != nil {
 		t.Fatal("should not have sent a fill for a disabled discount leg")
 	}
 }

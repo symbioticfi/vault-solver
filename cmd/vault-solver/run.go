@@ -99,6 +99,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		TipGwei:             cfg.TxManager.TipGwei,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
+		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
 	}, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)

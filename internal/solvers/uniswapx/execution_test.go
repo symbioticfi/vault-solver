@@ -344,27 +344,6 @@ func TestStartFillRejectsExpiredOrderBeforeStrategy(t *testing.T) {
 	}
 }
 
-func TestFillCancellationDeadlineUsesChainClock(t *testing.T) {
-	chainObservedAt := time.Unix(1_000, 0)
-	chainNow := time.Unix(1_010, 0)
-	deadline := time.Unix(1_030, 0)
-	cancelAt, ok := fillCancellationDeadline(deadline, chainNow, chainObservedAt, chainObservedAt)
-	if !ok || !cancelAt.Equal(time.Unix(1_020, 0)) {
-		t.Fatalf("cancelAt = %s, %v; want 1020, true", cancelAt, ok)
-	}
-
-	wallNow := chainObservedAt.Add(15 * time.Second)
-	cancelAt, ok = fillCancellationDeadline(deadline, chainNow, chainObservedAt, wallNow)
-	if !ok || !cancelAt.Equal(time.Unix(1_020, 0)) {
-		t.Fatalf("cancelAt after planning = %s, %v; want 1020, true", cancelAt, ok)
-	}
-	if _, valid := fillCancellationDeadline(
-		deadline, chainNow, chainObservedAt, chainObservedAt.Add(20*time.Second),
-	); valid {
-		t.Fatal("expired chain deadline was accepted")
-	}
-}
-
 type executionTestStrategy struct {
 	input strategytypes.FillInput
 	plan  *strategytypes.FillPlan

@@ -194,6 +194,91 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	if txm.reqs[0].MaxFeePerGas == nil || txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(1)) != 0 {
 		t.Fatalf("fill max fee per gas = %v, want 1", txm.reqs[0].MaxFeePerGas)
 	}
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	}
+}
+
+func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	order.Order.Expires = 0
+	order.Order.FillDeadline = 0
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		order,
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if !txm.reqs[0].CancelAt.IsZero() {
+		t.Fatalf("fill CancelAt = %v, want global pending timeout", txm.reqs[0].CancelAt)
+	}
+}
+
+func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	wallNow := time.Unix(1_700_000_000, 0)
+	s.wallNow = func() time.Time { return wallNow }
+	s.now = func(context.Context) (time.Time, error) {
+		return time.Unix(1_700_000_010, 0), nil
+	}
+	statusReads := 0
+	reader := s.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		statusReads++
+		if statusReads == 2 {
+			wallNow = wallNow.Add(15 * time.Second)
+		}
+		return lifiOrderStatusDeposited, nil
+	}
+	s.reader = reader
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.reqs[0].CancelAt, want)
+	}
 }
 
 func TestProcessOrderSkipsInputTokenOutsideScopeBeforeChainReads(t *testing.T) {
@@ -670,6 +755,7 @@ func newProcessTestSolver(
 		strategy: strategy, caller: caller, txm: txm, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:      func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 }
 

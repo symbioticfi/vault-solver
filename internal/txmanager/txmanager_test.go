@@ -1206,6 +1206,19 @@ type acceptedThenNonceLowBackend struct {
 	receiptGate <-chan struct{}
 }
 
+type replacementNonceRaceBackend struct {
+	*mockBackend
+
+	publishOwnedReceipt bool
+}
+
+type shutdownWriteOutageBackend struct {
+	*mockBackend
+
+	cancellationStarted chan struct{}
+	cancellationOnce    sync.Once
+}
+
 func (b *acceptedThenNonceLowBackend) SendTransaction(
 	_ context.Context,
 	tx *types.Transaction,
@@ -1240,6 +1253,43 @@ func (b *acceptedThenNonceLowBackend) TransactionReceipt(
 	return b.mockBackend.TransactionReceipt(ctx, hash)
 }
 
+func (b *replacementNonceRaceBackend) SendTransaction(
+	_ context.Context,
+	tx *types.Transaction,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sendCalls++
+	b.sent = append(b.sent, tx)
+	if b.sendCalls == 1 {
+		return nil
+	}
+	if b.publishOwnedReceipt {
+		original := b.sent[0]
+		b.receipts[original.Hash()] = successfulReceipt(original, b.head)
+	}
+	b.latestNonce = tx.Nonce() + 1
+	b.pendingNonce = tx.Nonce() + 1
+	return errors.New("nonce too low")
+}
+
+func (b *shutdownWriteOutageBackend) SendTransaction(
+	ctx context.Context,
+	tx *types.Transaction,
+) error {
+	b.mu.Lock()
+	b.sendCalls++
+	call := b.sendCalls
+	b.sent = append(b.sent, tx)
+	b.mu.Unlock()
+	if call == 1 {
+		return nil
+	}
+	b.cancellationOnce.Do(func() { close(b.cancellationStarted) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 type blockingTxSigner struct {
 	signer.Signer
 
@@ -1248,12 +1298,37 @@ type blockingTxSigner struct {
 	once    sync.Once
 }
 
+type shutdownBlockingSigner struct {
+	signer.Signer
+
+	mu                 sync.Mutex
+	calls              int
+	replacementStarted chan struct{}
+	release            <-chan struct{}
+	once               sync.Once
+}
+
 func (s *blockingTxSigner) SignTx(
 	tx *types.Transaction,
 	chainID *big.Int,
 ) (*types.Transaction, error) {
 	s.once.Do(func() { close(s.entered) })
 	<-s.release
+	return s.Signer.SignTx(tx, chainID)
+}
+
+func (s *shutdownBlockingSigner) SignTx(
+	tx *types.Transaction,
+	chainID *big.Int,
+) (*types.Transaction, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call > 1 {
+		s.once.Do(func() { close(s.replacementStarted) })
+		<-s.release
+	}
 	return s.Signer.SignTx(tx, chainID)
 }
 
@@ -1339,6 +1414,138 @@ func successfulReceipt(tx *types.Transaction, block uint64) *types.Receipt {
 
 func receiptTestHeader(block uint64) *types.Header {
 	return forkedReceiptHeader(block, "")
+}
+
+func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing.T) {
+	b := &replacementNonceRaceBackend{
+		mockBackend:         newMockBackend(),
+		publishOwnedReceipt: true,
+	}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{
+			Confirmations:       2,
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: 10 * time.Millisecond,
+		},
+		logr.Discard(),
+	)
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "inclusion race",
+	})
+	if err != nil {
+		t.Fatalf("initial broadcast: %v", err)
+	}
+
+	m.tryReplace(t.Context(), pending, false)
+	if !m.Available() {
+		t.Fatal("owned canonical inclusion paused the nonce lane")
+	}
+	select {
+	case <-m.AvailabilityChanged():
+		t.Fatal("owned canonical inclusion published a pause edge")
+	default:
+	}
+
+	b.mu.Lock()
+	b.head = 102
+	b.mu.Unlock()
+	got, done := m.receiptResult(t.Context(), pending)
+	if !done || got.Err != nil || got.Receipt == nil {
+		t.Fatalf("confirmed receipt outcome = (%+v, %v)", got, done)
+	}
+}
+
+func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
+	b := &replacementNonceRaceBackend{mockBackend: newMockBackend()}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{ReplacementInterval: 10 * time.Millisecond}, logr.Discard(),
+	)
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "unresolved replacement",
+	})
+	if err != nil {
+		t.Fatalf("initial broadcast: %v", err)
+	}
+
+	m.tryReplace(t.Context(), pending, false)
+	if m.Available() {
+		t.Fatal("unexplained nonce consumption left the nonce lane available")
+	}
+	select {
+	case <-m.AvailabilityChanged():
+	case <-time.After(time.Second):
+		t.Fatal("unexplained nonce consumption did not publish a pause edge")
+	}
+	if len(pending.attempts) != 2 || pending.nonceConflictHash != pending.attempts[1].hash {
+		t.Fatalf("pending conflict evidence = %+v", pending)
+	}
+}
+
+func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T) {
+	b := &replacementNonceRaceBackend{mockBackend: newMockBackend()}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
+	)
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "delayed inclusion race",
+	})
+	if err != nil {
+		t.Fatalf("initial broadcast: %v", err)
+	}
+	m.tryReplace(t.Context(), pending, false)
+	if m.Available() {
+		t.Fatal("replacement nonce conflict did not pause the lane")
+	}
+	select {
+	case <-m.AvailabilityChanged():
+	case <-time.After(time.Second):
+		t.Fatal("replacement nonce conflict did not publish a pause edge")
+	}
+
+	original := pending.attempts[0]
+	b.mu.Lock()
+	b.receipts[original.hash] = successfulReceipt(original.tx, b.head)
+	b.mu.Unlock()
+	type receiptOutcome struct {
+		result Result
+		done   bool
+	}
+	result := make(chan receiptOutcome, 1)
+	go func() {
+		got, done := m.receiptResult(t.Context(), pending)
+		result <- receiptOutcome{result: got, done: done}
+	}()
+	select {
+	case <-m.AvailabilityChanged():
+		if !m.Available() {
+			t.Fatal("canonical tracked receipt did not resume the lane")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delayed canonical receipt did not publish a resume edge")
+	}
+
+	b.mu.Lock()
+	delete(b.receipts, original.hash)
+	b.mu.Unlock()
+	select {
+	case got := <-result:
+		if got.done {
+			t.Fatalf("reorged receipt completed the lifecycle: %+v", got.result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("receipt disappearance did not resume pending reconciliation")
+	}
+	select {
+	case <-m.AvailabilityChanged():
+		if m.Available() {
+			t.Fatal("receipt reorg did not restore the nonce conflict")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("receipt reorg did not publish a pause edge")
+	}
 }
 
 func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
@@ -1642,6 +1849,7 @@ func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 			PollInterval:        time.Millisecond,
 			ReplacementInterval: time.Hour,
 			PendingTimeout:      time.Hour,
+			ShutdownTimeout:     time.Second,
 		},
 		logr.Discard(),
 	)
@@ -1702,6 +1910,198 @@ func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 	case <-startDone:
 	case <-time.After(time.Second):
 		t.Fatal("transaction manager did not finish draining")
+	}
+}
+
+func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
+	receiptGate := make(chan struct{})
+	b := &acceptedThenNonceLowBackend{mockBackend: newMockBackend(), receiptGate: receiptGate}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: time.Hour,
+			PendingTimeout:      time.Hour,
+			ShutdownTimeout:     20 * time.Millisecond,
+		},
+		logr.Discard(),
+	)
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	startDone := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(startDone)
+	}()
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "shutdown conflict",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	select {
+	case <-m.AvailabilityChanged():
+	case <-time.After(time.Second):
+		t.Fatal("initial nonce conflict did not pause the lane")
+	}
+	cancelManager()
+
+	select {
+	case got := <-result:
+		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) {
+			t.Fatalf("bounded conflict result = %+v, want shutdown deadline with tracked hash", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unresolved nonce conflict exceeded the shutdown bound")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not return after the conflict drain deadline")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sendCalls != 1 {
+		t.Fatalf("broadcast calls = %d, want no unsafe cancellation during conflict", b.sendCalls)
+	}
+}
+
+func TestStartCancelBoundsCancellationWriteOutage(t *testing.T) {
+	b := &shutdownWriteOutageBackend{
+		mockBackend:         newMockBackend(),
+		cancellationStarted: make(chan struct{}),
+	}
+	sgnr := mustSigner(t)
+	m := New(
+		b, sgnr, big.NewInt(11155111),
+		Config{
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: time.Hour,
+			PendingTimeout:      time.Hour,
+			ShutdownTimeout:     20 * time.Millisecond,
+		},
+		logr.Discard(),
+	)
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	startDone := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(startDone)
+	}()
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "shutdown write outage",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	waitForSentTransactions(t, b.mockBackend, 1)
+	cancelManager()
+	select {
+	case <-b.cancellationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not attempt same-nonce cancellation")
+	}
+
+	select {
+	case got := <-result:
+		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) {
+			t.Fatalf("bounded write-outage result = %+v, want shutdown deadline with tracked hash", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write outage exceeded the shutdown bound")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not return after cancelling the blocked write RPC")
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sendCalls != 2 {
+		t.Fatalf("broadcast calls = %d, want initial fill plus one cancellation", b.sendCalls)
+	}
+	cancellation := b.sent[1]
+	if cancellation.To() == nil || *cancellation.To() != sgnr.Address() ||
+		len(cancellation.Data()) != 0 || cancellation.Value().Sign() != 0 {
+		t.Fatalf("shutdown replacement is not a self-cancellation: %+v", cancellation)
+	}
+}
+
+func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSigner := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseSigner)
+
+	baseSigner := mustSigner(t)
+	s := &shutdownBlockingSigner{
+		Signer:             baseSigner,
+		replacementStarted: make(chan struct{}),
+		release:            release,
+	}
+	b := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: baseSigner.Address()}
+	m := New(
+		b, s, big.NewInt(11155111),
+		Config{
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: time.Hour,
+			PendingTimeout:      time.Hour,
+			ShutdownTimeout:     20 * time.Millisecond,
+		},
+		logr.Discard(),
+	)
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	startDone := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(startDone)
+	}()
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "blocked shutdown signer",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	waitForSentTransactions(t, b.mockBackend, 1)
+	cancelManager()
+	select {
+	case <-s.replacementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown cancellation did not reach the signer")
+	}
+
+	select {
+	case got := <-result:
+		if !errors.Is(got.Err, errShutdownTimeout) || got.Hash == (common.Hash{}) {
+			t.Fatalf("blocked-signer result = %+v, want tracked shutdown timeout", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked signer prevented the accepted caller from completing")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked signer kept the transaction manager alive past its shutdown bound")
+	}
+
+	releaseSigner()
+	lifecycleDone := make(chan struct{})
+	go func() {
+		m.lifecycleWG.Wait()
+		close(lifecycleDone)
+	}()
+	select {
+	case <-lifecycleDone:
+	case <-time.After(time.Second):
+		t.Fatal("released signer did not let the detached lifecycle finish")
+	}
+	select {
+	case extra := <-result:
+		t.Fatalf("accepted caller received a second terminal result: %+v", extra)
+	default:
 	}
 }
 

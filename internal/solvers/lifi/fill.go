@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -18,6 +19,7 @@ var lifiExecutor = executor.NewLiquidLaneLifiExecutor()
 type fillCalldata struct {
 	OrderID  common.Hash
 	Finalise []byte
+	Deadline time.Time
 }
 
 func buildExecutorRoutes(
@@ -112,6 +114,10 @@ func buildFillCalldata(
 	if err != nil {
 		return nil, err
 	}
+	deadline, err := lifiFillDeadline(order, plan, resolvedDiscounts)
+	if err != nil {
+		return nil, err
+	}
 	finaliseCalldata, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp(
 		toExecutorOrder(order.Order),
 		directRoutes,
@@ -120,7 +126,57 @@ func buildFillCalldata(
 	if err != nil {
 		return nil, errors.Errorf("pack finaliseWithCurrentTimestamp: %w", err)
 	}
-	return &fillCalldata{OrderID: orderID, Finalise: finaliseCalldata}, nil
+	return &fillCalldata{OrderID: orderID, Finalise: finaliseCalldata, Deadline: deadline}, nil
+}
+
+func lifiFillDeadline(
+	order submittedOrder,
+	plan *types.FillPlan,
+	resolvedDiscounts map[common.Hash]*discounts.Signed,
+) (time.Time, error) {
+	deadline := earlierDeadline(
+		unixDeadline(int64(order.Order.Expires)),
+		unixDeadline(int64(order.Order.FillDeadline)),
+	)
+	for i, route := range plan.Routes {
+		if route.DiscountID == nil {
+			continue
+		}
+		resolved := resolvedDiscounts[*route.DiscountID]
+		if resolved == nil || resolved.Terms.Deadline == nil || resolved.ProtocolDeadline == nil {
+			return time.Time{}, errors.Errorf("fill plan route %d discount is missing deadlines", i)
+		}
+		if resolved.Terms.Deadline.Sign() <= 0 || !resolved.Terms.Deadline.IsInt64() ||
+			resolved.ProtocolDeadline.Sign() <= 0 || !resolved.ProtocolDeadline.IsInt64() {
+			return time.Time{}, errors.Errorf("fill plan route %d discount has invalid deadline", i)
+		}
+		deadline = earlierDeadline(deadline, discounts.ValidUntil(resolved))
+	}
+	return deadline, nil
+}
+
+func orderDeadline(order *submittedOrder) time.Time {
+	if order == nil {
+		return time.Time{}
+	}
+	return earlierDeadline(
+		unixDeadline(int64(order.Order.Expires)),
+		unixDeadline(int64(order.Order.FillDeadline)),
+	)
+}
+
+func unixDeadline(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
+}
+
+func earlierDeadline(left, right time.Time) time.Time {
+	if left.IsZero() || !right.IsZero() && right.Before(left) {
+		return right
+	}
+	return left
 }
 
 func toExecutorOutput(output inputsettler.MandateOutput) executor.MandateOutput {

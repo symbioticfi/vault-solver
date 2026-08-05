@@ -73,6 +73,8 @@ type TxManagerConfig struct {
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
+	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
+	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -88,6 +90,7 @@ const DefaultConfirmations = 2
 const (
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
+	DefaultShutdownTimeoutMs     = 60_000
 )
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
@@ -134,6 +137,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TxManager.PendingTimeoutMs == 0 {
 		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
+	}
+	if c.TxManager.ShutdownTimeoutMs == 0 {
+		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
 	}
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
@@ -196,6 +202,9 @@ func (c TxManagerConfig) validate(required bool) error {
 	}
 	if c.PendingTimeoutMs < c.ReplacementIntervalMs {
 		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
+	}
+	if c.ShutdownTimeoutMs <= 0 {
+		return errors.New("txManager.shutdownTimeoutMs must be positive")
 	}
 	return nil
 }

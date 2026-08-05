@@ -116,8 +116,9 @@ fresh-fee timeout falls back to bumping the last signed fees. Solvers **never** 
 calldata (packed via the abigen ABI, e.g.
 `adapter.PackMulticall(finalizeRequest…)`) and receive a `txmanager.Result`. Serializing the complete
 lifecycle eliminates parallel-nonce races and prevents later calldata from being signed behind a
-missing lower nonce. Shutdown joins the active replacement/cancellation drain before the RPC clients
-are closed.
+missing lower nonce. Shutdown joins a healthy active replacement/cancellation drain before the RPC
+clients are closed. At `shutdownTimeoutMs`, it instead returns a terminal deadline result and lets
+process teardown close RPC without waiting on a stuck dependency.
 
 > The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
 > current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
@@ -159,7 +160,7 @@ the chosen solver decodes it into its own typed struct.
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei, replacementIntervalMs, pendingTimeoutMs }
+txManager: { confirmations: 2, maxFeeGwei, tipGwei, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
@@ -304,7 +305,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
-2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
+2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, bounded graceful shutdown.
 3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),

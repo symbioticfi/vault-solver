@@ -125,7 +125,8 @@ assertion because the PR19 ABI has no getter.
 - **`Run(ctx)`** binds the UniswapX quote listener before starting the `GET /orders` and fill loops. A later
   server failure is reported through `ReportFatal`, which cancels the process runtime and drops global
   readiness so the shared txmanager starts shutdown immediately. Cancellation stops new fill admission;
-  queued orders are released without signing, while accepted transaction results drain before `Run` returns.
+  queued orders are released without signing, while accepted transaction results drain within the configured
+  shutdown budget before `Run` returns.
   The framework observability server (`:9090`) stays separate.
 - **The quote server is a bounded strict-JSON stdlib handler.** The public quote schema is not available in
   the order-service OpenAPI and remains a hand-vendored, tested boundary (§4.1, §4.3).
@@ -138,7 +139,9 @@ assertion because the PR19 ABI has no getter.
   deadline without extending the remaining validity, and also bounds the pre-sign wait. The wall-clock
   observation anchor is captured before the chain-time RPC so lookup and planning latency consume, rather
   than extend, the remaining validity. The active lifecycle is replaced by a same-nonce cancellation on
-  expiry or shutdown and drained to a terminal result.
+  expiry or, when nonce ownership is not conflicted, shutdown, and drained to a terminal result. Shutdown
+  stops waiting after `shutdownTimeoutMs`, cancels outstanding RPC work, and returns a deadline error so
+  SIGTERM cannot hang indefinitely; the deployment grace period must be longer than that bound.
 - **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
   floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
   median p75 priority reward from the latest five blocks, also clamped to headroom, and fails new submissions
@@ -151,9 +154,13 @@ assertion because the PR19 ABI has no getter.
   ceiling but never the global ceiling. Startup rejects a configured positive tip floor that cannot fit
   beneath the initial cap after both reserved bumps.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
-  re-signed at another nonce. A consumed/colliding nonce pauses further sends, quotes, and readiness until an
-  exact attempt has a canonical receipt at the configured confirmation depth; unresolved ownership stays
-  fail-closed. Each confirmation check requires a stable head and proves that the receipt block is in its
+  re-signed at another nonce. A consumed/colliding nonce is reconciled against every exact attempt. During a
+  replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
+  ownership immediately, so readiness can resume while the single lifecycle still holds admission through
+  its configured confirmation depth. Initial-broadcast collisions, and replacements without an owned
+  canonical receipt, keep further sends, quotes, and readiness fail-closed until terminal reconciliation or
+  operator action; a later receipt reorg restores the pause. Each confirmation check proves that the receipt
+  block is in the stable head's
   ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
   or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
   read fallbacks. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
@@ -207,6 +214,7 @@ txManager:
   tipGwei: 0
   replacementIntervalMs: 5000
   pendingTimeoutMs: 300000
+  shutdownTimeoutMs: 60000
 
 solvers:
   - name: uniswapx-filler

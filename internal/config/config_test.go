@@ -40,7 +40,8 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
 	if cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
-		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs {
+		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs ||
+		cfg.TxManager.ShutdownTimeoutMs != DefaultShutdownTimeoutMs {
 		t.Fatalf("unexpected tx replacement defaults: %+v", cfg.TxManager)
 	}
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
@@ -284,6 +285,12 @@ solvers: [{name: x}]
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, replacementIntervalMs: 30000, pendingTimeoutMs: 10000}
+solvers: [{name: x}]
+`,
+		"negative shutdown timeout": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, shutdownTimeoutMs: -1}
 solvers: [{name: x}]
 `,
 	}

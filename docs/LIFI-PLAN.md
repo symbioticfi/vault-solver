@@ -435,9 +435,13 @@ signatures under one order-server timeout, then re-reads latest-state LiquidLane
 time before each strategy decision. That decision-time max fee is a hard per-request cap. Before signing,
 txmanager recomputes current fees and rejects the fill if base fee plus the selected priority fee cannot fit
 while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
-Pending calls are bumped within the request cap. After the shared pending timeout, txmanager replaces the call
-with a same-nonce self-transfer; cancellation may exceed the profitability cap but not the operator's global
-`txManager.maxFeeGwei`. LI.FI releases the reservation on the terminal txmanager result. A receipted fill,
+Pending calls are bumped within the request cap. `CancelAt` is the earliest non-zero order expiry, fill
+deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
+chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
+cannot extend validity; it also bounds a wait behind another active lifecycle. With no deadline, the global
+pending timeout remains the bound. At either bound, txmanager replaces the call with a same-nonce self-transfer;
+cancellation may exceed the profitability cap but not the operator's global `txManager.maxFeeGwei`. LI.FI
+releases the reservation on the terminal txmanager result. A receipted fill,
 revert, or cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast
 failure does not.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the

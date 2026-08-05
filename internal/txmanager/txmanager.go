@@ -50,6 +50,7 @@ type Config struct {
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
 	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
+	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -79,16 +80,20 @@ type feeQuote struct {
 }
 
 type pendingTransaction struct {
-	req             Request
-	nonce           uint64
-	gas             uint64
-	value           *big.Int
-	fees            feeQuote
-	attempts        []txAttempt
-	receiptCursor   int
-	cancelDeadline  time.Time
-	cancelRequested chan struct{}
-	cancelOnce      sync.Once
+	req               Request
+	nonce             uint64
+	gas               uint64
+	value             *big.Int
+	fees              feeQuote
+	attempts          []txAttempt
+	receiptCursor     int
+	nonceConflictHash common.Hash
+	originalHash      common.Hash
+	result            chan<- Result
+	resultOnce        sync.Once
+	cancelDeadline    time.Time
+	cancelRequested   chan struct{}
+	cancelOnce        sync.Once
 }
 
 type txAttempt struct {
@@ -134,6 +139,7 @@ const (
 	defaultPollInterval        = 2 * time.Second
 	defaultReplacementInterval = 30 * time.Second
 	defaultPendingTimeout      = 5 * time.Minute
+	defaultShutdownTimeout     = time.Minute
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
 	maxBroadcastTimeout        = 3 * time.Second
@@ -150,6 +156,7 @@ var (
 	errReceiptReorged          = errors.New("transaction receipt reorged")
 	errNonceLanePaused         = errors.New("transaction manager nonce lane paused")
 	errManagerStopped          = errors.New("transaction manager stopped")
+	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
 )
 
 // New constructs a Manager. Call Start to launch its worker.
@@ -162,6 +169,9 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	}
 	if cfg.PendingTimeout <= 0 {
 		cfg.PendingTimeout = defaultPendingTimeout
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
 	return &Manager{
 		backend:            backend,
@@ -197,7 +207,7 @@ func (m *Manager) ValidateFeeHeadroom() error {
 
 // Available reports whether new logical transactions may enter the nonce lane. A nonce conflict
 // pauses new work and further sends for the active lifecycle while exact signed hashes are polled.
-// A benign inclusion race resumes after its exact receipt is confirmed; an unresolved conflict
+// A benign inclusion race resumes once its exact receipt is proven canonical; an unresolved conflict
 // remains fail-closed for operator investigation instead of replaying calldata at another nonce.
 func (m *Manager) Available() bool {
 	m.mu.Lock()
@@ -221,15 +231,33 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	return m.initializeNonceLocked(ctx)
 }
 
-// Start admits one signed lifecycle at a time. On cancellation, the active lifecycle is cancelled
-// and drained before the worker returns.
+// Start admits one signed lifecycle at a time. On cancellation, the active lifecycle is asked to
+// cancel and drain. Once ShutdownTimeout elapses, its context is cancelled, its caller receives a
+// terminal deadline result, and the worker returns without waiting on a stuck dependency.
 func (m *Manager) Start(ctx context.Context) {
 	m.log.Info("started", "from", m.signer.Address().Hex())
-	lifecycleCtx := context.WithoutCancel(ctx)
+	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
+	defer cancelLifecycle(errManagerStopped)
 	stop := func(reason error) {
 		close(m.stopping)
 		m.requestActiveCancellation()
-		m.lifecycleWG.Wait()
+		drained := make(chan struct{})
+		go func() {
+			m.lifecycleWG.Wait()
+			close(drained)
+		}()
+		timer := time.NewTimer(m.cfg.ShutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-drained:
+		case <-timer.C:
+			m.log.Error(errShutdownTimeout, "transaction lifecycle drain deadline reached",
+				"timeout", m.cfg.ShutdownTimeout.String(),
+			)
+			cancelLifecycle(errShutdownTimeout)
+			m.deliverActiveShutdownTimeout()
+			reason = errShutdownTimeout
+		}
 		m.log.Info("stopped", "reason", reason.Error())
 	}
 	for {
@@ -255,10 +283,11 @@ func (m *Manager) Start(ctx context.Context) {
 				m.releaseLifecycleSlot()
 				continue
 			}
+			pending.result = j.res
 			m.trackUnminedTransaction(pending)
 			m.lifecycleWG.Go(func() {
 				defer m.releaseLifecycleSlot()
-				m.complete(lifecycleCtx, pending, j.res)
+				m.complete(lifecycleCtx, pending)
 			})
 		}
 	}
@@ -439,22 +468,37 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
-		req:      req,
-		nonce:    nonce,
-		gas:      gas,
-		value:    new(big.Int).Set(value),
-		fees:     cloneFeeQuote(fees),
-		attempts: []txAttempt{{hash: hash, tx: signed}},
+		req:          req,
+		nonce:        nonce,
+		gas:          gas,
+		value:        new(big.Int).Set(value),
+		fees:         cloneFeeQuote(fees),
+		attempts:     []txAttempt{{hash: hash, tx: signed}},
+		originalHash: hash,
 	}, nil
 }
 
-func (m *Manager) complete(ctx context.Context, pending *pendingTransaction, result chan<- Result) {
+func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	defer m.removeUnminedTransaction(pending)
 	outcome := m.waitForPendingTransaction(ctx, pending)
+	if errors.Is(outcome.Err, errShutdownTimeout) {
+		m.log.Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
+			"label", pending.req.Label,
+			"nonce", pending.nonce,
+			"hashes", attemptHashStrings(pending.attempts),
+		)
+	}
 	if outcome.Receipt != nil {
 		m.clearNonceConflict(pending.nonce)
 	}
-	result <- outcome
+	pending.deliver(outcome)
+}
+
+func (pending *pendingTransaction) deliver(result Result) {
+	if pending.result == nil {
+		return
+	}
+	pending.resultOnce.Do(func() { pending.result <- result })
 }
 
 func (m *Manager) confirmations(req Request) uint64 {
@@ -479,7 +523,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		}
 		select {
 		case <-ctx.Done():
-			return Result{Hash: pending.attempts[0].hash, Err: ctx.Err()}
+			return Result{Hash: pending.attempts[0].hash, Err: context.Cause(ctx)}
 		case <-pending.cancelRequested:
 			cancelling = true
 			m.tryReplace(ctx, pending, true)
@@ -537,9 +581,23 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 			continue
 		}
 		cancelLookup()
+		if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
+			if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
+				m.log.Error(err, "owned receipt cannot reconcile nonce conflict",
+					"label", pending.req.Label,
+					"hash", attempt.hash.Hex(),
+					"nonce", pending.nonce,
+				)
+				continue
+			}
+			m.clearNonceConflict(pending.nonce)
+		}
 		confirmations := m.confirmations(pending.req)
 		receipt, err = m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
 		if errors.Is(err, errReceiptReorged) {
+			if pending.nonceConflictHash != (common.Hash{}) {
+				m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
+			}
 			m.log.Info("transaction inclusion reorged; resuming pending lifecycle",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
@@ -634,6 +692,10 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation,
 	})
+	if isNonceConsumedError(sendErr) {
+		pending.nonceConflictHash = hash
+		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
 	if sendErr != nil {
 		m.log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash",
 			"label", pending.req.Label,
@@ -664,6 +726,10 @@ func (m *Manager) rebroadcastLatestAttempt(
 			continue
 		}
 		err := m.sendSigned(ctx, attempt.tx, true)
+		if isNonceConsumedError(err) {
+			pending.nonceConflictHash = attempt.hash
+			m.reconcileExistingLifecycleNonce(ctx, pending)
+		}
 		if err != nil {
 			m.log.Error(err, "capped transaction rebroadcast failed",
 				"label", pending.req.Label,
@@ -775,6 +841,15 @@ func (m *Manager) requestActiveCancellation() {
 	defer m.unminedMu.Unlock()
 	if m.unmined != nil {
 		requestCancellation(m.unmined)
+	}
+}
+
+func (m *Manager) deliverActiveShutdownTimeout() {
+	m.unminedMu.Lock()
+	pending := m.unmined
+	m.unminedMu.Unlock()
+	if pending != nil {
+		pending.deliver(Result{Hash: pending.originalHash, Err: errShutdownTimeout})
 	}
 }
 
@@ -939,10 +1014,58 @@ func (m *Manager) sendSigned(
 	sendCtx, cancel := context.WithTimeout(ctx, m.broadcastTimeout())
 	defer cancel()
 	err := m.backend.SendTransaction(sendCtx, signed)
-	if isNonceConsumedError(err) || (!existingLifecycle && isPendingNonceCollision(err)) {
+	if !existingLifecycle && (isNonceConsumedError(err) || isPendingNonceCollision(err)) {
 		m.markNonceConflict(signed.Nonce(), signed.Hash())
 	}
 	return err
+}
+
+// reconcileExistingLifecycleNonce distinguishes the benign race where one of this lifecycle's
+// exact signed attempts was included just before a replacement from unexplained nonce consumption.
+// Only a receipt proven canonical against a stable head can resume the lane.
+func (m *Manager) reconcileExistingLifecycleNonce(ctx context.Context, pending *pendingTransaction) {
+	if m.hasCanonicalTrackedReceipt(ctx, pending) {
+		m.clearNonceConflict(pending.nonce)
+		return
+	}
+	m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
+}
+
+func (m *Manager) hasCanonicalTrackedReceipt(ctx context.Context, pending *pendingTransaction) bool {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	for _, attempt := range pending.attempts {
+		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
+		if errors.Is(err, ethereum.NotFound) {
+			continue
+		}
+		if err != nil {
+			m.log.Error(err, "tracked receipt unavailable during nonce reconciliation",
+				"label", pending.req.Label,
+				"hash", attempt.hash.Hex(),
+				"nonce", pending.nonce,
+			)
+			continue
+		}
+		if err := validateReceipt(attempt.hash, receipt); err != nil {
+			m.log.Error(err, "invalid tracked receipt during nonce reconciliation",
+				"label", pending.req.Label,
+				"hash", attempt.hash.Hex(),
+				"nonce", pending.nonce,
+			)
+			continue
+		}
+		if err := m.confirmCanonicalReceipt(lookupCtx, receipt); err != nil {
+			m.log.Error(err, "tracked receipt is not canonically visible during nonce reconciliation",
+				"label", pending.req.Label,
+				"hash", attempt.hash.Hex(),
+				"nonce", pending.nonce,
+			)
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // isDefiniteBroadcastRejection is intentionally narrow. Once bytes have been signed and submitted,
@@ -1128,7 +1251,7 @@ func (m *Manager) waitForConfirmations(
 		}
 		select {
 		case <-ctx.Done():
-			return receipt, ctx.Err()
+			return receipt, context.Cause(ctx)
 		case <-ticker.C:
 		}
 	}
@@ -1161,6 +1284,24 @@ func (m *Manager) confirmationReceipt(ctx context.Context, hash common.Hash) (*t
 		return nil, err
 	}
 	return receipt, nil
+}
+
+func (m *Manager) confirmCanonicalReceipt(ctx context.Context, receipt *types.Receipt) error {
+	headBefore, err := m.confirmationHead(ctx)
+	if err != nil {
+		return errors.Errorf("confirmation head before ancestry check: %w", err)
+	}
+	if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
+		return err
+	}
+	headAfter, err := m.confirmationHead(ctx)
+	if err != nil {
+		return errors.Errorf("confirmation head after ancestry check: %w", err)
+	}
+	if headBefore.Hash() != headAfter.Hash() {
+		return errors.New("confirmation head changed during ancestry check")
+	}
+	return nil
 }
 
 func (m *Manager) confirmReceiptAncestry(
@@ -1267,6 +1408,14 @@ func feeLimitString(limit *big.Int) string {
 		return "unbounded"
 	}
 	return limit.String()
+}
+
+func attemptHashStrings(attempts []txAttempt) []string {
+	hashes := make([]string, len(attempts))
+	for i, attempt := range attempts {
+		hashes[i] = attempt.hash.Hex()
+	}
+	return hashes
 }
 
 func gweiToWei(gwei float64) *big.Int {

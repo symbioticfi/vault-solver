@@ -260,6 +260,13 @@ submissions are neither accepted nor signed until the active lifecycle has a ter
 previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
 the request's earlier deadline), replacements switch to a same-nonce cancellation.
 
+On shutdown, new admission stops immediately and the manager requests same-nonce cancellation when
+nonce ownership is not conflicted. It keeps draining exact signed attempts for at most
+`shutdownTimeoutMs`; if no terminal receipt is available by then, callers receive a shutdown-deadline
+error and the process exits instead of hanging indefinitely. Configure the orchestrator's SIGTERM
+grace longer than this value. The packaged Docker Compose profile uses a 70-second grace with the
+examples' 60-second drain bound.
+
 The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation. Normal transactions
 stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump
 inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
@@ -326,11 +333,14 @@ fail-closed for operator investigation; automatic restart does not recover the l
 For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
 the EOA back.
 
-At runtime, a post-signing `nonce too low` pauses new transactions and readiness while `txManager`
-checks every exact signed attempt. A confirmed receipt for one of those hashes resumes the lane;
-otherwise the conflict remains fail-closed for operator investigation. The calldata is not re-signed
-at another nonce solely from that response. LiquidLane state reads always use RPC `latest`; an archive
-node is not required.
+At runtime, a post-signing `nonce too low` makes `txManager` check every exact signed attempt. During a
+replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
+ownership immediately, so a normal replacement-versus-inclusion race does not keep readiness down while
+confirmations accumulate. An initial-broadcast collision, or a replacement with no owned canonical
+receipt, keeps new transactions and readiness paused until terminal reconciliation or operator action; a
+later receipt reorg restores that pause. The calldata is not re-signed at another nonce solely from that
+response. LiquidLane state reads always use RPC `latest`; an archive node is not required.
+
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
 interface; `*.local.*` and `.env` are gitignored.
 

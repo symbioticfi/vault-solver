@@ -3,6 +3,7 @@ package lifi
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -18,6 +19,8 @@ func (s *Solver) submitFill(
 	plan *types.FillPlan,
 	calldata *fillCalldata,
 	maxFeePerGas *big.Int,
+	chainTime time.Time,
+	chainObservedAt time.Time,
 ) *pendingFill {
 	reservations, ok := fillPlanReservations(plan)
 	if !ok {
@@ -36,10 +39,26 @@ func (s *Solver) submitFill(
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil
 	}
+	var cancelAt time.Time
+	if !calldata.Deadline.IsZero() {
+		var deadlineValid bool
+		cancelAt, deadlineValid = liquidlane.CancellationDeadline(
+			calldata.Deadline,
+			chainTime,
+			chainObservedAt,
+			s.wallNow(),
+		)
+		if !deadlineValid {
+			s.log.Info("order skipped: execution deadline elapsed before submission",
+				"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
+				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix())
+			return nil
+		}
+	}
 	reservationKey := calldata.OrderID.Hex()
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
 		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: new(big.Int).Set(maxFeePerGas),
-		Label: "lifi-fill",
+		CancelAt: cancelAt, Label: "lifi-fill",
 	})
 	if !accepted {
 		s.log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
