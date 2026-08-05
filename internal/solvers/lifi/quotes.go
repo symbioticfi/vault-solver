@@ -50,7 +50,7 @@ func (s *Solver) quoteLoop(
 ) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
-	availabilityChanges, unsubscribe := s.subscribeTransactionAvailability()
+	laneStateChanges, unsubscribe := s.subscribeTransactionLaneState()
 	defer unsubscribe()
 
 	state := newQuoteState(max(s.cfg.QuoteInterval, s.cfg.QuoteTTL/3))
@@ -76,7 +76,7 @@ func (s *Solver) quoteLoop(
 			stopOnShutdown := context.AfterFunc(ctx, stopConnected)
 			//nolint:contextcheck // connectedCtx is cancelled by either the feed connection or quote-loop context.
 			s.runConnectedQuoteLoop(
-				connectedCtx, routes, refresh, ticker.C, availabilityChanges, state, &lastBlock,
+				connectedCtx, routes, refresh, ticker.C, laneStateChanges, state, &lastBlock,
 			)
 			_ = stopOnShutdown()
 			stopConnected()
@@ -88,7 +88,7 @@ func (s *Solver) quoteLoop(
 			s.suspendQuotes(ctx, state)
 		case <-ticker.C:
 			s.suspendQuotes(ctx, state)
-		case <-availabilityChanges:
+		case <-laneStateChanges:
 			// A coalesced signal may represent pause followed by resume. Always retire any curve
 			// first so a missed intermediate state cannot leave a pre-pause commitment live.
 			s.suspendQuotes(ctx, state)
@@ -101,7 +101,7 @@ func (s *Solver) runConnectedQuoteLoop(
 	routes []route,
 	refresh <-chan struct{},
 	ticks <-chan time.Time,
-	availabilityChanges <-chan struct{},
+	laneStateChanges <-chan struct{},
 	state *quoteState,
 	lastBlock *uint64,
 ) {
@@ -116,11 +116,11 @@ func (s *Solver) runConnectedQuoteLoop(
 			if s.shouldRefreshQuotes(ctx, state, lastBlock) {
 				s.refreshQuotes(ctx, routes, state)
 			}
-		case <-availabilityChanges:
+		case <-laneStateChanges:
 			// Signals are deliberately coalesced. Retire the current curve even when the latest
-			// state is already available, then republish from fresh state below.
+			// state is already ready, then republish from fresh state below.
 			s.suspendQuotes(ctx, state)
-			if s.transactionLaneAvailable() {
+			if s.transactionLaneReady() {
 				state.forceRenewal()
 				s.refreshQuotes(ctx, routes, state)
 			}
@@ -128,15 +128,15 @@ func (s *Solver) runConnectedQuoteLoop(
 	}
 }
 
-func (s *Solver) transactionLaneAvailable() bool {
-	return s.txAvailability != nil && s.txAvailability.Available()
+func (s *Solver) transactionLaneReady() bool {
+	return s.txLaneState != nil && s.txLaneState.LaneReady()
 }
 
-func (s *Solver) subscribeTransactionAvailability() (<-chan struct{}, func()) {
-	if s.txAvailability == nil {
+func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
+	if s.txLaneState == nil {
 		return nil, func() {}
 	}
-	return s.txAvailability.SubscribeAvailability()
+	return s.txLaneState.SubscribeLaneState()
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
@@ -178,7 +178,7 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
-	if !s.transactionLaneAvailable() {
+	if !s.transactionLaneReady() {
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -221,7 +221,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if len(out.Quotes) == 0 {
 		s.log.V(1).Info("quote refresh: strategy produced no quotes", "routes", len(inventory))
 	}
-	if !s.transactionLaneAvailable() {
+	if !s.transactionLaneReady() {
 		s.suspendQuotes(ctx, state)
 		return
 	}

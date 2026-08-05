@@ -165,10 +165,10 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	g, gctx := errgroup.WithContext(runCtx)
 	var background sync.WaitGroup
 	if requiresTxManager {
-		availabilityChanged, unsubscribe := txm.SubscribeAvailability()
+		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
 		background.Go(func() {
 			defer unsubscribe()
-			watchReadiness(gctx, availabilityChanged, txm.Available, health.SetReady)
+			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
 		})
 	}
 	for _, slv := range solvers {
@@ -212,14 +212,14 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 func watchReadiness(
 	ctx context.Context,
-	availabilityChanged <-chan struct{},
-	available func() bool,
+	laneStateChanged <-chan struct{},
+	laneReady func() bool,
 	setReady func(bool),
 ) {
 	for {
 		select {
-		case <-availabilityChanged:
-			setReady(available())
+		case <-laneStateChanged:
+			setReady(laneReady())
 		case <-ctx.Done():
 			setReady(false)
 			return

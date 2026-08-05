@@ -21,12 +21,12 @@ import (
 type quoteService struct {
 	chainID  int64
 	executor common.Address
-	// laneAvailable is safe for concurrent use and reflects whether the shared nonce lane may accept
-	// work. It is checked both before quote planning and after strategy work so a planning pass that
-	// observes a lane pause does not publish a new external commitment.
-	laneAvailable func() bool
-	whitelist     adapterWhitelist // nil disables adapter filtering
-	tokenPolicy   tokenpolicy.Policy
+	// laneReady is safe for concurrent use and reflects whether the shared nonce lane can immediately
+	// accept work. It is sampled before and after quote planning so work is declined whenever either
+	// check observes an occupied or conflicted lane.
+	laneReady   func() bool
+	whitelist   adapterWhitelist // nil disables adapter filtering
+	tokenPolicy tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
 	minAmountsIn map[common.Address]*big.Int
@@ -56,7 +56,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane unavailable", "quoteId", q.QuoteID)
+		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
 		return nil, nil
 	}
 	if parsed == nil {
@@ -102,7 +102,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane became unavailable", "quoteId", q.QuoteID)
+		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
 		return nil, nil
 	}
 
@@ -123,11 +123,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	}, nil
 }
 
-// canQuote fails closed when the availability dependency was not wired. Production construction
+// canQuote fails closed when the lane-state dependency was not wired. Production construction
 // always supplies the txmanager predicate; keeping the nil case closed prevents a future alternate
 // constructor from silently advertising obligations it cannot fill.
 func (qs *quoteService) canQuote() bool {
-	return qs.laneAvailable != nil && qs.laneAvailable()
+	return qs.laneReady != nil && qs.laneReady()
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

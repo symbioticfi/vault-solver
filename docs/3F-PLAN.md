@@ -120,9 +120,10 @@ missing lower nonce. Shutdown joins a healthy active replacement/cancellation dr
 clients are closed. At `shutdownTimeoutMs`, it instead returns a terminal deadline result and lets
 process teardown close RPC without waiting on a stuck dependency.
 
-An unresolved nonce-ownership conflict pauses new 3F commitments: offer discovery exits before chain/API
-planning, and availability is checked again immediately before each `createOffer`. Existing offer tracking,
-auction reconciliation, and redemption continue so the lane pause does not block recovery work.
+An occupied transaction lane or unresolved nonce-ownership conflict pauses new 3F commitments: offer
+discovery exits before chain/API planning, and lane readiness is checked again immediately before each
+`createOffer`. Existing offer tracking, auction reconciliation, and redemption continue so contention does
+not block recovery work.
 
 > The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
 > current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.

@@ -383,7 +383,7 @@ func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error)
 }
 
 func (m *executionTestTxManager) Available() bool { return !m.unavailable }
-func (m *executionTestTxManager) Idle() bool      { return !m.busy }
+func (m *executionTestTxManager) LaneReady() bool { return !m.unavailable && !m.busy }
 
 func (m *executionTestTxManager) SendAsync(
 	_ context.Context,

@@ -277,10 +277,13 @@ submissions are neither accepted nor signed until the active lifecycle has a ter
 previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
 the request's earlier deadline), replacements switch to a same-nonce cancellation.
 
-When nonce ownership becomes uncertain, `txManager` pauses admission and readiness. Once that pause is
-observed, UniswapX and RFQ decline new quotes, LI.FI retires its active standing curves until the lane
-resumes, and 3F stops posting new offers. Reconciliation and already-accepted work continue so the process
-can recover the lane without abandoning tracked transactions.
+The transaction lane is ready for new external commitments only while it has no queued or admitted
+lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
+decline new quotes, LI.FI retires its active standing curves, and 3F stops posting new offers.
+Reconciliation and already-accepted work continue. A normal submission that races a nonce conflict waits
+without signing until exact-hash reconciliation restores the lane, its request deadline expires, or shutdown
+begins; non-blocking admission declines immediately. This lets the process recover without abandoning an
+immutable order that has already been accepted from an upstream protocol.
 
 During graceful shutdown the manager remains alive while solvers stop external commitments and drain
 already-accepted work. The solver drain is bounded by its preparation timeout plus `pendingTimeoutMs`
@@ -360,11 +363,12 @@ the EOA back.
 
 At runtime, a post-signing `nonce too low` makes `txManager` check every exact signed attempt. During a
 replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
-ownership immediately, so a normal replacement-versus-inclusion race does not keep readiness down while
-confirmations accumulate. An initial-broadcast collision, or a replacement with no owned canonical
-receipt, keeps new transactions and readiness paused until terminal reconciliation or operator action; a
-later receipt reorg restores that pause. The calldata is not re-signed at another nonce solely from that
-response. LiquidLane state reads always use RPC `latest`; an archive node is not required.
+ownership immediately. The lane remains non-ready only because that owned lifecycle is still active until
+its confirmation depth is reached, not because ownership is uncertain. An initial-broadcast collision, or a
+replacement with no owned canonical receipt, keeps new transactions and readiness paused until terminal
+reconciliation or operator action; a later receipt reorg restores that pause. The calldata is not re-signed
+at another nonce solely from that response. LiquidLane state reads always use RPC `latest`; an archive node
+is not required.
 
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
 interface; `*.local.*` and `.env` are gitignored.

@@ -62,7 +62,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	quotes, exec := buildServices(
-		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
+		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.LaneReady, quoteStrategy, log,
 	)
 	return &Solver{
 		cfg:  cfg,
@@ -86,7 +86,7 @@ func buildServices(
 	st *store,
 	rdr *reader,
 	txm txSender,
-	laneAvailable func() bool,
+	laneReady func() bool,
 	quoteStrategy types.Strategy,
 	log logr.Logger,
 ) (*quoteService, *executionService) {
@@ -99,16 +99,16 @@ func buildServices(
 	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:       chainID,
-		executor:      cfg.Executor,
-		laneAvailable: laneAvailable,
-		whitelist:     quoteWhitelist,
-		tokenPolicy:   cfg.TokenPolicy,
-		minAmountsIn:  cfg.MinAmountsIn,
-		reader:        rdr,
-		strategy:      quoteStrategy,
-		log:           log,
-		now:           time.Now,
+		chainID:      chainID,
+		executor:     cfg.Executor,
+		laneReady:    laneReady,
+		whitelist:    quoteWhitelist,
+		tokenPolicy:  cfg.TokenPolicy,
+		minAmountsIn: cfg.MinAmountsIn,
+		reader:       rdr,
+		strategy:     quoteStrategy,
+		log:          log,
+		now:          time.Now,
 	}
 	exec := &executionService{
 		chainID:          chainID,

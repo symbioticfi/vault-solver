@@ -31,22 +31,22 @@ func init() {
 }
 
 type Solver struct {
-	cfg            *Config
-	chainID        int64
-	reader         chainReader
-	strategy       types.Strategy
-	caller         common.Address
-	orders         *orderClient
-	feed           *orderFeed
-	txm            txSender
-	log            logr.Logger
-	now            func(context.Context) (time.Time, error)
-	maxFeePerGas   func(context.Context) (*big.Int, error)
-	wallNow        func() time.Time
-	txAvailability transactionAvailability
-	capacity       liquidlane.CapacityLedger
-	quoteRefresh   chan struct{}
-	discounts      discounts.Provider
+	cfg          *Config
+	chainID      int64
+	reader       chainReader
+	strategy     types.Strategy
+	caller       common.Address
+	orders       *orderClient
+	feed         *orderFeed
+	txm          txSender
+	log          logr.Logger
+	now          func(context.Context) (time.Time, error)
+	maxFeePerGas func(context.Context) (*big.Int, error)
+	wallNow      func() time.Time
+	txLaneState  transactionLaneState
+	capacity     liquidlane.CapacityLedger
+	quoteRefresh chan struct{}
+	discounts    discounts.Provider
 }
 
 type chainReader interface {
@@ -72,9 +72,9 @@ type txSender interface {
 	SendAsync(ctx context.Context, req txmanager.Request) (<-chan txmanager.Result, bool)
 }
 
-type transactionAvailability interface {
-	Available() bool
-	SubscribeAvailability() (<-chan struct{}, func())
+type transactionLaneState interface {
+	LaneReady() bool
+	SubscribeLaneState() (<-chan struct{}, func())
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -98,19 +98,19 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	result := &Solver{
-		cfg:            cfg,
-		chainID:        chainID,
-		reader:         reader,
-		strategy:       strategy,
-		caller:         deps.Signer.Address(),
-		orders:         newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
-		feed:           newOrderFeed(cfg.OrderServer.WSURL, apiKey, log),
-		txm:            deps.TxManager,
-		log:            log,
-		now:            reader.latestBlockTime,
-		maxFeePerGas:   deps.TxManager.MaxFeePerGas,
-		wallNow:        time.Now,
-		txAvailability: deps.TxManager,
+		cfg:          cfg,
+		chainID:      chainID,
+		reader:       reader,
+		strategy:     strategy,
+		caller:       deps.Signer.Address(),
+		orders:       newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
+		feed:         newOrderFeed(cfg.OrderServer.WSURL, apiKey, log),
+		txm:          deps.TxManager,
+		log:          log,
+		now:          reader.latestBlockTime,
+		maxFeePerGas: deps.TxManager.MaxFeePerGas,
+		wallNow:      time.Now,
+		txLaneState:  deps.TxManager,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)

@@ -148,7 +148,7 @@ func (r *countingQuoteReader) readQuoteCandidates(
 type laneFlippingStrategy struct {
 	types.Strategy
 
-	available *atomic.Bool
+	ready *atomic.Bool
 }
 
 func (s *laneFlippingStrategy) DecideQuote(
@@ -156,18 +156,18 @@ func (s *laneFlippingStrategy) DecideQuote(
 	input types.QuoteInput,
 ) (types.QuoteOutput, error) {
 	out, err := s.Strategy.DecideQuote(ctx, input)
-	s.available.Store(false)
+	s.ready.Store(false)
 	return out, err
 }
 
-func TestQuoteDeclinesBeforePlanningWhenLaneUnavailable(t *testing.T) {
-	var available atomic.Bool
-	available.Store(false)
+func TestQuoteDeclinesBeforePlanningWhenLaneNotReady(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(false)
 
 	srv := testServer()
 	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	strategy := &countingStrategy{Strategy: srv.quotes.strategy}
-	srv.quotes.laneAvailable = available.Load
+	srv.quotes.laneReady = ready.Load
 	srv.quotes.reader = reader
 	srv.quotes.strategy = strategy
 
@@ -176,21 +176,21 @@ func TestQuoteDeclinesBeforePlanningWhenLaneUnavailable(t *testing.T) {
 		t.Fatalf("quote status = %d, want 204 (body %s)", rr.Code, rr.Body.String())
 	}
 	if reader.calls != 0 || strategy.quoteCalls != 0 {
-		t.Fatalf("unavailable lane performed reader=%d strategy=%d calls, want none", reader.calls, strategy.quoteCalls)
+		t.Fatalf("non-ready lane performed reader=%d strategy=%d calls, want none", reader.calls, strategy.quoteCalls)
 	}
 }
 
-func TestQuoteDeclinesWhenLaneBecomesUnavailableDuringPlanning(t *testing.T) {
-	var available atomic.Bool
-	available.Store(true)
+func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
 
 	srv := testServer()
 	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
-	srv.quotes.laneAvailable = available.Load
+	srv.quotes.laneReady = ready.Load
 	srv.quotes.reader = reader
 	srv.quotes.strategy = &laneFlippingStrategy{
-		Strategy:  srv.quotes.strategy,
-		available: &available,
+		Strategy: srv.quotes.strategy,
+		ready:    &ready,
 	}
 
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())

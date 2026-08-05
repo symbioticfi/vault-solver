@@ -34,12 +34,12 @@ func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
 	}
 }
 
-func TestDiscoverAndOfferSkipsPlanningWhenLaneUnavailable(t *testing.T) {
+func TestDiscoverAndOfferSkipsPlanningWhenLaneNotReady(t *testing.T) {
 	t.Parallel()
 
 	var checks atomic.Int64
 	s := &Solver{
-		laneAvailable: func() bool {
+		laneReady: func() bool {
 			checks.Add(1)
 			return false
 		},
@@ -47,15 +47,15 @@ func TestDiscoverAndOfferSkipsPlanningWhenLaneUnavailable(t *testing.T) {
 		targets: []Target{{Adapter: common.HexToAddress("0x00000000000000000000000000000000000000A0")}},
 	}
 
-	// The nil API and reader make any discovery or chain work fail loudly; an unavailable lane must
+	// The nil API and reader make any discovery or chain work fail loudly; a non-ready lane must
 	// return before touching either while the Run loop remains free to reconcile and redeem elsewhere.
 	s.discoverAndOffer(t.Context())
 	if got := checks.Load(); got != 1 {
-		t.Fatalf("lane availability checks = %d, want one entry check", got)
+		t.Fatalf("lane readiness checks = %d, want one entry check", got)
 	}
 }
 
-func TestSubmitOfferRechecksLaneBeforeEveryAPICall(t *testing.T) {
+func TestSubmitOfferRechecksLaneReadinessBeforeEveryAPICall(t *testing.T) {
 	t.Parallel()
 
 	var requests atomic.Int64
@@ -66,19 +66,19 @@ func TestSubmitOfferRechecksLaneBeforeEveryAPICall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var available atomic.Bool
-	available.Store(true)
+	var ready atomic.Bool
+	ready.Store(true)
 	s := &Solver{
-		api:           newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard()),
-		laneAvailable: available.Load,
+		api:       newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard()),
+		laneReady: ready.Load,
 	}
 
-	submitted, err := s.submitOfferIfAvailable(t.Context(), threef.CreateOfferDto{})
+	submitted, err := s.submitOfferIfLaneReady(t.Context(), threef.CreateOfferDto{})
 	if err != nil || !submitted {
 		t.Fatalf("first submit: submitted=%t err=%v, want submitted", submitted, err)
 	}
-	available.Store(false)
-	submitted, err = s.submitOfferIfAvailable(t.Context(), threef.CreateOfferDto{})
+	ready.Store(false)
+	submitted, err = s.submitOfferIfLaneReady(t.Context(), threef.CreateOfferDto{})
 	if err != nil || submitted {
 		t.Fatalf("paused submit: submitted=%t err=%v, want skipped", submitted, err)
 	}

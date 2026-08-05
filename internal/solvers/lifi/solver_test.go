@@ -110,30 +110,30 @@ type recoveryGateStrategy struct {
 	tokenOut common.Address
 }
 
-type testTransactionAvailability struct {
-	available   func() bool
+type testTransactionLaneState struct {
+	ready       func() bool
 	changes     <-chan struct{}
 	onSubscribe func()
 	unsubscribe func()
 }
 
-func (a *testTransactionAvailability) Available() bool {
-	return a.available()
+func (s *testTransactionLaneState) LaneReady() bool {
+	return s.ready()
 }
 
-func (a *testTransactionAvailability) SubscribeAvailability() (<-chan struct{}, func()) {
-	if a.onSubscribe != nil {
-		a.onSubscribe()
+func (s *testTransactionLaneState) SubscribeLaneState() (<-chan struct{}, func()) {
+	if s.onSubscribe != nil {
+		s.onSubscribe()
 	}
-	unsubscribe := a.unsubscribe
+	unsubscribe := s.unsubscribe
 	if unsubscribe == nil {
 		unsubscribe = func() {}
 	}
-	return a.changes, unsubscribe
+	return s.changes, unsubscribe
 }
 
-func alwaysAvailableTransactionLane() transactionAvailability {
-	return &testTransactionAvailability{available: func() bool { return true }}
+func alwaysReadyTransactionLane() transactionLaneState {
+	return &testTransactionLaneState{ready: func() bool { return true }}
 }
 
 type quoteSubmission struct {
@@ -278,10 +278,10 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 			logr.Discard(),
 		),
 		txm: &fakeLifiTxSender{}, log: logr.Discard(),
-		now:            func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
-		maxFeePerGas:   func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
-		wallNow:        func() time.Time { return time.Unix(wallUnix.Load(), 0) },
-		txAvailability: alwaysAvailableTransactionLane(),
+		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
+		txLaneState:  alwaysReadyTransactionLane(),
 	}
 	done := make(chan error, 1)
 	go func() { done <- solver.Run(ctx) }()
@@ -361,7 +361,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			return big.NewInt(1), nil
 		},
-		txAvailability: alwaysAvailableTransactionLane(),
+		txLaneState: alwaysReadyTransactionLane(),
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	connectionCtx, cancelConnection := context.WithCancel(t.Context())
@@ -389,7 +389,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 	}
 }
 
-func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
+func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.T) {
 	cfg := testLifiConfig()
 	cfg.QuoteRefreshMode = quoteRefreshModeInterval
 	cfg.QuoteInterval = time.Hour
@@ -423,10 +423,10 @@ func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
 	}))
 	defer orderServer.Close()
 
-	var available atomic.Bool
-	available.Store(false)
-	availabilityChanges := make(chan struct{}, 1)
-	availabilitySubscribed := make(chan struct{})
+	var ready atomic.Bool
+	ready.Store(false)
+	laneStateChanges := make(chan struct{}, 1)
+	laneStateSubscribed := make(chan struct{})
 	var unsubscribed atomic.Bool
 	refresh := make(chan struct{}, 1)
 	solver := &Solver{
@@ -440,10 +440,10 @@ func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			return big.NewInt(1), nil
 		},
-		txAvailability: &testTransactionAvailability{
-			available:   available.Load,
-			changes:     availabilityChanges,
-			onSubscribe: func() { close(availabilitySubscribed) },
+		txLaneState: &testTransactionLaneState{
+			ready:       ready.Load,
+			changes:     laneStateChanges,
+			onSubscribe: func() { close(laneStateSubscribed) },
 			unsubscribe: func() {
 				unsubscribed.Store(true)
 			},
@@ -459,35 +459,35 @@ func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
 		done <- solver.quoteLoop(ctx, nil, refresh, feedConnections)
 	}()
 
-	// The unavailable initial state must suppress the first connected refresh.
-	expectSignal(t, availabilitySubscribed)
+	// A busy initial state must suppress the first connected refresh.
+	expectSignal(t, laneStateSubscribed)
 	select {
 	case <-quoteSubmitted:
-		t.Fatal("quote was published while transaction lane was initially unavailable")
+		t.Fatal("quote was published while transaction lane was initially not ready")
 	case <-time.After(50 * time.Millisecond):
 	}
-	available.Store(true)
-	availabilityChanges <- struct{}{}
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteSubmitted)
-	available.Store(false)
-	availabilityChanges <- struct{}{}
+	ready.Store(false)
+	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteExpired)
 	refresh <- struct{}{}
 	select {
 	case <-quoteSubmitted:
-		t.Fatal("quote was renewed while transaction lane was unavailable")
+		t.Fatal("quote was renewed while transaction lane was not ready")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	available.Store(true)
-	availabilityChanges <- struct{}{}
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteSubmitted)
 
-	// A coalesced pause+resume leaves one undifferentiated notification with Available already
+	// A coalesced busy+idle transition leaves one undifferentiated notification with LaneReady already
 	// true. The listener must still expire the old curve before publishing the fresh one.
-	available.Store(false)
-	available.Store(true)
-	availabilityChanges <- struct{}{}
+	ready.Store(false)
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteExpired)
 	expectSignal(t, quoteSubmitted)
 	cancel()
@@ -501,7 +501,7 @@ func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
 		t.Fatal("quoteLoop did not stop after resumed quote expiry")
 	}
 	if !unsubscribed.Load() {
-		t.Fatal("quoteLoop did not unsubscribe from transaction availability")
+		t.Fatal("quoteLoop did not unsubscribe from transaction lane state")
 	}
 }
 

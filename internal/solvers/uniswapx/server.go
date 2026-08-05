@@ -222,7 +222,7 @@ func (s *Solver) quoteBlocked(now int64) bool {
 		s.exclusiveBlockUntil.Load() > now ||
 		s.warmupUntil.Load() > now ||
 		s.planningFills.Load() != 0 ||
-		(s.txm != nil && (!s.txm.Available() || !s.txm.Idle())) ||
+		(s.txm != nil && !s.txm.LaneReady()) ||
 		!s.exclusiveDeliveryHealthy()
 }
 

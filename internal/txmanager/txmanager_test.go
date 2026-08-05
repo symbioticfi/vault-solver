@@ -579,6 +579,42 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 	}
 }
 
+func TestLaneStateSignalsBusyAndIdleEdges(t *testing.T) {
+	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	changes, unsubscribe := m.SubscribeLaneState()
+	defer unsubscribe()
+	if !m.LaneReady() {
+		t.Fatal("new manager lane is not ready")
+	}
+
+	m.addAdmissionDemand()
+	select {
+	case <-changes:
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive busy edge")
+	}
+	if m.LaneReady() || m.Idle() || !m.Available() {
+		t.Fatal("busy manager reported an inconsistent lane state")
+	}
+
+	m.addAdmissionDemand()
+	m.releaseAdmissionDemand()
+	select {
+	case <-changes:
+		t.Fatal("non-terminal demand changes published a lane edge")
+	default:
+	}
+	m.releaseAdmissionDemand()
+	select {
+	case <-changes:
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive idle edge")
+	}
+	if !m.LaneReady() {
+		t.Fatal("idle available manager lane is not ready")
+	}
+}
+
 func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -586,17 +622,6 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 		request Request
 		wantErr error
 	}{
-		{
-			name: "nonce conflict",
-			manager: func(t *testing.T) *Manager {
-				t.Helper()
-				m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
-				m.markNonceConflict(7, common.HexToHash("0x1234"))
-				return m
-			},
-			request: Request{To: common.HexToAddress("0xabc"), Label: "paused"},
-			wantErr: errNonceLanePaused,
-		},
 		{
 			name: "manager stopped",
 			manager: func(t *testing.T) *Manager {
@@ -654,6 +679,146 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendAsyncWaitsForNonceConflictToClear(t *testing.T) {
+	b := newMockBackend()
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	m.markNonceConflict(7, common.HexToHash("0x1234"))
+	startTestManager(t, m)
+
+	type submission struct {
+		result   <-chan Result
+		accepted bool
+	}
+	submitted := make(chan submission, 1)
+	go func() {
+		result, accepted := m.SendAsync(t.Context(), Request{
+			To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "wait for reconciliation",
+		})
+		submitted <- submission{result: result, accepted: accepted}
+	}()
+	waitForAdmissionDemand(t, m, 1)
+	select {
+	case got := <-submitted:
+		t.Fatalf("request completed admission while nonce lane was paused: %+v", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if result, accepted := m.TrySend(t.Context(), Request{
+		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "try while paused",
+	}); accepted || result.Err != nil {
+		t.Fatalf("paused TrySend = (%+v, %v), want not accepted", result, accepted)
+	}
+
+	m.clearNonceConflict(7)
+	var got submission
+	select {
+	case got = <-submitted:
+		if !got.accepted {
+			t.Fatal("waiting request was not accepted after reconciliation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting request did not resume after reconciliation")
+	}
+	if result := <-got.result; result.Err != nil || result.Receipt == nil {
+		t.Fatalf("resumed request result = %+v", result)
+	}
+	waitForAdmissionDemand(t, m, 0)
+	if !m.LaneReady() {
+		t.Fatal("lane did not become ready after the resumed lifecycle completed")
+	}
+}
+
+func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
+	t.Run("request deadline", func(t *testing.T) {
+		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m.markNonceConflict(7, common.HexToHash("0x1234"))
+		result, accepted := m.SendAsync(t.Context(), Request{
+			To:       common.HexToAddress("0xabc"),
+			CancelAt: time.Now().Add(20 * time.Millisecond),
+			Label:    "expires while paused",
+		})
+		if !accepted {
+			t.Fatal("request deadline did not return a terminal admission result")
+		}
+		got := <-result
+		if !errors.Is(got.Err, context.DeadlineExceeded) || !got.NotAdmitted {
+			t.Fatalf("deadline result = %+v", got)
+		}
+		if !m.Idle() {
+			t.Fatal("deadline left admission demand on the lane")
+		}
+	})
+
+	t.Run("caller context", func(t *testing.T) {
+		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m.markNonceConflict(7, common.HexToHash("0x1234"))
+		ctx, cancel := context.WithCancel(t.Context())
+		type submission struct {
+			result   <-chan Result
+			accepted bool
+		}
+		submitted := make(chan submission, 1)
+		go func() {
+			result, accepted := m.SendAsync(ctx, Request{
+				To: common.HexToAddress("0xabc"), Label: "caller cancels while paused",
+			})
+			submitted <- submission{result: result, accepted: accepted}
+		}()
+		waitForAdmissionDemand(t, m, 1)
+		cancel()
+		select {
+		case got := <-submitted:
+			if got.accepted || got.result != nil {
+				t.Fatalf("caller cancellation submission = %+v, want not accepted", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("caller cancellation did not stop nonce-conflict admission wait")
+		}
+		waitForAdmissionDemand(t, m, 0)
+	})
+
+	t.Run("manager stop", func(t *testing.T) {
+		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m.markNonceConflict(7, common.HexToHash("0x1234"))
+		managerCtx, cancelManager := context.WithCancel(t.Context())
+		managerDone := make(chan struct{})
+		go func() {
+			m.Start(managerCtx)
+			close(managerDone)
+		}()
+		type submission struct {
+			result   <-chan Result
+			accepted bool
+		}
+		submitted := make(chan submission, 1)
+		go func() {
+			result, accepted := m.SendAsync(t.Context(), Request{
+				To: common.HexToAddress("0xabc"), Label: "manager stops while paused",
+			})
+			submitted <- submission{result: result, accepted: accepted}
+		}()
+		waitForAdmissionDemand(t, m, 1)
+		cancelManager()
+		select {
+		case <-managerDone:
+		case <-time.After(time.Second):
+			t.Fatal("manager did not stop")
+		}
+		select {
+		case got := <-submitted:
+			if !got.accepted {
+				t.Fatal("manager stop did not return a terminal admission result")
+			}
+			result := <-got.result
+			if !errors.Is(result.Err, errManagerStopped) || !result.NotAdmitted {
+				t.Fatalf("manager stop result = %+v", result)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("manager stop did not stop nonce-conflict admission wait")
+		}
+		waitForAdmissionDemand(t, m, 0)
+	})
 }
 
 func TestSendAsyncCanCompleteAtInclusion(t *testing.T) {
@@ -1592,10 +1757,10 @@ func receiptTestHeader(block uint64) *types.Header {
 	return forkedReceiptHeader(block, "")
 }
 
-func TestAvailabilitySubscriptionsFanOutWithoutStealingEdges(t *testing.T) {
+func TestLaneStateSubscriptionsFanOutWithoutStealingEdges(t *testing.T) {
 	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
-	first, unsubscribeFirst := m.SubscribeAvailability()
-	second, unsubscribeSecond := m.SubscribeAvailability()
+	first, unsubscribeFirst := m.SubscribeLaneState()
+	second, unsubscribeSecond := m.SubscribeLaneState()
 	defer unsubscribeSecond()
 
 	m.markNonceConflict(7, common.HexToHash("0x1234"))
@@ -1635,7 +1800,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		},
 		logr.Discard(),
 	)
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "inclusion race",
@@ -1649,7 +1814,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		t.Fatal("owned canonical inclusion paused the nonce lane")
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 		t.Fatal("owned canonical inclusion published a pause edge")
 	default:
 	}
@@ -1669,7 +1834,7 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{ReplacementInterval: 10 * time.Millisecond}, logr.Discard(),
 	)
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "unresolved replacement",
@@ -1683,7 +1848,7 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 		t.Fatal("unexplained nonce consumption left the nonce lane available")
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 	case <-time.After(time.Second):
 		t.Fatal("unexplained nonce consumption did not publish a pause edge")
 	}
@@ -1698,7 +1863,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "delayed inclusion race",
@@ -1711,7 +1876,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		t.Fatal("replacement nonce conflict did not pause the lane")
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 	case <-time.After(time.Second):
 		t.Fatal("replacement nonce conflict did not publish a pause edge")
 	}
@@ -1730,7 +1895,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		result <- receiptOutcome{result: got, done: done}
 	}()
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 		if !m.Available() {
 			t.Fatal("canonical tracked receipt did not resume the lane")
 		}
@@ -1750,7 +1915,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		t.Fatal("receipt disappearance did not resume pending reconciliation")
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 		if m.Available() {
 			t.Fatal("receipt reorg did not restore the nonce conflict")
 		}
@@ -1763,7 +1928,7 @@ func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{errors.New("replacement transaction underpriced")}
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 
 	pending, err := m.broadcast(t.Context(), Request{
@@ -1776,7 +1941,7 @@ func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 		t.Fatal("manager remained available after a pending nonce collision")
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 	case <-time.After(time.Second):
 		t.Fatal("pending nonce collision did not publish an availability change")
 	}
@@ -1801,7 +1966,7 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{PollInterval: time.Millisecond}, logr.Discard(),
 	)
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	startTestManager(t, m)
 	firstResult, accepted := m.SendAsync(t.Context(), Request{
@@ -1811,22 +1976,32 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 		t.Fatal("first transaction was not accepted")
 	}
 	waitForSentTransactions(t, b.mockBackend, 1)
+	timeout := time.After(time.Second)
+	paused := false
+	for !paused {
+		select {
+		case <-laneStateChanges:
+			paused = !m.Available()
+		case <-timeout:
+			t.Fatal("nonce conflict did not publish the pause edge")
+		}
+	}
+	type submission struct {
+		result   <-chan Result
+		accepted bool
+	}
+	secondSubmission := make(chan submission, 1)
+	go func() {
+		result, secondAccepted := m.SendAsync(t.Context(), Request{
+			To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "blocked during reconciliation",
+		})
+		secondSubmission <- submission{result: result, accepted: secondAccepted}
+	}()
+	waitForAdmissionDemand(t, m, 2)
 	select {
-	case <-availabilityChanges:
-	case <-time.After(time.Second):
-		t.Fatal("nonce conflict did not publish the pause edge")
-	}
-	if m.Available() {
-		t.Fatal("manager remained available before exact receipt reconciliation")
-	}
-	blocked, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "blocked during reconciliation",
-	})
-	if !accepted {
-		t.Fatal("blocked request did not receive a terminal result")
-	}
-	if result := <-blocked; !errors.Is(result.Err, errNonceLanePaused) {
-		t.Fatalf("blocked result = %+v, want paused error", result)
+	case got := <-secondSubmission:
+		t.Fatalf("second request completed admission during reconciliation: %+v", got)
+	case <-time.After(20 * time.Millisecond):
 	}
 	close(receiptGate)
 	first := <-firstResult
@@ -1834,18 +2009,24 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 		t.Fatalf("reconciled first result = %+v", first)
 	}
 	select {
-	case <-availabilityChanges:
+	case <-laneStateChanges:
 	case <-time.After(time.Second):
 		t.Fatal("exact receipt did not publish the resume edge")
 	}
 	if !m.Available() {
 		t.Fatal("manager did not resume after exact receipt reconciliation")
 	}
-	second := m.Send(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "after reconciliation",
-	})
-	if second.Err != nil {
-		t.Fatalf("second result after reconciliation: %v", second.Err)
+	var second submission
+	select {
+	case second = <-secondSubmission:
+		if !second.accepted {
+			t.Fatal("second request was not accepted after reconciliation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second request remained blocked after reconciliation")
+	}
+	if result := <-second.result; result.Err != nil {
+		t.Fatalf("second result after reconciliation: %v", result.Err)
 	}
 	if tx := b.lastSent(); tx == nil || tx.Nonce() != 8 {
 		t.Fatalf("second transaction = %v, want nonce 8", tx)
@@ -2189,7 +2370,7 @@ func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 		},
 		logr.Discard(),
 	)
-	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
@@ -2204,10 +2385,13 @@ func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 	if !accepted {
 		t.Fatal("transaction was not accepted")
 	}
-	select {
-	case <-availabilityChanges:
-	case <-time.After(time.Second):
-		t.Fatal("initial nonce conflict did not pause the lane")
+	timeout := time.After(time.Second)
+	for m.Available() {
+		select {
+		case <-laneStateChanges:
+		case <-timeout:
+			t.Fatal("initial nonce conflict did not pause the lane")
+		}
 	}
 	cancelManager()
 

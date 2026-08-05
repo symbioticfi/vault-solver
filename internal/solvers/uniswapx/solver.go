@@ -125,8 +125,8 @@ type orderPoller interface {
 type transactionManager interface {
 	MaxFeePerGas(ctx context.Context) (*big.Int, error)
 	SendAsync(ctx context.Context, request txmanager.Request) (<-chan txmanager.Result, bool)
+	LaneReady() bool
 	Available() bool
-	Idle() bool
 }
 
 type contractCaller interface {

@@ -119,9 +119,9 @@ type Manager struct {
 	stopping        chan struct{}
 	admissionDemand atomic.Int64
 
-	availabilityMu          sync.Mutex
-	availabilitySubscribers map[uint64]chan struct{}
-	nextAvailabilityID      uint64
+	laneStateMu          sync.Mutex
+	laneStateSubscribers map[uint64]chan struct{}
+	nextLaneStateID      uint64
 
 	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
 	nonce     uint64
@@ -182,15 +182,15 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
 	return &Manager{
-		backend:                 backend,
-		signer:                  s,
-		chainID:                 chainID,
-		cfg:                     cfg,
-		log:                     log.WithName("txmanager"),
-		queue:                   make(chan job),
-		lifecycleSlot:           make(chan struct{}, 1),
-		stopping:                make(chan struct{}),
-		availabilitySubscribers: make(map[uint64]chan struct{}),
+		backend:              backend,
+		signer:               s,
+		chainID:              chainID,
+		cfg:                  cfg,
+		log:                  log.WithName("txmanager"),
+		queue:                make(chan job),
+		lifecycleSlot:        make(chan struct{}, 1),
+		stopping:             make(chan struct{}),
+		laneStateSubscribers: make(map[uint64]chan struct{}),
 	}
 }
 
@@ -213,10 +213,11 @@ func (m *Manager) ValidateFeeHeadroom() error {
 	return nil
 }
 
-// Available reports whether new logical transactions may enter the nonce lane. A nonce conflict
-// pauses new work and further sends for the active lifecycle while exact signed hashes are polled.
-// A benign inclusion race resumes once its exact receipt is proven canonical; an unresolved conflict
-// remains fail-closed for operator investigation instead of replaying calldata at another nonce.
+// Available reports nonce safety only; it does not report whether another lifecycle occupies the
+// lane. Owned execution paths use it to keep progressing during contention, while producers of new
+// external commitments use LaneReady. A nonce conflict pauses admission while exact signed hashes
+// are polled. A benign inclusion race resumes once its exact receipt is proven canonical; an
+// unresolved conflict remains fail-closed instead of replaying calldata at another nonce.
 func (m *Manager) Available() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,24 +231,30 @@ func (m *Manager) Idle() bool {
 	return m.admissionDemand.Load() == 0
 }
 
-// SubscribeAvailability returns an independent, coalesced change stream. Consumers must call
-// Available after every signal instead of assuming which edge occurred, and must call unsubscribe
-// when they stop. Independent subscriptions prevent readiness and solvers from stealing signals
-// from each other.
-func (m *Manager) SubscribeAvailability() (<-chan struct{}, func()) {
-	m.availabilityMu.Lock()
-	id := m.nextAvailabilityID
-	m.nextAvailabilityID++
+// LaneReady reports whether the nonce lane is both safe and idle, so a solver can make an external
+// commitment that requires prompt transaction admission.
+func (m *Manager) LaneReady() bool {
+	return m.Available() && m.Idle()
+}
+
+// SubscribeLaneState returns an independent, coalesced change stream. Consumers must call
+// LaneReady after every signal instead of assuming which edge occurred, and must call unsubscribe
+// when they stop. Signals cover both nonce-conflict and admission-demand edges. Independent
+// subscriptions prevent readiness and solvers from stealing signals from each other.
+func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
+	m.laneStateMu.Lock()
+	id := m.nextLaneStateID
+	m.nextLaneStateID++
 	changes := make(chan struct{}, 1)
-	m.availabilitySubscribers[id] = changes
-	m.availabilityMu.Unlock()
+	m.laneStateSubscribers[id] = changes
+	m.laneStateMu.Unlock()
 
 	var once sync.Once
 	return changes, func() {
 		once.Do(func() {
-			m.availabilityMu.Lock()
-			delete(m.availabilitySubscribers, id)
-			m.availabilityMu.Unlock()
+			m.laneStateMu.Lock()
+			delete(m.laneStateSubscribers, id)
+			m.laneStateMu.Unlock()
 		})
 	}
 }
@@ -343,7 +350,7 @@ func (m *Manager) Send(ctx context.Context, req Request) Result {
 	return <-result
 }
 
-// TrySend submits only when no signed lifecycle is active.
+// TrySend submits only when the nonce lane is available and no signed lifecycle is active.
 func (m *Manager) TrySend(ctx context.Context, req Request) (Result, bool) {
 	result, accepted := m.sendAsync(ctx, req, true)
 	if !accepted {
@@ -361,7 +368,7 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 }
 
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
-	m.admissionDemand.Add(1)
+	m.addAdmissionDemand()
 	releaseDemandOnReturn := true
 	defer func() {
 		if releaseDemandOnReturn {
@@ -383,24 +390,33 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 		return admissionFailure(ctx, req, errManagerStopped)
 	default:
 	}
-	if err := m.nonceConflictError(); err != nil {
-		res := make(chan Result, 1)
-		res <- notAdmittedResult(err)
-		return res, true
-	}
 	if try {
+		if m.nonceConflictError() != nil {
+			return nil, false
+		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		default:
 			return nil, false
 		}
+		if m.nonceConflictError() != nil {
+			<-m.lifecycleSlot
+			return nil, false
+		}
 	} else {
+		if err := m.waitForNonceLane(admissionCtx); err != nil {
+			return admissionFailure(ctx, req, err)
+		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		case <-admissionCtx.Done():
 			return admissionFailure(ctx, req, admissionCtx.Err())
 		case <-m.stopping:
 			return admissionFailure(ctx, req, errManagerStopped)
+		}
+		if err := m.waitForNonceLane(admissionCtx); err != nil {
+			<-m.lifecycleSlot
+			return admissionFailure(ctx, req, err)
 		}
 	}
 	res := make(chan Result, 1)
@@ -417,6 +433,31 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 		return admissionFailure(ctx, req, errManagerStopped)
 	}
 	return res, true
+}
+
+func (m *Manager) waitForNonceLane(ctx context.Context) error {
+	changes, unsubscribe := m.SubscribeLaneState()
+	defer unsubscribe()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-m.stopping:
+			return errManagerStopped
+		default:
+		}
+		if m.nonceConflictError() == nil {
+			return nil
+		}
+		select {
+		case <-changes:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-m.stopping:
+			return errManagerStopped
+		}
+	}
 }
 
 func admissionFailure(ctx context.Context, req Request, err error) (<-chan Result, bool) {
@@ -437,9 +478,19 @@ func (m *Manager) releaseLifecycleSlot() {
 	m.releaseAdmissionDemand()
 }
 
+func (m *Manager) addAdmissionDemand() {
+	if m.admissionDemand.Add(1) == 1 {
+		m.notifyLaneStateChange()
+	}
+}
+
 func (m *Manager) releaseAdmissionDemand() {
-	if remaining := m.admissionDemand.Add(-1); remaining < 0 {
+	remaining := m.admissionDemand.Add(-1)
+	if remaining < 0 {
 		panic("txmanager: negative admission demand")
+	}
+	if remaining == 0 {
+		m.notifyLaneStateChange()
 	}
 }
 
@@ -1179,7 +1230,7 @@ func (m *Manager) markNonceConflict(nonce uint64, hash common.Hash) {
 	m.conflict = &nonceConflict{nonce: nonce, hash: hash}
 	m.mu.Unlock()
 	if first {
-		m.notifyAvailabilityChange()
+		m.notifyLaneStateChange()
 		m.log.Error(errors.New("nonce ownership is uncertain"),
 			"transaction manager paused pending nonce reconciliation",
 			"nonce", nonce,
@@ -1196,14 +1247,14 @@ func (m *Manager) clearNonceConflict(nonce uint64) {
 	}
 	m.mu.Unlock()
 	if existed {
-		m.notifyAvailabilityChange()
+		m.notifyLaneStateChange()
 	}
 }
 
-func (m *Manager) notifyAvailabilityChange() {
-	m.availabilityMu.Lock()
-	defer m.availabilityMu.Unlock()
-	for _, changes := range m.availabilitySubscribers {
+func (m *Manager) notifyLaneStateChange() {
+	m.laneStateMu.Lock()
+	defer m.laneStateMu.Unlock()
+	for _, changes := range m.laneStateSubscribers {
 		select {
 		case changes <- struct{}{}:
 		default:
