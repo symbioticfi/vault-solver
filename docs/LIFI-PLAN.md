@@ -277,6 +277,12 @@ The order server acknowledges the number of deduplicated ranges it accepted. Loc
 publish or expiry only when `quotesAdded` equals the submitted range count; a missing or partial acknowledgement
 is treated as an uncertain submit so the same replacement or expiry is retried.
 
+Standing curves also follow the shared transaction lane. On any coalesced availability change, LI.FI first
+expires its known active curves; if the lane is available again, it rebuilds and republishes from fresh state.
+While the lane remains paused, both periodic refresh and final publication checks fail closed. This prevents
+new exclusive matches from being advertised while nonce ownership is unresolved without stopping recovery of
+already-accepted work.
+
 There are two independent exclusivity layers. Quote `exclusiveFor = executor` tells the order server which
 registered solver should receive a match. Supported on-chain exclusivity is encoded as an `0xe0` exclusive
 limit context: before its start time only the encoded `exclusiveFor` address may fill; afterwards any allowed

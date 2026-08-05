@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 )
 
@@ -89,6 +91,163 @@ func TestFallbackTransport_PrimaryOKNoFallover(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK || fallbackHits != 0 {
 		t.Fatalf("status=%d fallbackHits=%d, want 200/0 (no fallover on healthy primary)", resp.StatusCode, fallbackHits)
+	}
+}
+
+func TestFallbackTransport_FallsOverOnNullAvailabilityResult(t *testing.T) {
+	methods := []string{
+		"eth_getTransactionReceipt",
+		"eth_getBlockByHash",
+		"eth_getBlockByNumber",
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			var primaryHits, fallbackHits int
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				primaryHits++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":7,"result":null}`)
+			}))
+			defer primary.Close()
+			const fallbackBody = `{"jsonrpc":"2.0","id":7,"result":{"endpoint":"fallback"}}`
+			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fallbackHits++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, fallbackBody)
+			}))
+			defer fallback.Close()
+
+			payload := `{"jsonrpc":"2.0","id":7,"method":"` + method + `","params":[]}`
+			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), payload)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("read response: %v", readErr)
+			}
+			if string(body) != fallbackBody {
+				t.Fatalf("response body = %s, want fallback body %s", body, fallbackBody)
+			}
+			if primaryHits != 1 || fallbackHits != 1 {
+				t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
+			}
+		})
+	}
+}
+
+func TestFallbackTransport_PreservesNonAvailabilityResponses(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  string
+		response string
+	}{
+		{
+			name:     "non target method null",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}`,
+			response: `{"jsonrpc":"2.0","id":7,"result":null}`,
+		},
+		{
+			name:     "json rpc error",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`,
+			response: `{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"not found"}}`,
+		},
+		{
+			name:     "error alongside null result",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`,
+			response: `{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-32000,"message":"not found"}}`,
+		},
+		{
+			name:     "batch request",
+			request:  `[{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}]`,
+			response: `[{"jsonrpc":"2.0","id":7,"result":null}]`,
+		},
+		{
+			name:     "malformed request",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash"`,
+			response: `{"jsonrpc":"2.0","id":7,"result":null}`,
+		},
+		{
+			name:     "malformed response",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}`,
+			response: `{"jsonrpc":"2.0","id":7,"result":`,
+		},
+		{
+			name:     "mismatched response id",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`,
+			response: `{"jsonrpc":"2.0","id":8,"result":null}`,
+		},
+		{
+			name:     "non null body is restored",
+			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`,
+			response: "  {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var fallbackHits int
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tt.response)
+			}))
+			defer primary.Close()
+			fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				fallbackHits++
+			}))
+			defer fallback.Close()
+
+			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), tt.request)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("read response: %v", readErr)
+			}
+			if string(body) != tt.response {
+				t.Fatalf("response body = %q, want preserved primary body %q", body, tt.response)
+			}
+			if fallbackHits != 0 {
+				t.Fatalf("fallback hits = %d, want 0", fallbackHits)
+			}
+		})
+	}
+}
+
+func TestFallbackTransport_PreservesNullResultFromFinalEndpoint(t *testing.T) {
+	var primaryHits, fallbackHits int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"primary"}`)
+	}))
+	defer primary.Close()
+	const fallbackBody = `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"fallback"}`
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, fallbackBody)
+	}))
+	defer fallback.Close()
+
+	payload := `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`
+	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), payload)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	if string(body) != fallbackBody {
+		t.Fatalf("response body = %s, want final fallback body %s", body, fallbackBody)
+	}
+	if primaryHits != 1 || fallbackHits != 1 {
+		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
 	}
 }
 
@@ -278,6 +437,140 @@ func TestDial_FallbackServesChainID(t *testing.T) {
 	if got := c.ChainID().Uint64(); got != 31337 {
 		t.Fatalf("chainID = %d, want 31337 (served by fallback)", got)
 	}
+}
+
+func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
+	txHash := common.HexToHash("0x1234")
+	blockHash := common.HexToHash("0x5678")
+	receiptJSON, err := json.Marshal(&types.Receipt{
+		Type:              types.DynamicFeeTxType,
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 21_000,
+		Logs:              []*types.Log{},
+		TxHash:            txHash,
+		GasUsed:           21_000,
+		EffectiveGasPrice: big.NewInt(1),
+		BlockHash:         blockHash,
+		BlockNumber:       big.NewInt(42),
+	})
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+	headerJSON, err := json.Marshal(&types.Header{
+		ParentHash:  common.HexToHash("0x01"),
+		UncleHash:   types.EmptyUncleHash,
+		Root:        common.HexToHash("0x02"),
+		TxHash:      types.EmptyTxsHash,
+		ReceiptHash: types.EmptyReceiptsHash,
+		Difficulty:  big.NewInt(0),
+		Number:      big.NewInt(42),
+		GasLimit:    30_000_000,
+		Time:        1,
+		Extra:       []byte{},
+	})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+
+	var primaryMethods, fallbackMethods []string
+	primary := rpcRecorder(&primaryMethods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"0x7a69"`
+		}
+		return "null"
+	})
+	defer primary.Close()
+	fallback := rpcRecorder(&fallbackMethods, func(method string) string {
+		if method == "eth_getTransactionReceipt" {
+			return string(receiptJSON)
+		}
+		return string(headerJSON)
+	})
+	defer fallback.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	receipt, err := c.TransactionReceipt(t.Context(), txHash)
+	if err != nil {
+		t.Fatalf("TransactionReceipt: %v", err)
+	}
+	if receipt.TxHash != txHash || receipt.BlockHash != blockHash {
+		t.Fatalf("receipt hashes = tx %s block %s, want %s/%s", receipt.TxHash, receipt.BlockHash, txHash, blockHash)
+	}
+	headerByHash, err := c.HeaderByHash(t.Context(), blockHash)
+	if err != nil {
+		t.Fatalf("HeaderByHash: %v", err)
+	}
+	if headerByHash.Number.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("HeaderByHash number = %s, want 42", headerByHash.Number)
+	}
+	headerByNumber, err := c.HeaderByNumber(t.Context(), big.NewInt(42))
+	if err != nil {
+		t.Fatalf("HeaderByNumber: %v", err)
+	}
+	if headerByNumber.Number.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("HeaderByNumber number = %s, want 42", headerByNumber.Number)
+	}
+
+	availabilityMethods := []string{
+		"eth_getTransactionReceipt",
+		"eth_getBlockByHash",
+		"eth_getBlockByNumber",
+	}
+	for _, method := range availabilityMethods {
+		if got := countMethod(primaryMethods, method); got != 1 {
+			t.Errorf("primary %s hits = %d, want 1", method, got)
+		}
+		if got := countMethod(fallbackMethods, method); got != 1 {
+			t.Errorf("fallback %s hits = %d, want 1", method, got)
+		}
+	}
+}
+
+func TestDial_FinalNullReceiptReturnsNotFound(t *testing.T) {
+	var primaryMethods, fallbackMethods []string
+	primary := rpcRecorder(&primaryMethods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"0x7a69"`
+		}
+		return "null"
+	})
+	defer primary.Close()
+	fallback := rpcRecorder(&fallbackMethods, func(string) string { return "null" })
+	defer fallback.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	if receipt, receiptErr := c.TransactionReceipt(t.Context(), common.HexToHash("0x1234")); receipt != nil ||
+		!errors.Is(receiptErr, ethereum.NotFound) {
+		t.Fatalf("TransactionReceipt = (%v, %v), want nil/ethereum.NotFound", receipt, receiptErr)
+	}
+	if got := countMethod(primaryMethods, "eth_getTransactionReceipt"); got != 1 {
+		t.Fatalf("primary receipt hits = %d, want 1", got)
+	}
+	if got := countMethod(fallbackMethods, "eth_getTransactionReceipt"); got != 1 {
+		t.Fatalf("fallback receipt hits = %d, want 1", got)
+	}
+}
+
+func countMethod(methods []string, want string) int {
+	var count int
+	for _, method := range methods {
+		if method == want {
+			count++
+		}
+	}
+	return count
 }
 
 // rpcRecorder is a JSON-RPC httptest server that records the methods it is asked and replies with a

@@ -1,6 +1,7 @@
 package redstoneoev
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"math/big"
 	"testing"
@@ -33,7 +34,11 @@ func (s *testSigner) SignHash(hash common.Hash) ([]byte, error) {
 	return sig, nil
 }
 
-func (s *testSigner) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+func (s *testSigner) SignTx(
+	_ context.Context,
+	tx *types.Transaction,
+	chainID *big.Int,
+) (*types.Transaction, error) {
 	return types.SignTx(tx, types.LatestSignerForChainID(chainID), s.key)
 }
 

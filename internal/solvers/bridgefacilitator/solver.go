@@ -16,6 +16,7 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
@@ -40,17 +41,18 @@ func init() {
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
-	cfg        *Config
-	deps       solver.Deps
-	api        *apiClient
-	reader     *reader
-	strategy   types.Strategy
-	log        logr.Logger
-	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
-	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
-	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
-	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	cfg           *Config
+	deps          solver.Deps
+	api           *apiClient
+	reader        *reader
+	strategy      types.Strategy
+	log           logr.Logger
+	laneAvailable func() bool    // shared txmanager availability; safe for the single Run goroutine
+	signerAddr    common.Address // the solver's own signer address (diagnostics only), set in factory
+	probe         signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
+	nonceSeq      atomic.Uint64
+	offers        *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets       []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -84,15 +86,16 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	s := &Solver{
-		cfg:        cfg,
-		deps:       deps,
-		api:        api,
-		reader:     newReader(deps.Chain, cfg.LiquidityLens),
-		strategy:   offerStrategy,
-		log:        deps.Log.WithName(Name),
-		signerAddr: deps.Signer.Address(),
-		probe:      probe,
-		offers:     newOfferTracker(),
+		cfg:           cfg,
+		deps:          deps,
+		api:           api,
+		reader:        newReader(deps.Chain, cfg.LiquidityLens),
+		strategy:      offerStrategy,
+		log:           deps.Log.WithName(Name),
+		laneAvailable: deps.TxManager.Available,
+		signerAddr:    deps.Signer.Address(),
+		probe:         probe,
+		offers:        newOfferTracker(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
@@ -195,6 +198,10 @@ type adapterOffering struct {
 // discoverAndOffer lists open auctions, snapshots adapter liquidity/exposure once, delegates offer
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
+	if !s.canCreateOffer() {
+		s.log.V(1).Info("skipping offer discovery: transaction lane unavailable")
+		return
+	}
 	if len(s.targets) == 0 {
 		return
 	}
@@ -274,7 +281,12 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			s.log.Error(buildErr, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
-		if subErr := s.api.createOffer(ctx, dto); subErr != nil {
+		submitted, subErr := s.submitOfferIfAvailable(ctx, dto)
+		if !submitted {
+			s.log.V(1).Info("stopping offer submission: transaction lane became unavailable")
+			return
+		}
+		if subErr != nil {
 			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
 		}
@@ -282,6 +294,23 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
+}
+
+// canCreateOffer fails closed when construction omitted the shared lane dependency. The registered
+// factory always wires txmanager.Available; keeping the nil case closed avoids accidental commitments
+// from alternate construction paths.
+func (s *Solver) canCreateOffer() bool {
+	return s.laneAvailable != nil && s.laneAvailable()
+}
+
+// submitOfferIfAvailable performs the last availability check immediately before the external API
+// call. Discovery and strategy work can span RPC/HTTP calls, so the lane may pause after the pass's
+// entry check. A false submitted result tells the caller to abandon the remaining stale plan.
+func (s *Solver) submitOfferIfAvailable(ctx context.Context, dto threef.CreateOfferDto) (bool, error) {
+	if !s.canCreateOffer() {
+		return false, nil
+	}
+	return true, s.api.createOffer(ctx, dto)
 }
 
 // redeemAll runs the redeemer for every matched adapter.

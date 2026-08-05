@@ -110,6 +110,32 @@ type recoveryGateStrategy struct {
 	tokenOut common.Address
 }
 
+type testTransactionAvailability struct {
+	available   func() bool
+	changes     <-chan struct{}
+	onSubscribe func()
+	unsubscribe func()
+}
+
+func (a *testTransactionAvailability) Available() bool {
+	return a.available()
+}
+
+func (a *testTransactionAvailability) SubscribeAvailability() (<-chan struct{}, func()) {
+	if a.onSubscribe != nil {
+		a.onSubscribe()
+	}
+	unsubscribe := a.unsubscribe
+	if unsubscribe == nil {
+		unsubscribe = func() {}
+	}
+	return a.changes, unsubscribe
+}
+
+func alwaysAvailableTransactionLane() transactionAvailability {
+	return &testTransactionAvailability{available: func() bool { return true }}
+}
+
 type quoteSubmission struct {
 	Expiry int64 `json:"expiry"`
 }
@@ -252,9 +278,10 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 			logr.Discard(),
 		),
 		txm: &fakeLifiTxSender{}, log: logr.Discard(),
-		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
-		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
-		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
+		now:            func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		maxFeePerGas:   func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:        func() time.Time { return time.Unix(wallUnix.Load(), 0) },
+		txAvailability: alwaysAvailableTransactionLane(),
 	}
 	done := make(chan error, 1)
 	go func() { done <- solver.Run(ctx) }()
@@ -334,6 +361,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			return big.NewInt(1), nil
 		},
+		txAvailability: alwaysAvailableTransactionLane(),
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	connectionCtx, cancelConnection := context.WithCancel(t.Context())
@@ -358,6 +386,122 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("quoteLoop did not stop after expiring quotes")
+	}
+}
+
+func TestQuoteLoopSuspendsDuringNoncePauseAndCoalescedResume(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	cfg.QuoteInterval = time.Hour
+	cfg.QuoteTTL = 2 * time.Hour
+	cfg.OrderServer.HTTPTimeout = time.Second
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	now := time.Unix(1_700_000_000, 0)
+	quoteSubmitted := make(chan struct{}, 2)
+	quoteExpired := make(chan struct{}, 2)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode quote submission: %v", err)
+			return
+		}
+		signal := quoteSubmitted
+		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+			signal = quoteExpired
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer orderServer.Close()
+
+	var available atomic.Bool
+	available.Store(false)
+	availabilityChanges := make(chan struct{}, 1)
+	availabilitySubscribed := make(chan struct{})
+	var unsubscribed atomic.Bool
+	refresh := make(chan struct{}, 1)
+	solver := &Solver{
+		cfg:      cfg,
+		reader:   fakeLifiReader{},
+		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
+		orders:   newOrderClient(orderServer.URL, "test-key", time.Second, 11155111),
+		log:      logr.Discard(),
+		now:      func(context.Context) (time.Time, error) { return now, nil },
+		wallNow:  func() time.Time { return now },
+		maxFeePerGas: func(context.Context) (*big.Int, error) {
+			return big.NewInt(1), nil
+		},
+		txAvailability: &testTransactionAvailability{
+			available:   available.Load,
+			changes:     availabilityChanges,
+			onSubscribe: func() { close(availabilitySubscribed) },
+			unsubscribe: func() {
+				unsubscribed.Store(true)
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	defer cancelConnection()
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, nil, refresh, feedConnections)
+	}()
+
+	// The unavailable initial state must suppress the first connected refresh.
+	expectSignal(t, availabilitySubscribed)
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was published while transaction lane was initially unavailable")
+	case <-time.After(50 * time.Millisecond):
+	}
+	available.Store(true)
+	availabilityChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+	available.Store(false)
+	availabilityChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	refresh <- struct{}{}
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was renewed while transaction lane was unavailable")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	available.Store(true)
+	availabilityChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+
+	// A coalesced pause+resume leaves one undifferentiated notification with Available already
+	// true. The listener must still expire the old curve before publishing the fresh one.
+	available.Store(false)
+	available.Store(true)
+	availabilityChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	expectSignal(t, quoteSubmitted)
+	cancel()
+	expectSignal(t, quoteExpired)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("quoteLoop did not stop after resumed quote expiry")
+	}
+	if !unsubscribed.Load() {
+		t.Fatal("quoteLoop did not unsubscribe from transaction availability")
 	}
 }
 

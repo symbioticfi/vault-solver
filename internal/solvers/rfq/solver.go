@@ -61,7 +61,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}
 
-	quotes, exec := buildServices(cfg, chainID, st, rdr, deps.TxManager, quoteStrategy, log)
+	quotes, exec := buildServices(
+		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
+	)
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,
@@ -79,7 +81,14 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 // Split from factory so the config → service wiring (notably the adapter whitelist reaching both
 // services) is unit-testable without a chain client.
 func buildServices(
-	cfg *Config, chainID int64, st *store, rdr *reader, txm txSender, quoteStrategy types.Strategy, log logr.Logger,
+	cfg *Config,
+	chainID int64,
+	st *store,
+	rdr *reader,
+	txm txSender,
+	laneAvailable func() bool,
+	quoteStrategy types.Strategy,
+	log logr.Logger,
 ) (*quoteService, *executionService) {
 	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
 	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
@@ -90,15 +99,16 @@ func buildServices(
 	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
-		chainID:      chainID,
-		executor:     cfg.Executor,
-		whitelist:    quoteWhitelist,
-		tokenPolicy:  cfg.TokenPolicy,
-		minAmountsIn: cfg.MinAmountsIn,
-		reader:       rdr,
-		strategy:     quoteStrategy,
-		log:          log,
-		now:          time.Now,
+		chainID:       chainID,
+		executor:      cfg.Executor,
+		laneAvailable: laneAvailable,
+		whitelist:     quoteWhitelist,
+		tokenPolicy:   cfg.TokenPolicy,
+		minAmountsIn:  cfg.MinAmountsIn,
+		reader:        rdr,
+		strategy:      quoteStrategy,
+		log:           log,
+		now:           time.Now,
 	}
 	exec := &executionService{
 		chainID:          chainID,

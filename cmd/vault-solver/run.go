@@ -164,9 +164,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	g, gctx := errgroup.WithContext(runCtx)
 	var background sync.WaitGroup
-	background.Go(func() {
-		watchReadiness(gctx, txm.AvailabilityChanged(), txm.Available, health.SetReady)
-	})
+	if requiresTxManager {
+		availabilityChanged, unsubscribe := txm.SubscribeAvailability()
+		background.Go(func() {
+			defer unsubscribe()
+			watchReadiness(gctx, availabilityChanged, txm.Available, health.SetReady)
+		})
+	}
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}

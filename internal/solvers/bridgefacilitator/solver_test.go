@@ -12,6 +12,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/api/threef"
 )
 
 func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
@@ -29,6 +31,59 @@ func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("deduplicated adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
 		}
+	}
+}
+
+func TestDiscoverAndOfferSkipsPlanningWhenLaneUnavailable(t *testing.T) {
+	t.Parallel()
+
+	var checks atomic.Int64
+	s := &Solver{
+		laneAvailable: func() bool {
+			checks.Add(1)
+			return false
+		},
+		log:     logr.Discard(),
+		targets: []Target{{Adapter: common.HexToAddress("0x00000000000000000000000000000000000000A0")}},
+	}
+
+	// The nil API and reader make any discovery or chain work fail loudly; an unavailable lane must
+	// return before touching either while the Run loop remains free to reconcile and redeem elsewhere.
+	s.discoverAndOffer(t.Context())
+	if got := checks.Load(); got != 1 {
+		t.Fatalf("lane availability checks = %d, want one entry check", got)
+	}
+}
+
+func TestSubmitOfferRechecksLaneBeforeEveryAPICall(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":1}`))
+	}))
+	defer srv.Close()
+
+	var available atomic.Bool
+	available.Store(true)
+	s := &Solver{
+		api:           newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard()),
+		laneAvailable: available.Load,
+	}
+
+	submitted, err := s.submitOfferIfAvailable(t.Context(), threef.CreateOfferDto{})
+	if err != nil || !submitted {
+		t.Fatalf("first submit: submitted=%t err=%v, want submitted", submitted, err)
+	}
+	available.Store(false)
+	submitted, err = s.submitOfferIfAvailable(t.Context(), threef.CreateOfferDto{})
+	if err != nil || submitted {
+		t.Fatalf("paused submit: submitted=%t err=%v, want skipped", submitted, err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("createOffer requests = %d, want only the pre-pause request", got)
 	}
 }
 

@@ -347,7 +347,8 @@ func TestValidateFeeHeadroom(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "automatic tip", maxFee: 50},
-		{name: "floor equals reserved cap", maxFee: 50, tip: 39.506172839},
+		{name: "floor one wei below reserved cap", maxFee: 50, tip: 39.506172838},
+		{name: "floor equals reserved cap", maxFee: 50, tip: 39.506172839, wantErr: true},
 		{name: "floor one wei above reserved cap", maxFee: 50, tip: 39.506172840, wantErr: true},
 		{name: "reported invalid configuration", maxFee: 50, tip: 40, wantErr: true},
 	}
@@ -788,7 +789,7 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: gweiToWei(50),
 		Gas: cancellationGasLimit, To: ptr(s.Address()), Value: new(big.Int),
 	})
-	signed, err := s.SignTx(unsigned, big.NewInt(11155111))
+	signed, err := s.SignTx(t.Context(), unsigned, big.NewInt(11155111))
 	if err != nil {
 		t.Fatalf("sign cancellation: %v", err)
 	}
@@ -1474,15 +1475,21 @@ type shutdownBlockingSigner struct {
 }
 
 func (s *blockingTxSigner) SignTx(
+	ctx context.Context,
 	tx *types.Transaction,
 	chainID *big.Int,
 ) (*types.Transaction, error) {
 	s.once.Do(func() { close(s.entered) })
-	<-s.release
-	return s.Signer.SignTx(tx, chainID)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.Signer.SignTx(ctx, tx, chainID)
 }
 
 func (s *shutdownBlockingSigner) SignTx(
+	ctx context.Context,
 	tx *types.Transaction,
 	chainID *big.Int,
 ) (*types.Transaction, error) {
@@ -1492,9 +1499,13 @@ func (s *shutdownBlockingSigner) SignTx(
 	s.mu.Unlock()
 	if call > 1 {
 		s.once.Do(func() { close(s.replacementStarted) })
-		<-s.release
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return s.Signer.SignTx(tx, chainID)
+	return s.Signer.SignTx(ctx, tx, chainID)
 }
 
 func (b *blockedReceiptHashBackend) TransactionReceipt(
@@ -1581,6 +1592,35 @@ func receiptTestHeader(block uint64) *types.Header {
 	return forkedReceiptHeader(block, "")
 }
 
+func TestAvailabilitySubscriptionsFanOutWithoutStealingEdges(t *testing.T) {
+	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	first, unsubscribeFirst := m.SubscribeAvailability()
+	second, unsubscribeSecond := m.SubscribeAvailability()
+	defer unsubscribeSecond()
+
+	m.markNonceConflict(7, common.HexToHash("0x1234"))
+	for name, changes := range map[string]<-chan struct{}{"first": first, "second": second} {
+		select {
+		case <-changes:
+		case <-time.After(time.Second):
+			t.Fatalf("%s subscriber did not receive pause edge", name)
+		}
+	}
+
+	unsubscribeFirst()
+	m.clearNonceConflict(7)
+	select {
+	case <-second:
+	case <-time.After(time.Second):
+		t.Fatal("remaining subscriber did not receive resume edge")
+	}
+	select {
+	case <-first:
+		t.Fatal("unsubscribed consumer received resume edge")
+	default:
+	}
+}
+
 func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing.T) {
 	b := &replacementNonceRaceBackend{
 		mockBackend:         newMockBackend(),
@@ -1595,6 +1635,8 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		},
 		logr.Discard(),
 	)
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "inclusion race",
 	})
@@ -1607,7 +1649,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		t.Fatal("owned canonical inclusion paused the nonce lane")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 		t.Fatal("owned canonical inclusion published a pause edge")
 	default:
 	}
@@ -1627,6 +1669,8 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{ReplacementInterval: 10 * time.Millisecond}, logr.Discard(),
 	)
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "unresolved replacement",
 	})
@@ -1639,7 +1683,7 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 		t.Fatal("unexplained nonce consumption left the nonce lane available")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("unexplained nonce consumption did not publish a pause edge")
 	}
@@ -1654,6 +1698,8 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "delayed inclusion race",
 	})
@@ -1665,7 +1711,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		t.Fatal("replacement nonce conflict did not pause the lane")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("replacement nonce conflict did not publish a pause edge")
 	}
@@ -1684,7 +1730,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		result <- receiptOutcome{result: got, done: done}
 	}()
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 		if !m.Available() {
 			t.Fatal("canonical tracked receipt did not resume the lane")
 		}
@@ -1704,7 +1750,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 		t.Fatal("receipt disappearance did not resume pending reconciliation")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 		if m.Available() {
 			t.Fatal("receipt reorg did not restore the nonce conflict")
 		}
@@ -1717,6 +1763,8 @@ func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{errors.New("replacement transaction underpriced")}
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "pending collision",
@@ -1728,7 +1776,7 @@ func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 		t.Fatal("manager remained available after a pending nonce collision")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("pending nonce collision did not publish an availability change")
 	}
@@ -1753,6 +1801,8 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{PollInterval: time.Millisecond}, logr.Discard(),
 	)
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 	startTestManager(t, m)
 	firstResult, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "accepted before nonce error",
@@ -1762,7 +1812,7 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 	}
 	waitForSentTransactions(t, b.mockBackend, 1)
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("nonce conflict did not publish the pause edge")
 	}
@@ -1784,7 +1834,7 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 		t.Fatalf("reconciled first result = %+v", first)
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("exact receipt did not publish the resume edge")
 	}
@@ -2005,6 +2055,54 @@ func TestStartCancelInterruptsPreSignRPC(t *testing.T) {
 	}
 }
 
+func TestStartCancelInterruptsInitialSigner(t *testing.T) {
+	b := newMockBackend()
+	s := &blockingTxSigner{
+		Signer: mustSigner(t), entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	m := New(
+		b, s, big.NewInt(11155111),
+		Config{ShutdownTimeout: 20 * time.Millisecond}, logr.Discard(),
+	)
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	startDone := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(startDone)
+	}()
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "blocked initial signer",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted for initial signing")
+	}
+	select {
+	case <-s.entered:
+	case <-time.After(time.Second):
+		t.Fatal("initial signing did not start")
+	}
+	cancelManager()
+
+	select {
+	case got := <-result:
+		if !errors.Is(got.Err, context.Canceled) || !got.NotAdmitted ||
+			got.Hash != (common.Hash{}) || got.Receipt != nil {
+			t.Fatalf("initial-sign result = %+v, want not-admitted context cancellation", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial signer did not stop after manager cancellation")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked initial signer kept the transaction manager alive")
+	}
+	if b.sendCalls != 0 {
+		t.Fatalf("broadcast calls = %d, want none after cancelled signing", b.sendCalls)
+	}
+}
+
 func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 	sgnr := mustSigner(t)
 	b := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
@@ -2091,6 +2189,8 @@ func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 		},
 		logr.Discard(),
 	)
+	availabilityChanges, unsubscribe := m.SubscribeAvailability()
+	defer unsubscribe()
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
 	go func() {
@@ -2105,7 +2205,7 @@ func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 		t.Fatal("transaction was not accepted")
 	}
 	select {
-	case <-m.AvailabilityChanged():
+	case <-availabilityChanges:
 	case <-time.After(time.Second):
 		t.Fatal("initial nonce conflict did not pause the lane")
 	}

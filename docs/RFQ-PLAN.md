@@ -73,6 +73,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
+- **Quotes follow nonce-lane availability.** `/quote` preserves pure request validation, then returns the
+  normal no-quote `204` before chain reads or strategy work while txmanager is paused. Availability is checked
+  again after strategy planning so a pass that observes a mid-plan pause is discarded before its response.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.

@@ -114,11 +114,14 @@ type Manager struct {
 	cfg     Config
 	log     logr.Logger
 
-	queue              chan job
-	lifecycleSlot      chan struct{}
-	stopping           chan struct{}
-	availabilityChange chan struct{}
-	admissionDemand    atomic.Int64
+	queue           chan job
+	lifecycleSlot   chan struct{}
+	stopping        chan struct{}
+	admissionDemand atomic.Int64
+
+	availabilityMu          sync.Mutex
+	availabilitySubscribers map[uint64]chan struct{}
+	nextAvailabilityID      uint64
 
 	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
 	nonce     uint64
@@ -179,15 +182,15 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
 	return &Manager{
-		backend:            backend,
-		signer:             s,
-		chainID:            chainID,
-		cfg:                cfg,
-		log:                log.WithName("txmanager"),
-		queue:              make(chan job),
-		lifecycleSlot:      make(chan struct{}, 1),
-		stopping:           make(chan struct{}),
-		availabilityChange: make(chan struct{}, 1),
+		backend:                 backend,
+		signer:                  s,
+		chainID:                 chainID,
+		cfg:                     cfg,
+		log:                     log.WithName("txmanager"),
+		queue:                   make(chan job),
+		lifecycleSlot:           make(chan struct{}, 1),
+		stopping:                make(chan struct{}),
+		availabilitySubscribers: make(map[uint64]chan struct{}),
 	}
 }
 
@@ -201,9 +204,9 @@ func (m *Manager) Confirmations() uint64 {
 func (m *Manager) ValidateFeeHeadroom() error {
 	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
 	tip := gweiToWei(m.cfg.TipGwei)
-	if initialLimit != nil && tip.Cmp(initialLimit) > 0 {
+	if initialLimit != nil && tip.Sign() > 0 && tip.Cmp(initialLimit) >= 0 {
 		return errors.Errorf(
-			"tip floor %s exceeds initial fee limit %s after reserved replacement bumps",
+			"tip floor %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
 			tip, initialLimit,
 		)
 	}
@@ -227,10 +230,26 @@ func (m *Manager) Idle() bool {
 	return m.admissionDemand.Load() == 0
 }
 
-// AvailabilityChanged is edge-triggered and coalesces rapid state changes. Consumers must call
-// Available after every signal instead of assuming which edge occurred.
-func (m *Manager) AvailabilityChanged() <-chan struct{} {
-	return m.availabilityChange
+// SubscribeAvailability returns an independent, coalesced change stream. Consumers must call
+// Available after every signal instead of assuming which edge occurred, and must call unsubscribe
+// when they stop. Independent subscriptions prevent readiness and solvers from stealing signals
+// from each other.
+func (m *Manager) SubscribeAvailability() (<-chan struct{}, func()) {
+	m.availabilityMu.Lock()
+	id := m.nextAvailabilityID
+	m.nextAvailabilityID++
+	changes := make(chan struct{}, 1)
+	m.availabilitySubscribers[id] = changes
+	m.availabilityMu.Unlock()
+
+	var once sync.Once
+	return changes, func() {
+		once.Do(func() {
+			m.availabilityMu.Lock()
+			delete(m.availabilitySubscribers, id)
+			m.availabilityMu.Unlock()
+		})
+	}
 }
 
 // Initialize seeds the local nonce before solvers become ready. Startup fails closed when the
@@ -1026,8 +1045,11 @@ func (m *Manager) signAndSend(
 		Value:     value,
 		Data:      data,
 	})
-	signed, err := m.signer.SignTx(tx, m.chainID)
+	signed, err := m.signer.SignTx(ctx, tx, m.chainID)
 	if err != nil {
+		return nil, errors.Errorf("sign transaction: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
 	sendErr := m.sendSigned(ctx, signed, existingLifecycle)
@@ -1179,9 +1201,13 @@ func (m *Manager) clearNonceConflict(nonce uint64) {
 }
 
 func (m *Manager) notifyAvailabilityChange() {
-	select {
-	case m.availabilityChange <- struct{}{}:
-	default:
+	m.availabilityMu.Lock()
+	defer m.availabilityMu.Unlock()
+	for _, changes := range m.availabilitySubscribers {
+		select {
+		case changes <- struct{}{}:
+		default:
+		}
 	}
 }
 

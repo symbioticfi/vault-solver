@@ -155,8 +155,8 @@ assertion because the PR19 ABI has no getter.
   cancellation headroom below it. With gas accounting disabled, UniswapX supplies no request ceiling. With
   gas accounting enabled, `MaxFeePerGas` returns the profitability ceiling including one normal replacement,
   and the initial send reserves that replacement inside the ceiling. Cancellation may exceed the request
-  ceiling but never the global ceiling. Startup rejects a configured positive tip floor that cannot fit
-  beneath the initial cap after both reserved bumps.
+  ceiling but never the global ceiling. Startup rejects a configured positive tip floor that leaves no
+  base-fee headroom beneath the initial cap after both reserved bumps.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
   re-signed at another nonce. A consumed/colliding nonce is reconciled against every exact attempt. During a
   replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves

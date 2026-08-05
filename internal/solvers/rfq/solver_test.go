@@ -75,7 +75,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 
 	// External + configured adapters ⇒ both quote and execution scope to the configured adapters.
 	cfg.SolverMode = solverModeExternal
-	quotes, exec := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
+	quotes, exec := buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	scopedToConfigured(t, "execution", exec.whitelist)
 	if !quotes.tokenPolicy.RequiresSingleRoute(permissionedToken) ||
@@ -86,7 +86,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution
 	// stays unrestricted (nil) so discount recovery can fill through any advertised adapter.
 	cfg.SolverMode = solverModeInternal
-	quotes, exec = buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
+	quotes, exec = buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
 	if exec.whitelist != nil {
 		t.Fatalf("internal mode: execution whitelist = %v, want nil (filling stays unrestricted)", exec.whitelist)
@@ -94,7 +94,7 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 
 	// Internal + no adapters ⇒ neither path scopes (both nil): the filler quotes/fills off discounts only.
 	cfg.Adapters = nil
-	quotes, exec = buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
+	quotes, exec = buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	if quotes.whitelist != nil || exec.whitelist != nil {
 		t.Fatal("internal mode with no adapters should wire both whitelists nil (filtering off)")
 	}
@@ -116,7 +116,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 		Adapters:   []recoveryVault{{Adapter: vlt}}, // the only adapter this filler is scoped to
 	}
 
-	quotes, _ := buildServices(cfg, 1, st, nil, nil, nil, logr.Discard())
+	quotes, _ := buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
 	// asset-group at 1.000000 USDC.
 	quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}

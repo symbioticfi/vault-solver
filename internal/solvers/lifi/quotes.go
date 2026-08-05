@@ -50,6 +50,8 @@ func (s *Solver) quoteLoop(
 ) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
+	availabilityChanges, unsubscribe := s.subscribeTransactionAvailability()
+	defer unsubscribe()
 
 	state := newQuoteState(max(s.cfg.QuoteInterval, s.cfg.QuoteTTL/3))
 	defer func() {
@@ -73,7 +75,9 @@ func (s *Solver) quoteLoop(
 			connectedCtx, stopConnected := context.WithCancel(connectionCtx)
 			stopOnShutdown := context.AfterFunc(ctx, stopConnected)
 			//nolint:contextcheck // connectedCtx is cancelled by either the feed connection or quote-loop context.
-			s.runConnectedQuoteLoop(connectedCtx, routes, refresh, ticker.C, state, &lastBlock)
+			s.runConnectedQuoteLoop(
+				connectedCtx, routes, refresh, ticker.C, availabilityChanges, state, &lastBlock,
+			)
 			_ = stopOnShutdown()
 			stopConnected()
 			if ctx.Err() != nil {
@@ -84,6 +88,10 @@ func (s *Solver) quoteLoop(
 			s.suspendQuotes(ctx, state)
 		case <-ticker.C:
 			s.suspendQuotes(ctx, state)
+		case <-availabilityChanges:
+			// A coalesced signal may represent pause followed by resume. Always retire any curve
+			// first so a missed intermediate state cannot leave a pre-pause commitment live.
+			s.suspendQuotes(ctx, state)
 		}
 	}
 }
@@ -93,6 +101,7 @@ func (s *Solver) runConnectedQuoteLoop(
 	routes []route,
 	refresh <-chan struct{},
 	ticks <-chan time.Time,
+	availabilityChanges <-chan struct{},
 	state *quoteState,
 	lastBlock *uint64,
 ) {
@@ -107,8 +116,27 @@ func (s *Solver) runConnectedQuoteLoop(
 			if s.shouldRefreshQuotes(ctx, state, lastBlock) {
 				s.refreshQuotes(ctx, routes, state)
 			}
+		case <-availabilityChanges:
+			// Signals are deliberately coalesced. Retire the current curve even when the latest
+			// state is already available, then republish from fresh state below.
+			s.suspendQuotes(ctx, state)
+			if s.transactionLaneAvailable() {
+				state.forceRenewal()
+				s.refreshQuotes(ctx, routes, state)
+			}
 		}
 	}
+}
+
+func (s *Solver) transactionLaneAvailable() bool {
+	return s.txAvailability != nil && s.txAvailability.Available()
+}
+
+func (s *Solver) subscribeTransactionAvailability() (<-chan struct{}, func()) {
+	if s.txAvailability == nil {
+		return nil, func() {}
+	}
+	return s.txAvailability.SubscribeAvailability()
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
@@ -150,6 +178,10 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
+	if !s.transactionLaneAvailable() {
+		s.suspendQuotes(ctx, state)
+		return
+	}
 	chainTime, err := s.now(ctx)
 	if err != nil {
 		s.log.Error(err, "quote refresh: read latest block time")
@@ -188,6 +220,10 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	if len(out.Quotes) == 0 {
 		s.log.V(1).Info("quote refresh: strategy produced no quotes", "routes", len(inventory))
+	}
+	if !s.transactionLaneAvailable() {
+		s.suspendQuotes(ctx, state)
+		return
 	}
 	removed, err := state.reconcile(ctx, s.orders, out.Quotes, serverTime)
 	if err != nil {

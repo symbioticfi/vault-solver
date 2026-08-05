@@ -277,6 +277,11 @@ submissions are neither accepted nor signed until the active lifecycle has a ter
 previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
 the request's earlier deadline), replacements switch to a same-nonce cancellation.
 
+When nonce ownership becomes uncertain, `txManager` pauses admission and readiness. Once that pause is
+observed, UniswapX and RFQ decline new quotes, LI.FI retires its active standing curves until the lane
+resumes, and 3F stops posting new offers. Reconciliation and already-accepted work continue so the process
+can recover the lane without abandoning tracked transactions.
+
 During graceful shutdown the manager remains alive while solvers stop external commitments and drain
 already-accepted work. The solver drain is bounded by its preparation timeout plus `pendingTimeoutMs`
 and `replacementIntervalMs`. When manager shutdown begins, new admission stops and it requests
@@ -291,8 +296,8 @@ inside its normal cap for a replacement. A solver-supplied request cap applies t
 and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
 `tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
 to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
-positive floor that cannot fit after both reserved bumps, and runtime submission fails when the current
-base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
+positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
+when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
 instead uses the median p75 priority reward from the latest five blocks, likewise clamped to available
 headroom. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor
 provides the operator-controlled fallback.
@@ -336,8 +341,10 @@ in order for reads when the primary is unavailable. Signed broadcasts and both s
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
 that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
-normal read fallback behavior, while an unavailable or incoherent snapshot is retried on a later poll. An
-explicit write endpoint must report the same chain ID as the read endpoint.
+normal read fallback behavior. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
+to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. An unavailable
+or incoherent multi-read snapshot is retried on a later poll. An explicit write endpoint must report the same
+chain ID as the read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
 from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
