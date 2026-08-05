@@ -26,7 +26,8 @@ type InputDto struct {
 	// Native address of the user providing the input assets
 	User string `json:"user"`
 	// Native address of the token/asset being provided as input
-	Asset  string         `json:"asset"`
+	Asset string `json:"asset"`
+	// Amount available. For exact-input: exact amount user will provide and is used for quoting. For exact-output: ignored by the quote decoder and not used for quoting
 	Amount NullableString `json:"amount,omitempty"`
 	// Optional lock reference for securing the input assets. Shape: { kind: \"the-compact\" | \"rhinestone\", params: object }. Currently ignored by the quote decoder.
 	Lock map[string]interface{} `json:"lock,omitempty"`

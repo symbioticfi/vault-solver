@@ -272,6 +272,9 @@ price curve per RWA→underlying pair from `adapter.getMaxRate` / `getMaxAssets`
 `fromChain` and `toChain` are transport fields only: `orderClient` initializes both once from the solver's
 configured runtime chain. Strategy outputs and quote-state keys contain only the local token pair, so a
 same-chain solver cannot accidentally publish a mixed-chain curve.
+The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation commits a
+publish or expiry only when `quotesAdded` equals the submitted range count; a missing or partial acknowledgement
+is treated as an uncertain submit so the same replacement or expiry is retried.
 
 There are two independent exclusivity layers. Quote `exclusiveFor = executor` tells the order server which
 registered solver should receive a match. Supported on-chain exclusivity is encoded as an `0xe0` exclusive
@@ -399,7 +402,11 @@ type Strategy interface {
   the local deterministic strategy is probed once without them. Only a valid hypothetical plan makes the worker
   enqueue the order in its bounded retry FIFO. A webhook `null` is not probed with a second request; it and all
   other skipped orders remain terminal. Strategy errors are retried during recovery unless the strategy marks a
-  deterministic input rejection as permanent; the default strategy marks malformed or unsupported output contexts.
+  deterministic input rejection as permanent; the default strategy marks malformed or unsupported output contexts,
+  while the webhook strategy treats fill responses with HTTP `400` or `422` as order-specific permanent
+  rejections. Other strategy failures remain transient, but one recovered order receives at most three total
+  strategy attempts in a recovery session; retryable chain, RPC, and pre-admission failures remain unbounded and
+  fail closed.
   The `default` resolves the supported OutputSettlerSimple contexts: limit and exclusive limit both use
   `output.amount`, while an exclusive order for another solver before `startTime` is declined. Dutch and
   exclusive Dutch orders never reach the strategy because order-feed admission discards them. It fills
@@ -442,7 +449,9 @@ both fill planning and quote refresh, and the quote coordinator does not keep a 
 reservations. When the feed becomes ready, any economic payload changes, or expiry enters
 the renewal window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
 stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
-the old server-side quote. An unchanged pair is not reposted on every calculation tick.
+the old server-side quote. Local state advances only after the response acknowledges every submitted range, so a
+partial acknowledgement leaves the replacement or expiry pending for retry. An unchanged pair is not reposted on
+every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
 `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the

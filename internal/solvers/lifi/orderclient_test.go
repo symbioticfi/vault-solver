@@ -31,24 +31,12 @@ func TestOrderClientSubmitQuotes(t *testing.T) {
 			t.Fatalf("decode body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":2}`))
 	}))
 	defer srv.Close()
 
 	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
-	err := client.submitQuotes(context.Background(), []types.Quote{{
-		FromAsset:    common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		ToAsset:      common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		FromDecimals: 6,
-		ToDecimals:   18,
-		Expiry:       1_800_000_000,
-		ExclusiveFor: common.HexToAddress("0x3333333333333333333333333333333333333333"),
-		Ranges: []types.QuoteRange{{
-			MinAmount: big.NewInt(1),
-			MaxAmount: big.NewInt(1_000_000),
-			Quote:     "0.99",
-		}},
-	}})
+	err := client.submitQuotes(context.Background(), []types.Quote{submitQuotesTestQuote()})
 	if err != nil {
 		t.Fatalf("submitQuotes: %v", err)
 	}
@@ -71,9 +59,68 @@ func TestOrderClientSubmitQuotes(t *testing.T) {
 		t.Fatalf("exclusiveFor = %v", q["exclusiveFor"])
 	}
 	ranges := q["ranges"].([]any)
+	if len(ranges) != 2 {
+		t.Fatalf("ranges = %d, want 2", len(ranges))
+	}
 	rng := ranges[0].(map[string]any)
 	if rng["minAmount"] != "1" || rng["maxAmount"] != "1000000" || rng["quote"] != "0.99" {
 		t.Fatalf("range = %#v", rng)
+	}
+}
+
+func TestOrderClientSubmitQuotesValidatesAcknowledgedRanges(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response string
+		wantErr  string
+	}{
+		{
+			name:     "partial acknowledgement",
+			response: `{"status":"success","quotesAdded":1}`,
+			wantErr:  "quotesAdded 1, want 2",
+		},
+		{
+			name:     "empty response",
+			response: `null`,
+			wantErr:  "empty response",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer srv.Close()
+
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			err := client.submitQuotes(context.Background(), []types.Quote{submitQuotesTestQuote()})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("submitQuotes() error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func submitQuotesTestQuote() types.Quote {
+	return types.Quote{
+		FromAsset:    common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		ToAsset:      common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		FromDecimals: 6,
+		ToDecimals:   18,
+		Expiry:       1_800_000_000,
+		ExclusiveFor: common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		Ranges: []types.QuoteRange{
+			{
+				MinAmount: big.NewInt(1),
+				MaxAmount: big.NewInt(1_000_000),
+				Quote:     "0.99",
+			},
+			{
+				MinAmount: big.NewInt(1_000_001),
+				MaxAmount: big.NewInt(2_000_000),
+				Quote:     "0.98",
+			},
+		},
 	}
 }
 

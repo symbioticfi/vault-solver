@@ -200,6 +200,8 @@ validated `discounts.Signed` into its own generated executor binding.
 - HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
 - literal or env-backed headers (parsed config retains only the env-var name; `NewClient` resolves it)
 - strict response decode; non-2xx and empty-body responses are errors
+- typed non-2xx status errors, so each solver strategy can distinguish permanent input rejection from a
+  retryable endpoint failure without putting protocol policy in the shared client
 
 It has no solver names, no strategy registry, and no per-solver DTOs — each solver's webhook strategy
 owns its own wire types (conventionally lower-camel JSON with decimal strings for big integers,

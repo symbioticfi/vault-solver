@@ -15,13 +15,16 @@ import (
 )
 
 const (
-	fillCompletionCapacity      = 128
-	orderRecoverySeenCapacity   = 4_096
-	orderInboxCapacity          = orderRecoverySeenCapacity
-	orderRetryCapacity          = orderInboxCapacity
-	maximumOrderRecoverySweeps  = 8
-	initialOrderRecoveryBackoff = time.Second
-	maximumOrderRecoveryBackoff = 30 * time.Second
+	fillCompletionCapacity     = 128
+	orderRecoverySeenCapacity  = 4_096
+	orderInboxCapacity         = orderRecoverySeenCapacity
+	orderRetryCapacity         = orderInboxCapacity
+	maximumOrderRecoverySweeps = 8
+	// Strategy failures are often deterministic for one input. Two retries preserve a
+	// short transient window without allowing one order to hold readiness forever.
+	maximumStrategyRecoveryAttempts = 3
+	initialOrderRecoveryBackoff     = time.Second
+	maximumOrderRecoveryBackoff     = 30 * time.Second
 )
 
 var (
@@ -63,6 +66,7 @@ type orderInbox struct {
 	recoverySeenNext  int
 	recoveryOverflow  bool
 	recoveryRetry     map[string]*submittedOrder
+	recoveryAttempts  map[string]int
 	recoveryGen       uint64
 	closed            bool
 	capacity          int
@@ -184,6 +188,7 @@ func (q *orderInbox) beginRecovery() {
 	q.recoverySeenNext = 0
 	q.recoveryOverflow = false
 	q.recoveryRetry = make(map[string]*submittedOrder)
+	q.recoveryAttempts = make(map[string]int)
 	q.recoveryGen = 0
 }
 
@@ -195,10 +200,11 @@ func (q *orderInbox) endRecovery() {
 	q.recoverySeenNext = 0
 	q.recoveryOverflow = false
 	q.recoveryRetry = nil
+	q.recoveryAttempts = nil
 	q.recoveryGen = 0
 }
 
-func (q *orderInbox) markRecoveryRetry(order *submittedOrder) {
+func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) {
 	key := orderInboxKey(order)
 	if key == "" {
 		return
@@ -207,6 +213,15 @@ func (q *orderInbox) markRecoveryRetry(order *submittedOrder) {
 	defer q.mu.Unlock()
 	if q.recoverySeen == nil {
 		return
+	}
+	// A zero limit deliberately preserves unbounded recovery for chain, RPC, and
+	// pre-admission failures. Positive limits count failures by stable order key, so
+	// the budget survives both recovery sweeps and reconstructed REST order values.
+	if attemptLimit > 0 {
+		q.recoveryAttempts[key]++
+		if q.recoveryAttempts[key] >= attemptLimit {
+			return
+		}
 	}
 	q.recoveryRetry[key] = order
 	q.recoveryGen++
@@ -250,6 +265,7 @@ func (q *orderInbox) tryEndRecovery(processedGen uint64) bool {
 	q.recoverySeenOrder = nil
 	q.recoverySeenNext = 0
 	q.recoveryRetry = nil
+	q.recoveryAttempts = nil
 	q.recoveryGen = 0
 	return true
 }
@@ -494,7 +510,7 @@ func (s *Solver) runOrderWorker(
 	ctx context.Context,
 	routes []route,
 	orders <-chan *submittedOrder,
-	onRetryable func(*submittedOrder),
+	onRetryable func(*submittedOrder, int),
 	inputDrained chan<- struct{},
 ) error {
 	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
@@ -517,7 +533,7 @@ func (s *Solver) runOrderWorker(
 			return
 		}
 		if result.retryable && onRetryable != nil {
-			onRetryable(order)
+			onRetryable(order, result.recoveryAttemptLimit)
 		}
 		// Invariant: a queued reservation retry implies a pending fill. Completions are
 		// the only events that advance the retry generation and wake the worker.

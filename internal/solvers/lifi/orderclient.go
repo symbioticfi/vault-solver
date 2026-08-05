@@ -245,21 +245,33 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 
 func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) error {
 	dtoQuotes := make([]lifiorder.SubmitQuotesDtoQuotesInner, 0, len(quotes))
+	expectedRanges := 0
 	for i, quote := range quotes {
 		dto, err := submitQuoteDTO(c.chain, quote, i)
 		if err != nil {
 			return err
 		}
 		dtoQuotes = append(dtoQuotes, dto)
+		expectedRanges += len(dto.Ranges)
 	}
 
-	_, httpResp, err := c.api.SolverAPIAPI.
+	response, httpResp, err := c.api.SolverAPIAPI.
 		QuotesControllerSubmitQuotes(c.withAuth(ctx)).
 		SubmitQuotesDto(lifiorder.SubmitQuotesDto{Quotes: dtoQuotes}).
 		Execute()
 	closeResp(httpResp)
 	if err != nil {
 		return apiErr("submit quotes", httpResp, err)
+	}
+	if response == nil {
+		return errors.New("lifi order server: submit quotes: empty response")
+	}
+	if response.QuotesAdded != float32(expectedRanges) {
+		return errors.Errorf(
+			"lifi order server: submit quotes: quotesAdded %v, want %d",
+			response.QuotesAdded,
+			expectedRanges,
+		)
 	}
 	return nil
 }

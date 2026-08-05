@@ -617,11 +617,17 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 	transient := errors.New("strategy transport unavailable")
 	tests := []struct {
-		name          string
-		err           error
-		wantRetryable bool
+		name             string
+		err              error
+		wantRetryable    bool
+		wantAttemptLimit int
 	}{
-		{name: "transient", err: transient, wantRetryable: true},
+		{
+			name:             "transient",
+			err:              transient,
+			wantRetryable:    true,
+			wantAttemptLimit: maximumStrategyRecoveryAttempts,
+		},
 		{
 			name: "permanent input rejection",
 			err:  types.MarkPermanentFillDecisionError(errors.New("unsupported output context")),
@@ -643,6 +649,13 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 			)
 			if result.retryable != tt.wantRetryable {
 				t.Fatalf("retryable = %v, want %v", result.retryable, tt.wantRetryable)
+			}
+			if result.recoveryAttemptLimit != tt.wantAttemptLimit {
+				t.Fatalf(
+					"recovery attempt limit = %d, want %d",
+					result.recoveryAttemptLimit,
+					tt.wantAttemptLimit,
+				)
 			}
 		})
 	}

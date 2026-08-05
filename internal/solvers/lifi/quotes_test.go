@@ -2,7 +2,11 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -208,6 +213,61 @@ func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
 			len(state.active),
 			submitter.calls,
 		)
+	}
+}
+
+func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) {
+	var calls int
+	var expiries []int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var dto lifiorder.SubmitQuotesDto
+		if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+			t.Errorf("decode submit quotes: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if len(dto.Quotes) != 1 || len(dto.Quotes[0].Ranges) != 1 {
+			t.Errorf("submitted quotes = %#v, want one quote with one range", dto.Quotes)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+
+		calls++
+		expiries = append(expiries, dto.Quotes[0].Expiry)
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 2 {
+			_, _ = w.Write([]byte(`{"status":"success","quotesAdded":0}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer srv.Close()
+
+	state := newQuoteState(30 * time.Second)
+	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+	now := time.Unix(1_800_000_000, 0)
+	quote := testStandingQuote(testQuoteRoute(), 1_000)
+	if _, err := state.reconcile(context.Background(), client, []types.Quote{quote}, now); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	removed, err := state.reconcile(context.Background(), client, nil, now)
+	if err == nil || !strings.Contains(err.Error(), "quotesAdded 0, want 1") {
+		t.Fatalf("first expire error = %v, want acknowledgement mismatch", err)
+	}
+	if removed != 1 || len(state.active) != 1 {
+		t.Fatalf("failed expire: removed=%d active=%d, want 1/1", removed, len(state.active))
+	}
+
+	removed, err = state.reconcile(context.Background(), client, nil, now)
+	if err != nil {
+		t.Fatalf("retry expire: %v", err)
+	}
+	if removed != 1 || len(state.active) != 0 || calls != 3 {
+		t.Fatalf("retried expire: removed=%d active=%d calls=%d, want 1/0/3", removed, len(state.active), calls)
+	}
+	if len(expiries) != 3 || int64(expiries[1]) >= now.Unix() || int64(expiries[2]) >= now.Unix() {
+		t.Fatalf("submitted expiries = %v, want both retry attempts expired", expiries)
 	}
 }
 

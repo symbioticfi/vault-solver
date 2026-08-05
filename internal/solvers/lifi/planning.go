@@ -27,9 +27,10 @@ type preparedFill struct {
 }
 
 type orderProcessingResult struct {
-	fill      *pendingFill
-	blockedOn map[liquidlane.CapacityID]bool
-	retryable bool
+	fill                 *pendingFill
+	blockedOn            map[liquidlane.CapacityID]bool
+	retryable            bool
+	recoveryAttemptLimit int
 }
 
 var errOrderNotDeposited = errors.New("order is not deposited")
@@ -94,7 +95,13 @@ func (s *Solver) processOrderUsingReservations(
 	plan, err := s.strategy.DecideFill(ctx, prepared.input)
 	if err != nil {
 		s.log.Error(err, "order fill: strategy", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return orderProcessingResult{retryable: !types.IsPermanentFillDecisionError(err)}
+		if types.IsPermanentFillDecisionError(err) {
+			return orderProcessingResult{}
+		}
+		return orderProcessingResult{
+			retryable:            true,
+			recoveryAttemptLimit: maximumStrategyRecoveryAttempts,
+		}
 	}
 	if plan == nil {
 		s.log.V(1).Info("order skipped: no immediate fill plan", "orderId", order.OrderID,

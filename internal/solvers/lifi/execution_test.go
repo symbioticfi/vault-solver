@@ -18,7 +18,9 @@ import (
 	"github.com/go-logr/logr/funcr"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
+	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
 func TestOrderInboxDoesNotBlockAndPreservesOrder(t *testing.T) {
@@ -333,6 +335,41 @@ func TestOrderInboxRecoveryGenerationRejectsPostBarrierEnqueue(t *testing.T) {
 	}
 }
 
+func TestOrderInboxBoundsLimitedRecoveryRetriesAcrossOrderInstances(t *testing.T) {
+	inbox := newOrderInbox(1)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+
+	for attempt := 1; attempt <= maximumStrategyRecoveryAttempts; attempt++ {
+		order := &submittedOrder{OrderID: "poisoned"}
+		inbox.markRecoveryRetry(order, maximumStrategyRecoveryAttempts)
+		retries := inbox.takeRecoveryRetries()
+		if attempt < maximumStrategyRecoveryAttempts {
+			if len(retries) != 1 || retries[0] != order {
+				t.Fatalf("attempt %d retries = %+v, want current order", attempt, retries)
+			}
+			continue
+		}
+		if len(retries) != 0 {
+			t.Fatalf("attempt %d retries = %+v, want exhausted budget", attempt, retries)
+		}
+	}
+
+	inbox.markRecoveryRetry(&submittedOrder{OrderID: "poisoned"}, maximumStrategyRecoveryAttempts)
+	if retries := inbox.takeRecoveryRetries(); len(retries) != 0 {
+		t.Fatalf("replacement order retries = %+v, want budget retained by order key", retries)
+	}
+
+	for attempt := 1; attempt <= maximumStrategyRecoveryAttempts+1; attempt++ {
+		order := &submittedOrder{OrderID: "chain-read-failure"}
+		inbox.markRecoveryRetry(order, 0)
+		retries := inbox.takeRecoveryRetries()
+		if len(retries) != 1 || retries[0] != order {
+			t.Fatalf("unlimited attempt %d retries = %+v, want current order", attempt, retries)
+		}
+	}
+}
+
 func TestReservationRetryQueueIsBoundedFIFO(t *testing.T) {
 	retries := newReservationRetryQueue(2)
 	first := &submittedOrder{OrderID: "first"}
@@ -445,20 +482,105 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	close(orders)
-	marked := make(chan *submittedOrder, 1)
+	type markedRecovery struct {
+		order        *submittedOrder
+		attemptLimit int
+	}
+	marked := make(chan markedRecovery, 1)
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder) {
-		marked <- got
+	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
+		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
 	}, nil); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	select {
 	case got := <-marked:
-		if got != order {
-			t.Fatalf("marked order = %p, want %p", got, order)
+		if got.order != order {
+			t.Fatalf("marked order = %p, want %p", got.order, order)
+		}
+		if got.attemptLimit != 0 {
+			t.Fatalf("recovery attempt limit = %d, want unlimited", got.attemptLimit)
 		}
 	default:
 		t.Fatal("transient worker failure was not returned to recovery")
+	}
+}
+
+func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
+	var webhookAttempts atomic.Int32
+	webhookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/decide-fill" {
+			http.NotFound(w, r)
+			return
+		}
+		webhookAttempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{`))
+	}))
+	defer webhookServer.Close()
+	client, err := webhook.NewClient(webhook.Config{URL: webhookServer.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	fixture := immediateTestSetup(t)
+	recoveredOrder := testListedOrderJSON(
+		t,
+		fixture.cfg,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		orderStatusSigned,
+	)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var orders []json.RawMessage
+		if r.URL.Query().Get("status") == orderStatusSigned {
+			orders = []json.RawMessage{recoveredOrder}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(testListedOrdersPageJSON(t, orders, len(orders), 0))
+	}))
+	defer orderServer.Close()
+	solver := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		&fakeLifiTxSender{},
+		webhookstrategy.New(client),
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	solver.orders = newOrderClient(orderServer.URL, "test-key", time.Second, 11155111)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	inbox := newOrderInbox(2)
+	inbox.beginRecovery()
+	orders := make(chan *submittedOrder)
+	inboxDone := make(chan error, 1)
+	workerDone := make(chan error, 1)
+	go func() { inboxDone <- inbox.run(ctx, orders) }()
+	go func() {
+		workerDone <- solver.runOrderWorker(
+			ctx,
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			inbox.markRecoveryRetry,
+			nil,
+		)
+	}()
+
+	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {
+		t.Fatalf("persistent webhook decode failure prevented recovery from completing: %v", ctx.Err())
+	}
+	if got := webhookAttempts.Load(); got != maximumStrategyRecoveryAttempts {
+		t.Fatalf("webhook fill attempts = %d, want bounded total %d", got, maximumStrategyRecoveryAttempts)
+	}
+	inbox.closeInput()
+	if err := <-inboxDone; err != nil {
+		t.Fatalf("inbox.run: %v", err)
+	}
+	if err := <-workerDone; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
 	}
 }
 
@@ -571,7 +693,7 @@ func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
 				continue
 			}
 			if attempts.Add(1) == 1 {
-				inbox.markRecoveryRetry(order)
+				inbox.markRecoveryRetry(order, 0)
 			}
 		}
 	}()

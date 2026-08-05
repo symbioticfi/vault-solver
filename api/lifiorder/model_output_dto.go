@@ -26,7 +26,8 @@ type OutputDto struct {
 	// Native address that will receive the output assets
 	Receiver string `json:"receiver"`
 	// Native address of the token/asset to be received as output
-	Asset  string         `json:"asset"`
+	Asset string `json:"asset"`
+	// For exact-input: ignored by the quote decoder and not used for quoting. For exact-output: exact amount user wants to receive and is used for quoting
 	Amount NullableString `json:"amount,omitempty"`
 	// Optional calldata describing how the receiver will consume the output. Enables composability with other protocols
 	Calldata *string `json:"calldata,omitempty"`

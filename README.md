@@ -124,7 +124,8 @@ that the built-in strategy proves fillable without, but blocked by, pending rese
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
 blocked order to the tail. During startup/reconnect recovery, quote publication remains suspended until each
 recovered order leaves the FIFO, either resolved or returned to the recovery sweep. Overflow drops the newest
-retry. A webhook `null` decision stays terminal rather than triggering a hypothetical second request. On graceful
+retry. A webhook `null` decision and an order-specific `400`/`422` fill rejection stay terminal; other
+strategy failures get at most three attempts per order during each recovery session. On graceful
 shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
 timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
 hard stop.

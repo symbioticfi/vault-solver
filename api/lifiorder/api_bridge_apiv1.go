@@ -33,7 +33,7 @@ func (r ApiQuotesControllerV1GetQuoteRequest) QuoteRequestDto(quoteRequestDto Qu
 	return r
 }
 
-// Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.
+// Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.
 func (r ApiQuotesControllerV1GetQuoteRequest) XIntegratorKey(xIntegratorKey string) ApiQuotesControllerV1GetQuoteRequest {
 	r.xIntegratorKey = &xIntegratorKey
 	return r
