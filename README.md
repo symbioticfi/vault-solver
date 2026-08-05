@@ -187,15 +187,20 @@ accounting in both quote and fill decisions and skips gas-state and Chainlink re
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. As soon as a polled order is
-admitted to the fill queue, quote publication pauses until planning either rejects it or atomically hands
-capacity ownership to an accepted transaction reservation. Every posted order gets a fresh route plan from
-the current chain state and is simulated before sending. The reservation remains effective while txmanager waits
-for the configured confirmations. On completion the quote snapshot is invalidated before capacity is
+admitted to the fill queue, quote publication and `GET /ready` pause. They remain paused during planning and,
+once the submission occupies the shared nonce lane, while it holds that queued or admitted lifecycle,
+including receipt confirmation. The fill's capacity reservation still protects already-awarded orders for
+the same period; it does not reopen quoting. Every posted order gets a fresh route plan from the current chain
+state and is simulated before sending. On completion the quote snapshot is invalidated before capacity is
 released, and that capacity is not advertised again until a fresh post-fill chain snapshot is published.
 A quote is returned only if its snapshot epoch and every blocking condition are unchanged after the strategy
 finishes. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery, fill
-planning, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. `GET /ready`
-exposes that state and also returns not-ready when the latest snapshot has no quotable inventory;
+planning, a queued or admitted txmanager lifecycle, an unavailable nonce lane, an active Uniswap
+`blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
+signed-discount resolution, calldata construction, or preflight while the nonce lane is paused. A txmanager
+result that failed before admission does not count toward the local fill breaker and is reported as
+`uniswapx_fills_total{outcome="not-admitted"}` rather than a failed fill. `GET /ready` exposes that state and
+also returns not-ready when the latest snapshot has no quotable inventory;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that

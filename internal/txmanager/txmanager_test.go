@@ -397,6 +397,9 @@ func TestSend_RejectsRequestCapWithoutReplacementHeadroom(t *testing.T) {
 	if res.Err == nil {
 		t.Fatal("expected request cap without replacement headroom to fail")
 	}
+	if res.NotAdmitted {
+		t.Fatal("fee failure was classified as a manager admission failure")
+	}
 	if tx := b.lastSent(); tx != nil {
 		t.Fatalf("underfunded request sent transaction %s", tx.Hash())
 	}
@@ -499,6 +502,156 @@ func TestSendAsyncKeepsFutureNonceUnsignedUntilPriorConfirmation(t *testing.T) {
 	}
 	if got := <-second.result; got.Err != nil {
 		t.Fatalf("second result: %v", got.Err)
+	}
+}
+
+func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
+	b := newMockBackend()
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 1, PollInterval: time.Millisecond}, logr.Discard(),
+	)
+	if !m.Idle() {
+		t.Fatal("new manager is not idle")
+	}
+	startTestManager(t, m)
+
+	first, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "first",
+	})
+	if !accepted {
+		t.Fatal("first request was not accepted")
+	}
+	waitForSentTransactions(t, b, 1)
+	waitForAdmissionDemand(t, m, 1)
+	if m.Idle() {
+		t.Fatal("manager is idle while a lifecycle is active")
+	}
+
+	type submission struct {
+		result   <-chan Result
+		accepted bool
+	}
+	secondSubmission := make(chan submission, 1)
+	go func() {
+		result, secondAccepted := m.SendAsync(t.Context(), Request{
+			To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "second",
+		})
+		secondSubmission <- submission{result: result, accepted: secondAccepted}
+	}()
+	waitForAdmissionDemand(t, m, 2)
+	if m.Idle() {
+		t.Fatal("manager is idle with an active lifecycle and a waiter")
+	}
+
+	b.mu.Lock()
+	b.head = 101
+	b.mu.Unlock()
+	if got := <-first; got.Err != nil {
+		t.Fatalf("first result: %v", got.Err)
+	}
+
+	var second submission
+	select {
+	case second = <-secondSubmission:
+		if !second.accepted {
+			t.Fatal("second request was not accepted after the handoff")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second request remained blocked after the first completed")
+	}
+	waitForSentTransactions(t, b, 2)
+	waitForAdmissionDemand(t, m, 1)
+	if m.Idle() {
+		t.Fatal("manager became idle during the lifecycle handoff")
+	}
+
+	b.mu.Lock()
+	b.head = 102
+	b.mu.Unlock()
+	if got := <-second.result; got.Err != nil {
+		t.Fatalf("second result: %v", got.Err)
+	}
+	waitForAdmissionDemand(t, m, 0)
+	if !m.Idle() {
+		t.Fatal("manager did not become idle after the terminal result")
+	}
+}
+
+func TestResultMarksManagerAdmissionFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		manager func(*testing.T) *Manager
+		request Request
+		wantErr error
+	}{
+		{
+			name: "nonce conflict",
+			manager: func(t *testing.T) *Manager {
+				t.Helper()
+				m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+				m.markNonceConflict(7, common.HexToHash("0x1234"))
+				return m
+			},
+			request: Request{To: common.HexToAddress("0xabc"), Label: "paused"},
+			wantErr: errNonceLanePaused,
+		},
+		{
+			name: "manager stopped",
+			manager: func(t *testing.T) *Manager {
+				t.Helper()
+				m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				done := make(chan struct{})
+				go func() {
+					m.Start(ctx)
+					close(done)
+				}()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("manager did not stop")
+				}
+				return m
+			},
+			request: Request{To: common.HexToAddress("0xabc"), Label: "stopped"},
+			wantErr: errManagerStopped,
+		},
+		{
+			name: "expired before admission",
+			manager: func(t *testing.T) *Manager {
+				t.Helper()
+				return New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+			},
+			request: Request{
+				To: common.HexToAddress("0xabc"), CancelAt: time.Now().Add(-time.Second), Label: "expired",
+			},
+			wantErr: context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := test.manager(t)
+			result, accepted := m.SendAsync(t.Context(), test.request)
+			if !accepted {
+				t.Fatal("manager-level admission failure did not return a terminal result")
+			}
+			got := <-result
+			if !errors.Is(got.Err, test.wantErr) {
+				t.Fatalf("result error = %v, want %v", got.Err, test.wantErr)
+			}
+			if !got.NotAdmitted {
+				t.Fatalf("result = %+v, want NotAdmitted", got)
+			}
+			if got.Hash != (common.Hash{}) || got.Receipt != nil {
+				t.Fatalf("not-admitted result has an on-chain outcome: %+v", got)
+			}
+			if !m.Idle() {
+				t.Fatal("terminal admission failure left demand on the lane")
+			}
+		})
 	}
 }
 
@@ -848,7 +1001,7 @@ func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
 	}
 	select {
 	case got := <-second:
-		if got.Err == nil || !strings.Contains(got.Err.Error(), "context deadline exceeded") {
+		if got.Err == nil || !strings.Contains(got.Err.Error(), "context deadline exceeded") || !got.NotAdmitted {
 			t.Fatalf("expired waiting result = %+v", got)
 		}
 	case <-time.After(time.Second):
@@ -1111,6 +1264,18 @@ func waitForSentTransactions(t *testing.T, b *mockBackend, count int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d broadcasts", count)
+}
+
+func waitForAdmissionDemand(t *testing.T, m *Manager, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := m.admissionDemand.Load(); got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("admission demand = %d, want %d", m.admissionDemand.Load(), want)
 }
 
 type receiptErrorBackend struct {
@@ -1900,8 +2065,8 @@ func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 		if !waiting.accepted {
 			t.Fatal("shutdown waiter returned without a terminal result")
 		}
-		if got := <-waiting.result; !errors.Is(got.Err, errManagerStopped) {
-			t.Fatalf("shutdown waiter result = %+v, want manager stopped", got)
+		if got := <-waiting.result; !errors.Is(got.Err, errManagerStopped) || !got.NotAdmitted {
+			t.Fatalf("shutdown waiter result = %+v, want not-admitted manager stop", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("shutdown waiter remained blocked after manager cancellation")
@@ -1948,7 +2113,7 @@ func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 
 	select {
 	case got := <-result:
-		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) {
+		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) || got.NotAdmitted {
 			t.Fatalf("bounded conflict result = %+v, want shutdown deadline with tracked hash", got)
 		}
 	case <-time.After(time.Second):
@@ -2005,7 +2170,7 @@ func TestStartCancelBoundsCancellationWriteOutage(t *testing.T) {
 
 	select {
 	case got := <-result:
-		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) {
+		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) || got.NotAdmitted {
 			t.Fatalf("bounded write-outage result = %+v, want shutdown deadline with tracked hash", got)
 		}
 	case <-time.After(time.Second):
@@ -2075,7 +2240,7 @@ func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
 
 	select {
 	case got := <-result:
-		if !errors.Is(got.Err, errShutdownTimeout) || got.Hash == (common.Hash{}) {
+		if !errors.Is(got.Err, errShutdownTimeout) || got.Hash == (common.Hash{}) || got.NotAdmitted {
 			t.Fatalf("blocked-signer result = %+v, want tracked shutdown timeout", got)
 		}
 	case <-time.After(time.Second):

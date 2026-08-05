@@ -142,6 +142,10 @@ assertion because the PR19 ABI has no getter.
   expiry or, when nonce ownership is not conflicted, shutdown, and drained to a terminal result. Shutdown
   stops waiting after `shutdownTimeoutMs`, cancels outstanding RPC work, and returns a deadline error so
   SIGTERM cannot hang indefinitely; the deployment grace period must be longer than that bound.
+  UniswapX treats the lane as busy from lifecycle-slot acquisition through the terminal result: quote
+  responses and solver readiness stay blocked while a request is queued or admitted, including receipt
+  confirmation. Pending capacity reservations independently protect already-awarded orders; installing one
+  is not a signal to reopen quoting.
 - **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
   floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
   median p75 priority reward from the latest five blocks, also clamped to headroom, and fails new submissions
@@ -156,10 +160,11 @@ assertion because the PR19 ABI has no getter.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
   re-signed at another nonce. A consumed/colliding nonce is reconciled against every exact attempt. During a
   replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
-  ownership immediately, so readiness can resume while the single lifecycle still holds admission through
-  its configured confirmation depth. Initial-broadcast collisions, and replacements without an owned
-  canonical receipt, keep further sends, quotes, and readiness fail-closed until terminal reconciliation or
-  operator action; a later receipt reorg restores the pause. Each confirmation check proves that the receipt
+  ownership conflict immediately, but the single lifecycle still holds the lane through its configured
+  confirmation depth, so UniswapX quote responses and readiness remain blocked until it is terminal.
+  Initial-broadcast collisions, and replacements without an owned canonical receipt, keep further sends,
+  quotes, and readiness fail-closed until terminal reconciliation or operator action; a later receipt reorg
+  restores the conflict pause. Each confirmation check proves that the receipt
   block is in the stable head's
   ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
   or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
@@ -548,8 +553,8 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    output above the signed requirement remains executor surplus. No ladder, amount range, allocation, or
    quote-time route is published or retained.
 5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
-   Any fill reservation, breaker, exclusive-state change, unavailable txmanager nonce lane, or snapshot
-   replacement during strategy execution turns the result into a decline.
+   Any fill reservation, breaker, exclusive-state change, occupied or unavailable txmanager nonce lane, or
+   snapshot replacement during strategy execution turns the result into a decline.
 6. Echo `requestId` and `quoteId`, and return `200` with `amountIn`, `amountOut`, and `filler` =
    `LiquidLaneUniswapXExecutor`. Do not mutate capacity on this path.
 
@@ -577,21 +582,25 @@ is economic, not just gas:
   means simultaneous winning hard quotes can contend; current-chain replanning and simulation fail closed,
   while the cold-start window and fade breakers limit the operational risk.
 - **Block at order admission, not worker execution** — claiming an order invalidates quote state before it
-  enters the bounded worker queue. The blocker remains until planning rejects the order or an accepted
-  transaction installs its shared-capacity reservation, so queueing and the first chain-time read cannot
-  advertise the same capacity again.
+  enters the bounded worker queue. The blocker remains through planning and, once the submission occupies
+  the shared lane, until its queued or admitted lifecycle is terminal. Its capacity reservation
+  continues to protect already-awarded orders, but does not replace the lane-occupancy quote gate.
 - **Invalidate quotes across state transitions** — a request may return only against the same snapshot epoch
   and blocker state it started with. A completed fill invalidates the snapshot before releasing its
   reservation, and the released capacity remains unavailable until a post-fill chain refresh publishes the
   next epoch.
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
-  attempts are classified only by their tracked terminal reconciliation. Successful settlement resets it.
+  attempts are classified only by their tracked terminal reconciliation. A txmanager result produced before
+  admission is retried without incrementing the local breaker and is counted as
+  `uniswapx_fills_total{outcome="not-admitted"}`, not as a failed fill. Successful settlement resets it.
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
-- **Gate quotes on transaction readiness:** an unavailable nonce lane blocks quote responses, the solver
-  `/ready` endpoint, its readiness metric, and framework readiness. Exact-hash reconciliation and the
-  fail-closed recovery rule are described in §2.2.
+- **Gate quotes on transaction readiness:** an occupied or unavailable nonce lane blocks quote responses,
+  the solver `/ready` endpoint, its readiness metric, and framework readiness. While a nonce conflict pauses
+  the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
+  calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
+  described in §2.2.
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
   `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
   poll, the solver also reads recent filler history across all statuses so an order that became terminal while

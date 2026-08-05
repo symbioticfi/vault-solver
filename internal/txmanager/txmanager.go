@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -66,11 +67,14 @@ type Request struct {
 	Label         string    // for logs/metrics, e.g. "redeem"
 }
 
-// Result carries the outcome of one transaction request.
+// Result carries the outcome of one transaction request. NotAdmitted identifies manager-level
+// admission failures; ordinary fee, gas, signing, and definite broadcast failures remain submission
+// failures even though they do not produce a tracked hash.
 type Result struct {
-	Hash    common.Hash
-	Receipt *types.Receipt
-	Err     error
+	Hash        common.Hash
+	Receipt     *types.Receipt
+	Err         error
+	NotAdmitted bool
 }
 
 type feeQuote struct {
@@ -114,6 +118,7 @@ type Manager struct {
 	lifecycleSlot      chan struct{}
 	stopping           chan struct{}
 	availabilityChange chan struct{}
+	admissionDemand    atomic.Int64
 
 	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
 	nonce     uint64
@@ -215,6 +220,13 @@ func (m *Manager) Available() bool {
 	return m.conflict == nil
 }
 
+// Idle reports whether no request owns or is waiting for the single signed-lifecycle lane. It is
+// intentionally independent of Available: a nonce conflict pauses admission without making an
+// otherwise empty lane busy.
+func (m *Manager) Idle() bool {
+	return m.admissionDemand.Load() == 0
+}
+
 // AvailabilityChanged is edge-triggered and coalesces rapid state changes. Consumers must call
 // Available after every signal instead of assuming which edge occurred.
 func (m *Manager) AvailabilityChanged() <-chan struct{} {
@@ -267,19 +279,22 @@ func (m *Manager) Start(ctx context.Context) {
 			return
 		case j := <-m.queue:
 			if err := ctx.Err(); err != nil {
-				j.res <- Result{Err: err}
+				j.res <- notAdmittedResult(err)
 				m.releaseLifecycleSlot()
 				stop(err)
 				return
 			}
 			if err := m.nonceConflictError(); err != nil {
-				j.res <- Result{Err: err}
+				j.res <- notAdmittedResult(err)
 				m.releaseLifecycleSlot()
 				continue
 			}
 			pending, err := m.broadcast(ctx, j.req)
 			if err != nil {
-				j.res <- Result{Err: err}
+				j.res <- Result{
+					Err:         err,
+					NotAdmitted: errors.Is(err, errNonceLanePaused) || ctx.Err() != nil,
+				}
 				m.releaseLifecycleSlot()
 				continue
 			}
@@ -304,7 +319,7 @@ func (m *Manager) Start(ctx context.Context) {
 func (m *Manager) Send(ctx context.Context, req Request) Result {
 	result, accepted := m.sendAsync(ctx, req, false)
 	if !accepted {
-		return Result{Err: ctx.Err()}
+		return notAdmittedResult(ctx.Err())
 	}
 	return <-result
 }
@@ -327,6 +342,14 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 }
 
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
+	m.admissionDemand.Add(1)
+	releaseDemandOnReturn := true
+	defer func() {
+		if releaseDemandOnReturn {
+			m.releaseAdmissionDemand()
+		}
+	}()
+
 	admissionCtx := ctx
 	cancel := func() {}
 	if !req.CancelAt.IsZero() {
@@ -343,7 +366,7 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 	}
 	if err := m.nonceConflictError(); err != nil {
 		res := make(chan Result, 1)
-		res <- Result{Err: err}
+		res <- notAdmittedResult(err)
 		return res, true
 	}
 	if try {
@@ -364,11 +387,14 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 	res := make(chan Result, 1)
 	select {
 	case m.queue <- job{req: cloneRequest(req), res: res}:
+		releaseDemandOnReturn = false
 	case <-admissionCtx.Done():
 		m.releaseLifecycleSlot()
+		releaseDemandOnReturn = false
 		return admissionFailure(ctx, req, admissionCtx.Err())
 	case <-m.stopping:
 		m.releaseLifecycleSlot()
+		releaseDemandOnReturn = false
 		return admissionFailure(ctx, req, errManagerStopped)
 	}
 	return res, true
@@ -379,12 +405,23 @@ func admissionFailure(ctx context.Context, req Request, err error) (<-chan Resul
 		return nil, false
 	}
 	res := make(chan Result, 1)
-	res <- Result{Err: errors.Errorf("send %q before admission: %w", req.Label, err)}
+	res <- notAdmittedResult(errors.Errorf("send %q before admission: %w", req.Label, err))
 	return res, true
+}
+
+func notAdmittedResult(err error) Result {
+	return Result{Err: err, NotAdmitted: true}
 }
 
 func (m *Manager) releaseLifecycleSlot() {
 	<-m.lifecycleSlot
+	m.releaseAdmissionDemand()
+}
+
+func (m *Manager) releaseAdmissionDemand() {
+	if remaining := m.admissionDemand.Add(-1); remaining < 0 {
+		panic("txmanager: negative admission demand")
+	}
 }
 
 // MaxFeePerGas returns a profitability ceiling that includes one ordinary replacement when the

@@ -13,6 +13,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -34,6 +36,7 @@ type executionTestReader struct {
 	snapshot         fillSnapshot
 	fillSnapshotFn   func([]liquidlane.Route, *big.Int) fillSnapshot
 	now              time.Time
+	latestBlockReads int
 }
 
 type failingListener struct{ err error }
@@ -53,6 +56,7 @@ func (r *executionTestReader) resolveRoutes(
 func (r *executionTestReader) validateGasTokens([]liquidlane.Route) error { return nil }
 
 func (r *executionTestReader) latestBlockTime(context.Context) (time.Time, error) {
+	r.latestBlockReads++
 	return r.now, nil
 }
 
@@ -369,6 +373,7 @@ type executionTestTxManager struct {
 	maxFeeReads int
 	reqs        []txmanager.Request
 	unavailable bool
+	busy        bool
 	accepted    chan<- struct{}
 }
 
@@ -378,6 +383,7 @@ func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error)
 }
 
 func (m *executionTestTxManager) Available() bool { return !m.unavailable }
+func (m *executionTestTxManager) Idle() bool      { return !m.busy }
 
 func (m *executionTestTxManager) SendAsync(
 	_ context.Context,
@@ -391,6 +397,11 @@ func (m *executionTestTxManager) SendAsync(
 		}
 	}
 	return m.result, true
+}
+
+func (m *executionTestTxManager) complete(result txmanager.Result) {
+	m.result <- result
+	m.busy = false
 }
 
 type contractCallerFunc func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -516,6 +527,46 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	}
 }
 
+func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	accepted := make(chan struct{}, 1)
+	fixture.txm.accepted = accepted
+	fixture.txm.busy = true
+	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
+		t.Fatal("order was not claimed")
+	}
+	orders := make(chan *resolvedOrder, 1)
+	orders <- fixture.order
+	close(orders)
+	done := make(chan error, 1)
+	go func() { done <- fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders) }()
+
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("fill was not accepted")
+	}
+	waitForExecutionCondition(t, func() bool {
+		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
+	})
+	if !fixture.solver.quoteBlocked(time.Now().Unix()) {
+		t.Fatal("accepted transaction lifecycle did not block quoting after fill planning completed")
+	}
+
+	fixture.txm.complete(txmanager.Result{Hash: common.HexToHash("0x2")})
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("fill loop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fill loop did not finish after transaction lifecycle completed")
+	}
+	if fixture.solver.quoteBlocked(time.Now().Unix()) {
+		t.Fatal("completed transaction lifecycle kept quoting blocked")
+	}
+}
+
 func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	accepted := make(chan struct{}, 1)
@@ -587,6 +638,80 @@ func TestFillLoopDropsQueuedOrderAfterCancellation(t *testing.T) {
 	if len(fixture.txm.reqs) != 0 || fixture.solver.planningFills.Load() != 0 ||
 		fixture.solver.inFlight[fixture.order.Hash] {
 		t.Fatal("queued order was submitted or retained after cancellation")
+	}
+}
+
+func TestFillLoopDefersQueuedOrderWhileNonceLaneUnavailable(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	fixture.txm.unavailable = true
+	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
+		t.Fatal("order was not claimed")
+	}
+	orders := make(chan *resolvedOrder, 1)
+	orders <- fixture.order
+	close(orders)
+
+	if err := fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders); err != nil {
+		t.Fatalf("fill loop: %v", err)
+	}
+	reader := fixture.solver.reader.(*executionTestReader)
+	if reader.latestBlockReads != 0 || fixture.strategy.input.OrderID != "" || len(fixture.txm.reqs) != 0 ||
+		len(fixture.packed.Routes) != 0 {
+		t.Fatalf(
+			"unavailable lane performed fill work: chainReads=%d strategyOrder=%q requests=%d packedRoutes=%d",
+			reader.latestBlockReads, fixture.strategy.input.OrderID, len(fixture.txm.reqs), len(fixture.packed.Routes),
+		)
+	}
+	if fixture.solver.planningFills.Load() != 0 || fixture.solver.inFlight[fixture.order.Hash] ||
+		fixture.solver.attempts[fixture.order.Hash] != 0 {
+		t.Fatal("deferred order retained planning/in-flight state or counted as a failed attempt")
+	}
+	retryAt, scheduled := fixture.solver.retryAt[fixture.order.Hash]
+	if !scheduled {
+		t.Fatal("deferred order did not receive a normal retry")
+	}
+	if fixture.solver.claim(fixture.order.Hash, retryAt.Add(-time.Nanosecond)) {
+		t.Fatal("deferred order was reclaimable before its normal retry")
+	}
+	if !fixture.solver.claim(fixture.order.Hash, retryAt) {
+		t.Fatal("deferred order was not reclaimable at its normal retry")
+	}
+	fixture.solver.endFillPlanning()
+}
+
+func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	fixture.order.Source = orderSourcePublicV2
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
+	metrics, err := newUniswapXMetrics(prometheus.NewRegistry(), fixture.solver.ready)
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	fixture.solver.metrics = metrics
+	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.setPendingReservations(
+		fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+	)
+	pending := &pendingUniswapFill{order: fixture.order}
+
+	fixture.solver.completePendingFill(uniswapFillCompletion{
+		fill: pending,
+		result: txmanager.Result{
+			Err:         errors.New("transaction was not admitted"),
+			NotAdmitted: true,
+		},
+	})
+
+	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+		t.Fatal("not-admitted fill retained reservation or in-flight state")
+	}
+	if fixture.solver.attempts[fixture.order.Hash] != 0 || len(fixture.solver.failureTimes) != 0 ||
+		fixture.solver.localBlockUntil.Load() != 0 {
+		t.Fatal("not-admitted fill counted toward retry or fade breaker failures")
+	}
+	if got := testutil.ToFloat64(metrics.fills.WithLabelValues("not-admitted")); got != 1 {
+		t.Fatalf("not-admitted fill metric = %v, want 1", got)
 	}
 }
 

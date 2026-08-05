@@ -63,6 +63,17 @@ func (s *Solver) fillLoop(
 				s.retry(order.Hash, time.Now(), false)
 				continue
 			}
+			if !s.txm.Available() {
+				s.endFillPlanning()
+				s.retry(order.Hash, time.Now(), false)
+				s.log.V(1).Info(
+					"order fill deferred while transaction nonce lane is paused",
+					"source", order.Source,
+					"orderHash", order.Hash.Hex(),
+					"quoteId", order.QuoteID,
+				)
+				continue
+			}
 			s.log.V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
@@ -410,6 +421,18 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
 	if completion.result.Err != nil {
+		if completion.result.NotAdmitted {
+			s.retry(order.Hash, now, false)
+			s.observeFill("not-admitted")
+			s.log.V(1).Info(
+				"order fill was not admitted",
+				"source", order.Source,
+				"orderHash", order.Hash.Hex(),
+				"quoteId", order.QuoteID,
+				"error", completion.result.Err,
+			)
+			return
+		}
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
 		s.observeFill("failed")
