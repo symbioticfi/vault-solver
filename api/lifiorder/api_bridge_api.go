@@ -385,12 +385,14 @@ func (a *BridgeAPIAPIService) OrdersControllerGetOrdersExecute(r ApiOrdersContro
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
 	} else {
 		var defaultValue int32 = 10
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
 		r.limit = &defaultValue
 	}
 	if r.offset != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "offset", r.offset, "form", "")
 	} else {
 		var defaultValue int32 = 0
+		parameterAddToHeaderOrQuery(localVarQueryParams, "offset", defaultValue, "form", "")
 		r.offset = &defaultValue
 	}
 	if r.status != nil {
@@ -628,7 +630,7 @@ func (r ApiQuotesControllerRequestQuoteRequest) OifQuoteRequestDto(oifQuoteReque
 	return r
 }
 
-// Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.
+// Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.
 func (r ApiQuotesControllerRequestQuoteRequest) XIntegratorKey(xIntegratorKey string) ApiQuotesControllerRequestQuoteRequest {
 	r.xIntegratorKey = &xIntegratorKey
 	return r

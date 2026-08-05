@@ -7,6 +7,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -45,6 +46,12 @@ type Solver interface {
 func RequiresTxManager(s Solver) bool {
 	requirer, ok := s.(interface{ RequiresTxManager() bool })
 	return !ok || requirer.RequiresTxManager()
+}
+
+// ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation
+// while it retires externally visible work such as active quotes.
+type ShutdownPreparer interface {
+	ShutdownPreparationTimeout() time.Duration
 }
 
 // Factory builds a Solver from its opaque config block (decoded by the solver into its own type)

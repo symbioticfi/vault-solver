@@ -112,14 +112,26 @@ and roadmap:
 
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
 standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
-LI.FI WebSocket feed. Before each fill it rechecks the canonical order status, adapter state, gas cost, and
-strategy decision, then atomically claims the input, redeems it through LiquidLane, and fills the output via
+LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
+publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
+rechecks the canonical order status, adapter state, gas cost, and strategy decision, then atomically claims
+the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
 available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
 terminal result. Receipted fills, reverts, and cancellations wait for the configured confirmation depth;
 pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt.
+Orders
+that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
+without blocking later deliveries. The worker retries them after every reservation release and returns a still-
+blocked order to the tail. During startup/reconnect recovery, quote publication remains suspended until each
+recovered order leaves the FIFO, either resolved or returned to the recovery sweep. Overflow drops the newest
+retry. A webhook `null` decision and an order-specific `400`/`422` fill rejection stay terminal; other
+strategy failures get at most three attempts per order during each recovery session. On graceful
+shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
+timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
+hard stop.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
@@ -142,7 +154,7 @@ also requires external order coordination. The API key, executor owner key, and 
 distinct credentials.
 
 Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
-scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at WebSocket
+scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at order-feed
 admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
@@ -265,12 +277,13 @@ submissions are neither accepted nor signed until the active lifecycle has a ter
 previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
 the request's earlier deadline), replacements switch to a same-nonce cancellation.
 
-On shutdown, new admission stops immediately and the manager requests same-nonce cancellation when
-nonce ownership is not conflicted. It keeps draining exact signed attempts for at most
-`shutdownTimeoutMs`; if no terminal receipt is available by then, callers receive a shutdown-deadline
-error and the process exits instead of hanging indefinitely. Configure the orchestrator's SIGTERM
-grace longer than this value. The packaged Docker Compose profile uses a 70-second grace with the
-examples' 60-second drain bound.
+During graceful shutdown the manager remains alive while solvers stop external commitments and drain
+already-accepted work. The solver drain is bounded by its preparation timeout plus `pendingTimeoutMs`
+and `replacementIntervalMs`. When manager shutdown begins, new admission stops and it requests
+same-nonce cancellation when nonce ownership is not conflicted. It keeps draining exact signed attempts
+for at most `shutdownTimeoutMs`; if no terminal receipt is available by then, callers receive a
+shutdown-deadline error and the process exits instead of hanging indefinitely. Configure the
+orchestrator's SIGTERM grace to cover the sum of those bounds.
 
 The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation. Normal transactions
 stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump

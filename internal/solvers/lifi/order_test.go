@@ -40,6 +40,50 @@ func TestParseSubmittedOrder(t *testing.T) {
 	}
 }
 
+func TestOrderInboxKeyUsesOrderPayloadInsteadOfMetadata(t *testing.T) {
+	cfg := testLifiConfig()
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	first, err := parseSubmittedOrder(testOrderJSON(t, cfg, tokenIn, tokenOut), cfg, 11155111)
+	if err != nil {
+		t.Fatalf("parse first order: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body); err != nil {
+		t.Fatalf("unmarshal second order: %v", err)
+	}
+	mapField(t, body, "order")["nonce"] = "8"
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal second order: %v", err)
+	}
+	second, err := parseSubmittedOrder(raw, cfg, 11155111)
+	if err != nil {
+		t.Fatalf("parse second order: %v", err)
+	}
+
+	if first.OnChainOrderID != second.OnChainOrderID {
+		t.Fatal("test orders do not share metadata id")
+	}
+	if orderInboxKey(first) == orderInboxKey(second) {
+		t.Fatal("different order payloads were deduplicated by shared metadata id")
+	}
+	mapField(t, body, "order")["nonce"] = "7"
+	mapField(t, body, "meta")["onChainOrderId"] =
+		"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	raw, err = json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal replay order: %v", err)
+	}
+	replay, err := parseSubmittedOrder(raw, cfg, 11155111)
+	if err != nil {
+		t.Fatalf("parse replay order: %v", err)
+	}
+	if orderInboxKey(first) != orderInboxKey(replay) {
+		t.Fatal("same order payload received different keys after metadata changed")
+	}
+}
+
 func TestParseSubmittedOrderRejectsNonStringInputTuple(t *testing.T) {
 	cfg := testLifiConfig()
 	var body map[string]any
@@ -326,6 +370,66 @@ func testOrderJSON(t *testing.T, cfg *Config, tokenIn, tokenOut common.Address) 
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal order: %v", err)
+	}
+	return raw
+}
+
+func testListedOrderJSON(
+	t *testing.T,
+	cfg *Config,
+	tokenIn, tokenOut common.Address,
+	status string,
+) json.RawMessage {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body); err != nil {
+		t.Fatalf("unmarshal order: %v", err)
+	}
+	delete(body, "orderType")
+	delete(body, "quoteId")
+	body["quote"] = nil
+	meta := mapField(t, body, "meta")
+	meta["orderStatus"] = status
+	meta["submitTime"] = float64(1_700_000_000)
+	meta["destinationAddress"] = common.HexToAddress("0x8888888888888888888888888888888888888888").Hex()
+	for _, field := range []string{
+		"orderInitiatedTxHash",
+		"orderDeliveredTxHash",
+		"orderVerifiedTxHash",
+		"orderSettledTxHash",
+		"refundTxHash",
+		"signedAt",
+		"expiredAt",
+		"deliveredAt",
+		"settledAt",
+		"refundedAt",
+		"lastCompactDepositBlockNumber",
+	} {
+		meta[field] = nil
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal listed order: %v", err)
+	}
+	return raw
+}
+
+func testListedOrdersPageJSON(
+	t *testing.T,
+	orders []json.RawMessage,
+	total, offset int,
+) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"data": orders,
+		"meta": map[string]any{
+			"total":  total,
+			"limit":  orderRecoveryPageLimit,
+			"offset": offset,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal listed orders page: %v", err)
 	}
 	return raw
 }

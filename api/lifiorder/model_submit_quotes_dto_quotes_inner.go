@@ -39,7 +39,7 @@ type SubmitQuotesDtoQuotesInner struct {
 	Expiry int32 `json:"expiry"`
 	// Exclusive solver address allowed to fill this quote. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.
 	ExclusiveFor *string `json:"exclusiveFor,omitempty"`
-	// Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote available to all integrators.
+	// Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote, served only to requests that carry no X-Integrator-Key header.
 	IntegratorKeyHash *string `json:"integratorKeyHash,omitempty" validate:"regexp=^[a-f0-9]{64}$"`
 }
 

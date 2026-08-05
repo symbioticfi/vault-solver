@@ -132,22 +132,71 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}
 
+	var stopTx context.CancelFunc
+	if requiresTxManager {
+		// Accepted transactions outlive solver intake cancellation: solvers first stop admitting
+		// work and drain their pending results, then this detached context stops the shared manager.
+		txCtx, cancelTx := context.WithCancel(context.WithoutCancel(runCtx))
+		stopTx = cancelTx
+		txDone := make(chan struct{})
+		go func() {
+			defer close(txDone)
+			txm.Start(txCtx)
+		}()
+		defer func() {
+			stopTx()
+			<-txDone
+		}()
+	}
+
 	health.SetReady(true)
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
+	var shutdownPreparationTimeout time.Duration
+	for _, slv := range solvers {
+		if preparer, ok := slv.(solver.ShutdownPreparer); ok {
+			shutdownPreparationTimeout = max(
+				shutdownPreparationTimeout,
+				preparer.ShutdownPreparationTimeout(),
+			)
+		}
+	}
 	g, gctx := errgroup.WithContext(runCtx)
 	var background sync.WaitGroup
-	if requiresTxManager {
-		background.Go(func() { txm.Start(gctx) })
-	}
 	background.Go(func() {
 		watchReadiness(gctx, txm.AvailabilityChanged(), txm.Available, health.SetReady)
 	})
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}
+
+	var (
+		solversDone      chan struct{}
+		drainMonitorDone chan struct{}
+	)
+	if requiresTxManager {
+		solversDone = make(chan struct{})
+		drainMonitorDone = make(chan struct{})
+		// The finite shutdown budget covers solver preparation, one pending-timeout window, and one
+		// replacement interval. It bounds how long the process waits before stopping txmanager;
+		// txmanager then applies its own configured lifecycle drain timeout.
+		shutdownTimeout := shutdownPreparationTimeout + time.Duration(
+			cfg.TxManager.PendingTimeoutMs+cfg.TxManager.ReplacementIntervalMs,
+		)*time.Millisecond
+		go func() {
+			defer close(drainMonitorDone)
+			monitorTransactionDrain(gctx.Done(), solversDone, shutdownTimeout, func() {
+				log.Info("solver shutdown timed out; stopping tx manager", "timeout", shutdownTimeout.String())
+				stopTx()
+			})
+		}()
+	}
 	err = g.Wait()
+	if requiresTxManager {
+		close(solversDone)
+		<-drainMonitorDone
+	}
 	background.Wait()
 	if err == nil {
 		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) {
@@ -171,5 +220,25 @@ func watchReadiness(
 			setReady(false)
 			return
 		}
+	}
+}
+
+func monitorTransactionDrain(
+	shutdown <-chan struct{},
+	solversDone <-chan struct{},
+	timeout time.Duration,
+	onTimeout func(),
+) {
+	select {
+	case <-shutdown:
+	case <-solversDone:
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		onTimeout()
+	case <-solversDone:
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
@@ -39,6 +40,9 @@ type submittedOrder struct {
 	OrderStatus    string
 	OrderID        string
 	OnChainOrderID string
+	dedupeKey      string
+	processed      chan struct{}
+	recoveryGen    uint64
 
 	Order        inputsettler.StandardOrder
 	InputSettler common.Address
@@ -99,11 +103,16 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	if err != nil {
 		return nil, err
 	}
+	dedupeKey, err := localOrderKey(parsed.order)
+	if err != nil {
+		return nil, err
+	}
 	return &submittedOrder{
 		QuoteID:        eventQuoteID(event),
 		OrderStatus:    event.Meta.OrderStatus,
 		OrderID:        event.Meta.OrderID,
 		OnChainOrderID: event.Meta.OnChainOrderID,
+		dedupeKey:      dedupeKey,
 		Order:          parsed.order,
 		InputSettler:   inputSettler,
 		TokenIn:        parsed.tokenIn,
@@ -112,6 +121,27 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OutputAmount:   new(big.Int).Set(parsed.outputAmount),
 		Output:         parsed.output,
 	}, nil
+}
+
+func localOrderKey(order inputsettler.StandardOrder) (string, error) {
+	if order.Nonce == nil || order.OriginChainId == nil || len(order.Inputs) == 0 || len(order.Outputs) == 0 {
+		return "", errors.New("incomplete order cannot be fingerprinted")
+	}
+	for _, input := range order.Inputs {
+		if input[0] == nil || input[1] == nil {
+			return "", errors.New("incomplete order input cannot be fingerprinted")
+		}
+	}
+	for _, output := range order.Outputs {
+		if output.ChainId == nil || output.Amount == nil {
+			return "", errors.New("incomplete order output cannot be fingerprinted")
+		}
+	}
+	data, err := lifiInputSettler.TryPackOrderIdentifier(order)
+	if err != nil {
+		return "", errors.Errorf("pack local order key: %w", err)
+	}
+	return crypto.Keccak256Hash(data).Hex(), nil
 }
 
 func isFillableOrderStatus(status string) bool {

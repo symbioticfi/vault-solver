@@ -15,6 +15,11 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
+const (
+	initialQuoteSuspensionBackoff = time.Second
+	maximumQuoteSuspensionBackoff = 30 * time.Second
+)
+
 type quoteSubmitter interface {
 	submitQuotes(ctx context.Context, quotes []types.Quote) error
 }
@@ -37,24 +42,93 @@ type quoteState struct {
 	renewBefore time.Duration
 }
 
-func (s *Solver) quoteLoop(ctx context.Context, routes []route, refresh <-chan struct{}) error {
+func (s *Solver) quoteLoop(
+	ctx context.Context,
+	routes []route,
+	refresh <-chan struct{},
+	feedConnections <-chan context.Context,
+) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
 
 	state := newQuoteState(max(s.cfg.QuoteInterval, s.cfg.QuoteTTL/3))
-	s.refreshQuotes(ctx, routes, state)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			s.cfg.OrderServer.HTTPTimeout,
+		)
+		defer cancel()
+		s.suspendQuotes(shutdownCtx, state)
+		if err := shutdownCtx.Err(); err != nil && len(state.active) > 0 {
+			s.log.Error(err, "quote shutdown incomplete", "activePairs", len(state.active))
+		}
+	}()
 	var lastBlock uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case connectionCtx := <-feedConnections:
+			state.forceRenewal()
+			connectedCtx, stopConnected := context.WithCancel(connectionCtx)
+			stopOnShutdown := context.AfterFunc(ctx, stopConnected)
+			//nolint:contextcheck // connectedCtx is cancelled by either the feed connection or quote-loop context.
+			s.runConnectedQuoteLoop(connectedCtx, routes, refresh, ticker.C, state, &lastBlock)
+			_ = stopOnShutdown()
+			stopConnected()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.suspendQuotes(ctx, state)
+		case <-refresh:
+			s.suspendQuotes(ctx, state)
+		case <-ticker.C:
+			s.suspendQuotes(ctx, state)
+		}
+	}
+}
+
+func (s *Solver) runConnectedQuoteLoop(
+	ctx context.Context,
+	routes []route,
+	refresh <-chan struct{},
+	ticks <-chan time.Time,
+	state *quoteState,
+	lastBlock *uint64,
+) {
+	s.refreshQuotes(ctx, routes, state)
+	for {
+		select {
+		case <-ctx.Done():
+			return
 		case <-refresh:
 			s.refreshQuotes(ctx, routes, state)
-		case <-ticker.C:
-			if s.shouldRefreshQuotes(ctx, state, &lastBlock) {
+		case <-ticks:
+			if s.shouldRefreshQuotes(ctx, state, lastBlock) {
 				s.refreshQuotes(ctx, routes, state)
 			}
 		}
+	}
+}
+
+func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
+	backoff := initialQuoteSuspensionBackoff
+	for {
+		removed, err := state.reconcile(ctx, s.orders, nil, s.wallNow())
+		if err == nil {
+			if removed > 0 {
+				s.log.Info("quotes suspended", "removedPairs", removed)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.log.Error(err, "quote suspension: expire active quotes; retrying", "backoff", backoff.String())
+		if !waitForRetry(ctx, backoff) {
+			return
+		}
+		backoff = min(2*backoff, maximumQuoteSuspensionBackoff)
 	}
 }
 
@@ -139,6 +213,13 @@ func newQuoteState(renewBefore time.Duration) *quoteState {
 	}
 }
 
+func (s *quoteState) forceRenewal() {
+	for key, pair := range s.active {
+		pair.expiry = 0
+		s.active[key] = pair
+	}
+}
+
 func (s *quoteState) needsRenewal(now time.Time) bool {
 	deadline := now.Add(s.renewBefore).Unix()
 	for _, pair := range s.active {
@@ -195,6 +276,14 @@ func (s *quoteState) reconcile(
 	}
 	if len(toPublish) != 0 {
 		if err := submitter.submitQuotes(ctx, toPublish); err != nil {
+			// The server may have accepted a request even when the client did not
+			// receive its response. Track every attempted pair conservatively so
+			// disconnect suspension expires it before quoting resumes.
+			for _, key := range publishKeys {
+				uncertain := next[key]
+				uncertain.expiry = 0
+				s.active[key] = uncertain
+			}
 			return len(expire), err
 		}
 	}
