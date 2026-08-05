@@ -166,6 +166,35 @@ func TestOrderInboxBoundsRecoveryDedupe(t *testing.T) {
 	inbox.endRecovery()
 }
 
+func TestOrderInboxPreservesRecoveryEvictionOrderAfterCompaction(t *testing.T) {
+	inbox := newOrderInbox(orderRecoverySeenCapacity + 2)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+
+	for index := 0; index <= orderRecoverySeenCapacity; index++ {
+		if err := inbox.enqueue(&submittedOrder{OrderID: strconv.Itoa(index)}); err != nil {
+			t.Fatalf("enqueue %d: %v", index, err)
+		}
+	}
+	if inbox.recoverySeenNext == 0 {
+		t.Fatal("recovery seen ring did not wrap")
+	}
+
+	if retries := inbox.takeRecoveryRetries(); len(retries) != 0 {
+		t.Fatalf("recovery retries = %d, want 0", len(retries))
+	}
+	newest := strconv.Itoa(orderRecoverySeenCapacity + 1)
+	if err := inbox.enqueue(&submittedOrder{OrderID: newest}); err != nil {
+		t.Fatalf("enqueue newest: %v", err)
+	}
+	if inbox.recoverySeen["1"] {
+		t.Fatal("oldest recovery key was not evicted after compaction")
+	}
+	if !inbox.recoverySeen[strconv.Itoa(orderRecoverySeenCapacity)] || !inbox.recoverySeen[newest] {
+		t.Fatal("compaction evicted a newer recovery key")
+	}
+}
+
 func TestOrderInboxRecoveryBarrierBackpressuresUntilWorker(t *testing.T) {
 	inbox := newOrderInbox(1)
 	if err := inbox.enqueueWait(t.Context(), &submittedOrder{OrderID: "first"}); err != nil {

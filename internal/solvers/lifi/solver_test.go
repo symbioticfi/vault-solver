@@ -475,6 +475,46 @@ func (s reservationAwareFillStrategy) DecideFillWithoutReservations(
 	return s.plan, nil
 }
 
+type recoveryBarrierRetryStrategy struct {
+	plan          *types.FillPlan
+	failNextRetry bool
+	events        chan string
+}
+
+func (*recoveryBarrierRetryStrategy) DecideQuotes(
+	context.Context,
+	types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s *recoveryBarrierRetryStrategy) DecideFill(
+	_ context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	if input.OrderID == "pending" {
+		return s.plan, nil
+	}
+	if reserved := input.Reservations[s.plan.Routes[0].CapacityID]; reserved != nil && reserved.Sign() > 0 {
+		s.events <- "blocked"
+		return nil, nil
+	}
+	if s.failNextRetry {
+		s.failNextRetry = false
+		s.events <- "transient"
+		return nil, errors.New("temporary retry failure")
+	}
+	return s.plan, nil
+}
+
+func (s *recoveryBarrierRetryStrategy) DecideFillWithoutReservations(
+	context.Context,
+	types.FillInput,
+) (*types.FillPlan, error) {
+	s.events <- "probe"
+	return s.plan, nil
+}
+
 type reroutingFillStrategy struct {
 	plans           map[liquidlane.CapacityID]*types.FillPlan
 	blockedCapacity liquidlane.CapacityID
@@ -1037,6 +1077,107 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not finish after receipt")
+	}
+}
+
+func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	plan := &types.FillPlan{Routes: []types.FillRoute{{
+		RouteID:           "route-1",
+		CapacityID:        "capacity-1",
+		Adapter:           fixture.adapter,
+		AmountIn:          big.NewInt(1_000_000),
+		ExpectedAmountOut: big.NewInt(1_000_000),
+		MinAmountOut:      big.NewInt(990_001),
+		ReservedAmountOut: big.NewInt(1_000_000),
+	}}}
+	events := make(chan string, 3)
+	strategy := &recoveryBarrierRetryStrategy{plan: plan, failNextRetry: true, events: events}
+	submitted := make(chan chan<- txmanager.Result, 1)
+	txm := &fakeLifiTxSender{
+		hold: true,
+		onSend: func(_ int, result chan<- txmanager.Result) {
+			submitted <- result
+		},
+	}
+	s := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	s.reader = fakeLifiReader{
+		status: lifiOrderStatusDeposited,
+		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
+			return common.BigToHash(order.Nonce)
+		},
+		fillSnapshotsFn: func() []liquidlane.FillQuote {
+			return profitableFillSnapshots(fixture.tokenIn, fixture.tokenOut, fixture.adapter, 1_000_000)
+		},
+	}
+
+	pending := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	pending.OrderID = "pending"
+	blockedValue := *pending
+	blockedValue.OrderID = "blocked"
+	blockedValue.Order.Nonce = new(big.Int).Add(pending.Order.Nonce, big.NewInt(1))
+	blockedKey, err := localOrderKey(blockedValue.Order)
+	if err != nil {
+		t.Fatalf("blocked order key: %v", err)
+	}
+	blockedValue.dedupeKey = blockedKey
+	blocked := &blockedValue
+	barrier := &submittedOrder{processed: make(chan struct{})}
+	orders := make(chan *submittedOrder)
+	barrierDelivered := make(chan struct{})
+	go func() {
+		orders <- pending
+		orders <- blocked
+		orders <- barrier
+		close(barrierDelivered)
+		close(orders)
+	}()
+
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.runOrderWorker(
+			t.Context(),
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			inbox.markRecoveryRetry,
+			nil,
+		)
+	}()
+
+	pendingResult := receiveFillSubmission(t, submitted)
+	expectRetryEvent(t, events, "blocked")
+	expectRetryEvent(t, events, "probe")
+	expectSignal(t, barrierDelivered)
+	select {
+	case <-barrier.processed:
+		t.Fatal("recovery barrier passed while a recovered order was waiting on capacity")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	pendingResult <- txm.fillResult()
+	expectRetryEvent(t, events, "transient")
+	select {
+	case <-barrier.processed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("recovery barrier did not pass after the capacity retry returned to recovery")
+	}
+	retries := inbox.takeRecoveryRetries()
+	if len(retries) != 1 || retries[0] != blocked {
+		t.Fatalf("recovery retries = %+v, want blocked order", retries)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOrderWorker: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not stop after retaining the capacity retry")
 	}
 }
 

@@ -69,10 +69,6 @@ func (s *Solver) quoteLoop(
 		case <-ctx.Done():
 			return ctx.Err()
 		case connectionCtx := <-feedConnections:
-			if connectionCtx == nil {
-				s.suspendQuotes(ctx, state)
-				continue
-			}
 			state.forceRenewal()
 			connectedCtx, stopConnected := context.WithCancel(connectionCtx)
 			stopOnShutdown := context.AfterFunc(ctx, stopConnected)

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,7 +309,73 @@ func TestOrderClientListRecoverableOrdersPaginatesAndFilters(t *testing.T) {
 	}
 
 	solver := &Solver{cfg: cfg, chainID: 11155111, log: logr.Discard()}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: orders[0]}); order == nil {
+	order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: orders[0]})
+	if order == nil {
 		t.Fatal("listed order did not pass the WebSocket admission parser")
+	}
+	if len(order.Output.Context) != 0 {
+		t.Fatalf("listed limit order context = %x, want non-exclusive context", order.Output.Context)
+	}
+}
+
+func TestOrderClientListRecoverableOrdersPaginationLimit(t *testing.T) {
+	cfg := testLifiConfig()
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	row := testListedOrderJSON(t, cfg, tokenIn, tokenOut, orderStatusSigned)
+
+	for _, tc := range []struct {
+		name       string
+		total      int
+		wantErr    string
+		wantOrders int
+	}{
+		{name: "maximum reachable total", total: 1_050, wantOrders: 1_050},
+		{name: "first unreachable row", total: 1_051, wantErr: "pagination requires offset 1050"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+				if err != nil {
+					t.Errorf("offset: %v", err)
+					http.Error(w, "invalid offset", http.StatusBadRequest)
+					return
+				}
+				count := min(int(orderRecoveryPageLimit), tc.total-offset)
+				rows := make([]json.RawMessage, count)
+				for index := range rows {
+					rows[index] = row
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(map[string]any{
+					"data": rows,
+					"meta": map[string]any{
+						"total": tc.total, "limit": orderRecoveryPageLimit, "offset": offset,
+					},
+				}); err != nil {
+					t.Errorf("encode orders page: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			orders, err := client.listRecoverableOrdersByStatus(t.Context(), cfg.Executor, orderStatusSigned)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) ||
+					!strings.Contains(err.Error(), "reported total 1051") {
+					t.Fatalf("listRecoverableOrdersByStatus() error = %v", err)
+				}
+				if len(orders) != 0 {
+					t.Fatalf("orders = %d after pagination failure, want 0", len(orders))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("listRecoverableOrdersByStatus: %v", err)
+			}
+			if len(orders) != tc.wantOrders {
+				t.Fatalf("orders = %d, want %d", len(orders), tc.wantOrders)
+			}
+		})
 	}
 }

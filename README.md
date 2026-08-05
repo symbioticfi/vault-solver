@@ -122,10 +122,12 @@ and immediately refreshes every affected quote. A fill remains pending until the
 the configured confirmation depth; only then is its reservation released and quote refresh requested. Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
-blocked order to the tail; overflow drops the newest retry. A webhook `null` decision stays terminal rather than
-triggering a hypothetical second request. On graceful shutdown the solver keeps the feed alive while it
-expires active curves with the configured order-server HTTP timeout, then stops accepting orders and waits for
-already-accepted fills until completion or the finite process hard stop.
+blocked order to the tail. During startup/reconnect recovery, quote publication remains suspended until each
+recovered order leaves the FIFO, either resolved or returned to the recovery sweep. Overflow drops the newest
+retry. A webhook `null` decision stays terminal rather than triggering a hypothetical second request. On graceful
+shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
+timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
+hard stop.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative

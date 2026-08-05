@@ -289,10 +289,11 @@ bounded FIFO; a bounded per-connection seen set coalesces their overlap even aft
 the queue. Recovery applies backpressure
 instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
 passed every recovered row, any accepted fill has installed its reservation, and transient chain/state failures
-have been re-enqueued from their retained payloads even when the next REST sweep does not list them yet. The
-barrier snapshots the inbox
-admission generation; a live enqueue behind that barrier changes the generation and forces another sweep before
-recovery can end. On disconnect the solver
+have been re-enqueued from their retained payloads even when the next REST sweep does not list them yet. If a
+recovered order enters the capacity retry FIFO, the barrier stays pending until it installs its own reservation,
+becomes terminal, or returns its retained payload to the next recovery sweep. The barrier
+snapshots the inbox admission generation; a live enqueue behind that barrier changes the generation and forces
+another sweep before recovery can end. On disconnect the solver
 retries expiry of its known active curves until acknowledged and resumes only after the next barrier. This closes the local
 publish-before-recovery race, but cannot revoke a match the remote server already made against a stale quote
 while the process was down. Live overflow still drops the newest message rather than growing memory without

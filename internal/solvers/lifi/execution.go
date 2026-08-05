@@ -223,8 +223,10 @@ func (q *orderInbox) takeRecoveryRetries() []*submittedOrder {
 		delete(q.recoverySeen, key)
 	}
 	q.recoveryRetry = make(map[string]*submittedOrder)
-	seenOrder := q.recoverySeenOrder[:0]
-	for _, key := range q.recoverySeenOrder {
+	seenOrder := make([]string, 0, len(q.recoverySeenOrder))
+	for offset := range len(q.recoverySeenOrder) {
+		index := (q.recoverySeenNext + offset) % len(q.recoverySeenOrder)
+		key := q.recoverySeenOrder[index]
 		if key != "" && !retrying[key] && q.recoverySeen[key] {
 			seenOrder = append(seenOrder, key)
 		}
@@ -497,6 +499,7 @@ func (s *Solver) runOrderWorker(
 	var reservationReleaseGen uint64
 	ctxDone := ctx.Done()
 	var runErr error
+	var recoveryBarrier chan struct{}
 	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations) {
 		var result orderProcessingResult
 		if reservations == nil {
@@ -512,6 +515,8 @@ func (s *Solver) runOrderWorker(
 		if result.retryable && onRetryable != nil {
 			onRetryable(order)
 		}
+		// Invariant: a queued reservation retry implies a pending fill. Completions are
+		// the only events that advance the retry generation and wake the worker.
 		if len(result.blockedOn) == 0 || pending.len() == 0 {
 			return
 		}
@@ -523,6 +528,13 @@ func (s *Solver) runOrderWorker(
 				"capacity", orderRetryCapacity,
 			)
 		}
+	}
+	releaseRecoveryBarrier := func() {
+		if recoveryBarrier == nil || retries.len() > 0 {
+			return
+		}
+		close(recoveryBarrier)
+		recoveryBarrier = nil
 	}
 	complete := func(completion fillCompletion) {
 		s.completeFill(&pending, completion)
@@ -541,6 +553,7 @@ func (s *Solver) runOrderWorker(
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
 			s.requestQuoteRefresh()
 		}
+		releaseRecoveryBarrier()
 	}
 	for orders != nil || pending.len() > 0 || retries.len() > 0 {
 		if runErr == nil && ctx.Err() != nil {
@@ -553,7 +566,9 @@ func (s *Solver) runOrderWorker(
 			return runErr
 		}
 		orderInput := orders
-		if runErr != nil {
+		if runErr != nil || recoveryBarrier != nil {
+			// Post-barrier orders belong to a later recovery generation and must not
+			// extend the retry set protected by this barrier.
 			orderInput = nil
 		}
 		select {
@@ -581,7 +596,8 @@ func (s *Solver) runOrderWorker(
 				continue
 			}
 			if order.processed != nil {
-				close(order.processed)
+				recoveryBarrier = order.processed
+				releaseRecoveryBarrier()
 				continue
 			}
 			process(order, nil)

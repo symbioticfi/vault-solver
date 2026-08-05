@@ -179,6 +179,8 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 ) ([]json.RawMessage, error) {
 	var orders []json.RawMessage
 	for offset := int32(0); ; {
+		// exclusiveFor scopes quote ownership to this solver; it is independent from
+		// the output context's optional on-chain exclusivity window.
 		response, httpResp, err := c.api.BridgeAPIAPI.
 			OrdersControllerGetOrders(c.withAuth(ctx)).
 			Limit(orderRecoveryPageLimit).
@@ -230,9 +232,11 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 		}
 		if nextOffset > orderRecoveryMaxOffset {
 			return nil, errors.Errorf(
-				"lifi order server: get %s orders: pagination exceeds maximum offset %d",
+				"lifi order server: get %s orders: pagination requires offset %d, maximum is %d (reported total %v)",
 				status,
+				nextOffset,
 				orderRecoveryMaxOffset,
+				response.Meta.Total,
 			)
 		}
 		offset = nextOffset
