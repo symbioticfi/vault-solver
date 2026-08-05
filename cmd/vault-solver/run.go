@@ -123,6 +123,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		if err := cfg.ValidateTxManager(); err != nil {
 			return errors.Errorf("invalid config %q: %w", configPath, err)
 		}
+		if err := txm.ValidateFeeHeadroom(); err != nil {
+			return errors.Errorf("invalid config %q: txManager: %w", configPath, err)
+		}
 		if err := txm.Initialize(runCtx); err != nil {
 			return errors.Errorf("initialize tx manager: %w", err)
 		}

@@ -56,9 +56,9 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 
 - **`Run(ctx)`** connects to the LI.FI order server (WebSocket order feed), refreshes standing quotes,
   and evaluates every admitted order once for immediate execution; blocks until ctx cancels.
-- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata and
-  its validity deadline; txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed
-  receipt. Same nonce-serialized EOA as every other transaction-sending solver.
+- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata;
+  txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed receipt. Same
+  nonce-serialized EOA as every other transaction-sending solver.
 - **On-chain reads use `chain.Multicall`** — adapter `getAmountOut` / `minDiscount` / `getMaxAssets` /
   `getMaxRate`, executor immutables/caller authorization, and filler authorization are batched where appropriate.
 - **Signer/caller** — the framework EOA is the tx sender and must be authorized through
@@ -427,7 +427,7 @@ The executor derives the solver identifier from `address(this)`. The WS handler 
 in-memory FIFO without blocking the socket reader, so ping/pong and later messages continue while one planner
 evaluates orders in arrival order. It reads fresh state and gas, asks the strategy, builds calldata, and calls
 `SendAsync`. If another transaction lifecycle is active, that planned request waits for admission without being
-signed; its `CancelAt` can expire the wait, and the single planner does not plan another order meanwhile.
+signed, and the single planner does not plan another order meanwhile.
 An admitted order first verifies `governanceFee() == 0`, then derives the canonical ID and verifies
 `orderStatus == Deposited` before expensive route reads. It selects only configured routes matching both
 order tokens. For private candidates it resolves the
@@ -437,9 +437,9 @@ txmanager recomputes current fees and rejects the fill if base fee plus the sele
 while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
 Pending calls are bumped within the request cap. After the shared pending timeout, txmanager replaces the call
 with a same-nonce self-transfer; cancellation may exceed the profitability cap but not the operator's global
-`txManager.maxFeeGwei`. LI.FI uses the earliest order or selected-discount deadline for both admission and
-cancellation and releases the reservation on the terminal txmanager result. A receipted fill, revert, or
-cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast failure does not.
+`txManager.maxFeeGwei`. LI.FI releases the reservation on the terminal txmanager result. A receipted fill,
+revert, or cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast
+failure does not.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.

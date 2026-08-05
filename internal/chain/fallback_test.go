@@ -92,6 +92,67 @@ func TestFallbackTransport_PrimaryOKNoFallover(t *testing.T) {
 	}
 }
 
+func TestFallbackTransport_PinnedEndpointDoesNotChangeMidSnapshot(t *testing.T) {
+	primaryHealthy := true
+	var primaryHits, fallbackHits int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits++
+		if !primaryHealthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, `primary`)
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHits++
+		_, _ = io.WriteString(w, `fallback`)
+	}))
+	defer fallback.Close()
+
+	eps := mustEndpoints(t, primary.URL, fallback.URL)
+	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
+	client := new(Client)
+	request := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, primary.URL, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		return rt.RoundTrip(req)
+	}
+
+	primarySnapshot := client.PinReadEndpoint(t.Context())
+	resp, err := request(primarySnapshot)
+	if err != nil {
+		t.Fatalf("pin primary: %v", err)
+	}
+	_ = resp.Body.Close()
+	primaryHealthy = false
+	if resp, err = request(primarySnapshot); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("pinned primary failure switched to fallback")
+	}
+	if fallbackHits != 0 {
+		t.Fatalf("fallback hits in primary snapshot = %d, want 0", fallbackHits)
+	}
+
+	fallbackSnapshot := client.PinReadEndpoint(t.Context())
+	resp, err = request(fallbackSnapshot)
+	if err != nil {
+		t.Fatalf("pin fallback: %v", err)
+	}
+	_ = resp.Body.Close()
+	primaryHealthy = true
+	resp, err = request(fallbackSnapshot)
+	if err != nil {
+		t.Fatalf("reuse pinned fallback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if primaryHits != 3 || fallbackHits != 2 {
+		t.Fatalf("endpoint hits primary/fallback = %d/%d, want 3/2", primaryHits, fallbackHits)
+	}
+}
+
 func TestFallbackTransport_AllFail(t *testing.T) {
 	down := func() *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

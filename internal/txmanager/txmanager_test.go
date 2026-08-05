@@ -295,6 +295,29 @@ func TestMaxFeeGweiRejectsCurrentBaseFeeAboveCap(t *testing.T) {
 	}
 }
 
+func TestValidateFeeHeadroom(t *testing.T) {
+	tests := []struct {
+		name    string
+		maxFee  float64
+		tip     float64
+		wantErr bool
+	}{
+		{name: "automatic tip", maxFee: 50},
+		{name: "floor equals reserved cap", maxFee: 50, tip: 39.506172839},
+		{name: "floor one wei above reserved cap", maxFee: 50, tip: 39.506172840, wantErr: true},
+		{name: "reported invalid configuration", maxFee: 50, tip: 40, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &Manager{cfg: Config{MaxFeeGwei: test.maxFee, TipGwei: test.tip}}
+			err := m.ValidateFeeHeadroom()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ValidateFeeHeadroom() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestSend_ReservesReplacementHeadroomInsideRequestCap(t *testing.T) {
 	b := newMockBackend()
 	m := newTestManager(t, b)
@@ -912,6 +935,28 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 	}
 }
 
+func TestConfirmationsKeepFallbackSnapshotOnOneEndpoint(t *testing.T) {
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
+		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+	})
+	receipt := successfulReceipt(tx, 100)
+	receipt.BlockHash = forkedReceiptHeader(100, "fallback").Hash()
+	backend := &mixedForkBackend{mockBackend: newMockBackend(), receipt: receipt}
+	m := New(
+		backend, mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
+	)
+
+	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
+	if err != nil || got != receipt {
+		t.Fatalf("waitForConfirmations = (%+v, %v), want fallback receipt", got, err)
+	}
+	if pins := backend.pinCalls.Load(); pins != 2 {
+		t.Fatalf("pinned snapshots = %d, want 2", pins)
+	}
+}
+
 func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
 	b := &receiptErrorBackend{mockBackend: newMockBackend(), failures: 1}
 	m := New(
@@ -1045,6 +1090,55 @@ type disappearingReceiptBackend struct {
 	*mockBackend
 
 	receiptReads atomic.Int64
+}
+
+type confirmationEndpointPinKey struct{}
+
+type mixedForkBackend struct {
+	*mockBackend
+
+	receipt  *types.Receipt
+	pinCalls atomic.Int64
+}
+
+func (b *mixedForkBackend) PinReadEndpoint(ctx context.Context) context.Context {
+	return context.WithValue(ctx, confirmationEndpointPinKey{}, b.pinCalls.Add(1) > 1)
+}
+
+func (b *mixedForkBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	fallback, pinned := ctx.Value(confirmationEndpointPinKey{}).(bool)
+	if !pinned {
+		if number == nil {
+			return forkedReceiptHeader(102, "primary"), nil
+		}
+		fallback = true
+	}
+	if !fallback && number != nil {
+		return nil, errors.New("primary block unavailable")
+	}
+	height := uint64(102)
+	if number != nil {
+		height = number.Uint64()
+	}
+	fork := "primary"
+	if fallback {
+		fork = "fallback"
+	}
+	return forkedReceiptHeader(height, fork), nil
+}
+
+func (b *mixedForkBackend) TransactionReceipt(ctx context.Context, _ common.Hash) (*types.Receipt, error) {
+	fallback, pinned := ctx.Value(confirmationEndpointPinKey{}).(bool)
+	if pinned && !fallback {
+		return nil, errors.New("primary receipt unavailable")
+	}
+	return b.receipt, nil
+}
+
+func forkedReceiptHeader(number uint64, fork string) *types.Header {
+	header := receiptTestHeader(number)
+	header.Extra = []byte(fork)
+	return header
 }
 
 func (b *blockedFeeBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {

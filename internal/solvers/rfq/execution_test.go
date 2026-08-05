@@ -91,12 +91,12 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 }
 
 type fakeTxm struct {
-	lastReq txmanager.Request
-	result  txmanager.Result
+	lastData []byte
+	result   txmanager.Result
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
-	f.lastReq = req
+	f.lastData = req.Data
 	return f.result
 }
 
@@ -189,11 +189,8 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
-	if len(txm.lastReq.Data) < 4 {
+	if len(txm.lastData) < 4 {
 		t.Fatalf("no fill calldata sent")
-	}
-	if want := time.Unix(4_102_444_800, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.lastReq.CancelAt, want)
 	}
 }
 
@@ -208,7 +205,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
-	if len(txm.lastReq.Data) != 0 {
+	if len(txm.lastData) != 0 {
 		t.Fatal("fill transaction was sent for inconsistent backend metadata")
 	}
 }
@@ -234,9 +231,9 @@ func TestExecution_DiscountFill(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_700,
+			Nonce:    "0x1", Deadline: 4_102_444_800,
 		},
-		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_750, ProtocolSignature: "0xbb",
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
@@ -250,11 +247,8 @@ func TestExecution_DiscountFill(t *testing.T) {
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
 	}
-	if len(txm.lastReq.Data) < 4 {
+	if len(txm.lastData) < 4 {
 		t.Fatalf("no fill calldata sent")
-	}
-	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
 	}
 }
 
@@ -280,9 +274,9 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_750,
+			Nonce:    "0x1", Deadline: 4_102_444_800,
 		},
-		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_700, ProtocolSignature: "0xbb",
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
@@ -299,11 +293,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
 	}
-	if len(txm.lastReq.Data) < 4 {
+	if len(txm.lastData) < 4 {
 		t.Fatalf("no fill calldata sent")
-	}
-	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want protocol deadline %v", txm.lastReq.CancelAt, want)
 	}
 }
 
@@ -336,7 +327,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if !strings.Contains(rec.LastError, errDiscountAdapterMismatch.Error()) {
 		t.Fatalf("lastError = %q, want adapter-mismatch reason", rec.LastError)
 	}
-	if txm.lastReq.Data != nil {
+	if txm.lastData != nil {
 		t.Fatalf("should not have sent a fill for a mismatched discount adapter")
 	}
 
@@ -349,7 +340,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
-	if txm.lastReq.Data != nil {
+	if txm.lastData != nil {
 		t.Fatalf("second cycle must not send a fill either")
 	}
 }
@@ -414,7 +405,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
-	if txm.lastReq.Data != nil {
+	if txm.lastData != nil {
 		t.Fatalf("should not have sent a tx without a fill plan")
 	}
 }

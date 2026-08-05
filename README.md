@@ -263,9 +263,10 @@ stay one 12.5% bump below it so cancellation has headroom, and the initial send 
 inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
 and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
 `tipGwei` is a priority-fee floor: a higher node suggestion wins, while the floor is used if that
-suggestion is unavailable. With `tipGwei: 0` (or the field omitted), txmanager instead uses the median
-p75 priority reward from the latest five blocks. Invalid or unavailable `eth_feeHistory` fails new
-submissions closed; setting a positive floor provides the operator-controlled fallback.
+suggestion is unavailable. Startup rejects a positive floor that cannot fit after both reserved bumps.
+With `tipGwei: 0` (or the field omitted), txmanager instead uses the median p75 priority reward from
+the latest five blocks. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting
+a positive floor provides the operator-controlled fallback.
 
 ## Requirements
 
@@ -304,13 +305,17 @@ inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. An explicit write endpoint must report the same chain ID as the read endpoint.
+endpoints. Receipt confirmation keeps each head/receipt/block consistency check on one selected read
+endpoint; if it fails mid-check, a later poll may select another endpoint. An explicit write endpoint
+must report the same chain ID as the read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
 from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
 must be exclusive to this process: standard nonce reads cannot reveal a future transaction queued
 beyond a gap. Before upgrading from a build that allowed several unresolved signed nonces, drain that
-EOA's write-endpoint pool.
+EOA's write-endpoint pool. After an unclean exit, nonce equality alone cannot rule out a private
+submission hidden by its relay; do not restart the same EOA until that submission is reconciled or can
+no longer execute.
 
 At runtime, a post-signing `nonce too low` pauses new transactions and readiness while `txManager`
 checks every exact signed attempt. A confirmed receipt for one of those hashes resumes the lane;

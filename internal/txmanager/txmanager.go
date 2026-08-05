@@ -41,6 +41,10 @@ type Backend interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 }
 
+type readEndpointPinner interface {
+	PinReadEndpoint(ctx context.Context) context.Context
+}
+
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
 	Confirmations       uint64        // blocks to wait past inclusion before returning
@@ -178,6 +182,20 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 // Confirmations returns the configured finality depth used by requests without an override.
 func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
+}
+
+// ValidateFeeHeadroom rejects a configured priority-fee floor that can never fit under the initial
+// transaction cap after reserving one ordinary replacement and one cancellation bump.
+func (m *Manager) ValidateFeeHeadroom() error {
+	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
+	tip := gweiToWei(m.cfg.TipGwei)
+	if initialLimit != nil && tip.Cmp(initialLimit) > 0 {
+		return errors.Errorf(
+			"tip floor %s exceeds initial fee limit %s after reserved replacement bumps",
+			tip, initialLimit,
+		)
+	}
+	return nil
 }
 
 // Available reports whether new logical transactions may enter the nonce lane. A nonce conflict
@@ -1076,11 +1094,15 @@ func (m *Manager) waitForConfirmations(
 	defer ticker.Stop()
 
 	for {
-		headBefore, headErr := m.confirmationHead(ctx)
+		confirmationCtx := ctx
+		if pinner, ok := m.backend.(readEndpointPinner); ok {
+			confirmationCtx = pinner.PinReadEndpoint(ctx)
+		}
+		headBefore, headErr := m.confirmationHead(confirmationCtx)
 		if headErr != nil {
 			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
 		}
-		refreshed, err := m.canonicalReceipt(ctx, hash)
+		refreshed, err := m.canonicalReceipt(confirmationCtx, hash)
 		if err != nil {
 			if errors.Is(err, errReceiptReorged) {
 				return receipt, err
@@ -1088,7 +1110,7 @@ func (m *Manager) waitForConfirmations(
 			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
 		} else {
 			receipt = refreshed
-			headAfter, afterErr := m.confirmationHead(ctx)
+			headAfter, afterErr := m.confirmationHead(confirmationCtx)
 			if afterErr != nil {
 				m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
 			} else if headErr == nil && headBefore.Hash() == headAfter.Hash() {

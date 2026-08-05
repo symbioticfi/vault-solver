@@ -145,11 +145,16 @@ assertion because the PR19 ABI has no getter.
   cancellation headroom below it. With gas accounting disabled, UniswapX supplies no request ceiling. With
   gas accounting enabled, `MaxFeePerGas` returns the profitability ceiling including one normal replacement,
   and the initial send reserves that replacement inside the ceiling. Cancellation may exceed the request
-  ceiling but never the global ceiling.
+  ceiling but never the global ceiling. Startup rejects a configured positive tip floor that cannot fit
+  beneath the initial cap after both reserved bumps.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
   re-signed at another nonce. A consumed/colliding nonce pauses further sends, quotes, and readiness until an
   exact attempt has a canonical receipt at the configured confirmation depth; unresolved ownership stays
-  fail-closed. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
+  fail-closed. Each confirmation consistency check pins one read endpoint for its head/receipt/block reads;
+  an endpoint failure retries a fresh pinned snapshot rather than mixing fallback forks. Startup likewise
+  rejects any write-endpoint latest/pending nonce mismatch before readiness. Exact-attempt ownership is
+  in-memory: after an unclean exit, the same EOA must not restart until any private submission is reconciled
+  or can no longer execute because nonce equality cannot prove that hidden attempt is gone.
 - **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
   until a fresh post-fill snapshot is published.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives

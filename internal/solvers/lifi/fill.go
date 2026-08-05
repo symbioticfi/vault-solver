@@ -2,7 +2,6 @@ package lifi
 
 import (
 	"math/big"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -19,7 +18,6 @@ var lifiExecutor = executor.NewLiquidLaneLifiExecutor()
 type fillCalldata struct {
 	OrderID  common.Hash
 	Finalise []byte
-	CancelAt time.Time
 }
 
 func buildExecutorRoutes(
@@ -122,39 +120,7 @@ func buildFillCalldata(
 	if err != nil {
 		return nil, errors.Errorf("pack finaliseWithCurrentTimestamp: %w", err)
 	}
-	return &fillCalldata{
-		OrderID: orderID, Finalise: finaliseCalldata,
-		CancelAt: fillCancelAt(order, plan, resolvedDiscounts),
-	}, nil
-}
-
-func fillCancelAt(
-	order submittedOrder,
-	plan *types.FillPlan,
-	resolved map[common.Hash]*discounts.Signed,
-) time.Time {
-	deadline := orderDeadline(&order)
-	for _, route := range plan.Routes {
-		if route.DiscountID == nil {
-			continue
-		}
-		validUntil := discounts.ValidUntil(resolved[*route.DiscountID])
-		if !validUntil.IsZero() && (deadline.IsZero() || validUntil.Before(deadline)) {
-			deadline = validUntil
-		}
-	}
-	return deadline
-}
-
-func orderDeadline(order *submittedOrder) time.Time {
-	deadline := order.Order.Expires
-	if deadline == 0 || order.Order.FillDeadline != 0 && order.Order.FillDeadline < deadline {
-		deadline = order.Order.FillDeadline
-	}
-	if deadline == 0 {
-		return time.Time{}
-	}
-	return time.Unix(int64(deadline), 0)
+	return &fillCalldata{OrderID: orderID, Finalise: finaliseCalldata}, nil
 }
 
 func toExecutorOutput(output inputsettler.MandateOutput) executor.MandateOutput {

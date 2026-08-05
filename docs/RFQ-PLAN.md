@@ -68,8 +68,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata and sets `CancelAt` to the earliest order or selected-discount
-  validity deadline; txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed receipt.
+  builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
+  replacement/cancellation, and confirmed receipt.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.

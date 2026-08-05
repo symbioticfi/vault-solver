@@ -269,6 +269,9 @@ func uint32Unix(t time.Time) uint32 {
 }
 
 func orderExpired(order *submittedOrder, now time.Time) bool {
-	deadline := orderDeadline(order)
-	return !deadline.IsZero() && !now.Before(deadline)
+	chainTime := uint32Unix(now)
+	if order.Order.Expires != 0 && chainTime >= order.Order.Expires {
+		return true
+	}
+	return order.Order.FillDeadline != 0 && chainTime >= order.Order.FillDeadline
 }
