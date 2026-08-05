@@ -39,7 +39,6 @@ type Backend interface {
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
-	BlockNumber(ctx context.Context) (uint64, error)
 }
 
 // Config tunes fee selection and confirmation behavior.
@@ -688,7 +687,6 @@ func (m *Manager) nextReplacementFees(
 	}
 	if err == nil {
 		next.baseFee.Set(current.baseFee)
-		next.tip = maxBigCopy(current.tip, next.tip)
 		next.maxFee = maxBigCopy(current.maxFee, next.maxFee)
 	} else {
 		m.log.V(1).Info("fresh replacement fees unavailable; using cached bump", "error", err)
@@ -696,16 +694,20 @@ func (m *Manager) nextReplacementFees(
 	if limit != nil && next.maxFee.Cmp(limit) > 0 {
 		next.maxFee.Set(limit)
 	}
-	maxTip := new(big.Int).Sub(next.maxFee, next.baseFee)
-	if maxTip.Sign() < 0 {
+	effectiveTipLimit := new(big.Int).Sub(next.maxFee, next.baseFee)
+	if effectiveTipLimit.Sign() < 0 {
 		return feeQuote{}, errors.Errorf(
 			"replacement base fee %s exceeds fee limit %s", next.baseFee, next.maxFee,
 		)
 	}
-	if next.tip.Cmp(maxTip) > 0 {
-		next.tip.Set(maxTip)
+	if err == nil {
+		freshTip := new(big.Int).Set(current.tip)
+		if freshTip.Cmp(effectiveTipLimit) > 0 {
+			freshTip.Set(effectiveTipLimit)
+		}
+		next.tip = maxBigCopy(freshTip, requiredTip)
 	}
-	if next.maxFee.Cmp(requiredMaxFee) < 0 || next.tip.Cmp(requiredTip) < 0 {
+	if next.maxFee.Cmp(requiredMaxFee) < 0 || next.tip.Cmp(next.maxFee) > 0 {
 		return feeQuote{}, errors.Errorf(
 			"%w: previous max fee %s tip %s, limit %s",
 			errReplacementLimitReached,
@@ -1074,9 +1076,7 @@ func (m *Manager) waitForConfirmations(
 	defer ticker.Stop()
 
 	for {
-		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-		head, headErr := m.backend.BlockNumber(lookupCtx)
-		cancel()
+		headBefore, headErr := m.confirmationHead(ctx)
 		if headErr != nil {
 			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
 		}
@@ -1088,8 +1088,15 @@ func (m *Manager) waitForConfirmations(
 			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
 		} else {
 			receipt = refreshed
-			if headErr == nil && head >= receipt.BlockNumber.Uint64()+confirmations {
-				return receipt, nil
+			headAfter, afterErr := m.confirmationHead(ctx)
+			if afterErr != nil {
+				m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
+			} else if headErr == nil && headBefore.Hash() == headAfter.Hash() {
+				head := headAfter.Number.Uint64()
+				included := receipt.BlockNumber.Uint64()
+				if head >= included && head-included >= confirmations {
+					return receipt, nil
+				}
 			}
 		}
 		select {
@@ -1098,6 +1105,19 @@ func (m *Manager) waitForConfirmations(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	header, err := m.backend.HeaderByNumber(lookupCtx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil || header.Number == nil {
+		return nil, errors.New("latest header number is required")
+	}
+	return header, nil
 }
 
 func (m *Manager) canonicalReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {

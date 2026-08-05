@@ -39,6 +39,7 @@ type mockBackend struct {
 	reorgedHeader bool
 
 	reorgOnHeadRead bool
+	latestHeads     []uint64
 
 	sendErrs  []error // returned, in order, by successive SendTransaction calls
 	sendCalls int
@@ -99,7 +100,15 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 		}
 		return header, nil
 	}
-	return &types.Header{Number: new(big.Int).SetUint64(b.head), BaseFee: b.baseFee}, nil
+	if b.reorgOnHeadRead {
+		b.reorgedHeader = true
+	}
+	head := b.head
+	if len(b.latestHeads) > 0 {
+		head = b.latestHeads[0]
+		b.latestHeads = b.latestHeads[1:]
+	}
+	return &types.Header{Number: new(big.Int).SetUint64(head), BaseFee: b.baseFee}, nil
 }
 
 func (b *mockBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, error) {
@@ -130,15 +139,6 @@ func (b *mockBackend) TransactionReceipt(_ context.Context, h common.Hash) (*typ
 		return r, nil
 	}
 	return nil, ethereum.NotFound
-}
-
-func (b *mockBackend) BlockNumber(context.Context) (uint64, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.reorgOnHeadRead {
-		b.reorgedHeader = true
-	}
-	return b.head, nil
 }
 
 func (b *mockBackend) lastSent() *types.Transaction {
@@ -635,8 +635,8 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 		"fresh tip is bounded by the cap": {
 			previous: quote(20, 1, 44), current: quote(20, 40, 0), want: quote(20, 30, 50),
 		},
-		"tip bump does not fit": {
-			previous: quote(20, 10, 44), current: quote(39.5, 1, 0), wantErr: true,
+		"raw tip bump may exceed effective headroom": {
+			previous: quote(20, 10, 44), current: quote(39.5, 1, 0), want: quote(39.5, 11.25, 50),
 		},
 		"max fee bump does not fit": {
 			previous: quote(20, 1, 45), current: quote(20, 1, 0), wantErr: true,
@@ -884,6 +884,31 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 				t.Fatal("reorged lifecycle lost active ownership")
 			}
 		})
+	}
+}
+
+func TestConfirmationsRequireStableHead(t *testing.T) {
+	b := newMockBackend()
+	b.latestHeads = []uint64{102, 100, 102, 102}
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
+		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+	})
+	receipt := successfulReceipt(tx, 100)
+	b.receipts[tx.Hash()] = receipt
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
+	)
+
+	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
+	if err != nil || got != receipt {
+		t.Fatalf("waitForConfirmations = (%+v, %v), want stable confirmed receipt", got, err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.latestHeads) != 0 {
+		t.Fatalf("confirmation returned before stable head snapshot; unread heads = %v", b.latestHeads)
 	}
 }
 
