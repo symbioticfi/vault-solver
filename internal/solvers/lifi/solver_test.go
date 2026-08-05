@@ -422,6 +422,18 @@ func (s fixedFillStrategy) DecideFill(context.Context, types.FillInput) (*types.
 	return s.plan, nil
 }
 
+type errorFillStrategy struct {
+	err error
+}
+
+func (errorFillStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s errorFillStrategy) DecideFill(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, s.err
+}
+
 type terminalNilFillStrategy struct {
 	calls int
 }
@@ -599,6 +611,40 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 	}
 	if strategy.calls != 1 {
 		t.Fatalf("external fill decisions = %d, want 1", strategy.calls)
+	}
+}
+
+func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
+	transient := errors.New("strategy transport unavailable")
+	tests := []struct {
+		name          string
+		err           error
+		wantRetryable bool
+	}{
+		{name: "transient", err: transient, wantRetryable: true},
+		{
+			name: "permanent input rejection",
+			err:  types.MarkPermanentFillDecisionError(errors.New("unsupported output context")),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := immediateTestSetup(t)
+			s := newProcessTestSolver(
+				fixture.cfg, fixture.caller, &fakeLifiTxSender{}, errorFillStrategy{err: tt.err},
+				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+			)
+
+			result := s.processOrderWithPending(
+				t.Context(),
+				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+				nil,
+			)
+			if result.retryable != tt.wantRetryable {
+				t.Fatalf("retryable = %v, want %v", result.retryable, tt.wantRetryable)
+			}
+		})
 	}
 }
 

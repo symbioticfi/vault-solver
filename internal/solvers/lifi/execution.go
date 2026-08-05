@@ -321,16 +321,20 @@ func (s *Solver) runOrderFeed(
 	go func() {
 		feedDone <- s.feed.run(
 			ctx,
-			func(connectionCtx context.Context) {
-				inbox.beginRecovery()
-				defer inbox.endRecovery()
-				if !s.recoverOrdersUntilSuccess(connectionCtx, inbox) {
-					return
-				}
-				select {
-				case feedConnections <- connectionCtx:
-				case <-connectionCtx.Done():
-				}
+			orderFeedConnectionHooks{
+				beforeRead: func(context.Context) {
+					inbox.beginRecovery()
+				},
+				whileConnected: func(connectionCtx context.Context) {
+					defer inbox.endRecovery()
+					if !s.recoverOrdersUntilSuccess(connectionCtx, inbox) {
+						return
+					}
+					select {
+					case feedConnections <- connectionCtx:
+					case <-connectionCtx.Done():
+					}
+				},
 			},
 			func(_ context.Context, msg orderMessage) {
 				order := s.parseOrderMessage(msg)

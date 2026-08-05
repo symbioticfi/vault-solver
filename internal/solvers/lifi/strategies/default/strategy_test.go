@@ -1541,6 +1541,33 @@ func TestDecideFillRejectsDutchAuctionContext(t *testing.T) {
 		if decideErr == nil || !strings.Contains(decideErr.Error(), "Dutch auctions are not supported") {
 			t.Fatalf("DecideFill(context=%x) error = %v", outputContext, decideErr)
 		}
+		if !types.IsPermanentFillDecisionError(decideErr) {
+			t.Fatalf("DecideFill(context=%x) error is not permanent", outputContext)
+		}
+		if plan != nil {
+			t.Fatalf("DecideFill(context=%x) plan = %+v", outputContext, plan)
+		}
+	}
+}
+
+func TestDecideFillMarksMalformedOutputContextPermanent(t *testing.T) {
+	strategy, err := New(testStrategyConfig(Config{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, outputContext := range [][]byte{
+		{limitOrderContextType, 0x01},
+		{exclusiveLimitOrderContextType},
+		{0x02},
+	} {
+		plan, decideErr := strategy.DecideFill(context.Background(), types.FillInput{
+			AmountIn:      big.NewInt(1_000_000),
+			OutputAmount:  big.NewInt(990_000),
+			OutputContext: outputContext,
+		})
+		if decideErr == nil || !types.IsPermanentFillDecisionError(decideErr) {
+			t.Fatalf("DecideFill(context=%x) error = %v, want permanent", outputContext, decideErr)
+		}
 		if plan != nil {
 			t.Fatalf("DecideFill(context=%x) plan = %+v", outputContext, plan)
 		}

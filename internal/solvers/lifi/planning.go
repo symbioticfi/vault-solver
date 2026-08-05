@@ -94,7 +94,7 @@ func (s *Solver) processOrderUsingReservations(
 	plan, err := s.strategy.DecideFill(ctx, prepared.input)
 	if err != nil {
 		s.log.Error(err, "order fill: strategy", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return orderProcessingResult{retryable: true}
+		return orderProcessingResult{retryable: !types.IsPermanentFillDecisionError(err)}
 	}
 	if plan == nil {
 		s.log.V(1).Info("order skipped: no immediate fill plan", "orderId", order.OrderID,

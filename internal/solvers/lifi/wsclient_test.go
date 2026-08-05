@@ -50,7 +50,7 @@ func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
 	defer server.Close()
 
 	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
-	connected, err := feed.watchOnce(context.Background(), nil, func(context.Context, orderMessage) {})
+	connected, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if !connected {
 		t.Fatal("connection was not reported as established")
 	}
@@ -86,11 +86,13 @@ func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
 	go func() {
 		_, _ = feed.watchOnce(
 			t.Context(),
-			func(connectionCtx context.Context) {
-				close(workStarted)
-				<-connectionCtx.Done()
-				close(workCanceled)
-				<-releaseWork
+			orderFeedConnectionHooks{
+				whileConnected: func(connectionCtx context.Context) {
+					close(workStarted)
+					<-connectionCtx.Done()
+					close(workCanceled)
+					<-releaseWork
+				},
 			},
 			func(context.Context, orderMessage) { close(liveHandled) },
 		)
@@ -106,6 +108,61 @@ func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
 	default:
 	}
 	close(releaseWork)
+	expectSignal(t, done)
+}
+
+func TestWatchOnceRunsConnectionStartHookBeforeFirstEvent(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	frameWritten := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(
+			websocket.TextMessage,
+			[]byte(`{"event":"`+orderSubmitEvent+`","data":{}}`),
+		); err != nil {
+			t.Errorf("write event: %v", err)
+			return
+		}
+		close(frameWritten)
+	}))
+	defer server.Close()
+
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	liveHandled := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		_, _ = feed.watchOnce(
+			t.Context(),
+			orderFeedConnectionHooks{
+				beforeRead: func(connectionCtx context.Context) {
+					close(hookStarted)
+					select {
+					case <-releaseHook:
+					case <-connectionCtx.Done():
+					}
+				},
+			},
+			func(context.Context, orderMessage) { close(liveHandled) },
+		)
+		close(done)
+	}()
+
+	expectSignal(t, hookStarted)
+	expectSignal(t, frameWritten)
+	select {
+	case <-liveHandled:
+		t.Fatal("event was handled before connected hook completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseHook)
+	expectSignal(t, liveHandled)
 	expectSignal(t, done)
 }
 
@@ -126,8 +183,8 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- feed.run(ctx, func(context.Context) {
-			started <- struct{}{}
+		done <- feed.run(ctx, orderFeedConnectionHooks{
+			whileConnected: func(context.Context) { started <- struct{}{} },
 		}, func(context.Context, orderMessage) {})
 	}()
 

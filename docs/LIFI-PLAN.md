@@ -398,7 +398,8 @@ type Strategy interface {
   `DecideFill` returns an immediate `*FillPlan` or `nil`. On a built-in-strategy `nil` with pending reservations,
   the local deterministic strategy is probed once without them. Only a valid hypothetical plan makes the worker
   enqueue the order in its bounded retry FIFO. A webhook `null` is not probed with a second request; it and all
-  other skipped orders remain terminal.
+  other skipped orders remain terminal. Strategy errors are retried during recovery unless the strategy marks a
+  deterministic input rejection as permanent; the default strategy marks malformed or unsupported output contexts.
   The `default` resolves the supported OutputSettlerSimple contexts: limit and exclusive limit both use
   `output.amount`, while an exclusive order for another solver before `startTime` is declined. Dutch and
   exclusive Dutch orders never reach the strategy because order-feed admission discards them. It fills

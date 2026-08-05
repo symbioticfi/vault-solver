@@ -31,18 +31,23 @@ type orderFeed struct {
 	log    logr.Logger
 }
 
+type orderFeedConnectionHooks struct {
+	beforeRead     func(context.Context) // Synchronous: establishes state before the first event.
+	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
+}
+
 func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
 	return &orderFeed{url: url, apiKey: apiKey, log: log}
 }
 
 func (f *orderFeed) run(
 	ctx context.Context,
-	onConnected func(context.Context),
+	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
 ) error {
 	backoff := initialWSBackoff
 	for {
-		connected, err := f.watchOnce(ctx, onConnected, handle)
+		connected, err := f.watchOnce(ctx, hooks, handle)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -66,7 +71,7 @@ func (f *orderFeed) run(
 
 func (f *orderFeed) watchOnce(
 	ctx context.Context,
-	onConnected func(context.Context),
+	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
 ) (bool, error) {
 	headers := http.Header{}
@@ -95,13 +100,16 @@ func (f *orderFeed) watchOnce(
 	defer conn.Close()
 
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
-	var connectionWork sync.WaitGroup
+	var work sync.WaitGroup
 	defer func() {
 		cancelConnection()
-		connectionWork.Wait()
+		work.Wait()
 	}()
-	if onConnected != nil {
-		connectionWork.Go(func() { onConnected(connectionCtx) })
+	if hooks.beforeRead != nil {
+		hooks.beforeRead(connectionCtx)
+	}
+	if hooks.whileConnected != nil {
+		work.Go(func() { hooks.whileConnected(connectionCtx) })
 	}
 
 	f.log.Info("order feed connected", "url", f.url)
