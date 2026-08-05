@@ -187,20 +187,15 @@ func (q *orderInbox) beginRecovery() {
 	q.recoverySeenOrder = nil
 	q.recoverySeenNext = 0
 	q.recoveryOverflow = false
-	q.recoveryRetry = make(map[string]*submittedOrder)
-	q.recoveryAttempts = make(map[string]int)
-	q.recoveryGen = 0
-}
-
-func (q *orderInbox) endRecovery() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.recoverySeen = nil
-	q.recoverySeenOrder = nil
-	q.recoverySeenNext = 0
-	q.recoveryOverflow = false
-	q.recoveryRetry = nil
-	q.recoveryAttempts = nil
+	// Retained retries and their attempt budgets span connection generations. A
+	// reconnecting REST snapshot may lag the live WebSocket order that failed, so
+	// only successful recovery convergence may discard these maps.
+	if q.recoveryRetry == nil {
+		q.recoveryRetry = make(map[string]*submittedOrder)
+	}
+	if q.recoveryAttempts == nil {
+		q.recoveryAttempts = make(map[string]int)
+	}
 	q.recoveryGen = 0
 }
 
@@ -342,7 +337,6 @@ func (s *Solver) runOrderFeed(
 					inbox.beginRecovery()
 				},
 				whileConnected: func(connectionCtx context.Context) {
-					defer inbox.endRecovery()
 					if !s.recoverOrdersUntilSuccess(connectionCtx, inbox) {
 						return
 					}
@@ -373,6 +367,9 @@ func (s *Solver) runOrderFeed(
 	select {
 	case <-workerInputDrained:
 		_ = drainTimer.Stop()
+		// All admitted orders were processed synchronously. Stop capacity retries,
+		// while the worker continues draining fills already accepted by txmanager.
+		stopWork()
 	case workerErr = <-workerDone:
 		workerFinished = true
 		_ = drainTimer.Stop()

@@ -340,6 +340,45 @@ func TestSendAsyncCanCompleteAtInclusion(t *testing.T) {
 	}
 }
 
+func TestSendAsyncRejectsAfterManagerStops(t *testing.T) {
+	m := stoppedTestManager(t)
+	type sendResult struct {
+		result   <-chan Result
+		accepted bool
+	}
+	returned := make(chan sendResult, 1)
+	go func() {
+		result, accepted := m.SendAsync(t.Context(), Request{Label: "after-stop"})
+		returned <- sendResult{result: result, accepted: accepted}
+	}()
+
+	select {
+	case got := <-returned:
+		if got.accepted || got.result != nil {
+			t.Fatalf("SendAsync after manager stopped = (%v, %v), want (nil, false)", got.result, got.accepted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendAsync blocked after manager stopped")
+	}
+}
+
+func TestSendAfterManagerStopsReturnsError(t *testing.T) {
+	m := stoppedTestManager(t)
+	returned := make(chan Result, 1)
+	go func() {
+		returned <- m.Send(t.Context(), Request{Label: "after-stop"})
+	}()
+
+	select {
+	case got := <-returned:
+		if !errors.Is(got.Err, errManagerStopped) {
+			t.Fatalf("Send error = %v, want %v", got.Err, errManagerStopped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send blocked after manager stopped")
+	}
+}
+
 func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 	b := &replacementBackend{
 		mockBackend:        newMockBackend(),
@@ -822,6 +861,24 @@ func mustSigner(t *testing.T) signer.Signer {
 		t.Fatalf("signer: %v", err)
 	}
 	return s
+}
+
+func stoppedTestManager(t *testing.T) *Manager {
+	t.Helper()
+	m := New(
+		newMockBackend(), mustSigner(t), big.NewInt(11155111),
+		Config{PollInterval: time.Millisecond}, logr.Discard(),
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	go m.Start(ctx)
+	cancel()
+
+	select {
+	case <-m.done:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not stop")
+	}
+	return m
 }
 
 func ptr[T any](value T) *T {

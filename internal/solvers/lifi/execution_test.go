@@ -139,7 +139,9 @@ func TestOrderInboxRecoveryCoalescesDrainedReplay(t *testing.T) {
 	if len(inbox.orders) != 0 {
 		t.Fatalf("REST replay was re-enqueued after live copy drained: %+v", inbox.orders)
 	}
-	inbox.endRecovery()
+	if !inbox.tryEndRecovery(inbox.recoveryGen) {
+		t.Fatal("recovery did not end after the replay was coalesced")
+	}
 	if err := inbox.enqueue(&submittedOrder{OnChainOrderID: "0xabcd"}); err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +167,11 @@ func TestOrderInboxBoundsRecoveryDedupe(t *testing.T) {
 	if !inbox.recoverySeen[strconv.Itoa(orderRecoverySeenCapacity)] {
 		t.Fatal("newest recovery key is missing")
 	}
-	inbox.endRecovery()
 }
 
 func TestOrderInboxPreservesRecoveryEvictionOrderAfterCompaction(t *testing.T) {
 	inbox := newOrderInbox(orderRecoverySeenCapacity + 2)
 	inbox.beginRecovery()
-	defer inbox.endRecovery()
 
 	for index := 0; index <= orderRecoverySeenCapacity; index++ {
 		if err := inbox.enqueue(&submittedOrder{OrderID: strconv.Itoa(index)}); err != nil {
@@ -338,7 +338,6 @@ func TestOrderInboxRecoveryGenerationRejectsPostBarrierEnqueue(t *testing.T) {
 func TestOrderInboxBoundsLimitedRecoveryRetriesAcrossOrderInstances(t *testing.T) {
 	inbox := newOrderInbox(1)
 	inbox.beginRecovery()
-	defer inbox.endRecovery()
 
 	for attempt := 1; attempt <= maximumStrategyRecoveryAttempts; attempt++ {
 		order := &submittedOrder{OrderID: "poisoned"}
@@ -636,7 +635,6 @@ func TestOrderRecoveryRetriesAndSweepsUntilStable(t *testing.T) {
 	defer cancel()
 	inbox := newOrderInbox(4)
 	inbox.beginRecovery()
-	defer inbox.endRecovery()
 	orders := make(chan *submittedOrder)
 	go func() { _ = inbox.run(ctx, orders) }()
 	go func() {
@@ -663,7 +661,7 @@ func TestOrderRecoveryRetriesAndSweepsUntilStable(t *testing.T) {
 	}
 }
 
-func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
+func TestOrderRecoveryRetainsLiveRetryAcrossReconnectWhenSnapshotOmitsOrder(t *testing.T) {
 	cfg := testLifiConfig()
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -682,32 +680,45 @@ func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
 	defer cancel()
 	inbox := newOrderInbox(4)
 	inbox.beginRecovery()
-	defer inbox.endRecovery()
 	orders := make(chan *submittedOrder)
 	go func() { _ = inbox.run(ctx, orders) }()
 	var attempts atomic.Int32
+	firstAttemptDone := make(chan struct{})
 	go func() {
 		for order := range orders {
 			if order.processed != nil {
 				close(order.processed)
 				continue
 			}
-			if attempts.Add(1) == 1 {
-				inbox.markRecoveryRetry(order, 0)
+			attempt := attempts.Add(1)
+			if attempt <= maximumStrategyRecoveryAttempts {
+				inbox.markRecoveryRetry(order, maximumStrategyRecoveryAttempts)
+			}
+			if attempt == 1 {
+				close(firstAttemptDone)
 			}
 		}
 	}()
 	if err := inbox.enqueue(&submittedOrder{OrderID: "live-only"}); err != nil {
 		t.Fatalf("enqueue live order: %v", err)
 	}
+	select {
+	case <-firstAttemptDone:
+	case <-ctx.Done():
+		t.Fatalf("live worker attempt did not complete: %v", ctx.Err())
+	}
+
+	// The connection drops before its recovery sweep can consume the retained
+	// retry. The next connection starts from an empty, lagging REST snapshot.
+	inbox.beginRecovery()
 
 	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {
-		t.Fatalf("recovery did not converge: %v", ctx.Err())
+		t.Fatalf("reconnect recovery did not converge: %v", ctx.Err())
 	}
-	if got := attempts.Load(); got != 2 {
-		t.Fatalf("worker attempts = %d, want retained retry for the live-only order", got)
+	if got := attempts.Load(); got != maximumStrategyRecoveryAttempts {
+		t.Fatalf("worker attempts = %d, want retained retry and attempt budget %d", got, maximumStrategyRecoveryAttempts)
 	}
-	if got := requests.Load(); got < 4 {
-		t.Fatalf("GET /orders requests = %d, want at least two empty sweeps", got)
+	if got := requests.Load(); got == 0 {
+		t.Fatal("empty reconnect snapshot was not queried")
 	}
 }

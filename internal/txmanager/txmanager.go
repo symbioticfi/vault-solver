@@ -22,6 +22,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/tenderly"
 )
 
+var errManagerStopped = errors.New("transaction manager stopped")
+
 // Backend is the subset of an EVM client the manager needs. *ethclient.Client satisfies it.
 type Backend interface {
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
@@ -91,6 +93,8 @@ type Manager struct {
 
 	queue        chan job
 	blockingSlot chan struct{}
+	startOnce    sync.Once
+	done         chan struct{} // closed when the single Start worker exits
 
 	mu        sync.Mutex // guards the local nonce
 	nonce     uint64
@@ -134,6 +138,7 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		log:           log.WithName("txmanager"),
 		queue:         make(chan job),
 		blockingSlot:  make(chan struct{}, 1),
+		done:          make(chan struct{}),
 		unminedNonces: make(map[uint64]struct{}),
 	}
 }
@@ -143,8 +148,15 @@ func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
 }
 
-// Start runs the worker until ctx is cancelled. Run it in its own goroutine.
+// Start runs the single worker until ctx is cancelled. Run it in its own goroutine. Concurrent calls
+// wait for the original worker; subsequent calls return without creating another nonce-owning worker.
 func (m *Manager) Start(ctx context.Context) {
+	m.startOnce.Do(func() { m.run(ctx) })
+}
+
+func (m *Manager) run(ctx context.Context) {
+	defer close(m.done)
+
 	m.log.Info("started", "from", m.signer.Address().Hex())
 	for {
 		select {
@@ -198,19 +210,25 @@ func (m *Manager) TrySend(ctx context.Context, req Request) (Result, bool) {
 func (m *Manager) sendAccepted(ctx context.Context, req Request) Result {
 	result, accepted := m.SendAsync(ctx, req)
 	if !accepted {
-		return Result{Err: ctx.Err()}
+		if err := ctx.Err(); err != nil {
+			return Result{Err: err}
+		}
+		return Result{Err: errManagerStopped}
 	}
 	return <-result
 }
 
 // SendAsync enqueues one transaction for nonce-serialized broadcast and returns its eventual
 // receipt result without waiting for it. Once accepted, the manager's long-lived context owns the
-// broadcast and receipt wait, matching Send's cancellation contract.
+// broadcast and receipt wait, matching Send's cancellation contract. After Start returns it rejects
+// immediately with a nil result channel and accepted=false.
 func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bool) {
 	res := make(chan Result, 1)
 	select {
 	case m.queue <- job{req: cloneRequest(req), res: res}:
 	case <-ctx.Done():
+		return nil, false
+	case <-m.done:
 		return nil, false
 	}
 	return res, true

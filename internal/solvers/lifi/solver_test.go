@@ -1197,7 +1197,6 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 
 	inbox := newOrderInbox(4)
 	inbox.beginRecovery()
-	defer inbox.endRecovery()
 	done := make(chan error, 1)
 	go func() {
 		done <- s.runOrderWorker(
