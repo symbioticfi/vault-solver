@@ -111,13 +111,24 @@ and roadmap:
 
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
 standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
-LI.FI WebSocket feed. Before each fill it rechecks the canonical order status, adapter state, gas cost, and
-strategy decision, then atomically claims the input, redeems it through LiquidLane, and fills the output via
+LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
+publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
+rechecks the canonical order status, adapter state, gas cost, and strategy decision, then atomically claims
+the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
 available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. A fill remains pending until the shared tx manager reaches
-the configured confirmation depth; only then is its reservation released and quote refresh requested.
+the configured confirmation depth; only then is its reservation released and quote refresh requested. Orders
+that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
+without blocking later deliveries. The worker retries them after every reservation release and returns a still-
+blocked order to the tail. During startup/reconnect recovery, quote publication remains suspended until each
+recovered order leaves the FIFO, either resolved or returned to the recovery sweep. Overflow drops the newest
+retry. A webhook `null` decision and an order-specific `400`/`422` fill rejection stay terminal; other
+strategy failures get at most three attempts per order during each recovery session. On graceful
+shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
+timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
+hard stop.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
@@ -140,7 +151,7 @@ also requires external order coordination. The API key, executor owner key, and 
 distinct credentials.
 
 Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
-scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at WebSocket
+scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at order-feed
 admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
@@ -251,9 +262,14 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
 The shared `txManager` fee-bumps pending transactions on `replacementIntervalMs`. After
-`pendingTimeoutMs`, it cancels only the lowest unresolved nonce before allowing later queued nonces
-to proceed. The required `maxFeeGwei` is the absolute ceiling; normal sends reserve one fee bump
-inside that ceiling so cancellation still has headroom.
+`pendingTimeoutMs`, it cancels only the lowest unresolved nonce; a higher nonce whose timer fires while a lower
+nonce remains unresolved waits another `pendingTimeoutMs`. The required `maxFeeGwei` is the absolute ceiling;
+normal sends reserve one fee bump inside that ceiling so cancellation still has headroom. During shutdown the
+manager stays alive while solvers finish accepted work. The finite hard-stop budget is each solver's bounded
+preparation phase (for LI.FI, one `orderServer.httpTimeout` for quote expiry plus one for admitted-inbox drain) plus
+`pendingTimeoutMs + replacementIntervalMs`. This is a best-effort drain window: once it expires, the manager
+stops even if later transactions remain pending. It bounds local shutdown, not RPC latency, mining,
+cancellation of every nonce, or mempool eviction.
 
 ## Requirements
 

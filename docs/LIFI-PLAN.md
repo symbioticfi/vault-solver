@@ -11,7 +11,8 @@ conventions in [`../CLAUDE.md`](../CLAUDE.md); the strategy layer follows
 [`strategy-plan.md`](strategy-plan.md).
 
 > **Status:** the on-chain-order path is implemented and has settled a real Sepolia order end to end.
-> The solver parses matched escrow orders from the WebSocket feed, takes a fresh LiquidLane fill snapshot,
+> The solver admits matched escrow orders from the live WebSocket feed plus a startup/reconnect REST
+> catch-up, takes a fresh LiquidLane fill snapshot,
 > runs the strategy decision, builds `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(...)` calldata,
 > confirms `InputSettlerEscrowLIFI.orderStatus(orderId) == Deposited`, and submits through the shared
 > `txmanager`. Gasless opening is explicitly out of scope. The executor is registered once through EIP-1271
@@ -25,7 +26,7 @@ conventions in [`../CLAUDE.md`](../CLAUDE.md); the strategy layer follows
 
 A user opens/funds an intent on-chain: "here is X of RWA token `tokenIn`; pay me ≥ Y of `tokenOut`
 (the redeemed underlying)." The LI.FI order server is still used for quote discovery, status tracking,
-and matched-order delivery; it pushes the `StandardOrder` to us over the solver WebSocket. We settle
+and matched-order delivery. We settle
 that already-opened order in **one atomic transaction**:
 
 1. call `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` with the
@@ -51,11 +52,12 @@ the solver sees the order.
 
 ## 2. How it maps onto the framework
 
-A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — no framework edits
-(CLAUDE.md modularity rule). Reused as-is:
+A self-contained `internal/solvers/lifi/` implements `solver.Solver`; protocol-specific state and behavior
+remain inside that package (CLAUDE.md modularity rule). The generic framework only exposes the optional
+shutdown-preparation duration used to bound process-wide transaction draining. Reused as-is:
 
-- **`Run(ctx)`** connects to the LI.FI order server (WebSocket order feed), refreshes standing quotes,
-  and evaluates every admitted order once for immediate execution; blocks until ctx cancels.
+- **`Run(ctx)`** maintains the LI.FI order feed and recovery fence, refreshes standing quotes, and
+  evaluates every admitted delivery for immediate execution; blocks until ctx cancels.
 - **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata;
   txmanager owns the nonce, send, and receipt/revert. Same nonce-serialized EOA as every other solver.
 - **On-chain reads use `chain.Multicall`** — adapter `getAmountOut` / `minDiscount` / `getMaxAssets` /
@@ -82,7 +84,7 @@ A new self-contained `internal/solvers/lifi/` implementing `solver.Solver` — n
 | `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, finalise calldata with typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]`, submit. |
 | Order-server client (Go, generated) | `api/lifiorder/` ← `openapi/lifi-order.openapi.json` | Typed HTTP client for register / `quotes/submit` / `orders` (vendor→generate→commit, like `api/rfqbackend`). The WebSocket order feed is a thin hand-written client. |
 | LI.FI strategies (Go) | `internal/solvers/lifi/strategies/` | `default` owns local quote/fill policy; `webhook` delegates to `/decide-quotes` and `/decide-fill` and validates returned route references. |
-| LI.FI order server | external | Discovery: standing quotes + matched-order WS feed. |
+| LI.FI order server | external | Standing quotes and matched-order discovery. |
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
 
 ---
@@ -206,7 +208,7 @@ amount; bytes32 recipient; bytes callbackData; bytes context; }`. Same-chain: `o
 OutputSettler`, `chainId == block.chainid`, empty `callbackData`, and `order.inputOracle ==
 OutputSettler`. `context` is the OutputSettlerSimple pricing/access payload: empty or `0x00` = limit
 amount (`output.amount`), `0x01` = Dutch amount, `0xe0` = exclusive limit, `0xe1` = exclusive Dutch.
-The solver supports only limit and exclusive-limit contexts. It discards both Dutch variants at WebSocket
+The solver supports only limit and exclusive-limit contexts. It discards both Dutch variants at order-feed
 admission and logs the order identifiers and unsupported context type.
 
 **Entrypoint:** the bot calls
@@ -270,6 +272,9 @@ price curve per RWA→underlying pair from `adapter.getMaxRate` / `getMaxAssets`
 `fromChain` and `toChain` are transport fields only: `orderClient` initializes both once from the solver's
 configured runtime chain. Strategy outputs and quote-state keys contain only the local token pair, so a
 same-chain solver cannot accidentally publish a mixed-chain curve.
+The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation commits a
+publish or expiry only when `quotesAdded` equals the submitted range count; a missing or partial acknowledgement
+is treated as an uncertain submit so the same replacement or expiry is retried.
 
 There are two independent exclusivity layers. Quote `exclusiveFor = executor` tells the order server which
 registered solver should receive a match. Supported on-chain exclusivity is encoded as an `0xe0` exclusive
@@ -280,17 +285,37 @@ correlation metadata only: it is not an authorization input, is not used by the 
 the WS event.
 
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
-`pong`). The socket reader hands parsed orders to a bounded FIFO so slow chain reads do not block
-heartbeats; queued replays are coalesced by on-chain order ID, and a full queue logs and drops the
-newest message instead of growing memory without bound (the upstream replay can redeliver it). An
-accepted message is evaluated once; the solver does not persist or retry it locally. Each message is a
+`pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
+`GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
+chain until a pass adds no new immutable-order fingerprints. REST rows and live events pass through the same parser and
+bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first copy has left
+the queue. Recovery applies backpressure
+instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
+passed every recovered row, any accepted fill has installed its reservation, and transient chain/state failures
+have been re-enqueued from their retained payloads even when the next REST sweep does not list them yet. If a
+recovered order enters the capacity retry FIFO, the barrier stays pending until it installs its own reservation,
+becomes terminal, or returns its retained payload to the next recovery sweep. The barrier
+snapshots the inbox admission generation; a live enqueue behind that barrier changes the generation and forces
+another sweep before recovery can end. On disconnect the solver
+retries expiry of its known active curves until acknowledged and resumes only after the next barrier. This closes the local
+publish-before-recovery race, but cannot revoke a match the remote server already made against a stale quote
+while the process was down. Live overflow still drops the newest message rather than growing memory without
+bound. A reconnect may re-evaluate an order that remains active; every attempt repeats the canonical on-chain
+status check. Each status query is bounded by the generated API's maximum offset: at most 1050 rows per status
+can be fenced; exceeding that limit fails closed and retries instead of publishing quotes. Eight non-converging
+sweeps likewise enter bounded backoff and restart convergence. Graceful process cancellation stops renewal first
+but keeps the feed alive while a fresh context, bounded by `orderServer.httpTimeout`, expires known active curves.
+It then stops intake, gives the already-admitted inbox one more HTTP-timeout window to drain, and waits for accepted
+fills until txmanager completion or its finite hard stop.
+The solver does not persist transaction attempts or retry them on a timer. Each live message is a
 `SubmitOrderDto`:
 ```
 { orderType?, quoteId,
   inputSettler,        // escrow-vs-Compact discriminator — must be the opened ESCROW settler
   order: StandardOrder, meta: { orderStatus: Signed|Delivered|Settled, onChainOrderId, ... } }
 ```
-We do **not** listen to on-chain events for discovery. The order must arrive via the LI.FI WebSocket.
+We do **not** scan on-chain events for discovery. The order must be present in the LI.FI live feed or
+active-order REST view.
 The fill path requires `inputSettler` = the configured escrow input settler and a live, not-yet-settled
 status (`Signed`/`Delivered` today). LI.FI's opened-order WS message currently omits `orderType`, so an
 absent value is accepted; an explicitly supplied value is fail-closed to the opened on-chain shapes we
@@ -317,7 +342,7 @@ output contexts locally.
 type Strategy interface {
     // §5.1 standing-quote curve, from configured routes + live adapter facts.
     DecideQuotes(ctx, QuoteInput) (QuoteOutput, error)   // → per-pair ranges[] {minAmount,maxAmount,quote}
-    // A matched WS order + fresh adapter reads → immediate fill or skip.
+    // A matched order delivery + fresh adapter reads → immediate fill or skip.
     DecideFill(ctx, FillInput) (*FillPlan, error)
 }
 ```
@@ -336,10 +361,11 @@ type Strategy interface {
   retains only the range-shaped protocol adapter: selected capacity is divided geometrically into at most
   `rangeCount` candidate ranges (default eight, hard protocol limit sixteen). For each
   `[inputLow,inputHigh]` the strategy calls the same exact-input `greedy.SolveQuote` used by concrete
-  RFQ-style solvers at both endpoints. The lower of the two endpoint rates is capped by a linear conservative
-  floor derived from the alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas,
-  and integer rounding. This covers interior route switches without enumerating route combinations. Two
-  price-movement stages are deducted (quote→decision and decision→inclusion). There is no separate LI.FI
+  RFQ-style solvers at both endpoints. Each endpoint is converted to the largest fixed-point rate that
+  cannot overquote its integer output, then capped by a linear conservative floor derived from the
+  alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas, and integer rounding.
+  The published minimum is revalidated for positive integer output. Two price-movement stages are deducted
+  (quote→decision and decision→inclusion). There is no separate LI.FI
   quote planner or minimum-profit setting. If a candidate range starts below the conservative economic floor,
   the strategy finds the first lower bound whose fixed-upper floor yields a representable positive output and
   publishes that safe suffix. It omits the range only when no such suffix exists or endpoint pricing still
@@ -372,10 +398,18 @@ type Strategy interface {
   filler authorization. Internal discount candidates are resolved again through the
   backend, validated against the advertised ID/adapter/token/deadlines and adapter minimum, then priced
   as `getAmountOut * (1 - signedDiscount)`.
-  `DecideFill` returns an immediate `*FillPlan` or `nil`; the solver does not retain or retry skipped orders.
+  `DecideFill` returns an immediate `*FillPlan` or `nil`. On a built-in-strategy `nil` with pending reservations,
+  the local deterministic strategy is probed once without them. Only a valid hypothetical plan makes the worker
+  enqueue the order in its bounded retry FIFO. A webhook `null` is not probed with a second request; it and all
+  other skipped orders remain terminal. Strategy errors are retried during recovery unless the strategy marks a
+  deterministic input rejection as permanent; the default strategy marks malformed or unsupported output contexts,
+  while the webhook strategy treats fill responses with HTTP `400` or `422` as order-specific permanent
+  rejections. Other strategy failures remain transient, but one recovered order receives at most three total
+  strategy attempts in a recovery session; retryable chain, RPC, and pre-admission failures remain unbounded and
+  fail closed.
   The `default` resolves the supported OutputSettlerSimple contexts: limit and exclusive limit both use
   `output.amount`, while an exclusive order for another solver before `startTime` is declined. Dutch and
-  exclusive Dutch orders never reach the strategy because WebSocket admission discards them. It fills
+  exclusive Dutch orders never reach the strategy because order-feed admission discards them. It fills
   only when aggregate fresh output covers resolved amount + one execution price buffer + gas for
   every selected leg, the adapter asset matches `output.token`, and `fillDeadline`/`expires` plus
   private-signature deadlines have at least `executionDeadlineBuffer` remaining. The plan commits a target
@@ -398,13 +432,26 @@ The order worker owns pending fills and their capacity reservations. It reserves
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
 and releases it only when the shared tx manager returns after the globally configured confirmation depth.
-A successful tx-manager admission immediately sends a coalesced refresh signal; confirmed completion and
-reservation release send another. A single shared `CapacityLedger` is the source for
+The worker-owned retry FIFO is bounded to the same 4096 entries as the order inbox and coalesces immutable
+`StandardOrder` fingerprints rather than trusting order-server metadata IDs. It never blocks intake of later
+deliveries. Each reservation release advances a generation and
+re-evaluates
+every older retry once against fresh order status, deadlines, inventory, gas, and routing. A still-blocked order,
+including one whose fresh plan moved from capacity A to capacity B, returns to the FIFO tail at the current
+generation; a full queue deterministically logs and drops the newest retry. There is no retry timer.
+A successful tx-manager admission immediately sends a coalesced refresh signal. During completion the worker
+keeps the completed fill's reservation visible globally while retry planning uses a snapshot excluding only that
+fill. Any accepted replacement reservation is therefore installed before the old reservation is removed; quote
+refresh can observe the old, old-plus-new, or final state, but never transiently free released capacity. The worker
+removes the old reservation and emits one refresh after the eligible retry batch. A single shared
+`CapacityLedger` is the source for
 both fill planning and quote refresh, and the quote coordinator does not keep a second copy of per-order
-reservations. On startup, when any economic payload changes, or when expiry enters the renewal
-window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
+reservations. When the feed becomes ready, any economic payload changes, or expiry enters
+the renewal window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
 stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
-the old server-side quote. An unchanged pair is not reposted on every calculation tick.
+the old server-side quote. Local state advances only after the response acknowledges every submitted range, so a
+partial acknowledgement leaves the replacement or expiry pending for retry. An unchanged pair is not reposted on
+every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
 `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the
@@ -436,17 +483,24 @@ Before broadcast, txmanager clamps its fee cap and tip to that budget and drops 
 fee itself no longer fits. It verifies `Deposited` again immediately before async submission. The shared txmanager
 serializes fee selection, signing, nonce assignment,
 and broadcast, but waits for receipts independently, allowing consecutive nonces to be pending together. Pending
-calls are fee-bumped within their decision cap. After the shared pending timeout, txmanager cancels only the
-lowest unresolved nonce with a same-nonce self-transfer; this cancellation is outside the fill's profitability
-cap but remains bounded by the operator's required global `txManager.maxFeeGwei`. Normal sends reserve one
+calls are fee-bumped within their decision cap. After the shared pending timeout, txmanager replaces only the
+lowest unresolved nonce with a same-nonce self-transfer. A higher nonce whose timer fires while a lower nonce
+remains unresolved waits another pending timeout. Cancellation is outside the fill's profitability cap but
+remains bounded by the operator's required global
+`txManager.maxFeeGwei`. Normal sends reserve one
 replacement bump below that global ceiling so cancellation still has fee headroom. LI.FI
-requests complete at inclusion/revert rather than waiting for the txmanager's extra confirmation depth; the
-planner then releases that fill's reservation. Every later fill decision subtracts aggregate pending
+requests complete successfully after the globally configured confirmation depth; a failed receipt returns as
+soon as the revert is observed. The planner releases that fill's reservation only after either result. Every
+later fill decision subtracts aggregate pending
 capacity before route allocation. At inclusion, the LiquidLane adapter and OutputSettler enforce the requested
 swap and resolved output; stale state therefore reverts atomically rather than being repriced by the executor.
-There is no solver-level pending plan, timer, future-auction scheduling, or new fill attempt. The txmanager
-may replace the same pending nonce as described above; that is fee management for one submission, not order
-retry.
+There is no solver-level pending plan, timer, or future-auction scheduling. Reservation-blocked built-in decisions
+have only the bounded completion-driven FIFO retry described above. The txmanager may replace
+the same pending nonce as described above; that is fee management for one submission, not order retry.
+During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
+The process hard-stop budget includes LI.FI's advertised quote-expiry HTTP timeout before the configured pending
+timeout plus one replacement interval. This bounds local shutdown even when receipt RPC or mining is unavailable;
+the current lowest-nonce-first policy does not guarantee that every higher pending nonce clears before exit.
 For a selected private candidate, the solver uses its `DiscountID` only as the off-chain resolution key,
 then commits the fresh signed terms and both signatures inside a separate `DiscountRoute`; a missing or
 mismatched resolution aborts before submission. Those two signatures authorize the private LiquidLane route
@@ -578,12 +632,12 @@ production.
 | Supported | Rejected / out of scope |
 |---|---|
 | One configured EVM chain; same-chain input and output. | Cross-chain orders or a chain different from runtime config. |
-| Already-opened `InputSettlerEscrowLIFI` order delivered over the LI.FI WebSocket. | Compact, Permit2, ERC-3009, gasless submit, and `openForAndFinalise`. |
+| Already-opened `InputSettlerEscrowLIFI` order. | Compact, Permit2, ERC-3009, gasless submit, and `openForAndFinalise`. |
 | One ERC-20 input, one output, full fill. | Native input, multiple inputs/outputs, and partial fills. |
 | `StandardOrder.inputOracle` and `MandateOutput.oracle` / `settler` identify the configured OutputSettler. | Unknown order settlers/oracles and non-empty output callback data. |
 | The default strategy handles limit and exclusive-limit output contexts. | Dutch and exclusive Dutch are ignored globally. The default strategy rejects unknown or malformed contexts; a webhook strategy must decline every non-Dutch context it cannot resolve. |
 | Immediate decide-and-send using current time and state. | Retaining or scheduling a future exclusive-limit order for later retry. |
-| WebSocket discovery with an on-chain `Deposited` check before send. | On-chain event discovery or trusting WS status without the chain check. |
+| WebSocket discovery plus scoped REST catch-up, with an on-chain `Deposited` check before send. | On-chain event discovery or trusting order-server status without the chain check. |
 
 #### Ownership map
 
@@ -745,21 +799,21 @@ still requires the redeploy in phase 0.
    Sepolia, register it with LI.FI through EIP-1271, and register it as an adapter filler.
    The vendored ABI and Go binding are generated from the contract artifact at
    RFQ `main` commit `8b970bd`, including the split direct/discount route interface.
-1. **Done locally** Order-server client — the vendored `openapi/lifi-order.openapi.json` + generated `api/lifiorder`
-   client (register / `quotes/submit` / `orders`) plus a thin hand-written WS client for
-   `user:vm-order-submit`, wired to the live `order-dev.li.fi`; register the executor account; config parsing
-   + framework wiring (`solver.Register`, blank-import). `httptest`-backed unit tests, validated live.
+1. **Done locally** Order-server client — generated HTTP client plus a thin hand-written WS client wired
+   to `order-dev.li.fi`, with a fenced active-order catch-up before quote readiness. Recovery is covered by
+   `httptest`; the existing HTTP/WS connection was validated live, but restart catch-up still needs a live exercise.
 2. **Done locally; previous ABI live Sepolia happy path proven** Pricing + decision + tx build — `default` strategy
    (direct executable getMaxRate for quotes; getAmountOut/minDiscount/getMaxAssets for fills;
    Chainlink gas conversion snapshots, code-owned settlement/private gas constants, pair-level route
    ladders, all live direct/private alternatives per route, shared capacity and shared LI.FI/UniswapX
    LiquidLane fill planning,
    asset match, immediate OutputSettlerSimple context resolution
-   for limit and exclusive-limit outputs, with Dutch contexts rejected at WebSocket admission);
+   for limit and exclusive-limit outputs, with Dutch contexts rejected at order-feed admission);
    executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
    early/final `orderStatus == Deposited` checks; latest-state snapshots; raw live txmanager fee input; dynamic
-   ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
-   pending-capacity-aware one-shot planning, inclusion-time reservation release, and fresh state for every admitted order.
+   positive fixed-point ranges; quote reconciliation; bounded replay-coalescing fill handoff,
+   sequential nonce broadcast,
+   pending-capacity-aware bounded FIFO retry, txmanager-result-driven reservation release, and fresh state for every attempt.
    The ladder is quote-only: an awarded order is greedily replanned from current amount-specific quotes,
    and output above the resolved order amount remains in the executor; the current ABI has no sweep entrypoint.
    Unit-tested through the solver-level submit path and validated end-to-end on Sepolia with a
@@ -809,6 +863,12 @@ still requires the redeploy in phase 0.
   The WebSocket `user:vm-order-submit` event is outside the OpenAPI; the confirmed dev connection uses
   `wss://order-dev.li.fi`, `x-api-key`, and application-level `ping`/`pong`. Its opened-order payload and
   optional `quoteId` behavior are captured in §5.1.
+- **Full process-crash recovery** — startup/reconnect order discovery is recovered from `GET /orders`,
+  but accepted transaction attempts and their capacity reservations are still process memory. Before
+  claiming crash-safe operation, persist/reconcile the order-to-transaction identity and reservation
+  against mined, reverted, replaced, or dropped attempts. Graceful shutdown already stops quote renewal,
+  keeps the feed alive through bounded curve expiry, and gives accepted fills the shared transaction-manager
+  completion/cancellation window before a finite local hard stop; an abrupt process crash cannot do even that.
 - **Adapter filler registration** — our executor must be granted filler rights on each LiquidLane
   adapter (`setFiller(executor, true)` / equivalent owner path), by the adapter's vault creator.
   Onboarding prereq.

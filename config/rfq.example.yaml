@@ -27,7 +27,7 @@ txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
   maxFeeGwei: 50                   # required absolute ceiling; normal sends reserve one bump for cancellation
   replacementIntervalMs: 30000     # fee-bump pending transactions every 30s
-  pendingTimeoutMs: 300000         # cancel the lowest blocked nonce after 5m
+  pendingTimeoutMs: 300000         # cancel the lowest unresolved nonce after 5m
   # tipGwei: 1                     # priority fee; omit to use the node's suggestion
 
 observability:

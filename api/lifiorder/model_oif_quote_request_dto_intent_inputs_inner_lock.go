@@ -24,7 +24,7 @@ type OifQuoteRequestDtoIntentInputsInnerLock struct {
 	// Lock type identifier
 	Kind string `json:"kind"`
 	// Lock-specific parameters
-	Params map[string]interface{} `json:"params,omitempty"`
+	Params map[string]*interface{} `json:"params,omitempty"`
 }
 
 type _OifQuoteRequestDtoIntentInputsInnerLock OifQuoteRequestDtoIntentInputsInnerLock
@@ -72,9 +72,9 @@ func (o *OifQuoteRequestDtoIntentInputsInnerLock) SetKind(v string) {
 }
 
 // GetParams returns the Params field value if set, zero value otherwise.
-func (o *OifQuoteRequestDtoIntentInputsInnerLock) GetParams() map[string]interface{} {
+func (o *OifQuoteRequestDtoIntentInputsInnerLock) GetParams() map[string]*interface{} {
 	if o == nil || IsNil(o.Params) {
-		var ret map[string]interface{}
+		var ret map[string]*interface{}
 		return ret
 	}
 	return o.Params
@@ -82,9 +82,9 @@ func (o *OifQuoteRequestDtoIntentInputsInnerLock) GetParams() map[string]interfa
 
 // GetParamsOk returns a tuple with the Params field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *OifQuoteRequestDtoIntentInputsInnerLock) GetParamsOk() (map[string]interface{}, bool) {
+func (o *OifQuoteRequestDtoIntentInputsInnerLock) GetParamsOk() (map[string]*interface{}, bool) {
 	if o == nil || IsNil(o.Params) {
-		return map[string]interface{}{}, false
+		return map[string]*interface{}{}, false
 	}
 	return o.Params, true
 }
@@ -98,8 +98,8 @@ func (o *OifQuoteRequestDtoIntentInputsInnerLock) HasParams() bool {
 	return false
 }
 
-// SetParams gets a reference to the given map[string]interface{} and assigns it to the Params field.
-func (o *OifQuoteRequestDtoIntentInputsInnerLock) SetParams(v map[string]interface{}) {
+// SetParams gets a reference to the given map[string]*interface{} and assigns it to the Params field.
+func (o *OifQuoteRequestDtoIntentInputsInnerLock) SetParams(v map[string]*interface{}) {
 	o.Params = v
 }
 

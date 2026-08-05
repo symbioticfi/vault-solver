@@ -22,13 +22,13 @@ var _ MappedNullable = &SubmitQuotesDtoQuotesInnerRangesInner{}
 // SubmitQuotesDtoQuotesInnerRangesInner struct for SubmitQuotesDtoQuotesInnerRangesInner
 type SubmitQuotesDtoQuotesInnerRangesInner struct {
 	// Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.
-	MinAmount string `json:"minAmount" validate:"regexp=^(0|[1-9]\\\\d*)$"`
+	MinAmount string `json:"minAmount" validate:"regexp=^(0|[1-9]\\d*)$"`
 	// Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.
-	MaxAmount string `json:"maxAmount" validate:"regexp=^(0|[1-9]\\\\d*)$"`
+	MaxAmount string `json:"maxAmount" validate:"regexp=^(0|[1-9]\\d*)$"`
 	// Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.  Full formula:      outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )  Example (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).
-	Quote string `json:"quote" validate:"regexp=^(0|[1-9]\\\\d*)(\\\\.\\\\d+)?$"`
+	Quote string `json:"quote" validate:"regexp=^(0|[1-9]\\d*)(\\.\\d+)?$"`
 	// The fixed cost to add to the quote (as a fee). Should be expressed in \"fromAsset\" units
-	FixedCost *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9]\\\\d*)$"`
+	FixedCost *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9]\\d*)$"`
 }
 
 type _SubmitQuotesDtoQuotesInnerRangesInner SubmitQuotesDtoQuotesInnerRangesInner

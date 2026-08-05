@@ -73,3 +73,60 @@ func TestWebhookStrategyDelegatesQuotesAndFill(t *testing.T) {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
+
+func TestWebhookStrategyClassifiesFillHTTPFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		statusCode    int
+		body          string
+		wantPermanent bool
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest, body: "invalid fill input", wantPermanent: true},
+		{name: "unprocessable entity", statusCode: http.StatusUnprocessableEntity, body: "unsupported order", wantPermanent: true},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, body: "bad credentials"},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: "forbidden"},
+		{name: "not found", statusCode: http.StatusNotFound, body: "route unavailable"},
+		{name: "request timeout", statusCode: http.StatusRequestTimeout, body: "timeout"},
+		{name: "too many requests", statusCode: http.StatusTooManyRequests, body: "retry later"},
+		{name: "server error", statusCode: http.StatusInternalServerError, body: "boom"},
+		{name: "decode error", statusCode: http.StatusOK, body: `{`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			_, err = New(client).DecideFill(t.Context(), types.FillInput{})
+			if err == nil {
+				t.Fatal("DecideFill error = nil, want webhook failure")
+			}
+			if got := types.IsPermanentFillDecisionError(err); got != tt.wantPermanent {
+				t.Fatalf("permanent = %v, want %v (error: %v)", got, tt.wantPermanent, err)
+			}
+		})
+	}
+}
+
+func TestWebhookStrategyKeepsFillTransportFailureTransient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	server.Close()
+
+	_, err = New(client).DecideFill(t.Context(), types.FillInput{})
+	if err == nil {
+		t.Fatal("DecideFill error = nil, want transport failure")
+	}
+	if types.IsPermanentFillDecisionError(err) {
+		t.Fatalf("transport failure was marked permanent: %v", err)
+	}
+}
