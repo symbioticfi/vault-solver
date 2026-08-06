@@ -158,8 +158,12 @@ assertion because the PR19 ABI has no getter.
   ceiling but never the global ceiling. Startup rejects a configured positive tip floor that leaves no
   base-fee headroom beneath the initial cap after both reserved bumps.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
-  re-signed at another nonce. A consumed/colliding nonce is reconciled against every exact attempt. During a
-  replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
+  re-signed at another nonce. Before escalating fees, the next normal replacement tick rebroadcasts the
+  latest transport-ambiguous attempt's exact signed bytes once; it does not append a duplicate attempt or
+  change cached fees. A later tick may apply the normal bump. `CancelAt`, pending timeout, and shutdown skip
+  this grace retry and proceed directly to same-nonce cancellation. A consumed/colliding nonce is reconciled
+  against every exact attempt. During a replacement of an already tracked lifecycle, a receipt proven
+  canonical against a stable head resolves
   ownership conflict immediately, but the single lifecycle still holds the lane through its configured
   confirmation depth, so UniswapX quote responses and readiness remain blocked until it is terminal.
   Initial-broadcast collisions, and replacements without an owned canonical receipt, keep further sends,
@@ -217,6 +221,7 @@ txManager:
   confirmations: 2
   maxFeeGwei: 50
   tipGwei: 0
+  broadcastTimeoutMs: 5000
   replacementIntervalMs: 5000
   pendingTimeoutMs: 300000
   shutdownTimeoutMs: 60000
