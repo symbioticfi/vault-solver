@@ -289,6 +289,16 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 ## 5. Open items / prerequisites
 
+- **Pareto AA_FalconXUSDC readiness** — the RFQ implementation is already token-agnostic and supports
+  the 18-decimal mainnet tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing
+  permissioned, single-route path. Deployment remains deliberately dormant until all of these are
+  authoritative: the bounded Symbiotic `ParetoOracle`, Pareto account factory/implementation and
+  Keyring-onboarded account proxy, LiquidLane adapter, RFQ Executor, authorized caller, and backend
+  token enablement. At activation, configure the token in `permissionedTokens`, set its 1-token floor
+  (`1000000000000000000`) in `minAmountsIn`, and scope the new process to the deployed adapter. The
+  checked-in RFQ example carries the exact token/floor snippet; no protocol branch belongs in solver
+  code.
+
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
