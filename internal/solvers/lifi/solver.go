@@ -43,6 +43,7 @@ type Solver struct {
 	now          func(context.Context) (time.Time, error)
 	maxFeePerGas func(context.Context) (*big.Int, error)
 	wallNow      func() time.Time
+	txLaneState  transactionLaneState
 	capacity     liquidlane.CapacityLedger
 	quoteRefresh chan struct{}
 	discounts    discounts.Provider
@@ -69,6 +70,11 @@ type chainReader interface {
 
 type txSender interface {
 	SendAsync(ctx context.Context, req txmanager.Request) (<-chan txmanager.Result, bool)
+}
+
+type transactionLaneState interface {
+	LaneReady() bool
+	SubscribeLaneState() (<-chan struct{}, func())
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -104,6 +110,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		now:          reader.latestBlockTime,
 		maxFeePerGas: deps.TxManager.MaxFeePerGas,
 		wallNow:      time.Now,
+		txLaneState:  deps.TxManager,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)

@@ -57,6 +57,12 @@ type fakeRecoveryReader struct {
 	authCalls int
 	setCalls  int
 	quoteOut  map[common.Address]*big.Int
+	chainTime time.Time
+	chainErr  error
+}
+
+func (f *fakeRecoveryReader) latestBlockTime(context.Context) (time.Time, error) {
+	return f.chainTime, f.chainErr
 }
 
 func (f *fakeRecoveryReader) readQuoteCandidates(
@@ -91,12 +97,12 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 }
 
 type fakeTxm struct {
-	lastData []byte
-	result   txmanager.Result
+	lastReq txmanager.Request
+	result  txmanager.Result
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
-	f.lastData = req.Data
+	f.lastReq = req
 	return f.result
 }
 
@@ -111,14 +117,16 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
 		strategy: fixedFillStrategy{plan: baseFillPlan()},
+		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}
 }
 
 type fixedFillStrategy struct {
-	plan *types.FillPlan
-	err  error
+	plan    *types.FillPlan
+	err     error
+	onBuild func()
 }
 
 func (s fixedFillStrategy) DecideQuote(
@@ -132,6 +140,9 @@ func (s fixedFillStrategy) BuildFillPlan(
 	context.Context,
 	types.FillInput,
 ) (*types.FillPlan, error) {
+	if s.onBuild != nil {
+		s.onBuild()
+	}
 	return s.plan, s.err
 }
 
@@ -189,8 +200,80 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
-	if len(txm.lastData) < 4 {
+	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	if want := time.Unix(4_102_444_800, 0); !txm.lastReq.CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.lastReq.CancelAt, want)
+	}
+}
+
+func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) {
+	st, be := fillFixtures(t)
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+	wallNow := time.Unix(1_000, 0)
+	e.now = func() time.Time { return wallNow }
+	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(1_010, 0)
+	e.strategy = fixedFillStrategy{
+		plan: baseFillPlan(),
+		onBuild: func() {
+			wallNow = wallNow.Add(15 * time.Second)
+		},
+	}
+
+	e.syncOnce(t.Context())
+
+	want := time.Unix(4_102_444_790, 0)
+	if !txm.lastReq.CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.lastReq.CancelAt, want)
+	}
+}
+
+func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing.T) {
+	st, be := fillFixtures(t)
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	e := newExec(t, st, be, txm)
+	wallNow := time.Unix(1_000, 0)
+	e.now = func() time.Time { return wallNow }
+	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_790, 0)
+	e.strategy = fixedFillStrategy{
+		plan: baseFillPlan(),
+		onBuild: func() {
+			wallNow = wallNow.Add(10 * time.Second)
+		},
+	}
+
+	e.syncOnce(t.Context())
+
+	if txm.lastReq.Data != nil {
+		t.Fatal("fill was admitted after its chain deadline elapsed")
+	}
+	rec := st.order("o1")
+	if rec == nil || rec.Status != statusFailed ||
+		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
+		t.Fatalf("status = %+v, want deadline failure", rec)
+	}
+}
+
+func TestRFQFillDeadline(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		discount time.Time
+		want     int64
+	}{
+		{name: "order only", want: 200},
+		{name: "order earlier", discount: time.Unix(300, 0), want: 200},
+		{name: "selected discount earlier", discount: time.Unix(100, 0), want: 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := rfqFillDeadline(time.Unix(200, 0), tt.discount); got.Unix() != tt.want {
+				t.Fatalf("deadline = %d, want %d", got.Unix(), tt.want)
+			}
+		})
 	}
 }
 
@@ -205,7 +288,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
-	if len(txm.lastData) != 0 {
+	if len(txm.lastReq.Data) != 0 {
 		t.Fatal("fill transaction was sent for inconsistent backend metadata")
 	}
 }
@@ -231,9 +314,9 @@ func TestExecution_DiscountFill(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_800,
+			Nonce:    "0x1", Deadline: 4_102_444_700,
 		},
-		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_750, ProtocolSignature: "0xbb",
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
@@ -247,8 +330,11 @@ func TestExecution_DiscountFill(t *testing.T) {
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
 	}
-	if len(txm.lastData) < 4 {
+	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
 	}
 }
 
@@ -274,9 +360,9 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_800,
+			Nonce:    "0x1", Deadline: 4_102_444_750,
 		},
-		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
+		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_700, ProtocolSignature: "0xbb",
 	}
 	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
@@ -293,8 +379,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	if be.resolveCalls != 1 {
 		t.Fatalf("resolveDiscount calls = %d, want 1", be.resolveCalls)
 	}
-	if len(txm.lastData) < 4 {
+	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want protocol deadline %v", txm.lastReq.CancelAt, want)
 	}
 }
 
@@ -327,7 +416,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if !strings.Contains(rec.LastError, errDiscountAdapterMismatch.Error()) {
 		t.Fatalf("lastError = %q, want adapter-mismatch reason", rec.LastError)
 	}
-	if txm.lastData != nil {
+	if txm.lastReq.Data != nil {
 		t.Fatalf("should not have sent a fill for a mismatched discount adapter")
 	}
 
@@ -340,7 +429,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
-	if txm.lastData != nil {
+	if txm.lastReq.Data != nil {
 		t.Fatalf("second cycle must not send a fill either")
 	}
 }
@@ -405,7 +494,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
-	if txm.lastData != nil {
+	if txm.lastReq.Data != nil {
 		t.Fatalf("should not have sent a tx without a fill plan")
 	}
 }

@@ -29,6 +29,9 @@ type Deps struct {
 	Signer    signer.Signer
 	Log       logr.Logger
 	Metrics   *observability.Metrics
+	// ReportFatal cancels the process runtime before a solver finishes draining accepted work.
+	// The solver must still return the reported error from Run.
+	ReportFatal func(error)
 }
 
 // Solver is a long-running strategy. Run must honor ctx cancellation and return nil (or a
@@ -36,6 +39,13 @@ type Deps struct {
 type Solver interface {
 	Name() string
 	Run(ctx context.Context) error
+}
+
+// RequiresTxManager reports whether a solver uses the shared on-chain sender. Solvers default to
+// requiring it; integrations whose transactions are submitted externally may opt out.
+func RequiresTxManager(s Solver) bool {
+	requirer, ok := s.(interface{ RequiresTxManager() bool })
+	return !ok || requirer.RequiresTxManager()
 }
 
 // ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation

@@ -19,8 +19,12 @@ import (
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID     int64
-	executor    common.Address
+	chainID  int64
+	executor common.Address
+	// laneReady is safe for concurrent use and reflects whether the shared nonce lane can immediately
+	// accept work. It is sampled before and after quote planning so work is declined whenever either
+	// check observes an occupied or conflicted lane.
+	laneReady   func() bool
 	whitelist   adapterWhitelist // nil disables adapter filtering
 	tokenPolicy tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
@@ -50,6 +54,10 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
 		return nil, &badRequestError{errors.Errorf("parse request: %w", err)}
+	}
+	if !qs.canQuote() {
+		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
+		return nil, nil
 	}
 	if parsed == nil {
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
@@ -93,6 +101,10 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
+	if !qs.canQuote() {
+		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
+		return nil, nil
+	}
 
 	qs.log.V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
@@ -109,6 +121,13 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		TokenOut:  lowerAddr(req.TokenOut),
 		QuoteID:   q.QuoteID,
 	}, nil
+}
+
+// canQuote fails closed when the lane-state dependency was not wired. Production construction
+// always supplies the txmanager predicate; keeping the nil case closed prevents a future alternate
+// constructor from silently advertising obligations it cannot fill.
+func (qs *quoteService) canQuote() bool {
+	return qs.laneReady != nil && qs.laneReady()
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

@@ -15,15 +15,22 @@ import (
 )
 
 type fillState struct {
-	snapshots       fillSnapshotSet
+	fillSnapshotObservation
+
 	discountQuotes  []liquidlane.FillQuote
 	signedDiscounts map[common.Hash]*discounts.Signed
+}
+
+type fillSnapshotObservation struct {
+	snapshots       fillSnapshotSet
 	chainTime       time.Time
+	chainObservedAt time.Time
 }
 
 type preparedFill struct {
 	input           types.FillInput
 	signedDiscounts map[common.Hash]*discounts.Signed
+	chainObservedAt time.Time
 }
 
 type orderProcessingResult struct {
@@ -140,7 +147,15 @@ func (s *Solver) processOrderUsingReservations(
 		s.log.Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{}
 	}
-	fill, err := s.submitFill(ctx, order, plan, calldata, prepared.input.MaxFeePerGas)
+	fill, err := s.submitFill(
+		ctx,
+		order,
+		plan,
+		calldata,
+		prepared.input.MaxFeePerGas,
+		prepared.input.ChainTime,
+		prepared.chainObservedAt,
+	)
 	if err != nil {
 		s.log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true}
@@ -249,6 +264,7 @@ func (s *Solver) prepareFill(
 			ChainTime:          state.chainTime,
 		},
 		signedDiscounts: state.signedDiscounts,
+		chainObservedAt: state.chainObservedAt,
 	}, nil
 }
 
@@ -257,28 +273,29 @@ func (s *Solver) loadFillState(
 	routes []route,
 	order *submittedOrder,
 ) (*fillState, error) {
-	snapshots, chainTime, err := s.readFillSnapshot(ctx, routes, order)
+	observation, err := s.readFillSnapshot(ctx, routes, order)
 	if err != nil {
 		return nil, err
 	}
-	if s.skipExpiredOrder(order, chainTime) {
+	if s.skipExpiredOrder(order, observation.chainTime) {
 		return nil, nil
 	}
-	state := &fillState{snapshots: snapshots, chainTime: chainTime}
-	if s.discounts == nil || len(snapshots.Physical) == 0 {
+	state := &fillState{fillSnapshotObservation: observation}
+	if s.discounts == nil || len(observation.snapshots.Physical) == 0 {
 		return state, nil
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, s.cfg.OrderServer.HTTPTimeout)
 	state.discountQuotes, state.signedDiscounts = s.fillDiscountQuotes(
-		resolveCtx, snapshots.Physical, chainTime,
+		resolveCtx, observation.snapshots.Physical, observation.chainTime,
 	)
 	cancel()
 
-	state.snapshots, state.chainTime, err = s.readFillSnapshot(ctx, routes, order)
+	observation, err = s.readFillSnapshot(ctx, routes, order)
 	if err != nil {
 		return nil, errors.Errorf("refresh after private discount resolution: %w", err)
 	}
+	state.fillSnapshotObservation = observation
 	if s.skipExpiredOrder(order, state.chainTime) {
 		return nil, nil
 	}
@@ -297,16 +314,19 @@ func (s *Solver) readFillSnapshot(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-) (fillSnapshotSet, time.Time, error) {
+) (fillSnapshotObservation, error) {
+	chainObservedAt := s.wallNow()
 	chainTime, err := s.now(ctx)
 	if err != nil {
-		return fillSnapshotSet{}, time.Time{}, errors.Errorf("read latest block time: %w", err)
+		return fillSnapshotObservation{}, errors.Errorf("read latest block time: %w", err)
 	}
 	snapshots, err := s.reader.fillSnapshots(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn, chainTime)
 	if err != nil {
-		return fillSnapshotSet{}, time.Time{}, errors.Errorf("read routes: %w", err)
+		return fillSnapshotObservation{}, errors.Errorf("read routes: %w", err)
 	}
-	return snapshots, chainTime, nil
+	return fillSnapshotObservation{
+		snapshots: snapshots, chainTime: chainTime, chainObservedAt: chainObservedAt,
+	}, nil
 }
 
 func (s *Solver) skipExpiredOrder(order *submittedOrder, chainTime time.Time) bool {
@@ -355,9 +375,6 @@ func uint32Unix(t time.Time) uint32 {
 }
 
 func orderExpired(order *submittedOrder, now time.Time) bool {
-	chainTime := uint32Unix(now)
-	if order.Order.Expires != 0 && chainTime >= order.Order.Expires {
-		return true
-	}
-	return order.Order.FillDeadline != 0 && chainTime >= order.Order.FillDeadline
+	deadline := orderDeadline(order)
+	return !deadline.IsZero() && !now.Before(deadline)
 }

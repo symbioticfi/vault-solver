@@ -74,6 +74,19 @@ func TestDecodeStrict(t *testing.T) {
 	}
 }
 
+type txManagerIndependentSolver struct{ fakeSolver }
+
+func (txManagerIndependentSolver) RequiresTxManager() bool { return false }
+
+func TestRequiresTxManagerDefaultsToSafe(t *testing.T) {
+	if !RequiresTxManager(fakeSolver{name: "default"}) {
+		t.Fatal("solver without an explicit capability must require txManager")
+	}
+	if RequiresTxManager(txManagerIndependentSolver{fakeSolver{name: "external"}}) {
+		t.Fatal("externally submitted solver must not require txManager")
+	}
+}
+
 func TestRunTreatsCancellationAsClean(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

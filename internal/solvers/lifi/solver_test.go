@@ -110,6 +110,32 @@ type recoveryGateStrategy struct {
 	tokenOut common.Address
 }
 
+type testTransactionLaneState struct {
+	ready       func() bool
+	changes     <-chan struct{}
+	onSubscribe func()
+	unsubscribe func()
+}
+
+func (s *testTransactionLaneState) LaneReady() bool {
+	return s.ready()
+}
+
+func (s *testTransactionLaneState) SubscribeLaneState() (<-chan struct{}, func()) {
+	if s.onSubscribe != nil {
+		s.onSubscribe()
+	}
+	unsubscribe := s.unsubscribe
+	if unsubscribe == nil {
+		unsubscribe = func() {}
+	}
+	return s.changes, unsubscribe
+}
+
+func alwaysReadyTransactionLane() transactionLaneState {
+	return &testTransactionLaneState{ready: func() bool { return true }}
+}
+
 type quoteSubmission struct {
 	Expiry int64 `json:"expiry"`
 }
@@ -255,6 +281,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
 		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
+		txLaneState:  alwaysReadyTransactionLane(),
 	}
 	done := make(chan error, 1)
 	go func() { done <- solver.Run(ctx) }()
@@ -334,6 +361,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			return big.NewInt(1), nil
 		},
+		txLaneState: alwaysReadyTransactionLane(),
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	connectionCtx, cancelConnection := context.WithCancel(t.Context())
@@ -358,6 +386,122 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("quoteLoop did not stop after expiring quotes")
+	}
+}
+
+func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	cfg.QuoteInterval = time.Hour
+	cfg.QuoteTTL = 2 * time.Hour
+	cfg.OrderServer.HTTPTimeout = time.Second
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	now := time.Unix(1_700_000_000, 0)
+	quoteSubmitted := make(chan struct{}, 2)
+	quoteExpired := make(chan struct{}, 2)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode quote submission: %v", err)
+			return
+		}
+		signal := quoteSubmitted
+		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+			signal = quoteExpired
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer orderServer.Close()
+
+	var ready atomic.Bool
+	ready.Store(false)
+	laneStateChanges := make(chan struct{}, 1)
+	laneStateSubscribed := make(chan struct{})
+	var unsubscribed atomic.Bool
+	refresh := make(chan struct{}, 1)
+	solver := &Solver{
+		cfg:      cfg,
+		reader:   fakeLifiReader{},
+		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
+		orders:   newOrderClient(orderServer.URL, "test-key", time.Second, 11155111),
+		log:      logr.Discard(),
+		now:      func(context.Context) (time.Time, error) { return now, nil },
+		wallNow:  func() time.Time { return now },
+		maxFeePerGas: func(context.Context) (*big.Int, error) {
+			return big.NewInt(1), nil
+		},
+		txLaneState: &testTransactionLaneState{
+			ready:       ready.Load,
+			changes:     laneStateChanges,
+			onSubscribe: func() { close(laneStateSubscribed) },
+			unsubscribe: func() {
+				unsubscribed.Store(true)
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	defer cancelConnection()
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, nil, refresh, feedConnections)
+	}()
+
+	// A busy initial state must suppress the first connected refresh.
+	expectSignal(t, laneStateSubscribed)
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was published while transaction lane was initially not ready")
+	case <-time.After(50 * time.Millisecond):
+	}
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+	ready.Store(false)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	refresh <- struct{}{}
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was renewed while transaction lane was not ready")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+
+	// A coalesced busy+idle transition leaves one undifferentiated notification with LaneReady already
+	// true. The listener must still expire the old curve before publishing the fresh one.
+	ready.Store(false)
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	expectSignal(t, quoteSubmitted)
+	cancel()
+	expectSignal(t, quoteExpired)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("quoteLoop did not stop after resumed quote expiry")
+	}
+	if !unsubscribed.Load() {
+		t.Fatal("quoteLoop did not unsubscribe from transaction lane state")
 	}
 }
 
@@ -679,6 +823,91 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	}
 	if txm.reqs[0].MaxFeePerGas == nil || txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(1)) != 0 {
 		t.Fatalf("fill max fee per gas = %v, want 1", txm.reqs[0].MaxFeePerGas)
+	}
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	}
+}
+
+func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	order.Order.Expires = 0
+	order.Order.FillDeadline = 0
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		order,
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if !txm.reqs[0].CancelAt.IsZero() {
+		t.Fatalf("fill CancelAt = %v, want global pending timeout", txm.reqs[0].CancelAt)
+	}
+}
+
+func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	wallNow := time.Unix(1_700_000_000, 0)
+	s.wallNow = func() time.Time { return wallNow }
+	s.now = func(context.Context) (time.Time, error) {
+		return time.Unix(1_700_000_010, 0), nil
+	}
+	statusReads := 0
+	reader := s.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		statusReads++
+		if statusReads == 2 {
+			wallNow = wallNow.Add(15 * time.Second)
+		}
+		return lifiOrderStatusDeposited, nil
+	}
+	s.reader = reader
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.reqs[0].CancelAt, want)
 	}
 }
 
@@ -1453,6 +1682,7 @@ func newProcessTestSolver(
 		strategy: strategy, caller: caller, txm: txm, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:      func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 }
 

@@ -7,11 +7,11 @@
 # environment at load time. Never commit a real key or production endpoint.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL_SEPOLIA}
+  rpcUrl: ${ETH_RPC_URL_SEPOLIA}   # primary endpoint for state, fee, and receipt reads
   chainId: 11155111
-  # writeRpcUrl: ${WRITE_RPC_URL}
-  # rpcFallbackUrls:
+  # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
+  # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest/pending nonce reads; defaults to rpcUrl
 
 signer:
   # Runtime caller and tx sender. The executor owner adds it through setCallers(); startup checks isCaller().
@@ -19,12 +19,13 @@ signer:
 
 txManager:
   confirmations: 2
-  maxFeeGwei: 50              # required absolute ceiling; normal sends reserve one bump for cancellation
-  replacementIntervalMs: 30000 # replace a pending call with higher fees every 30s
-  pendingTimeoutMs: 300000     # after 5m, cancel the lowest unresolved nonce
-  # Each LI.FI fill also pins its own decision-time fee cap; txmanager clamps fee and tip to that
-  # budget and drops only when it no longer covers base fee.
-  # tipGwei: 1
+  maxFeeGwei: 50               # global fee cap; the normal lifecycle stops one bump below it
+  replacementIntervalMs: 30000 # attempt a capped fee bump every 30s
+  pendingTimeoutMs: 300000     # switch the active nonce to cancellation after 5m
+  shutdownTimeoutMs: 60000     # bound SIGTERM cancellation + receipt drain to 60s
+  # Each fill also supplies its decision-time cap. The initial send reserves one replacement inside
+  # that cap; cancellation may exceed it but never maxFeeGwei.
+  # tipGwei: 1                 # optional floor; omit/zero to use recent eth_feeHistory rewards
 
 observability:
   addr: ":9090"

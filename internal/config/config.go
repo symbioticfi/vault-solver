@@ -21,8 +21,8 @@ type Config struct {
 	Signer    SignerConfig    `yaml:"signer"`
 	TxManager TxManagerConfig `yaml:"txManager"`
 	// Solvers is the set of solvers to run in one process — at most one entry per solver type. They
-	// share the chain client, signer, and (crucially) the single nonce-serialized txManager, so they
-	// never race on nonces.
+	// share the chain client and signer; transaction-sending solvers also share the single
+	// nonce-serialized txManager, so they never race on nonces.
 	Solvers       []SolverConfig      `yaml:"solvers"`
 	Observability ObservabilityConfig `yaml:"observability"`
 }
@@ -41,11 +41,9 @@ type ChainConfig struct {
 	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
 	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
 	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
-	// WriteRPCURL, when set, is used ONLY to broadcast signed transactions (eth_sendRawTransaction).
-	// Every read — nonce, gas, fee, receipts, block number — stays on `rpcUrl`. Point this at a
-	// private/MEV-protected endpoint (e.g. mevblocker) to submit fills privately while reading from a
-	// normal RPC. Optional; empty means broadcasts also use `rpcUrl`. Expand from the environment
-	// with ${WRITE_RPC_URL}.
+	// WriteRPCURL, when set, broadcasts signed transactions and supplies both startup nonce reads.
+	// Other reads stay on `rpcUrl`. Point this at the private/MEV-protected endpoint that accepts the
+	// fills so startup observes its private nonce lane. Optional; empty means `rpcUrl` serves both.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
@@ -69,12 +67,14 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the EIP-1559 priority fee; 0 means "use the node's suggestion".
+	// TipGwei is the minimum EIP-1559 priority fee; 0 derives it from recent fee history.
 	TipGwei float64 `yaml:"tipGwei"`
 	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
+	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
+	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -90,6 +90,7 @@ const DefaultConfirmations = 2
 const (
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
+	DefaultShutdownTimeoutMs     = 60_000
 )
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
@@ -137,6 +138,9 @@ func (c *Config) applyDefaults() {
 	if c.TxManager.PendingTimeoutMs == 0 {
 		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
 	}
+	if c.TxManager.ShutdownTimeoutMs == 0 {
+		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
+	}
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
 	}
@@ -158,21 +162,8 @@ func (c *Config) Validate() error {
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")
 	}
-	if c.TxManager.MaxFeeGwei <= 0 ||
-		math.IsNaN(c.TxManager.MaxFeeGwei) ||
-		math.IsInf(c.TxManager.MaxFeeGwei, 0) {
-		return errors.New("txManager.maxFeeGwei must be finite and positive")
-	}
-	if c.TxManager.TipGwei < 0 ||
-		math.IsNaN(c.TxManager.TipGwei) ||
-		math.IsInf(c.TxManager.TipGwei, 0) {
-		return errors.New("txManager.tipGwei must be finite and non-negative")
-	}
-	if c.TxManager.ReplacementIntervalMs <= 0 {
-		return errors.New("txManager.replacementIntervalMs must be positive")
-	}
-	if c.TxManager.PendingTimeoutMs < c.TxManager.ReplacementIntervalMs {
-		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
+	if err := c.TxManager.validate(false); err != nil {
+		return err
 	}
 	if err := c.Signer.validate(); err != nil {
 		return err
@@ -189,6 +180,31 @@ func (c *Config) Validate() error {
 			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", s.Name)
 		}
 		seen[s.Name] = true
+	}
+	return nil
+}
+
+// ValidateTxManager checks fields required only when at least one solver sends transactions.
+func (c *Config) ValidateTxManager() error {
+	return c.TxManager.validate(true)
+}
+
+func (c TxManagerConfig) validate(required bool) error {
+	if c.MaxFeeGwei < 0 || required && c.MaxFeeGwei == 0 ||
+		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
+		return errors.New("txManager.maxFeeGwei must be finite and positive")
+	}
+	if c.TipGwei < 0 || math.IsNaN(c.TipGwei) || math.IsInf(c.TipGwei, 0) {
+		return errors.New("txManager.tipGwei must be finite and non-negative")
+	}
+	if c.ReplacementIntervalMs <= 0 {
+		return errors.New("txManager.replacementIntervalMs must be positive")
+	}
+	if c.PendingTimeoutMs < c.ReplacementIntervalMs {
+		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
+	}
+	if c.ShutdownTimeoutMs <= 0 {
+		return errors.New("txManager.shutdownTimeoutMs must be positive")
 	}
 	return nil
 }

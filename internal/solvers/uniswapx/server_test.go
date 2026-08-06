@@ -71,6 +71,19 @@ func TestQuoteDelegatesOneRequestedAmountToStrategy(t *testing.T) {
 	}
 }
 
+func TestQuoteDeclinesWhileSharedTransactionLaneBusy(t *testing.T) {
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+	solver := newQuoteTestSolver(t, tokenIn, strategy)
+	solver.txm = &executionTestTxManager{busy: true}
+
+	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+	if err != nil || response.declineReason != "blocked" || len(strategy.inputs) != 0 {
+		t.Fatalf("busy-lane quote = %+v, inputs = %d, err %v", response, len(strategy.inputs), err)
+	}
+}
+
 func TestQuoteRejectsStrategyThatChangesRequestedSide(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
