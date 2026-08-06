@@ -35,6 +35,17 @@ solvers:
                                         # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
       callback: "0x065B612a182f360D4428cD00a8094049B3c92168"   # SymbioticOevSolver — receives Executor callback and pays the bid
 
+      # Optional common gas accounting. Omit the entire block to skip Chainlink reads and choose bundles
+      # by gross loan-token profit. Gas-limit fitting, native Executor-deposit headroom/reservations, the
+      # fixed callback-funded bid, and the signed maxTxGasPriceWei cap still apply when this is omitted.
+      gas:
+        nativeUsdFeed: "0x694AA1769357215DE4FAC081bf1f309aDC325306" # Chainlink Sepolia ETH / USD
+        nativeMaxAge: 24h                                            # native feed heartbeat plus publication slack
+        tokenUsdFeeds:
+          - token: "0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d"   # actual adapter vault asset / loan token (TLOAN)
+            feed: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"  # Chainlink Sepolia USDC / USD (proxy for TLOAN)
+            maxAge: 24h                                              # set independently for every token/USD feed
+
       strategy:
         name: default
         config:
@@ -46,18 +57,12 @@ solvers:
           #                                 # local Morpho math then decides real liquidatability at the auction price
           # maxTrackedPositions: 10000      # Morpho API page size + in-memory at-risk position cap (default 10000)
 
-          # ETH price feeds used to value gas/bid/profit in USD. loanUsd prices the loan token; on the
-          # testbed TLOAN is a $1 token, so it reuses Chainlink's Sepolia USDC/USD feed.
-          loanEthFeed:
-            ethUsd: "0x694AA1769357215DE4FAC081bf1f309aDC325306"    # Chainlink Sepolia ETH / USD
-            loanUsd: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"   # Chainlink Sepolia USDC / USD (proxy for TLOAN)
-            maxAgeMs: 86400000                                      # max feed staleness before a read fails (default 3600000 = 1h)
-
           bid:
             bidEth: "0.0005"                 # minimum bid in ETH; the final bid is max(this, gross-profit share)
             authTtlMs: 60000                 # callback-auth replay window (default 60000); independent of the auction timeout
-            totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms (default 0)
-            minBundleProfitBidBps: 1000      # required extra bundle margin after gas + bid, as bps of the final bid
+            totalBundleProfitBps: 0          # optional bid share of gross bundle profit, in native terms (requires gas)
+            minBundleProfitBidBps: 1000      # extra margin after gas + bid, as bps of the final bid (requires gas)
+                                              # omit/set both bps fields to 0 when the top-level gas block is omitted
 
           sizing:
             allowFullLiquidation: true       # seize full collateral when profitable (default true); false forces fixed 90% partial mode
@@ -66,7 +71,8 @@ solvers:
           monitorPollMs: 10000               # default strategy monitor snapshot poll (API in prod, testMonitor on Sepolia)
           maxStateAgeMs: 90000               # max default-strategy cache age before stale_state
 
-      maxTxGasPriceWei: "20000000000"        # signed tx.gasprice ceiling + solver envelope assumption
+      maxTxGasPriceWei: "20000000000"        # signed tx.gasprice ceiling + native deposit/gas-reservation assumption;
+                                              # remains positive and active when gas economics are disabled
       # maxBidWei: "1000000000000000"        # optional for default; required when strategy.name is webhook
 
       breaker:

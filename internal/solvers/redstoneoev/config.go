@@ -8,22 +8,24 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
 type rawConfig struct {
-	WS               rawWS             `yaml:"ws"`
-	Executor         string            `yaml:"executor"`
-	Adapter          string            `yaml:"adapter"`
-	Callback         string            `yaml:"callback"`
-	LiquidityLens    string            `yaml:"liquidityLens"`
-	Strategy         rawStrategyConfig `yaml:"strategy"`
-	MaxTxGasPriceWei string            `yaml:"maxTxGasPriceWei"`
-	MaxBidWei        string            `yaml:"maxBidWei"`
-	Breaker          rawBreaker        `yaml:"breaker"`
-	Intervals        rawIntervals      `yaml:"intervals"`
+	WS               rawWS                    `yaml:"ws"`
+	Executor         string                   `yaml:"executor"`
+	Adapter          string                   `yaml:"adapter"`
+	Callback         string                   `yaml:"callback"`
+	LiquidityLens    string                   `yaml:"liquidityLens"`
+	Gas              *liquidlanegas.RawConfig `yaml:"gas"`
+	Strategy         rawStrategyConfig        `yaml:"strategy"`
+	MaxTxGasPriceWei string                   `yaml:"maxTxGasPriceWei"`
+	MaxBidWei        string                   `yaml:"maxBidWei"`
+	Breaker          rawBreaker               `yaml:"breaker"`
+	Intervals        rawIntervals             `yaml:"intervals"`
 }
 
 type rawWS struct {
@@ -60,6 +62,7 @@ type Config struct {
 	// is read from the lens's cross-adapter deallocation-cascade estimate instead of the adapter's own
 	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
 	LiquidityLens common.Address
+	Gas           *liquidlanegas.OracleConfig
 
 	Strategy StrategyConfig
 
@@ -119,6 +122,14 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, err
 		}
 	}
+	var gas *liquidlanegas.OracleConfig
+	if raw.Gas != nil {
+		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
+		if gasErr != nil {
+			return nil, gasErr
+		}
+		gas = &parsed
+	}
 
 	breakerWindow, err := parse.MsDuration(raw.Breaker.WindowMs, defaultBreakerWindow, "breaker.windowMs")
 	if err != nil {
@@ -143,6 +154,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		Adapter:       adapter,
 		Callback:      callback,
 		LiquidityLens: liquidityLens,
+		Gas:           gas,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,

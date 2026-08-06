@@ -103,8 +103,11 @@ On settlement it liquidates the position and exits the seized collateral through
 settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
 LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
 `operationData`. Operators can set `maxBidWei` as a per-auction spend ceiling over any strategy; it is
-required for the external `webhook` strategy and optional for the built-in `default`. Design, config,
-and roadmap:
+required for the external `webhook` strategy and optional for the built-in `default`. The common `gas:`
+block is optional, and its shared oracle facts are passed to the selected strategy. The built-in strategy
+uses them for after-cost economics; without them, it selects gross-profitable bundles while retaining the
+signed gas-price cap and native funding checks. When `gas:` is configured, startup requires a feed for the
+resolved adapter loan asset and a readable initial oracle snapshot. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 

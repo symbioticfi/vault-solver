@@ -45,8 +45,8 @@ func TestExampleConfigParses(t *testing.T) {
 	if !strategyCfg.Sizing.AllowFullLiquidation {
 		t.Fatal("example settings drifted: allowFullLiquidation must stay enabled")
 	}
-	if strategyCfg.LoanEthFeed == nil {
-		t.Fatal("example settings drifted: default strategy config must carry a loan↔ETH rate source")
+	if cfg.Gas == nil {
+		t.Fatal("example settings drifted: shared gas accounting must stay enabled")
 	}
 }
 
@@ -65,7 +65,7 @@ func strategyBlock(extra string) string {
 }
 
 func strategyConfigBlock(body string) string {
-	return "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", maxAgeMs: 3600000}\n" + body
+	return "strategy:\n  name: default\n  config:\n" + body
 }
 
 func parseDefaultStrategyConfigForTest(t *testing.T, c *Config) defaultstrategy.Config {
@@ -88,7 +88,7 @@ func TestConfigProfiles(t *testing.T) {
 		check func(*testing.T, *Config)
 	}{
 		{
-			// Production: the Morpho API is the market source + a flat bid, with a loan↔ETH rate source so
+			// Production: the Morpho API is the market source + a flat bid, with shared gas pricing so
 			// the bundle-level after-cost profitability gate is active.
 			name: "prod: API snapshot / flat bid",
 			yaml: wsline + addrs + api + feedLine + okBid,
@@ -101,8 +101,8 @@ func TestConfigProfiles(t *testing.T) {
 				if strategyCfg.BidWei.Sign() <= 0 {
 					t.Fatalf("prod profile must carry a positive flat bid, got %v", strategyCfg.BidWei)
 				}
-				if strategyCfg.LoanEthFeed == nil {
-					t.Fatal("prod profile must carry a rate source")
+				if c.Gas == nil {
+					t.Fatal("prod profile must carry shared gas pricing")
 				}
 			},
 		},
@@ -131,13 +131,12 @@ func TestConfigProfiles(t *testing.T) {
 			},
 		},
 		{
-			name: "single adapter pinned + oracle rate source",
+			name: "single adapter pinned + shared gas pricing",
 			yaml: wsline + addrs + api + feedLine + okBid,
 			check: func(t *testing.T, c *Config) {
 				t.Helper()
-				strategyCfg := parseDefaultStrategyConfigForTest(t, c)
-				if c.Adapter != adapterAddr || strategyCfg.LoanEthFeed == nil {
-					t.Fatalf("single-adapter profile wrong: adapter=%s feed=%v", c.Adapter, strategyCfg.LoanEthFeed)
+				if c.Adapter != adapterAddr || c.Gas == nil {
+					t.Fatalf("single-adapter profile wrong: adapter=%s gas=%v", c.Adapter, c.Gas)
 				}
 			},
 		},
@@ -160,13 +159,16 @@ ws:
 executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"
 adapter: "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"
 callback: "0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"
+gas:
+  nativeUsdFeed: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+  nativeMaxAge: 1h
+  tokenUsdFeeds:
+    - token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+      feed: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+      maxAge: 1h
 strategy:
   name: default
   config:
-    loanEthFeed:
-      ethUsd: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-      loanUsd: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-      maxAgeMs: 3600000
     morphoApiUrl: https://api.morpho.org/graphql
     bid:
       bidEth: "0.0005"
@@ -191,6 +193,9 @@ func TestParseConfigValid(t *testing.T) {
 	}
 	if cfg.Callback != common.HexToAddress("0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1") {
 		t.Fatalf("callback = %s", cfg.Callback.Hex())
+	}
+	if cfg.Gas == nil {
+		t.Fatal("gas config is nil")
 	}
 	if !strategyCfg.Sizing.AllowFullLiquidation || strategyCfg.Sizing.SwapHaircutBps != 200 {
 		t.Fatalf("bad sizing: %+v", strategyCfg.Sizing)
@@ -221,7 +226,6 @@ callback: "0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"
 strategy:
   name: default
   config:
-    loanEthFeed: {ethUsd: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", loanUsd: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"}
     morphoApiUrl: https://api.morpho.org/graphql
     bid: {bidEth: "0.0001"}
 `)
@@ -237,6 +241,9 @@ strategy:
 	}
 	if cfg.ExecutorStateMaxAge != defaultExecutorStateMaxAge {
 		t.Fatalf("executorStateMaxAge default wrong: %v, want %v", cfg.ExecutorStateMaxAge, defaultExecutorStateMaxAge)
+	}
+	if cfg.Gas != nil {
+		t.Fatalf("gas config default = %+v, want nil", cfg.Gas)
 	}
 	if cfg.MaxBidWei != nil {
 		t.Fatalf("maxBidWei default = %s, want nil", cfg.MaxBidWei)
@@ -328,6 +335,8 @@ func TestParseConfigSwapHaircutZeroRespected(t *testing.T) {
 
 func TestParseConfigErrors(t *testing.T) {
 	cases := map[string]string{
+		"malformed gas":                  wsline + addrs + api + "gas: {}\n",
+		"removed loanEthFeed":            wsline + addrs + strategyConfigBlock("    loanEthFeed: {ethUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\"}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n"),
 		"missing ws url":                 `ws: {apiKeyEnv: K}` + "\n" + addrs + api + feedLine,
 		"missing apiKeyEnv":              `ws: {url: x}` + "\n" + addrs + api + feedLine,
 		"missing adapter":                wsline + `executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"` + "\n" + api + feedLine,
@@ -335,7 +344,6 @@ func TestParseConfigErrors(t *testing.T) {
 		"removed markets key":            wsline + addrs + api + feedLine + `markets: ["` + mkt + `"]` + "\n", // markets no longer a config field → unknown key
 		"zero bid":                       wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0\"}\n") + feedLine,
 		"bad executor addr":              wsline + `executor: "0xnope"` + "\n" + api + feedLine,
-		"missing loanEthFeed":            wsline + addrs + "strategy:\n  name: default\n  config:\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
 		"removed maxSeizeFractionBps":    wsline + addrs + api + feedLine + "sizing: {maxSeizeFractionBps: 9000}",
 		"removed maxLegsPerBid":          wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", maxLegsPerBid: 8}",
 		"removed minLegProfitLoan":       wsline + addrs + api + feedLine + "sizing: {minLegProfitLoan: \"1\"}",
@@ -345,9 +353,6 @@ func TestParseConfigErrors(t *testing.T) {
 		"removed gasBase":                wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", gasBase: 100000}",
 		"removed gasPerLeg":              wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", gasPerLeg: 800000}",
 		"removed loanPerEth":             wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", loanPerEth: \"2500000000\"}",
-		"bad loan feed age":              wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", loanUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", maxAgeMs: 0}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
-		"zero loan feed":                 wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", loanUsd: \"0x0000000000000000000000000000000000000000\"}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
-		"zero eth feed":                  wsline + addrs + "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0x0000000000000000000000000000000000000000\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\"}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n",
 		"removed minBundleProfitLoan":    wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", minBundleProfitLoan: \"1\"}",
 		"negative minBundleProfitBidBps": wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", minBundleProfitBidBps: -1}\n") + feedLine,
 		"bad totalBundleProfitBps":       wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", totalBundleProfitBps: 10001}\n") + feedLine,
@@ -369,9 +374,9 @@ func TestParseConfigErrors(t *testing.T) {
 		"zero executor state max age":    wsline + addrs + api + feedLine + "intervals: {executorStateMaxAgeMs: 0}",
 		"zero executor addr":             wsline + "executor: \"0x0000000000000000000000000000000000000000\"\n" + api + feedLine,
 		"zero callback addr":             wsline + "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\nadapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\ncallback: \"0x0000000000000000000000000000000000000000\"\n" + api + feedLine,
-		"callback in strategy config":    wsline + addrs + "strategy:\n  name: default\n  config:\n    callback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\n    loanEthFeed: {ethUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", maxAgeMs: 3600000}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n" + feedLine,
+		"callback in strategy config":    wsline + addrs + "strategy:\n  name: default\n  config:\n    callback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n" + feedLine,
 		"zero adapter addr":              wsline + "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\nadapter: \"0x0000000000000000000000000000000000000000\"\n" + api + feedLine,
-		"adapter in strategy config":     wsline + addrs + "strategy:\n  name: default\n  config:\n    adapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\n    loanEthFeed: {ethUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", maxAgeMs: 3600000}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n" + feedLine,
+		"adapter in strategy config":     wsline + addrs + "strategy:\n  name: default\n  config:\n    adapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n" + feedLine,
 	}
 	for name, y := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -392,9 +397,15 @@ const (
 	addrs  = "executor: \"0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD\"\nadapter: \"0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b\"\ncallback: \"0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1\"\n"
 	// api is the production market source (the Morpho API) appended to a valid config; markets/positions are
 	// discovered at runtime, so a parseable config needs no market list.
-	api      = "strategy:\n  name: default\n  config:\n    loanEthFeed: {ethUsd: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", loanUsd: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\", maxAgeMs: 3600000}\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n"
-	feedLine = ""
-	okBid    = ""
+	api      = "strategy:\n  name: default\n  config:\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n"
+	feedLine = "gas:\n" +
+		"  nativeUsdFeed: \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\"\n" +
+		"  nativeMaxAge: 1h\n" +
+		"  tokenUsdFeeds:\n" +
+		"    - token: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\"\n" +
+		"      feed: \"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\"\n" +
+		"      maxAge: 1h\n"
+	okBid = ""
 )
 
 var adapterAddr = common.HexToAddress("0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b")

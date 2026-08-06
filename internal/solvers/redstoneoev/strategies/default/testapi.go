@@ -24,6 +24,7 @@ func NewWithSnapshotForTest(
 	cfg Config,
 	adapter common.Address,
 	callback common.Address,
+	gasAccounting bool,
 	seed SnapshotSeed,
 	log logr.Logger,
 	signer signer,
@@ -31,22 +32,21 @@ func NewWithSnapshotForTest(
 	mon := &apiMonitor{log: log}
 	mon.snap.Store(snapshotFromSeed(seed))
 	return &Strategy{
-		cfg:      cfg,
-		adapter:  adapter,
-		callback: callback,
-		signer:   signer,
-		mon:      mon,
-		engine:   newBundleEngine(cfg, log),
-		maxAge:   cfg.MaxStateAge,
-		log:      log,
+		cfg:           cfg,
+		adapter:       adapter,
+		callback:      callback,
+		gasAccounting: gasAccounting,
+		signer:        signer,
+		mon:           mon,
+		engine:        newBundleEngine(cfg, log),
+		maxAge:        cfg.MaxStateAge,
+		log:           log,
 	}
 }
 
-func (s *Strategy) StoreDecisionStateForTest(rate, callbackNative *big.Int, updatedAt time.Time) {
+func (s *Strategy) StoreDecisionStateForTest(callbackNative *big.Int, updatedAt time.Time) {
 	s.state.store(decisionState{
-		Rate:              rate,
 		CallbackNative:    callbackNative,
-		RateUpdatedAt:     updatedAt,
 		CallbackUpdatedAt: updatedAt,
 	})
 }
