@@ -54,8 +54,30 @@ func (s *Solver) submitFill(
 		}
 	}
 	reservationKey := calldata.OrderID.Hex()
+	deadline := int64(0)
+	deadlineRemaining := time.Duration(0)
+	cancelAtUnix := int64(0)
+	if !calldata.Deadline.IsZero() {
+		deadline = calldata.Deadline.Unix()
+		deadlineRemaining = calldata.Deadline.Sub(chainTime)
+		cancelAtUnix = cancelAt.Unix()
+	}
+	s.log.V(1).Info(
+		"order fill ready for submission",
+		"orderId", order.OrderID,
+		"onChainOrderId", calldata.OrderID.Hex(),
+		"quoteId", order.QuoteID,
+		"executor", s.cfg.Executor.Hex(),
+		"caller", s.caller.Hex(),
+		"calldataBytes", len(calldata.Finalise),
+		"gasAccounting", s.cfg.Gas != nil,
+		"requestMaxFeePerGas", bigString(maxFeePerGas),
+		"deadline", deadline,
+		"deadlineRemaining", deadlineRemaining,
+		"cancelAt", cancelAtUnix,
+	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: new(big.Int).Set(maxFeePerGas),
+		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt, Label: "lifi-fill",
 	})
 	if !accepted {
@@ -63,7 +85,27 @@ func (s *Solver) submitFill(
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
 		return nil, nil
 	}
-	s.reserveWithoutRefresh(reservationKey, reservations)
+	if s.reserveWithoutRefresh(reservationKey, reservations) {
+		s.log.V(1).Info(
+			"fill capacity reserved",
+			"orderId", order.OrderID,
+			"onChainOrderId", calldata.OrderID.Hex(),
+			"quoteId", order.QuoteID,
+			"capacityGroups", len(reservations),
+			"pendingFills", s.capacity.Len(),
+		)
+	}
+	s.log.V(1).Info(
+		"order fill submitted",
+		"orderId", order.OrderID,
+		"onChainOrderId", calldata.OrderID.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(plan.Routes),
+		"reservationDomains", len(reservations),
+		"pendingFills", s.capacity.Len(),
+		"gasAccounting", s.cfg.Gas != nil,
+		"requestMaxFeePerGas", bigString(maxFeePerGas),
+	)
 	return &pendingFill{
 		order: order, orderID: calldata.OrderID, reservationKey: reservationKey,
 		result: result,
@@ -83,6 +125,7 @@ func (s *Solver) completeFill(pending *pendingFillState, completion fillCompleti
 		"onChainOrderId", fill.orderID.Hex(),
 		"quoteId", fill.order.QuoteID,
 		"tx", completion.result.Hash.Hex(),
+		"notAdmitted", completion.result.NotAdmitted,
 	)
 }
 

@@ -813,6 +813,11 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	}
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
+	var logs []string
+	s.log = funcr.NewJSON(
+		func(entry string) { logs = append(logs, entry) },
+		funcr.Options{Verbosity: 1},
+	)
 
 	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 	if len(txm.reqs) != 1 {
@@ -826,6 +831,64 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	}
 	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
 		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	}
+	logged := strings.Join(logs, "\n")
+	for _, want := range []string{
+		"liquidlane fill selected",
+		"order fill submitted",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("fill lifecycle log %q missing: %s", want, logged)
+		}
+	}
+	if !strings.Contains(logged, `"orderId":`) ||
+		!strings.Contains(logged, `"onChainOrderId":`) ||
+		!strings.Contains(logged, `"quoteId":`) {
+		t.Fatalf("fill lifecycle logs are missing correlation fields: %s", logged)
+	}
+}
+
+func TestProcessOrderWithoutGasAccountingSkipsFeeReaderAndRequestCap(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	fixture.cfg.Gas = nil
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	reader := s.reader.(fakeLifiReader)
+	reader.omitGasFacts = true
+	s.reader = reader
+	feeReads := 0
+	s.maxFeePerGas = func(context.Context) (*big.Int, error) {
+		feeReads++
+		return big.NewInt(1), nil
+	}
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+	)
+
+	if feeReads != 0 {
+		t.Fatalf("max fee reads = %d, want 0", feeReads)
+	}
+	if len(txm.reqs) != 1 {
+		t.Fatalf("txmanager.Send calls = %d, want 1", len(txm.reqs))
+	}
+	if txm.reqs[0].MaxFeePerGas != nil {
+		t.Fatalf("fill max fee per gas = %v, want nil", txm.reqs[0].MaxFeePerGas)
 	}
 }
 

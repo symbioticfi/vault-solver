@@ -25,6 +25,62 @@ type fakeQuoteSubmitter struct {
 	err   error
 }
 
+func TestQuoteExpiryBoundsUsesPublishedExpiries(t *testing.T) {
+	earliest, latest := quoteExpiryBounds([]types.Quote{{Expiry: 30}, {Expiry: 10}, {Expiry: 20}})
+	if earliest != 10 || latest != 30 {
+		t.Fatalf("expiry bounds = %d..%d, want 10..30", earliest, latest)
+	}
+}
+
+type recordingQuoteStrategy struct {
+	inputs []types.QuoteInput
+}
+
+func (s *recordingQuoteStrategy) DecideQuotes(
+	_ context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	s.inputs = append(s.inputs, input)
+	return types.QuoteOutput{}, nil
+}
+
+func (*recordingQuoteStrategy) DecideFill(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, nil
+}
+
+func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.Gas = nil
+	strategy := &recordingQuoteStrategy{}
+	feeReads := 0
+	solver := &Solver{
+		cfg: cfg, reader: fakeLifiReader{}, strategy: strategy, log: logr.Discard(),
+		now:         func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		wallNow:     func() time.Time { return time.Unix(1_700_000_001, 0) },
+		txLaneState: alwaysReadyTransactionLane(),
+		maxFeePerGas: func(context.Context) (*big.Int, error) {
+			feeReads++
+			return big.NewInt(7), nil
+		},
+	}
+
+	solver.refreshQuotes(t.Context(), nil, newQuoteState(time.Second))
+
+	if feeReads != 0 {
+		t.Fatalf("max fee reads = %d, want 0", feeReads)
+	}
+	if len(strategy.inputs) != 1 {
+		t.Fatalf("strategy quote inputs = %d, want 1", len(strategy.inputs))
+	}
+	input := strategy.inputs[0]
+	if input.MaxFeePerGas == nil || input.MaxFeePerGas.Sign() != 0 {
+		t.Fatalf("strategy max fee per gas = %v, want zero", input.MaxFeePerGas)
+	}
+	if input.GasSnapshot != nil || input.GasPrices != nil {
+		t.Fatalf("strategy gas facts = snapshot %v prices %v, want nil", input.GasSnapshot, input.GasPrices)
+	}
+}
+
 func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
 	permissioned := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	permissionless := common.HexToAddress("0x2222222222222222222222222222222222222222")

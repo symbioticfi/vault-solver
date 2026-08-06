@@ -89,6 +89,7 @@ type FillInput struct {
 	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
 	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
 	ChainTime    time.Time                       `json:"chainTime"`
+	Trace        liquidstrategies.DecisionTrace  `json:"-"`
 }
 
 type FillPlan struct {
