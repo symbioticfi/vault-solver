@@ -298,11 +298,16 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   `0xE54219880a1296D028CcD7B3d5a34c65fb0B7CAB`). Still outstanding, because each is an instance
   someone must create rather than an address to configure: the Keyring-onboarded account proxy, the
   LiquidLane adapter, the RFQ Executor's authorized caller, and backend token enablement. At
-  activation, configure the token in `permissionedTokens` and set its 1-token floor
-  (`1000000000000000000`) in `minAmountsIn` — that is the whole change. No dedicated per-token
-  process exists: the numbered solver workloads differ only by executor and settlement adapter, not
-  by asset. The checked-in RFQ example carries the exact token/floor snippet; no protocol branch
-  belongs in solver code.
+  activation, on an instance already scoped `tokensToQuote: permissioned` (the default `all` scope
+  admits every token, so `permissionedTokens` governs nothing there), configure the token in
+  `permissionedTokens`, set its 1-token floor (`1000000000000000000`) in `minAmountsIn`, and point
+  the instance at the LiquidLane adapter holding it via `adapters`. No dedicated per-token process
+  exists: separate solver instances differ only by executor and settlement adapter, not by asset.
+  The checked-in RFQ example carries the exact token/floor snippet; no protocol branch belongs in
+  solver code.
+
+  Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
+  for the external operator-facing runtime and configuration surface.
 
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding

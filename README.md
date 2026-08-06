@@ -82,12 +82,12 @@ use one candidate route. Other scopes keep the existing multi-route behavior.
 `minAmountsIn` adds an optional per-input-token floor on request size (base units, decimal strings):
 a request below its token's minimum is not quoted (HTTP 204), while an amount equal to the minimum
 still quotes; unlisted tokens have no floor.
-Pareto's mainnet `AA_FalconXUSDC` tranche (`0xC26A…f99C`) uses this existing generic path; it needs no
-token-specific solver code and no per-token process. Onboarding is the same two config edits as any
-other permissioned token: add it to `permissionedTokens` and give it a base-unit floor in
-`minAmountsIn`. Its Symbiotic `ParetoOracle` is deployed
-(`0xba833D6288aC591BFffbeD16909B8B824e7fA9F2`); it stays dormant until a LiquidLane account and
-adapter exist, the account is Keyring-onboarded, and the RFQ executor/caller are authorized.
+Pareto's mainnet `AA_FalconXUSDC` tranche (`0xC26A…f99C`) uses this existing generic path and needs no
+token-specific solver code. On an instance already running `tokensToQuote: permissioned` — which is
+what admits by `permissionedTokens` at all, since the default `all` scope admits every token
+regardless — onboarding it is the same two config edits as any other permissioned token: add it to
+`permissionedTokens`, and give it a base-unit floor in `minAmountsIn`. Quoting it also requires a
+LiquidLane adapter holding the token in `adapters`.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
