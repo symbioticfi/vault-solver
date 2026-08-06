@@ -291,13 +291,18 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 - **Pareto AA_FalconXUSDC readiness** — the RFQ implementation is already token-agnostic and supports
   the 18-decimal mainnet tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing
-  permissioned, single-route path. Deployment remains deliberately dormant until all of these are
-  authoritative: the bounded Symbiotic `ParetoOracle`, Pareto account factory/implementation and
-  Keyring-onboarded account proxy, LiquidLane adapter, RFQ Executor, authorized caller, and backend
-  token enablement. At activation, configure the token in `permissionedTokens`, set its 1-token floor
-  (`1000000000000000000`) in `minAmountsIn`, and scope the new process to the deployed adapter. The
-  checked-in RFQ example carries the exact token/floor snippet; no protocol branch belongs in solver
-  code.
+  permissioned, single-route path. Deployed and verified on mainnet as of 2026-08-06: the bounded
+  Symbiotic `ParetoOracle` (`0xba833D6288aC591BFffbeD16909B8B824e7fA9F2`, block 25697403, already
+  wired into the rfq-backend and rfq-frontend token entries) and the Pareto account
+  factory/implementation (`0xa47cE86c304e251198F1a318c569e5217b694e1F` /
+  `0xE54219880a1296D028CcD7B3d5a34c65fb0B7CAB`). Still outstanding, because each is an instance
+  someone must create rather than an address to configure: the Keyring-onboarded account proxy, the
+  LiquidLane adapter, the RFQ Executor's authorized caller, and backend token enablement. At
+  activation, configure the token in `permissionedTokens` and set its 1-token floor
+  (`1000000000000000000`) in `minAmountsIn` — that is the whole change. No dedicated per-token
+  process exists: the numbered solver workloads differ only by executor and settlement adapter, not
+  by asset. The checked-in RFQ example carries the exact token/floor snippet; no protocol branch
+  belongs in solver code.
 
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
