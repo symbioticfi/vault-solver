@@ -16,10 +16,10 @@ txManager:
   confirmations: 2               # confirmations awaited before capacity is released
   maxFeeGwei: 50                  # global fee cap; the normal lifecycle stops one bump below it
   broadcastTimeoutMs: 5000        # allow the private write RPC up to 5s per submission
-  replacementIntervalMs: 5000    # attempt a capped fee bump every 5s
+  replacementIntervalMs: 15000   # attempt a capped fee bump every 15s
   pendingTimeoutMs: 300000        # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000        # bound SIGTERM cancellation + receipt drain to 60s
-  tipGwei: 0                      # automatic median p75 tip from the latest five blocks
+  tipGwei: 0                      # observed Etherscan Fast: minimum p25 tip from the latest five blocks
 
 observability:
   addr: ":9090"                  # framework metrics and health endpoints

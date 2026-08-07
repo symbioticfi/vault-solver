@@ -308,10 +308,11 @@ and its replacements; cancellation may exceed that request cap but never `maxFee
 `tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
 to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
 positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
-when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
-instead uses the median p75 priority reward from the latest five blocks, likewise clamped to available
-headroom. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor
-provides the operator-controlled fallback.
+when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
+txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
+the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
+Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
+operator-controlled fallback.
 
 ## Requirements
 

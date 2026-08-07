@@ -25,7 +25,7 @@ txManager:
   shutdownTimeoutMs: 60000     # bound SIGTERM cancellation + receipt drain to 60s
   # Each fill also supplies its decision-time cap. The initial send reserves one replacement inside
   # that cap; cancellation may exceed it but never maxFeeGwei.
-  # tipGwei: 1                 # optional floor; omit/zero to use recent eth_feeHistory rewards
+  # tipGwei: 1                 # optional floor; omit/zero to use the minimum p25 tip over five blocks
 
 observability:
   addr: ":9090"
