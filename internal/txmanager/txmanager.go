@@ -7,7 +7,6 @@ package txmanager
 import (
 	"context"
 	"math/big"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,7 +153,7 @@ const (
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
 	feeHistoryBlocks           = 5
-	feeHistoryPercentile       = 75.0
+	feeHistoryPercentile       = 25.0
 	replacementBumpNumerator   = 9
 	replacementBumpDenominator = 8
 	cancellationGasLimit       = 21_000
@@ -1152,21 +1151,17 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 }
 
 func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
-	if history == nil || len(history.Reward) == 0 || len(history.Reward) > feeHistoryBlocks {
+	if history == nil || len(history.Reward) != feeHistoryBlocks {
 		return nil, false
 	}
-	rewards := make([]*big.Int, len(history.Reward))
-	for i, blockRewards := range history.Reward {
+	var tip *big.Int
+	for _, blockRewards := range history.Reward {
 		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
 			return nil, false
 		}
-		rewards[i] = new(big.Int).Set(blockRewards[0])
-	}
-	slices.SortFunc(rewards, func(left, right *big.Int) int { return left.Cmp(right) })
-	middle := len(rewards) / 2
-	tip := new(big.Int).Set(rewards[middle])
-	if len(rewards)%2 == 0 {
-		tip.Add(tip, rewards[middle-1]).Div(tip, big.NewInt(2))
+		if tip == nil || blockRewards[0].Cmp(tip) < 0 {
+			tip = new(big.Int).Set(blockRewards[0])
+		}
 	}
 	return tip, true
 }

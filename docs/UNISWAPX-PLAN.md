@@ -148,15 +148,16 @@ assertion because the PR19 ABI has no getter.
   is not a signal to reopen quoting.
 - **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
   floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
-  median p75 priority reward from the latest five blocks, also clamped to headroom, and fails new submissions
-  closed when `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a
-  12.5% bump; when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei`
-  is the absolute global ceiling and normal sends reserve
-  cancellation headroom below it. With gas accounting disabled, UniswapX supplies no request ceiling. With
-  gas accounting enabled, `MaxFeePerGas` returns the profitability ceiling including one normal replacement,
-  and the initial send reserves that replacement inside the ceiling. Cancellation may exceed the request
-  ceiling but never the global ceiling. Startup rejects a configured positive tip floor that leaves no
-  base-fee headroom beneath the initial cap after both reserved bumps.
+  minimum gas-weighted p25 priority reward from the latest five blocks, aligned with the observed behavior
+  of Etherscan Gas Tracker's Fast tier, also clamped to headroom, and fails new submissions closed when
+  `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a 12.5% bump;
+  when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei` is the
+  absolute global ceiling and normal sends reserve cancellation headroom below it. With gas accounting
+  disabled, UniswapX supplies no request ceiling. With gas accounting enabled, `MaxFeePerGas` returns the
+  profitability ceiling including one normal replacement, and the initial send reserves that replacement
+  inside the ceiling. Cancellation may exceed the request ceiling but never the global ceiling. Startup
+  rejects a configured positive tip floor that leaves no base-fee headroom beneath the initial cap after
+  both reserved bumps.
 - **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
   re-signed at another nonce. Before escalating fees, the next normal replacement tick rebroadcasts the
   latest transport-ambiguous attempt's exact signed bytes once; it does not append a duplicate attempt or
@@ -222,7 +223,7 @@ txManager:
   maxFeeGwei: 50
   tipGwei: 0
   broadcastTimeoutMs: 5000
-  replacementIntervalMs: 5000
+  replacementIntervalMs: 15000
   pendingTimeoutMs: 300000
   shutdownTimeoutMs: 60000
 
@@ -253,10 +254,10 @@ solvers:
 The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
 skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
 quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
-the quote. With `tipGwei: 0`, recent fee-history rewards avoid relying on a potentially unusable node tip
-suggestion. Suggestions and rewards are advisory and are clamped to available headroom; a positive value
-remains the mandatory operator-controlled floor and fallback. `maxFeeGwei` remains the absolute ceiling
-described in §2.2.
+the quote. With `tipGwei: 0`, the fee-history policy aligned with observed Etherscan Fast behavior avoids
+relying on a potentially unusable node tip suggestion. Suggestions and rewards are advisory and are clamped
+to available headroom; a positive value remains the mandatory operator-controlled floor and fallback.
+`maxFeeGwei` remains the absolute ceiling described in §2.2.
 
 The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
 account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read

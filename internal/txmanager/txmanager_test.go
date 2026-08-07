@@ -22,6 +22,12 @@ import (
 // anvil account #0 — a well-known throwaway key, fine for unit tests.
 const testKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
+type feeHistoryRequest struct {
+	blocks      uint64
+	newest      *big.Int
+	percentiles []float64
+}
+
 type mockBackend struct {
 	mu sync.Mutex
 
@@ -29,6 +35,7 @@ type mockBackend struct {
 	pendingNonce  uint64
 	history       *ethereum.FeeHistory
 	historyErr    error
+	historyReq    feeHistoryRequest
 	tip           *big.Int
 	tipErr        error
 	tipCalls      int
@@ -53,7 +60,7 @@ func newMockBackend() *mockBackend {
 	return &mockBackend{
 		latestNonce:  7,
 		pendingNonce: 7,
-		history:      &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(1e9)}}},
+		history:      constantFeeHistory(big.NewInt(1e9)),
 		tip:          big.NewInt(1e9),
 		baseFee:      big.NewInt(20e9),
 		gasEstimate:  50_000,
@@ -76,13 +83,27 @@ func (b *mockBackend) PendingNonceAt(context.Context, common.Address) (uint64, e
 
 func (b *mockBackend) FeeHistory(
 	_ context.Context,
-	_ uint64,
-	_ *big.Int,
-	_ []float64,
+	blockCount uint64,
+	newestBlock *big.Int,
+	rewardPercentiles []float64,
 ) (*ethereum.FeeHistory, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.historyReq = feeHistoryRequest{
+		blocks: blockCount, percentiles: append([]float64(nil), rewardPercentiles...),
+	}
+	if newestBlock != nil {
+		b.historyReq.newest = new(big.Int).Set(newestBlock)
+	}
 	return b.history, b.historyErr
+}
+
+func constantFeeHistory(reward *big.Int) *ethereum.FeeHistory {
+	history := &ethereum.FeeHistory{Reward: make([][]*big.Int, feeHistoryBlocks)}
+	for i := range history.Reward {
+		history.Reward[i] = []*big.Int{new(big.Int).Set(reward)}
+	}
+	return history
 }
 
 func (b *mockBackend) SuggestGasTipCap(context.Context) (*big.Int, error) {
@@ -284,7 +305,7 @@ func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
 	}
 }
 
-func TestTipGweiZeroUsesRecentFeeHistory(t *testing.T) {
+func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
 	b := newMockBackend()
 	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{
 		{big.NewInt(3_000_000_000)},
@@ -301,19 +322,38 @@ func TestTipGweiZeroUsesRecentFeeHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("currentFees: %v", err)
 	}
-	if want := big.NewInt(1_500_000_000); fees.tip.Cmp(want) != 0 {
-		t.Fatalf("tip = %s, want median p75 reward %s", fees.tip, want)
+	if want := big.NewInt(500_000_000); fees.tip.Cmp(want) != 0 {
+		t.Fatalf("tip = %s, want minimum p25 reward %s", fees.tip, want)
+	}
+	if b.historyReq.blocks != 5 || b.historyReq.newest != nil ||
+		len(b.historyReq.percentiles) != 1 || b.historyReq.percentiles[0] != 25.0 {
+		t.Fatalf(
+			"fee history request = blocks %d, newest %v, percentiles %v; want 5, latest, [25]",
+			b.historyReq.blocks, b.historyReq.newest, b.historyReq.percentiles,
+		)
 	}
 	if fees.maxFee.Cmp(limit) != 0 {
 		t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
 	}
-	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(30_000_000_000)}}}
+	b.history.Reward[0][0] = new(big.Int)
+	fees, err = m.currentFees(t.Context(), limit)
+	if err != nil {
+		t.Fatalf("currentFees with zero reward: %v", err)
+	}
+	if fees.tip.Sign() != 0 {
+		t.Fatalf("tip = %s, want zero minimum reward", fees.tip)
+	}
+	b.history = constantFeeHistory(big.NewInt(30_000_000_000))
 	fees, err = m.currentFees(t.Context(), limit)
 	if err != nil {
 		t.Fatalf("currentFees with reward above cap: %v", err)
 	}
 	if want := big.NewInt(20_500_000_000); fees.tip.Cmp(want) != 0 {
 		t.Fatalf("tip = %s, want reward clamped to %s", fees.tip, want)
+	}
+	b.history.Reward = b.history.Reward[:feeHistoryBlocks-1]
+	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
+		t.Fatalf("short fee history error = %v, want fresh-fees error", err)
 	}
 	b.historyErr = errors.New("fee history unavailable")
 	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
@@ -1192,7 +1232,7 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			b := newMockBackend()
 			b.baseFee = test.current.baseFee
-			b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{{test.current.tip}}}
+			b.history = constantFeeHistory(test.current.tip)
 			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
 
 			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50))
