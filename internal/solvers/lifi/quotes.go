@@ -179,6 +179,11 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
 	if !s.transactionLaneReady() {
+		s.log.V(1).Info(
+			"quote refresh skipped: transaction lane unavailable",
+			"activePairs", len(state.active),
+			"pendingFills", s.capacity.Len(),
+		)
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -192,20 +197,24 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: read routes")
 		return
 	}
-	maxFeePerGas, err := s.readMaxFeePerGas(ctx)
-	if err != nil {
-		s.log.Error(err, "quote refresh: read max fee per gas")
-		return
+	maxFeePerGas := new(big.Int)
+	if s.cfg.Gas != nil {
+		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
+		if err != nil {
+			s.log.Error(err, "quote refresh: read max fee per gas")
+			return
+		}
 	}
 	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
 	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
 	inventory := append([]liquidlane.Inventory(nil), direct...)
 	inventory = append(inventory, s.quoteDiscountInventories(ctx, discountBases, chainTime)...)
+	reservations := s.capacity.Snapshot()
 	serverTime := s.wallNow()
 	out, err := s.strategy.DecideQuotes(ctx, types.QuoteInput{
 		Solver:            s.cfg.Executor,
 		Inventory:         inventory,
-		Reservations:      s.capacity.Snapshot(),
+		Reservations:      reservations,
 		SingleRouteTokens: s.cfg.TokenPolicy.SingleRouteTokens(),
 		GasSnapshot:       snapshotSet.GasSnapshot,
 		GasPrices:         snapshotSet.GasPrices,
@@ -218,10 +227,33 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: strategy")
 		return
 	}
+	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
 	if len(out.Quotes) == 0 {
-		s.log.V(1).Info("quote refresh: strategy produced no quotes", "routes", len(inventory))
+		s.log.V(1).Info(
+			"quote refresh: strategy produced no quotes",
+			"inventory", len(inventory),
+			"directInventory", len(direct),
+			"physicalInventory", len(discountBases),
+			"discountInventory", len(inventory)-len(direct),
+			"reservationDomains", len(reservations),
+			"gasAccounting", s.cfg.Gas != nil,
+			"pricingMaxFeePerGas", maxFeePerGas.String(),
+		)
+	} else {
+		s.log.V(1).Info(
+			"quote plan selected",
+			"quotePairs", len(out.Quotes),
+			"quoteRanges", quoteRangeCount(out.Quotes),
+			"earliestExpiry", earliestExpiry,
+			"latestExpiry", latestExpiry,
+		)
 	}
 	if !s.transactionLaneReady() {
+		s.log.V(1).Info(
+			"quote plan discarded: transaction lane unavailable",
+			"quotePairs", len(out.Quotes),
+			"quoteRanges", quoteRangeCount(out.Quotes),
+		)
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -230,7 +262,43 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
 	}
-	s.log.Info("quotes reconciled", "quotes", len(out.Quotes), "removedPairs", removed, "routes", len(inventory))
+	s.log.Info(
+		"quotes reconciled",
+		"quotes", len(out.Quotes),
+		"quoteRanges", quoteRangeCount(out.Quotes),
+		"activePairs", len(state.active),
+		"removedPairs", removed,
+		"inventory", len(inventory),
+		"directInventory", len(direct),
+		"physicalInventory", len(discountBases),
+		"discountInventory", len(inventory)-len(direct),
+		"reservationDomains", len(reservations),
+		"pendingFills", s.capacity.Len(),
+		"gasAccounting", s.cfg.Gas != nil,
+		"pricingMaxFeePerGas", maxFeePerGas.String(),
+		"earliestExpiry", earliestExpiry,
+		"latestExpiry", latestExpiry,
+	)
+}
+
+func quoteRangeCount(quotes []types.Quote) int {
+	ranges := 0
+	for _, quote := range quotes {
+		ranges += len(quote.Ranges)
+	}
+	return ranges
+}
+
+func quoteExpiryBounds(quotes []types.Quote) (earliest, latest int64) {
+	for _, quote := range quotes {
+		if earliest == 0 || quote.Expiry < earliest {
+			earliest = quote.Expiry
+		}
+		if quote.Expiry > latest {
+			latest = quote.Expiry
+		}
+	}
+	return earliest, latest
 }
 
 func filterQuoteInventory(inventory []liquidlane.Inventory, policy tokenpolicy.Policy) []liquidlane.Inventory {

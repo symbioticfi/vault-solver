@@ -56,14 +56,19 @@ type redeemableSnapshotJSON struct {
 }
 
 type bidContextJSON struct {
-	ChainID            string         `json:"chainId"`
-	Executor           common.Address `json:"executor"`
-	Callback           common.Address `json:"callback"`
-	Signer             common.Address `json:"signer"`
-	ExecutorDeposit    string         `json:"executorDeposit"`
-	ExecutorMinDeposit string         `json:"executorMinDeposit"`
-	MaxTxGasPrice      string         `json:"maxTxGasPrice"`
-	GasLimit           uint64         `json:"gasLimit"`
+	ChainID            string                `json:"chainId"`
+	Executor           common.Address        `json:"executor"`
+	Callback           common.Address        `json:"callback"`
+	Signer             common.Address        `json:"signer"`
+	ExecutorDeposit    string                `json:"executorDeposit"`
+	ExecutorMinDeposit string                `json:"executorMinDeposit"`
+	MaxTxGasPrice      string                `json:"maxTxGasPrice"`
+	GasPrices          *gasPriceSnapshotJSON `json:"gasPrices"`
+	GasLimit           uint64                `json:"gasLimit"`
+}
+
+type gasPriceSnapshotJSON struct {
+	TokenOutPerNative map[common.Address]string `json:"tokenOutPerNative"`
 }
 
 type pendingAuctionSnapshotJSON struct {
@@ -145,10 +150,22 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 			ExecutorDeposit:    bigStringZero(in.Context.ExecutorDeposit),
 			ExecutorMinDeposit: bigStringZero(in.Context.ExecutorMinDeposit),
 			MaxTxGasPrice:      bigStringZero(in.Context.MaxTxGasPrice),
+			GasPrices:          gasPricesJSON(in),
 			GasLimit:           in.Context.GasLimit,
 		},
 		PendingAuctions: pending,
 	})
+}
+
+func gasPricesJSON(in BidInput) *gasPriceSnapshotJSON {
+	if in.Context.GasPrices == nil {
+		return nil
+	}
+	rates := make(map[common.Address]string, 1)
+	if rate := in.Context.GasPrices.TokenOutPerNative(in.Adapter.Loan); rate != nil {
+		rates[in.Adapter.Loan] = rate.String()
+	}
+	return &gasPriceSnapshotJSON{TokenOutPerNative: rates}
 }
 
 func (out *BidOutput) UnmarshalJSON(data []byte) error {

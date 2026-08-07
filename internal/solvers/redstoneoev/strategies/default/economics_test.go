@@ -8,35 +8,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 )
 
-func TestComposeLoanPerEth(t *testing.T) {
-	cases := []struct {
-		name                             string
-		ethUsd, loanUsd                  *big.Int
-		ethFeedDec, loanFeedDec, loanDec int
-		want                             string
-	}{
-		{"USDC at 2500, 8-dec feeds, 6-dec loan", mustBig("250000000000"), mustBig("100000000"), 8, 8, 6, "2500000000"},
-		{"18-dec loan", mustBig("250000000000"), mustBig("100000000"), 8, 8, 18, "2500000000000000000000"},
-		{"mixed feed decimals", mustBig("2500000000000000000000"), mustBig("100000000"), 18, 8, 6, "2500000000"},
-		{"zero loan price", mustBig("250000000000"), big.NewInt(0), 8, 8, 6, ""},
-		{"negative answer", big.NewInt(-1), mustBig("100000000"), 8, 8, 6, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := composeLoanPerEth(c.ethUsd, c.loanUsd, c.ethFeedDec, c.loanFeedDec, c.loanDec)
-			if c.want == "" {
-				if got != nil {
-					t.Fatalf("want nil, got %s", got)
-				}
-				return
-			}
-			if got == nil || got.String() != c.want {
-				t.Fatalf("got %v, want %s", got, c.want)
-			}
-		})
-	}
-}
-
 func TestLegProfitFloorsIncludeFirstSwapOverhead(t *testing.T) {
 	rate := new(big.Int).Set(morpho.Wad)
 	gasPrice := big.NewInt(1)

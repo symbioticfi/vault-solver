@@ -46,6 +46,7 @@ func (s *Solver) bidInput(
 			ExecutorDeposit:    cloneBig(st.Exec.Deposit),
 			ExecutorMinDeposit: cloneBig(minDeposit),
 			MaxTxGasPrice:      cloneBig(gasPrice),
+			GasPrices:          st.GasPrices,
 			GasLimit:           st.GasLimit,
 		},
 		PendingAuctions: pendingAuctionsForStrategy(inFlight.pending, now),

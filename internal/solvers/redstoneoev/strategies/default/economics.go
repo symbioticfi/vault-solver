@@ -23,19 +23,6 @@ func validRate(rate *big.Int) *big.Int {
 	return nil
 }
 
-func composeLoanPerEth(ethUsd, loanUsd *big.Int, ethFeedDec, loanFeedDec, loanDec int) *big.Int {
-	if ethUsd == nil || loanUsd == nil || ethUsd.Sign() <= 0 || loanUsd.Sign() <= 0 {
-		return nil
-	}
-	num := new(big.Int).Mul(ethUsd, exp10(loanDec+loanFeedDec))
-	den := new(big.Int).Mul(loanUsd, exp10(ethFeedDec))
-	rate := new(big.Int).Quo(num, den)
-	if rate.Sign() <= 0 {
-		return nil
-	}
-	return rate
-}
-
 func loanToNative(loan, rate *big.Int) *big.Int {
 	if rate == nil || rate.Sign() <= 0 || loan == nil {
 		return new(big.Int)
@@ -81,6 +68,15 @@ func legsWithProfitFloors(legs []selectedLeg, gas gasPrediction, gasPrice, rate 
 		}
 		units := liquidlanegas.UnitsForRouteAt(route, i == 0)
 		out[i].MinProfit = nativeToLoan(gasCostNative(units, gasPrice), rate)
+	}
+	return out
+}
+
+func legsWithMinimumProfit(legs []selectedLeg, floor *big.Int) []selectedLeg {
+	out := make([]selectedLeg, len(legs))
+	copy(out, legs)
+	for i := range out {
+		out[i].MinProfit = cloneBig(floor)
 	}
 	return out
 }

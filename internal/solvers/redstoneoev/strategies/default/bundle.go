@@ -59,14 +59,8 @@ type pricedBundle struct {
 	selectedLegs        []selectedLeg
 }
 
-// selectBundle is the gross-profit fallback for dry-run/no-rate paths. Live bidding uses selectNetBundle.
-//
-// Legs sharing collateral also share the adapter's getMaxAssets pool, so selection caps cumulative expected
-// loan output per collateral against the cached adapter liquidity.
-func (e bundleEngine) selectBundle(scored []scoredLeg) (chosenBundle, string) {
-	return e.selectBundleWithGas(scored, nil, 0, defaultPriceUpdateFeeds)
-}
-
+// Legs sharing collateral share the adapter's getMaxAssets pool, so gross selection caps cumulative
+// expected loan output per collateral against cached adapter liquidity and the settlement gas limit.
 func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, string) {
 	if len(scored) == 0 {
 		return chosenBundle{}, skipNoLegs
@@ -87,7 +81,7 @@ func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneSta
 		return chosenBundle{}, skipNoLegs
 	}
 	if rate == nil || rate.Sign() <= 0 {
-		return e.selectBundleWithGas(scored, laneState, gasLimit, feedCount)
+		return chosenBundle{}, skipGasUnprofitable
 	}
 	best, ok := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
 		return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
@@ -391,6 +385,25 @@ func (e bundleEngine) priceBundle(b chosenBundle, rate *big.Int, laneState *liqu
 		bidNative:           e.bundleBidNative(b, rate),
 		minBundleProfitLoan: e.minBundleProfitLoan(b, rate, gas, gasPrice),
 		selectedLegs:        legsWithProfitFloors(b.selectedLegs(), gas, gasPrice, rate),
+	}
+}
+
+// priceBundleWithoutGasAccounting preserves native-only funding safety while intentionally omitting
+// native-cost deductions from loan-token profitability. The positive one-unit floors keep the
+// callback authorization valid without pretending an unavailable conversion is known.
+func (e bundleEngine) priceBundleWithoutGasAccounting(
+	b chosenBundle,
+	laneState *liquidLaneState,
+	gasPrice *big.Int,
+	feedCount int,
+) pricedBundle {
+	gas := predictGasForFeeds(legHints(b.legs), laneState, feedCount)
+	return pricedBundle{
+		gas:                 gas,
+		gasNative:           gasCostNative(gas.Units, gasPrice),
+		bidNative:           cloneBig(e.cfg.BidWei),
+		minBundleProfitLoan: big.NewInt(1),
+		selectedLegs:        legsWithMinimumProfit(b.selectedLegs(), big.NewInt(1)),
 	}
 }
 

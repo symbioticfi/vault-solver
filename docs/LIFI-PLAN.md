@@ -39,7 +39,7 @@ that already-opened order in **one atomic transaction**:
 
 Because input redemption and output fill are in one transaction, the executor does **not** need prefunded
 output inventory for this path. The economic surplus is aggregate redeemed output minus the resolved order
-output after the strategy's gas-aware checks. It remains in the executor; the current ABI has no sweep
+output after the strategy's checks, including gas when configured. It remains in the executor; the current ABI has no sweep
 entrypoint, so recovery requires the proxy administration path described in §7.
 
 This is the same-chain specialization of the cross-chain OIF flow. Same-chain is strictly simpler:
@@ -71,9 +71,9 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 - **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
   (`DecideQuotes` + `DecideFill`; `default` in-process or `webhook` external), per
   [`strategy-plan.md`](strategy-plan.md). See §5.2.
-- **Shared LiquidLane decision boundary** — direct/physical inventory, fill quotes, and gas state come
+- **Shared LiquidLane decision boundary** — direct/physical inventory, fill quotes, and optional gas state come
   from the common snapshot reader. Default allocation and external webhook plans converge on the same
-  canonical fill routes, capacity reservations, gas floor, and fail-closed route validation before the
+  canonical fill routes, capacity reservations, configured gas floor, and fail-closed route validation before the
   LI.FI-specific OIF calldata mapping.
 
 ### Component / repo map
@@ -356,16 +356,17 @@ type Strategy interface {
 }
 ```
 
-- **`QuoteInput`** = shared `[]liquidlane.Inventory`, latest LiquidLane gas snapshot
-  (adapter-local owner/market-maker `acquireBalance` and vault-level shared `freeAssets`/`withdrawable`), vault-level in-flight capacity
-  reservations, chain time, server wall time, solver-owned quote expiry, and the current
-  `txmanager.MaxFeePerGas` profitability ceiling, including one ordinary replacement when the cap permits.
+- **`QuoteInput`** = shared `[]liquidlane.Inventory`, vault-level in-flight capacity reservations, chain
+  time, server wall time, and solver-owned quote expiry. When `gas:` is configured it also carries the latest
+  LiquidLane gas snapshot and current `txmanager.MaxFeePerGas` profitability ceiling, including one ordinary
+  replacement when the cap permits.
   The shared LiquidLane predictor derives every adapter swap route as
   acquire/allocate/deallocate/unknown. The solver reads Chainlink native/USD and token/USD feeds at the
   latest state and passes a `tokenOut per native` snapshot to the strategy. Every distinct resolved
   adapter `tokenOut` must have a configured feed; missing coverage fails startup and stale/invalid rounds
   fail closed for that decision. Gas units are code-owned conservative constants: 250k fixed LI.FI
-  settlement, shared LiquidLane route units, and 75k for each private route.
+  settlement, shared LiquidLane route units, and 75k for each private route. Without `gas:`, the solver
+  skips those reads and passes a zero economic fee plus nil gas facts to the strategy.
   `DecideQuotes` applies `inventoryReserveBps` before pricing, normalizes direct and private inventory into
   shared greedy candidates, and keeps at most three physical routes (one for permissioned inputs). LI.FI
   retains only the range-shaped protocol adapter: selected capacity is divided geometrically into at most
@@ -373,7 +374,7 @@ type Strategy interface {
   `[inputLow,inputHigh]` the strategy calls the same exact-input `greedy.SolveQuote` used by concrete
   RFQ-style solvers at both endpoints. Each endpoint is converted to the largest fixed-point rate that
   cannot overquote its integer output, then capped by a linear conservative floor derived from the
-  alternatives able to cover each route at `inputHigh`, worst-case complete-plan gas, and integer rounding.
+  alternatives able to cover each route at `inputHigh`, integer rounding, and configured worst-case complete-plan gas.
   The published minimum is revalidated for positive integer output. Two price-movement stages are deducted
   (quote→decision and decision→inclusion). There is no separate LI.FI
   quote planner or minimum-profit setting. If a candidate range starts below the conservative economic floor,
@@ -404,7 +405,7 @@ type Strategy interface {
   that every concurrently matched order can be filled.
 - **`FillInput`** = the matched signed `StandardOrder` output facts (`output.amount`, raw
   `output.context`) plus fresh `getAmountOut`, `minDiscount`, `getMaxAssets`, pending fill reservations
-  by shared `CapacityID`, and the same latest LiquidLane gas facts. Direct candidates require current
+  by shared `CapacityID`, and the same optional LiquidLane gas facts. Direct candidates require current
   filler authorization. Internal discount candidates are resolved again through the
   backend, validated against the advertised ID/adapter/token/deadlines and adapter minimum, then priced
   as `getAmountOut * (1 - signedDiscount)`.
@@ -467,10 +468,9 @@ The solver then executes the result — publish the curve, or send one
 `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the
 `FillPlan`. `default` is in-process. `webhook` posts the same raw snapshots to `/decide-quotes` and
 `/decide-fill`; its response is a `FillPlan` or `null`. The solver normalizes adapters/capacity IDs from
-trusted candidates and rejects unknown, oversized, duplicated, input-mismatched, capacity-conflicting,
-or gas-negative routes before calldata construction. LI.FI owns the fixed settlement and
-private-payload gas envelope; the shared gas calculator consumes it for both quote/fill decisions and
-solver-side validation.
+trusted candidates and rejects unknown, oversized, duplicated, input-mismatched, or capacity-conflicting
+routes before calldata construction. When `gas:` is configured, it also rejects gas-negative routes through
+the shared calculator using LI.FI's fixed settlement/private-payload envelope.
 
 ### 5.3 Build & submit
 
@@ -480,17 +480,18 @@ Split the strategy plan into direct executor `FillRoute[]` and discount-backed `
 → read `InputSettlerEscrowLIFI.orderStatus(orderId)` again → submit only when the status is `Deposited`.
 The executor derives the solver identifier from `address(this)`. The WS handler places parsed orders into an
 in-memory FIFO without blocking the socket reader, so ping/pong and later messages continue while one planner
-evaluates orders in arrival order. It reads fresh state and gas, asks the strategy, builds calldata, and calls
+evaluates orders in arrival order. It reads fresh state and optional gas facts, asks the strategy, builds calldata, and calls
 `SendAsync`. If another transaction lifecycle is active, that planned request waits for admission without being
 signed, and the single planner does not plan another order meanwhile.
 An admitted order first verifies `governanceFee() == 0`, then derives the canonical ID and verifies
 `orderStatus == Deposited` before expensive route reads. It selects only configured routes matching both
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
-time before each strategy decision. That decision-time max fee is a hard per-request cap. Before signing,
-txmanager recomputes current fees and rejects the fill if base fee plus the selected priority fee cannot fit
-while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
-Pending calls are bumped within the request cap. `CancelAt` is the earliest non-zero order expiry, fill
+time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
+cap; without it, the request cap is nil and txmanager prices dynamically under global `maxFeeGwei`. Before
+signing, txmanager recomputes current fees and rejects a capped fill if base fee plus the selected priority fee
+cannot fit while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
+Pending calls are bumped within the applicable request/global cap. `CancelAt` is the earliest non-zero order expiry, fill
 deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
 chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
 cannot extend validity; it also bounds a wait behind another active lifecycle. With no deadline, the global
@@ -529,7 +530,7 @@ solvers:
           minAmount: "1000000"          # operator tokenIn floor; ranges may start higher
           rangeCount: 8                 # geometric ranges per pair; hard max is 16
           executionDeadlineBuffer: 12s
-      gas:
+      gas:                                  # optional; omit to disable economic gas accounting
         nativeUsdFeed: "0x…"
         nativeMaxAge: 1h                     # native/USD feed heartbeat
         tokenUsdFeeds:
@@ -588,11 +589,12 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Inclusion-time enforcement** — direct routes ask the adapter for the buffered target; private routes use
   the signed terms. If current adapter state cannot execute the request or the OutputSettler cannot pull the
   accepted order amount, the whole transaction reverts.
-- **Gas-aware quotes** — the solver supplies the live txmanager fee cap, latest LiquidLane gas state, and
+- **Optional gas-aware quotes** — when `gas:` is configured, the solver supplies the live txmanager fee cap, latest LiquidLane gas state, and
   Chainlink-derived token/native conversion as raw facts. Code-owned fixed settlement/private units combine
   with shared route prediction; there is no separate gas padding knob. `minAmount` is the operator's token-input
   floor. The per-range conservative floor covers complete-plan gas, both quote-time price windows, and rounding;
-  ranges with no positive suffix are omitted.
+  ranges with no positive suffix are omitted. Without it, quote/fill decisions use zero economic gas cost;
+  the tx manager still prices and pays the actual transaction gas.
 - **Capacity safety** — routes sharing a vault share one conservative capacity domain. Each pair may advertise
   the full domain, while quote and fill planning subtract every in-flight buffered output from it. This
   optimistic publication can overbook across simultaneously matched pairs, but each fill still uses a fresh
@@ -683,7 +685,7 @@ production.
    redeemable input-token list, current capacity, and rate. Grant `setFiller(executor, true)` for direct
    routes. In `internal` mode a signed private-discount leg has its own authorization, but any direct
    fallback still needs filler authorization.
-6. **Configure gas conversion.** Provide one native/USD Chainlink feed and one token/USD feed for every
+6. **Optionally configure gas conversion.** When enabling `gas:`, provide one native/USD Chainlink feed and one token/USD feed for every
    distinct adapter output asset. Set `gas.nativeMaxAge` and every `gas.tokenUsdFeeds[].maxAge`
    from the feed's heartbeat plus realistic publication slack; stale, non-positive, missing, or materially
    future-dated rounds fail the quote/fill decision closed.
@@ -708,14 +710,14 @@ starting, replace every zero/placeholder address and provide these secrets witho
 | `SOLVER_PRIVATE_KEY` | `signer.keyEnv` | Authorized executor caller and tx sender; it may be separate from the owner. |
 | `LIFI_SOLVER_API_KEY` | `orderServer.apiKeyEnv` | REST quote/supported-contract calls and WebSocket authentication. |
 | RPC URL variables | `chain.rpcUrl` / optional write and fallback URLs | Current-state reads and transaction submission. |
-| Chainlink feed variables | `gas.nativeUsdFeed`, `gas.tokenUsdFeeds[]` | Native gas cost converted into each output token; every feed has its own required max age. |
+| Chainlink feed variables | `gas.nativeUsdFeed`, `gas.tokenUsdFeeds[]` | Optional native gas conversion; every configured feed has its own required max age. |
 | `RFQ_BACKEND_URL` | `privateDiscountsUrl` | Required only for `solverMode: internal`. |
 
 #### Startup preflight performed by the solver
 
 Startup fails before quote publication when config is invalid, any configured adapter's `vault()`, vault
-`asset()`, token list, or token decimals cannot be resolved, no adapter routes resolve, an output token has
-no configured gas oracle, executor settler immutables do not match, the signer is not returned by
+`asset()`, token list, or token decimals cannot be resolved, no adapter routes resolve, a configured gas
+block does not cover an output token, executor settler immutables do not match, the signer is not returned by
 `executor.isCaller`, `InputSettler.governanceFee()` is non-zero or unreadable, the API
 key does not list the executor as a registered solver identity, or external mode lacks direct filler
 authorization. After those checks the solver reads `GET /api/v1/solver/supported-contracts`; if needed it
@@ -736,7 +738,7 @@ Onboarding is complete only when all of the following are observed in the target
 5. The executor transaction succeeds atomically: input claim -> LiquidLane redemption -> OutputSettler
    fill/attestation. The user receives the required output and backend status becomes `Settled`.
 6. Receipt gas is consistent with the conservative settlement constants and the submitted fee remains within
-   the decision and global fee caps; any surplus is held by the executor.
+   the configured decision cap, when present, and the global fee cap; any surplus is held by the executor.
 
 ### 8.2 Testnet dev environment (primary loop)
 Target **Ethereum Sepolia** (chainId 11155111) — the intersection of LI.FI `order-dev` support, the
@@ -755,7 +757,7 @@ One-time setup:
 3. **Filler auth** — the testbed owner `0x8124…7309` registers our executor as a filler on the adapter
    (`setFiller(executor, true)` / equivalent owner path).
 4. **Config** — copy `config/lifi.example.yaml` into an operator-local config, point `orderServer` at
-   `order-dev.li.fi`, and set the §4 settlers, deployed executor, TCOL->TLOAN adapter, RPC, and gas feeds.
+   `order-dev.li.fi`, and set the §4 settlers, deployed executor, TCOL->TLOAN adapter, RPC, and optional gas feeds.
    On first startup the solver preserves existing supported contracts and adds the escrow InputSettler plus
    the OutputSettler to their respective settler lists for `eip155:11155111`; it does not register the
    OutputSettler as an oracle.
@@ -813,13 +815,13 @@ still requires the redeploy in phase 0.
    `httptest`; the existing HTTP/WS connection was validated live, but restart catch-up still needs a live exercise.
 2. **Done locally; previous ABI live Sepolia happy path proven** Pricing + decision + tx build — `default` strategy
    (direct executable getMaxRate for quotes; getAmountOut/minDiscount/getMaxAssets for fills;
-   Chainlink gas conversion snapshots, code-owned settlement/private gas constants, pair-level route
+   optional Chainlink gas conversion snapshots, code-owned settlement/private gas constants, pair-level route
    ladders, all live direct/private alternatives per route, shared capacity and shared LI.FI/UniswapX
    LiquidLane fill planning,
    asset match, immediate OutputSettlerSimple context resolution
    for limit and exclusive-limit outputs, with Dutch contexts rejected at order-feed admission);
    executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
-   early/final `orderStatus == Deposited` checks; latest-state snapshots; txmanager profitability-ceiling fee
+   early/final `orderStatus == Deposited` checks; latest-state snapshots; optional txmanager profitability-ceiling fee
    input; dynamic ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
    pending-capacity-aware bounded FIFO retry, terminal-result reservation release (receipted outcomes wait for
    configured confirmations), fresh state for every attempt, and execution-time contract validation.

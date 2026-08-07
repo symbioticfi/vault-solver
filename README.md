@@ -109,18 +109,21 @@ On settlement it liquidates the position and exits the seized collateral through
 settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
 LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
 `operationData`. Operators can set `maxBidWei` as a per-auction spend ceiling over any strategy; it is
-required for the external `webhook` strategy and optional for the built-in `default`. Design, config,
-and roadmap:
+required for the external `webhook` strategy and optional for the built-in `default`. The common `gas:`
+block is optional, and its shared oracle facts are passed to the selected strategy. The built-in strategy
+uses them for after-cost economics; without them, it selects gross-profitable bundles while retaining the
+signed gas-price cap and native funding checks. When `gas:` is configured, startup requires a feed for the
+resolved adapter loan asset and a readable initial oracle snapshot. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 
 ### LI.FI Same-Chain Intents — `lifi-samechain`
 
-A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
-standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
+A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
+from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
 publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
-rechecks the canonical order status, adapter state, gas cost, and strategy decision, then atomically claims
+rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
@@ -143,8 +146,11 @@ solver greedily rebuilds the best current route plan, and redeemed output above 
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
 floor yields a positive output, then prices the published suffix by running the shared LiquidLane exact-input
 quote solver at both endpoints. It caps the lower of the two endpoint rates by that floor for interior route
-transitions, worst-case route gas, and rounding.
+transitions, rounding, and, when configured, worst-case route gas.
 `strategy.config.rangeCount` sets the geometric curve resolution (default `8`, maximum `16`).
+
+Omitting LI.FI's `gas:` block disables gas accounting in quote/fill decisions and skips gas-state and
+Chainlink reads; the tx manager still prices and pays the actual transaction gas.
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
 a caller signature bound to the executor's EIP-712 domain, appears as `exclusiveFor` in quotes, and calls the
@@ -164,8 +170,8 @@ scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders 
 admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
-route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
-its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
+route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
+Chainlink feed has its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
 available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
@@ -271,7 +277,7 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
   LI.FI and UniswapX own separate strategy contracts and independently reject returned fills that exceed
-  current capacity or do not cover the order plus gas. UniswapX delegates each concrete quote to
+  current capacity or do not cover the order plus configured gas. UniswapX delegates each concrete quote to
   `POST /decide-quote` and each current fill plan to `POST /decide-fill` under the configured webhook URL.
 
 This is the seam for customizing a solver without forking. Contract and trust model:

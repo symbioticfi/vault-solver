@@ -3,6 +3,7 @@ package redstoneoev
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/executor"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -20,10 +22,24 @@ var executorB = executor.NewRedStoneExecutor()
 type reader struct {
 	chain *chain.Client
 	ll    *liquidlane.Reader
+	gas   *liquidlanegas.OracleReader
 }
 
-func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
-	return &reader{chain: c, ll: liquidlane.NewReader(c, log, liquidityLens)}
+func newReader(
+	c *chain.Client,
+	log logr.Logger,
+	gasCfg *liquidlanegas.OracleConfig,
+	liquidityLens common.Address,
+) (*reader, error) {
+	var gasReader *liquidlanegas.OracleReader
+	if gasCfg != nil {
+		var err error
+		gasReader, err = liquidlanegas.NewOracleReader(c, *gasCfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &reader{chain: c, ll: liquidlane.NewReader(c, log, liquidityLens), gas: gasReader}, nil
 }
 
 // ExecutorState is the signer's accounting on the RedStone Executor.
@@ -80,4 +96,21 @@ func (r *reader) ReadAdapterSnapshot(
 		FreeAssets: liquidlane.CloneBig(snapshot.FreeAssets), Withdrawable: liquidlane.CloneBig(snapshot.Withdrawable),
 		Redeemable: redeemable, Filler: snapshot.Authorized,
 	}, nil
+}
+
+// ReadGasPrices returns the shared token/native price snapshot when gas accounting is configured.
+// A nil snapshot is the explicit gas-disabled mode; configured oracle failures are returned so the
+// solver keeps its last coherent state and eventually fails closed on cache staleness.
+func (r *reader) ReadGasPrices(
+	ctx context.Context,
+	adapter types.AdapterSnapshot,
+	now time.Time,
+) (*liquidlanegas.PriceSnapshot, error) {
+	if r.gas == nil {
+		return nil, nil
+	}
+	return r.gas.Read(ctx, []liquidlanegas.Token{{
+		Address:  adapter.Loan,
+		Decimals: adapter.LoanDecimals,
+	}}, now)
 }

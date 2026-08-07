@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
@@ -18,32 +17,18 @@ const (
 	defaultDiscoveryMaxHF       = 1.30
 	defaultMaxTrackedPositions  = 10_000
 	defaultCallbackAuthTTL      = time.Minute
-	defaultFeedMaxAge           = time.Hour
 	defaultMonitorPoll          = 10 * time.Second
 	defaultMaxStateAge          = 90 * time.Second
 )
 
 type rawConfig struct {
-	LoanEthFeed         *rawLoanEthFeed `yaml:"loanEthFeed"`
-	MorphoAPIURL        string          `yaml:"morphoApiUrl"`
-	DiscoveryMaxHF      *float64        `yaml:"discoveryMaxHealthFactor"`
-	MaxTrackedPositions *int            `yaml:"maxTrackedPositions"`
-	MonitorPollMs       *int            `yaml:"monitorPollMs"`
-	MaxStateAgeMs       *int            `yaml:"maxStateAgeMs"`
-	Bid                 rawBidPlan      `yaml:"bid"`
-	Sizing              rawSizing       `yaml:"sizing"`
-}
-
-type rawLoanEthFeed struct {
-	EthUsd   string `yaml:"ethUsd"`
-	LoanUsd  string `yaml:"loanUsd"`
-	MaxAgeMs *int   `yaml:"maxAgeMs"`
-}
-
-type loanEthFeed struct {
-	LoanUsdFeed common.Address
-	EthUsdFeed  common.Address
-	MaxAge      time.Duration
+	MorphoAPIURL        string     `yaml:"morphoApiUrl"`
+	DiscoveryMaxHF      *float64   `yaml:"discoveryMaxHealthFactor"`
+	MaxTrackedPositions *int       `yaml:"maxTrackedPositions"`
+	MonitorPollMs       *int       `yaml:"monitorPollMs"`
+	MaxStateAgeMs       *int       `yaml:"maxStateAgeMs"`
+	Bid                 rawBidPlan `yaml:"bid"`
+	Sizing              rawSizing  `yaml:"sizing"`
 }
 
 type rawBidPlan struct {
@@ -81,12 +66,6 @@ func ParseConfig(node yaml.Node) (Config, error) {
 			AllowFullLiquidation: defaultAllowFullLiquidation,
 			SwapHaircutBps:       defaultSwapHaircut,
 		},
-	}
-	if cfg.LoanEthFeed, err = parseLoanEthFeed(raw.LoanEthFeed); err != nil {
-		return Config{}, err
-	}
-	if cfg.LoanEthFeed == nil {
-		return Config{}, errors.New("strategy.config.loanEthFeed is required")
 	}
 	if raw.Bid.AuthTtlMs != nil {
 		authTTL, err := parse.MsDuration(raw.Bid.AuthTtlMs, cfg.CallbackAuthTTL, "strategy.config.bid.authTtlMs")
@@ -158,28 +137,6 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	return cfg, nil
 }
 
-func parseLoanEthFeed(in *rawLoanEthFeed) (*loanEthFeed, error) {
-	if in == nil {
-		return nil, nil
-	}
-	loanFeed, err := parse.NonZeroAddress(in.LoanUsd, "strategy.config.loanEthFeed.loanUsd")
-	if err != nil {
-		return nil, err
-	}
-	ethFeed, err := parse.NonZeroAddress(in.EthUsd, "strategy.config.loanEthFeed.ethUsd")
-	if err != nil {
-		return nil, err
-	}
-	maxAge := defaultFeedMaxAge
-	if in.MaxAgeMs != nil {
-		if *in.MaxAgeMs <= 0 {
-			return nil, errors.New("strategy.config.loanEthFeed.maxAgeMs must be > 0")
-		}
-		maxAge = time.Duration(*in.MaxAgeMs) * time.Millisecond
-	}
-	return &loanEthFeed{LoanUsdFeed: loanFeed, EthUsdFeed: ethFeed, MaxAge: maxAge}, nil
-}
-
 func ConfigForTest(overrides Config) Config {
 	cfg := Config{
 		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
@@ -203,13 +160,6 @@ func ConfigForTest(overrides Config) Config {
 	}
 	if overrides.BidWei != nil {
 		cfg.BidWei = new(big.Int).Set(overrides.BidWei)
-	}
-	if overrides.LoanEthFeed != nil {
-		cfg.LoanEthFeed = &loanEthFeed{
-			LoanUsdFeed: overrides.LoanEthFeed.LoanUsdFeed,
-			EthUsdFeed:  overrides.LoanEthFeed.EthUsdFeed,
-			MaxAge:      overrides.LoanEthFeed.MaxAge,
-		}
 	}
 	if overrides.MinBundleProfitBidBps != 0 {
 		cfg.MinBundleProfitBidBps = overrides.MinBundleProfitBidBps

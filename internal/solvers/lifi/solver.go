@@ -139,7 +139,10 @@ func (s *Solver) Run(ctx context.Context) error {
 		return startupErr
 	}
 	if err := s.reader.validateGasTokens(routes); err != nil {
-		return errors.Errorf("lifi: validate gas oracles: %w", err)
+		startupErr := errors.Errorf("lifi: validate gas oracles: %w", err)
+		s.log.Error(startupErr, "gas oracle validation failed",
+			"routes", len(routes), "gasAccounting", s.cfg.Gas != nil)
+		return startupErr
 	}
 	if err := s.reader.validateExecutor(
 		ctx, s.cfg.Executor, s.cfg.InputSettler, s.cfg.OutputSettler, s.caller,
@@ -151,7 +154,9 @@ func (s *Solver) Run(ctx context.Context) error {
 		return startupErr
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
-		return errors.Errorf("lifi: validate governance fee: %w", err)
+		startupErr := errors.Errorf("lifi: validate governance fee: %w", err)
+		s.log.Error(startupErr, "governance fee validation failed", "inputSettler", s.cfg.InputSettler.Hex())
+		return startupErr
 	}
 	if !s.cfg.usesDiscounts() {
 		if err := s.reader.validateDirectAuthorization(ctx, s.cfg.Executor, routes); err != nil {
@@ -165,13 +170,23 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 	}
 	if err := s.orders.validateExecutorRegistration(ctx, s.cfg.Executor); err != nil {
+		s.log.Error(err, "executor registration validation failed",
+			"executor", s.cfg.Executor.Hex(), "baseUrl", s.cfg.OrderServer.BaseURL)
 		return err
 	}
 	if err := s.orders.ensureSupportedContracts(ctx, s.chainID, s.cfg.InputSettler, s.cfg.OutputSettler); err != nil {
+		s.log.Error(err, "supported contract reconciliation failed",
+			"chainId", s.chainID,
+			"inputSettler", s.cfg.InputSettler.Hex(),
+			"outputSettler", s.cfg.OutputSettler.Hex(),
+		)
 		return err
 	}
 
 	s.log.Info("starting",
+		"chainId", s.chainID,
+		"strategy", s.cfg.Strategy.Name,
+		"adapters", len(s.cfg.Adapters),
 		"routes", len(routes),
 		"baseUrl", s.cfg.OrderServer.BaseURL,
 		"wsUrl", s.cfg.OrderServer.WSURL,
@@ -179,9 +194,13 @@ func (s *Solver) Run(ctx context.Context) error {
 		"quoteInterval", s.cfg.QuoteInterval.String(),
 		"quoteTTL", s.cfg.QuoteTTL.String(),
 		"solverMode", s.cfg.SolverMode,
+		"privateDiscounts", s.cfg.usesDiscounts(),
+		"gasAccounting", s.cfg.Gas != nil,
 		"tokensToQuote", s.cfg.TokenPolicy.Scope(),
 		"executor", s.cfg.Executor.Hex(),
 		"caller", s.caller.Hex(),
+		"inputSettler", s.cfg.InputSettler.Hex(),
+		"outputSettler", s.cfg.OutputSettler.Hex(),
 	)
 
 	s.quoteRefresh = make(chan struct{}, 1)

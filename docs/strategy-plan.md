@@ -67,7 +67,8 @@ its `strategies/types` package — this document intentionally does not restate 
 Solvers that use LiquidLane liquidity also follow
 [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): shared LiquidLane packages define
 read-side facts (`Route`, `Inventory`, `QuoteCandidate`, `FillQuote`, authorization, ids, freshness). The shared snapshot
-reader composes direct and physical state plus gas facts for LI.FI and UniswapX. RFQ-like exact-input
+reader composes direct and physical state plus optional gas facts for LI.FI and UniswapX. OEV consumes the
+same optional oracle facts while retaining its protocol-specific signed gas cap and deposit checks. RFQ-like exact-input
 paths can normalize amount-independent inventory against current per-route oracle quotes. The RFQ solver
 performs that protocol-to-LiquidLane normalization before calling its strategy; UniswapX and LI.FI already
 enter their strategies as typed LiquidLane inventory. Their default strategies build the same `QuoteTask`; RFQ, LI.FI, and
