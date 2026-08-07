@@ -9,7 +9,7 @@
             "name": "X-Integrator-Key",
             "required": false,
             "in": "header",
-            "description": "Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
+            "description": "Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.",
             "schema": {
               "type": "string"
             }
@@ -424,7 +424,7 @@
             "name": "X-Integrator-Key",
             "required": false,
             "in": "header",
-            "description": "Raw integrator key. Use a high-entropy random string. When provided, integrator-specific quotes become eligible in addition to open-market quotes.",
+            "description": "Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.",
             "schema": {
               "type": "string"
             }
@@ -978,14 +978,14 @@
                             "callbackData": "0x",
                             "token": "0x000000000000000000000000036cbd53842c5426634e7929541ec2318f3dcf7e",
                             "amount": "10000",
-                            "oracle": "0x00000000000000000000000000d5b500eca100f7cdedc800ec631aca00baac00",
+                            "oracle": "0x000000000000000000000000a70fe63dd97e8e0cb37241ed231fcbca87e99b72",
                             "chainId": "84532",
                             "context": "0x",
                             "settler": "0x00000000000000000000000000000000d7278408ce7a490015577c41e57143a5",
                             "recipient": "0x000000000000000000000000ae013dc3a3456459766a729a15c427a6607bd98d"
                           }
                         ],
-                        "inputOracle": "0x00d5b500ECa100F7cdeDC800eC631Aca00BaAC00",
+                        "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
                         "fillDeadline": "1759481697",
                         "originChainId": "11155111"
                       },
@@ -1092,14 +1092,14 @@
                         "callbackData": "0x",
                         "token": "0x000000000000000000000000036cbd53842c5426634e7929541ec2318f3dcf7e",
                         "amount": "10000",
-                        "oracle": "0x00000000000000000000000000d5b500eca100f7cdedc800ec631aca00baac00",
+                        "oracle": "0x000000000000000000000000a70fe63dd97e8e0cb37241ed231fcbca87e99b72",
                         "chainId": "84532",
                         "context": "0x",
                         "settler": "0x00000000000000000000000000000000d7278408ce7a490015577c41e57143a5",
                         "recipient": "0x000000000000000000000000ae013dc3a3456459766a729a15c427a6607bd98d"
                       }
                     ],
-                    "inputOracle": "0x00d5b500ECa100F7cdeDC800eC631Aca00BaAC00",
+                    "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
                     "fillDeadline": "1759481697",
                     "originChainId": "11155111"
                   },
@@ -1897,19 +1897,19 @@
                     "oracle": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                        "address": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                       }
                     ],
                     "inputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x000025c3226c00b2cdc200005a1600509f4e00c0"
+                        "address": "0x00fc00edbe7c003b006f870068c548940000223e"
                       }
                     ],
                     "outputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000000000ec36b683c2e6ac89e9a75989c22a2e"
+                        "address": "0x75220b7600c300005038432a0000f308e0000068"
                       }
                     ]
                   }
@@ -1956,19 +1956,19 @@
                     "oracle": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000003E06000007A224AeE90052fA6bb46d43C9"
+                        "address": "0x008C3800F3Ad9b3B662d002E90Cc00000000eE17"
                       }
                     ],
                     "inputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x000025c3226C00B2Cdc200005a1600509f4e00C0"
+                        "address": "0x00fC00edbe7C003b006f870068c548940000223e"
                       }
                     ],
                     "outputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"
+                        "address": "0x75220B7600c300005038432a0000f308e0000068"
                       }
                     ]
                   }
@@ -1990,19 +1990,19 @@
                     "oracle": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                        "address": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                       }
                     ],
                     "inputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x000025c3226c00b2cdc200005a1600509f4e00c0"
+                        "address": "0x00fc00edbe7c003b006f870068c548940000223e"
                       }
                     ],
                     "outputSettler": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000000000ec36b683c2e6ac89e9a75989c22a2e"
+                        "address": "0x75220b7600c300005038432a0000f308e0000068"
                       }
                     ]
                   }
@@ -2978,7 +2978,7 @@
               },
               "minValidUntil": {
                 "description": "Minimum validity timestamp in seconds",
-                "example": 1785154905,
+                "example": 1786441798,
                 "type": "number"
               },
               "preference": {
@@ -3372,7 +3372,7 @@
                   "type": "string"
                 },
                 "integratorKeyHash": {
-                  "description": "Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote available to all integrators.",
+                  "description": "Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote, served only to requests that carry no X-Integrator-Key header.",
                   "example": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
@@ -3406,7 +3406,7 @@
           },
           "quotesAdded": {
             "type": "number",
-            "description": "Number of quotes successfully added",
+            "description": "Number of deduplicated quote ranges accepted by the submission. Identical resubmissions count as accepted even when no rows change.",
             "example": 1250
           }
         },
@@ -3594,7 +3594,7 @@
               },
               "minValidUntil": {
                 "description": "Minimum validity timestamp in unix timestamp (seconds). Only select solver quotes with longer TTL.",
-                "example": 1785154905,
+                "example": 1786441799,
                 "type": "number"
               },
               "preference": {
@@ -3653,7 +3653,7 @@
                     "example": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000003E06000007A224AeE90052fA6bb46d43C9"
+                        "address": "0x008C3800F3Ad9b3B662d002E90Cc00000000eE17"
                       }
                     ],
                     "maxItems": 50,
@@ -3671,7 +3671,7 @@
                           "type": "string",
                           "minLength": 1,
                           "description": "Native contract address for the chain",
-                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                          "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                         }
                       },
                       "required": [
@@ -3685,7 +3685,7 @@
                     "example": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x000025c3226C00B2Cdc200005a1600509f4e00C0"
+                        "address": "0x00fC00edbe7C003b006f870068c548940000223e"
                       }
                     ],
                     "maxItems": 50,
@@ -3703,7 +3703,7 @@
                           "type": "string",
                           "minLength": 1,
                           "description": "Native contract address for the chain",
-                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                          "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                         }
                       },
                       "required": [
@@ -3717,7 +3717,7 @@
                     "example": [
                       {
                         "chain": "eip155:1",
-                        "address": "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"
+                        "address": "0x75220B7600c300005038432a0000f308e0000068"
                       }
                     ],
                     "maxItems": 50,
@@ -3735,7 +3735,7 @@
                           "type": "string",
                           "minLength": 1,
                           "description": "Native contract address for the chain",
-                          "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                          "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                         }
                       },
                       "required": [
@@ -5385,7 +5385,7 @@
           "address": {
             "type": "string",
             "description": "Native contract address for the chain",
-            "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+            "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
           }
         },
         "required": [
@@ -5454,7 +5454,7 @@
                   "type": "string",
                   "minLength": 1,
                   "description": "Native contract address for the chain",
-                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                 }
               },
               "required": [
@@ -5479,7 +5479,7 @@
                   "type": "string",
                   "minLength": 1,
                   "description": "Native contract address for the chain",
-                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                 }
               },
               "required": [
@@ -5504,7 +5504,7 @@
                   "type": "string",
                   "minLength": 1,
                   "description": "Native contract address for the chain",
-                  "example": "0x0000003e06000007a224aee90052fa6bb46d43c9"
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
                 }
               },
               "required": [

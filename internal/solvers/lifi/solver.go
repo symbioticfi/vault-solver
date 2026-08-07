@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
@@ -44,6 +43,7 @@ type Solver struct {
 	now          func(context.Context) (time.Time, error)
 	maxFeePerGas func(context.Context) (*big.Int, error)
 	wallNow      func() time.Time
+	txLaneState  transactionLaneState
 	capacity     liquidlane.CapacityLedger
 	quoteRefresh chan struct{}
 	discounts    discounts.Provider
@@ -70,6 +70,11 @@ type chainReader interface {
 
 type txSender interface {
 	SendAsync(ctx context.Context, req txmanager.Request) (<-chan txmanager.Result, bool)
+}
+
+type transactionLaneState interface {
+	LaneReady() bool
+	SubscribeLaneState() (<-chan struct{}, func())
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -105,6 +110,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		now:          reader.latestBlockTime,
 		maxFeePerGas: deps.TxManager.MaxFeePerGas,
 		wallNow:      time.Now,
+		txLaneState:  deps.TxManager,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)
@@ -113,6 +119,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 }
 
 func (s *Solver) Name() string { return Name }
+
+func (s *Solver) ShutdownPreparationTimeout() time.Duration {
+	return 2 * s.cfg.OrderServer.HTTPTimeout
+}
 
 func (s *Solver) Run(ctx context.Context) error {
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
@@ -175,8 +185,41 @@ func (s *Solver) Run(ctx context.Context) error {
 	)
 
 	s.quoteRefresh = make(chan struct{}, 1)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return s.quoteLoop(gctx, routes, s.quoteRefresh) })
-	g.Go(func() error { return s.runOrderFeed(gctx, routes) })
-	return g.Wait()
+	return s.runLoops(ctx, routes)
+}
+
+func (s *Solver) runLoops(ctx context.Context, routes []route) error {
+	feedConnections := make(chan context.Context)
+	feedCtx, stopFeed := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopFeed()
+	quoteCtx, stopQuotes := context.WithCancel(ctx)
+	defer stopQuotes()
+
+	feedDone := make(chan error, 1)
+	quoteDone := make(chan error, 1)
+	go func() { feedDone <- s.runOrderFeed(feedCtx, routes, feedConnections) }()
+	go func() { quoteDone <- s.quoteLoop(quoteCtx, routes, s.quoteRefresh, feedConnections) }()
+
+	select {
+	case quoteErr := <-quoteDone:
+		// Keep consuming matched orders until active quotes are expired or the bounded
+		// shutdown attempt finishes, then stop intake and await accepted fills until the
+		// shared tx manager completes or reaches its finite hard stop.
+		stopFeed()
+		return preferLifecycleError(quoteErr, <-feedDone)
+	case feedErr := <-feedDone:
+		// A failed feed cannot consume matches, so stop quote renewal and expire known curves.
+		stopQuotes()
+		return preferLifecycleError(feedErr, <-quoteDone)
+	}
+}
+
+func preferLifecycleError(primary, secondary error) error {
+	if primary != nil && !errors.Is(primary, context.Canceled) {
+		return primary
+	}
+	if secondary != nil && !errors.Is(secondary, context.Canceled) {
+		return secondary
+	}
+	return primary
 }

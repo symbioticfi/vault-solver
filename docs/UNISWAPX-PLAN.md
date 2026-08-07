@@ -67,9 +67,10 @@ exclusivity-override pricing controller, and quoting any pair our vaults can't s
 
 ## 2. How it maps onto the framework
 
-A new self-contained `internal/solvers/uniswapx/` implementing `solver.Solver` — **no framework edits**
-(CLAUDE.md modularity rule). Code organization follows the repo's **solver-local strategy architecture**
-(see `docs/strategy-plan.md`) and the shared LiquidLane read/type conventions
+A self-contained `internal/solvers/uniswapx/` implements `solver.Solver`; protocol behavior stays out of the
+generic framework (CLAUDE.md modularity rule). Shared lifecycle hardening in `internal/{chain,txmanager,solver}`
+and `cmd/` remains protocol-neutral. Code organization follows the repo's **solver-local strategy
+architecture** (see `docs/strategy-plan.md`) and the shared LiquidLane read/type conventions
 (`docs/LIQUIDLANE-CONVENTIONS.md`). §2.5 is the consolidated reuse-vs-delta implementation checklist.
 
 ### 2.1 Solver-local strategy, shared LiquidLane primitives
@@ -87,11 +88,11 @@ internal/solvers/uniswapx/
 ```
 
 The solver owns order decoding, Dutch amount resolution, quote serving, pending-fill reservations, chain
-snapshots, exclusive-obligation reconciliation, preflight, and transaction lifecycle. For each RFQ request,
-the strategy receives its concrete amount plus the latest inventory and optional gas snapshot and returns one
-`amountIn`/`amountOut` pair. At fill time it receives a fresh chain snapshot and returns an immediately
-executable LiquidLane route plan. A candidate may carry a `DiscountID`; offer discovery and fill-time
-resolution of signed terms stay solver-owned.
+snapshots, exclusive-obligation reconciliation, preflight, and construction of the transaction request. The
+shared txmanager owns the signed lifecycle. For each RFQ request, the strategy receives its concrete amount
+plus the latest inventory and optional gas snapshot and returns one `amountIn`/`amountOut` pair. At fill time
+it receives a fresh chain snapshot and returns an immediately executable LiquidLane route plan. A candidate
+may carry a `DiscountID`; offer discovery and fill-time resolution of signed terms stay solver-owned.
 
 Only proven neutral packages are shared: `internal/liquidlane` for route/inventory types, capacity IDs,
 fixed-point math, readers, and signed-discount client/types; `internal/liquidlane/snapshot` for the
@@ -119,18 +120,61 @@ assertion because the PR19 ABI has no getter.
   empty list produces discount-only quotes from all valid advertisements. Direct and signed-discount
   candidates for one physical route share the same capacity domain.
 
-### 2.2 Reuse of the generic layer (unchanged)
+### 2.2 Reuse of the generic layer
 
-- **`Run(ctx)`** starts the UniswapX **quote webhook server** *and* the `GET /orders` poll loop, blocking
-  until ctx cancels. The framework observability server (`:9090`) stays separate.
+- **`Run(ctx)`** binds the UniswapX quote listener before starting the `GET /orders` and fill loops. A later
+  server failure is reported through `ReportFatal`, which cancels the process runtime and drops global
+  readiness so the shared txmanager starts shutdown immediately. Cancellation stops new fill admission;
+  queued orders are released without signing, while accepted transaction results drain within the configured
+  shutdown budget before `Run` returns.
+  The framework observability server (`:9090`) stays separate.
 - **The quote server is a bounded strict-JSON stdlib handler.** The public quote schema is not available in
   the order-service OpenAPI and remains a hand-vendored, tested boundary (§4.1, §4.3).
 - **`/metrics`** is the framework's shared registry; the solver registers bounded quote, poll, fill,
   readiness, and breaker collectors via `deps.Metrics.Registerer()`.
-- **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). The
-  solver builds `LiquidLaneUniswapXExecutor.execute` calldata; txmanager owns nonce/send/receipt and applies
-  the configured confirmation count. Pending capacity stays reserved through that completion, then remains
-  unavailable to quotes until a fresh post-fill snapshot is published.
+- **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). It keeps
+  at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process
+  cannot create a future transaction queued behind a missing lower nonce. `CancelAt` is the earliest order,
+  signed-discount, or protocol-signature deadline. It is derived from chain time, translated to a wall-clock
+  deadline without extending the remaining validity, and also bounds the pre-sign wait. The wall-clock
+  observation anchor is captured before the chain-time RPC so lookup and planning latency consume, rather
+  than extend, the remaining validity. The active lifecycle is replaced by a same-nonce cancellation on
+  expiry or, when nonce ownership is not conflicted, shutdown, and drained to a terminal result. Shutdown
+  stops waiting after `shutdownTimeoutMs`, cancels outstanding RPC work, and returns a deadline error so
+  SIGTERM cannot hang indefinitely; the deployment grace period must be longer than that bound.
+  UniswapX treats the lane as busy from lifecycle-slot acquisition through the terminal result: quote
+  responses and solver readiness stay blocked while a request is queued or admitted, including receipt
+  confirmation. Pending capacity reservations independently protect already-awarded orders; installing one
+  is not a signal to reopen quoting.
+- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
+  floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
+  median p75 priority reward from the latest five blocks, also clamped to headroom, and fails new submissions
+  closed when `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a
+  12.5% bump; when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei`
+  is the absolute global ceiling and normal sends reserve
+  cancellation headroom below it. With gas accounting disabled, UniswapX supplies no request ceiling. With
+  gas accounting enabled, `MaxFeePerGas` returns the profitability ceiling including one normal replacement,
+  and the initial send reserves that replacement inside the ceiling. Cancellation may exceed the request
+  ceiling but never the global ceiling. Startup rejects a configured positive tip floor that leaves no
+  base-fee headroom beneath the initial cap after both reserved bumps.
+- **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
+  re-signed at another nonce. A consumed/colliding nonce is reconciled against every exact attempt. During a
+  replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
+  ownership conflict immediately, but the single lifecycle still holds the lane through its configured
+  confirmation depth, so UniswapX quote responses and readiness remain blocked until it is terminal.
+  Initial-broadcast collisions, and replacements without an owned canonical receipt, keep further sends,
+  quotes, and readiness fail-closed until terminal reconciliation or operator action; a later receipt reorg
+  restores the conflict pause. Each confirmation check proves that the receipt
+  block is in the stable head's
+  ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
+  or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
+  read fallbacks. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
+  Exact-attempt ownership is in-memory: the packaged Compose deployment restarts automatically after an
+  unclean exit even though nonce equality cannot prove that a private hidden attempt is gone. If such an
+  attempt later consumes the reused nonce, admission and readiness remain fail-closed for operator
+  reconciliation; automatic restart does not reconstruct ownership.
+- **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
+  until a fresh post-fill snapshot is published.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives
   validated inventory plus gas snapshots and current fee inputs only when gas accounting is configured.
 - **Addresses + URLs come from `solver.config`**; secrets (`UNISWAP_API_KEY`, the solver key) via `*Env`
@@ -163,10 +207,20 @@ the executor ABI and generated binding under `api/bindings/uniswapx/` — see §
 
 One code path; per-environment differences are pure YAML (CLAUDE.md "config is king"). Secrets via `*Env`
 indirection (read with `os.Getenv` at point of use, never stored in the parsed config). `chain` / `signer` /
-`txManager` / `observability` come from the framework block, unchanged from the `rfq` profile. The current
-profile is [`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is:
+`txManager` / `observability` use the same shared framework schema as the `rfq` profile, with
+UniswapX-specific timing and fee values. The current profile is
+[`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is:
 
 ```yaml
+chain: { rpcUrl: "${ETH_RPC_URL_MAINNET}", writeRpcUrl: "${WRITE_RPC_URL}", chainId: 1 }
+txManager:
+  confirmations: 2
+  maxFeeGwei: 50
+  tipGwei: 0
+  replacementIntervalMs: 5000
+  pendingTimeoutMs: 300000
+  shutdownTimeoutMs: 60000
+
 solvers:
   - name: uniswapx-filler
     config:
@@ -192,8 +246,18 @@ solvers:
 ```
 
 The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
-skips gas-state and Chainlink reads. Transaction submission still uses the tx manager's current fee, so the
-solver pays that cost without passing it through to the quote.
+skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
+quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
+the quote. With `tipGwei: 0`, recent fee-history rewards avoid relying on a potentially unusable node tip
+suggestion. Suggestions and rewards are advisory and are clamped to available headroom; a positive value
+remains the mandatory operator-controlled floor and fallback. `maxFeeGwei` remains the absolute ceiling
+described in §2.2.
+
+The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
+account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read
+fallbacks. A signed broadcast is never replayed across those endpoints. Startup requires the write endpoint's
+mined and pending nonces to match. Because standard nonce methods cannot reveal a future transaction queued
+beyond a nonce gap, the signer EOA must remain exclusive to this process.
 
 Startup scans the executor's indexed `callers(uint256)` entries for the framework signer and checks
 executor bytecode. In external mode it also requires every configured adapter to authorize the executor as a
@@ -489,8 +553,8 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    output above the signed requirement remains executor surplus. No ladder, amount range, allocation, or
    quote-time route is published or retained.
 5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
-   Any fill reservation, breaker, exclusive-state change, or snapshot replacement during strategy execution
-   turns the result into a decline.
+   Any fill reservation, breaker, exclusive-state change, occupied or unavailable txmanager nonce lane, or
+   snapshot replacement during strategy execution turns the result into a decline.
 6. Echo `requestId` and `quoteId`, and return `200` with `amountIn`, `amountOut`, and `filler` =
    `LiquidLaneUniswapXExecutor`. Do not mutate capacity on this path.
 
@@ -518,18 +582,25 @@ is economic, not just gas:
   means simultaneous winning hard quotes can contend; current-chain replanning and simulation fail closed,
   while the cold-start window and fade breakers limit the operational risk.
 - **Block at order admission, not worker execution** — claiming an order invalidates quote state before it
-  enters the bounded worker queue. The blocker remains until planning rejects the order or an accepted
-  transaction installs its shared-capacity reservation, so queueing and the first chain-time read cannot
-  advertise the same capacity again.
+  enters the bounded worker queue. The blocker remains through planning and, once the submission occupies
+  the shared lane, until its queued or admitted lifecycle is terminal. Its capacity reservation
+  continues to protect already-awarded orders, but does not replace the lane-occupancy quote gate.
 - **Invalidate quotes across state transitions** — a request may return only against the same snapshot epoch
   and blocker state it started with. A completed fill invalidates the snapshot before releasing its
   reservation, and the released capacity remains unavailable until a post-fill chain refresh publishes the
   next epoch.
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
-  attempts are classified only by their tracked terminal reconciliation. Successful settlement resets it.
+  attempts are classified only by their tracked terminal reconciliation. A txmanager result produced before
+  admission is retried without incrementing the local breaker and is counted as
+  `uniswapx_fills_total{outcome="not-admitted"}`, not as a failed fill. Successful settlement resets it.
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
+- **Gate quotes on transaction readiness:** an occupied or unavailable nonce lane blocks quote responses,
+  the solver `/ready` endpoint, its readiness metric, and framework readiness. While a nonce conflict pauses
+  the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
+  calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
+  described in §2.2.
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
   `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
   poll, the solver also reads recent filler history across all statuses so an order that became terminal while
@@ -669,9 +740,10 @@ in the owning repository and the integration harness pins the resulting revision
   before marking the phase complete.
 - [x] **P5 — Ingestion + execution completion.** Authenticated bounded polling, validation, preflight,
   async txmanager submission, receipts, pending-fill reservations, breaker, retries, and signed-discount
-  discovery/resolution/calldata exist. Txmanager's configured confirmations are honored; released capacity
-  stays unavailable until a post-fill snapshot. Exclusive obligations are tracked through `decayStartTime`
-  from admission (including execution-invalid awarded orders), recent terminal history is recovered after
+  discovery/resolution/calldata exist. Deadline, fee, nonce, exact-hash, readiness, and shutdown semantics are
+  implemented as described in §2.2 and §6. Released capacity stays unavailable until a post-fill snapshot.
+  Exclusive obligations are tracked through `decayStartTime` from admission (including execution-invalid
+  awarded orders), recent terminal history is recovered after
   startup/poll gaps, and confirmed terminal receipts are batch-reconciled before clearing obligations,
   opening the independent local fade breaker for live/runtime misses, or recording a startup-only historical
   miss without a new breaker window.

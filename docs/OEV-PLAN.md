@@ -101,8 +101,10 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   ops loop. It joins every background loop on shutdown (`sync.WaitGroup`) so no goroutine outlives `Run`.
   Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
 - **The solver sends no transactions** â€” RedStone's auctioneer submits the settlement tx; Executor deposit
-  management is out-of-band. `deps.TxManager` is therefore unused, and the OEV config carries no
-  `txManager` section.
+  management is out-of-band. The solver returns false from `RequiresTxManager`, so an OEV-only process does
+  not require `txManager.maxFeeGwei` and neither initializes nor starts the nonce lane. `deps.TxManager` remains
+  unused and the example needs no `txManager` section; a mixed process still starts the one shared manager for
+  its transaction-sending solvers.
 - **`deps.Signer` is the EXECUTOR_V6 signer.** The bid digest is `keccak256(abi.encode("EXECUTOR_V6",
   chainId, callback, keccak256(operationData), bidWei, nonce, maxTxGasPrice))` wrapped in EIP-191
   (`personal_sign`), signed via `Signer.SignHash`. The signer EOA **is** the wallet holding the Executor

@@ -1,6 +1,7 @@
 package signer
 
 import (
+	"context"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -19,5 +20,6 @@ type Signer interface {
 	SignHash(hash common.Hash) ([]byte, error)
 
 	// SignTx signs an EVM transaction for the given chain and returns the signed transaction.
-	SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
+	// Implementations must stop promptly when ctx is cancelled.
+	SignTx(ctx context.Context, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 }

@@ -1,6 +1,7 @@
 package signer
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"math/big"
 	"os"
@@ -82,10 +83,20 @@ func (l *local) SignHash(hash common.Hash) ([]byte, error) {
 	return sig, nil
 }
 
-func (l *local) SignTx(tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+func (l *local) SignTx(
+	ctx context.Context,
+	tx *types.Transaction,
+	chainID *big.Int,
+) (*types.Transaction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), l.key)
 	if err != nil {
 		return nil, errors.Errorf("signer: sign tx: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return signed, nil
 }

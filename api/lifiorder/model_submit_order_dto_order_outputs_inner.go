@@ -32,9 +32,11 @@ type SubmitOrderDtoOrderOutputsInner struct {
 	// The recipient address
 	Recipient string `json:"recipient"`
 	// The chain ID
-	ChainId      string         `json:"chainId"`
+	ChainId string `json:"chainId"`
+	// The remote call data
 	CallbackData NullableString `json:"callbackData,omitempty"`
-	Context      NullableString `json:"context,omitempty"`
+	// The fulfillment context
+	Context NullableString `json:"context,omitempty"`
 }
 
 type _SubmitOrderDtoOrderOutputsInner SubmitOrderDtoOrderOutputsInner

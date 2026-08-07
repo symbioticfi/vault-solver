@@ -3,6 +3,8 @@ package rfq
 import (
 	"context"
 	"math/big"
+	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -124,6 +126,80 @@ type countingStrategy struct {
 	types.Strategy
 
 	quoteCalls int
+}
+
+type countingQuoteReader struct {
+	quoteCandidateReader
+
+	calls int
+}
+
+func (r *countingQuoteReader) readQuoteCandidates(
+	ctx context.Context,
+	inventory []solverInventory,
+	tokenIn common.Address,
+	tokenOut common.Address,
+	amountIn *big.Int,
+) ([]liquidlane.QuoteCandidate, error) {
+	r.calls++
+	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn)
+}
+
+type laneFlippingStrategy struct {
+	types.Strategy
+
+	ready *atomic.Bool
+}
+
+func (s *laneFlippingStrategy) DecideQuote(
+	ctx context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	out, err := s.Strategy.DecideQuote(ctx, input)
+	s.ready.Store(false)
+	return out, err
+}
+
+func TestQuoteDeclinesBeforePlanningWhenLaneNotReady(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(false)
+
+	srv := testServer()
+	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
+	strategy := &countingStrategy{Strategy: srv.quotes.strategy}
+	srv.quotes.laneReady = ready.Load
+	srv.quotes.reader = reader
+	srv.quotes.strategy = strategy
+
+	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("quote status = %d, want 204 (body %s)", rr.Code, rr.Body.String())
+	}
+	if reader.calls != 0 || strategy.quoteCalls != 0 {
+		t.Fatalf("non-ready lane performed reader=%d strategy=%d calls, want none", reader.calls, strategy.quoteCalls)
+	}
+}
+
+func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
+
+	srv := testServer()
+	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
+	srv.quotes.laneReady = ready.Load
+	srv.quotes.reader = reader
+	srv.quotes.strategy = &laneFlippingStrategy{
+		Strategy: srv.quotes.strategy,
+		ready:    &ready,
+	}
+
+	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("quote status = %d, want 204 after lane pause (body %s)", rr.Code, rr.Body.String())
+	}
+	if reader.calls != 1 {
+		t.Fatalf("candidate reader calls = %d, want one completed planning read", reader.calls)
+	}
 }
 
 func (s *countingStrategy) DecideQuote(

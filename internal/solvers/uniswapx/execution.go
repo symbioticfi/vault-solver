@@ -39,10 +39,13 @@ func (s *Solver) fillLoop(
 ) error {
 	completions := make(chan uniswapFillCompletion, orderQueueCapacity)
 	pending := make(map[common.Hash]*pendingUniswapFill)
+	ctxDone := ctx.Done()
+	var shutdownErr error
 	for orders != nil || len(pending) > 0 {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-ctxDone:
+			shutdownErr = ctx.Err()
+			ctxDone = nil
 		case completion := <-completions:
 			delete(pending, completion.fill.order.Hash)
 			s.completePendingFill(completion)
@@ -51,12 +54,33 @@ func (s *Solver) fillLoop(
 				orders = nil
 				continue
 			}
+			if shutdownErr != nil || ctx.Err() != nil {
+				if shutdownErr == nil {
+					shutdownErr = ctx.Err()
+				}
+				ctxDone = nil
+				s.endFillPlanning()
+				s.retry(order.Hash, time.Now(), false)
+				continue
+			}
+			if !s.txm.Available() {
+				s.endFillPlanning()
+				s.retry(order.Hash, time.Now(), false)
+				s.log.V(1).Info(
+					"order fill deferred while transaction nonce lane is paused",
+					"source", order.Source,
+					"orderHash", order.Hash.Hex(),
+					"quoteId", order.QuoteID,
+				)
+				continue
+			}
 			s.log.V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
 				"orderHash", order.Hash.Hex(),
 				"quoteId", order.QuoteID,
 			)
+			chainObservedAt := time.Now()
 			now, err := s.reader.latestBlockTime(ctx)
 			if err != nil {
 				s.endFillPlanning()
@@ -64,7 +88,7 @@ func (s *Solver) fillLoop(
 				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
 				continue
 			}
-			fill, err := s.startFill(ctx, routes, order, now)
+			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
@@ -80,28 +104,22 @@ func (s *Solver) fillLoop(
 				continue
 			}
 			pending[order.Hash] = fill
-			go awaitUniswapFill(ctx, fill, completions)
+			go awaitUniswapFill(fill, completions)
 		}
 	}
-	return nil
+	return shutdownErr
 }
 
+// Once txmanager accepts a fill, shutdown may stop new admission but must not drop its terminal result.
 func awaitUniswapFill(
-	ctx context.Context,
 	fill *pendingUniswapFill,
 	out chan<- uniswapFillCompletion,
 ) {
-	select {
-	case result, ok := <-fill.result:
-		if !ok {
-			result.Err = errors.New("transaction result channel closed without a result")
-		}
-		select {
-		case out <- uniswapFillCompletion{fill: fill, result: result}:
-		case <-ctx.Done():
-		}
-	case <-ctx.Done():
+	result, ok := <-fill.result
+	if !ok {
+		result.Err = errors.New("transaction result channel closed without a result")
 	}
+	out <- uniswapFillCompletion{fill: fill, result: result}
 }
 
 func (s *Solver) startFill(
@@ -109,6 +127,7 @@ func (s *Solver) startFill(
 	routes []liquidlane.Route,
 	order *resolvedOrder,
 	now time.Time,
+	chainObservedAt time.Time,
 ) (*pendingUniswapFill, error) {
 	if order.TokenOut == (common.Address{}) {
 		return nil, errOrderNotFillable
@@ -152,13 +171,15 @@ func (s *Solver) startFill(
 		"fillQuotes", len(snapshot.Direct),
 		"physicalQuotes", len(snapshot.Physical),
 	)
-	maxFee, err := s.txm.MaxFeePerGas(ctx)
-	if err != nil {
-		return nil, err
-	}
-	pricingMaxFee := maxFee
-	if s.cfg.Gas == nil {
-		pricingMaxFee = new(big.Int)
+	pricingMaxFee := new(big.Int)
+	var transactionMaxFee *big.Int
+	if s.cfg.Gas != nil {
+		maxFee, err := s.txm.MaxFeePerGas(ctx)
+		if err != nil {
+			return nil, err
+		}
+		pricingMaxFee = maxFee
+		transactionMaxFee = new(big.Int).Set(maxFee)
 	}
 	fillInput := strategytypes.FillInput{
 		OrderID: order.Hash.Hex(), QuoteID: order.QuoteID,
@@ -205,12 +226,17 @@ func (s *Solver) startFill(
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
 	}
-	data, err := s.buildExecutorCalldata(ctx, order, plan, decisionRoutes, now)
+	data, discountValidUntil, err := s.buildExecutorCalldata(ctx, order, plan, decisionRoutes, now)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data}, nil); err != nil {
 		return nil, errors.Errorf("%w: %v", errFillPreflight, err)
+	}
+	deadline := fillDeadline(order, discountValidUntil)
+	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
+	if !ok {
+		return nil, errOrderNotFillable
 	}
 	s.log.V(1).Info(
 		"order fill preflight succeeded",
@@ -220,12 +246,14 @@ func (s *Solver) startFill(
 		"executor", order.Executor.Hex(),
 		"caller", s.solverAddress.Hex(),
 		"calldataBytes", len(data),
-		"maxFeePerGas", maxFee.String(),
-		"deadline", order.Deadline,
-		"deadlineRemaining", time.Unix(int64(order.Deadline), 0).Sub(now),
+		"gasAccounting", s.cfg.Gas != nil,
+		"pricingMaxFeePerGas", pricingMaxFee.String(),
+		"deadline", deadline.Unix(),
+		"deadlineRemaining", deadline.Sub(now),
+		"cancelAt", cancelAt.Unix(),
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		To: order.Executor, Data: data, MaxFeePerGas: new(big.Int).Set(maxFee),
+		To: order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
 		Label: "uniswapx-fill",
 	})
 	if !accepted {
@@ -242,7 +270,8 @@ func (s *Solver) startFill(
 		"quoteId", order.QuoteID,
 		"routes", len(plan.Routes),
 		"reservationDomains", len(reservations),
-		"maxFeePerGas", maxFee.String(),
+		"gasAccounting", s.cfg.Gas != nil,
+		"pricingMaxFeePerGas", pricingMaxFee.String(),
 	)
 	return &pendingUniswapFill{order: order, result: result}, nil
 }
@@ -253,9 +282,10 @@ func (s *Solver) buildExecutorCalldata(
 	plan *strategytypes.FillPlan,
 	routes []liquidlane.Route,
 	now time.Time,
-) ([]byte, error) {
+) ([]byte, time.Time, error) {
 	fillRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorFillRoute, 0, len(plan.Routes))
 	discountRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute, 0, len(plan.Routes))
+	var discountValidUntil time.Time
 	for _, route := range plan.Routes {
 		if route.DiscountID == nil {
 			fillRoutes = append(fillRoutes, uxexecutor.ILiquidLaneUniswapXExecutorFillRoute{
@@ -265,7 +295,7 @@ func (s *Solver) buildExecutorCalldata(
 		}
 		selectedRoute, ok := findRoute(routes, route.RouteID)
 		if !ok {
-			return nil, errors.Errorf("selected discount route %s is unavailable", route.RouteID)
+			return nil, time.Time{}, errors.Errorf("selected discount route %s is unavailable", route.RouteID)
 		}
 		s.log.V(1).Info(
 			"selected discount route repricing",
@@ -283,7 +313,7 @@ func (s *Solver) buildExecutorCalldata(
 			route.AmountIn,
 		)
 		if err != nil {
-			return nil, errors.Errorf("reprice selected discount %s: %w", route.DiscountID.Hex(), err)
+			return nil, time.Time{}, errors.Errorf("reprice selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
 		signed, err := s.resolveDiscount(ctx, liquiddiscounts.Selection{
 			DiscountID:   *route.DiscountID,
@@ -294,8 +324,9 @@ func (s *Solver) buildExecutorCalldata(
 			MinAmountOut: route.MinAmountOut,
 		}, physicalQuotes, now)
 		if err != nil {
-			return nil, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
+			return nil, time.Time{}, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
+		discountValidUntil = earlierTime(discountValidUntil, liquiddiscounts.ValidUntil(signed))
 		s.log.V(1).Info(
 			"selected discount resolved",
 			"orderHash", order.Hash.Hex(),
@@ -323,10 +354,22 @@ func (s *Solver) buildExecutorCalldata(
 			ProtocolSignature: signed.ProtocolSignature,
 		})
 	}
-	return uniswapXExecutor.TryPackExecute(
+	data, err := uniswapXExecutor.TryPackExecute(
 		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},
 		uxexecutor.ILiquidLaneUniswapXExecutorFillCall{Routes: fillRoutes, DiscountRoutes: discountRoutes},
 	)
+	return data, discountValidUntil, err
+}
+
+func fillDeadline(order *resolvedOrder, discountValidUntil time.Time) time.Time {
+	return earlierTime(time.Unix(int64(order.Deadline), 0), discountValidUntil)
+}
+
+func earlierTime(left, right time.Time) time.Time {
+	if left.IsZero() || !right.IsZero() && right.Before(left) {
+		return right
+	}
+	return left
 }
 
 func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Route, bool) {
@@ -378,6 +421,18 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
 	if completion.result.Err != nil {
+		if completion.result.NotAdmitted {
+			s.retry(order.Hash, now, false)
+			s.observeFill("not-admitted")
+			s.log.V(1).Info(
+				"order fill was not admitted",
+				"source", order.Source,
+				"orderHash", order.Hash.Hex(),
+				"quoteId", order.QuoteID,
+				"error", completion.result.Err,
+			)
+			return
+		}
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
 		s.observeFill("failed")

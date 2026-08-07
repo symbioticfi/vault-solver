@@ -2,8 +2,14 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +18,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	"github.com/gorilla/websocket"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -98,6 +105,413 @@ func TestRunLogsExecutorValidationFailure(t *testing.T) {
 	}
 }
 
+type recoveryGateStrategy struct {
+	tokenIn  common.Address
+	tokenOut common.Address
+}
+
+type testTransactionLaneState struct {
+	ready       func() bool
+	changes     <-chan struct{}
+	onSubscribe func()
+	unsubscribe func()
+}
+
+func (s *testTransactionLaneState) LaneReady() bool {
+	return s.ready()
+}
+
+func (s *testTransactionLaneState) SubscribeLaneState() (<-chan struct{}, func()) {
+	if s.onSubscribe != nil {
+		s.onSubscribe()
+	}
+	unsubscribe := s.unsubscribe
+	if unsubscribe == nil {
+		unsubscribe = func() {}
+	}
+	return s.changes, unsubscribe
+}
+
+func alwaysReadyTransactionLane() transactionLaneState {
+	return &testTransactionLaneState{ready: func() bool { return true }}
+}
+
+type quoteSubmission struct {
+	Expiry int64 `json:"expiry"`
+}
+
+type quoteSubmissionRequest struct {
+	Quotes []quoteSubmission `json:"quotes"`
+}
+
+func (s recoveryGateStrategy) DecideQuotes(
+	_ context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{Quotes: []types.Quote{{
+		FromAsset: s.tokenIn, ToAsset: s.tokenOut,
+		FromDecimals: 6, ToDecimals: 6,
+		Ranges: []types.QuoteRange{{
+			MinAmount: big.NewInt(1), MaxAmount: big.NewInt(10), Quote: "1",
+		}},
+		Expiry: input.QuoteExpiresAt.Unix(), ExclusiveFor: input.Solver,
+	}}}, nil
+}
+
+func (recoveryGateStrategy) DecideFill(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, nil
+}
+
+func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.SolverMode = solverModeExternal
+	cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	cfg.QuoteInterval = time.Hour
+	cfg.QuoteTTL = 2 * time.Hour
+	cfg.OrderServer.HTTPTimeout = 5 * time.Second
+	adapter := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+
+	recoveryStarted := make(chan struct{})
+	releaseRecovery := make(chan struct{})
+	quoteSubmitted := make(chan struct{}, 1)
+	quoteExpired := make(chan struct{}, 1)
+	renewalStarted := make(chan struct{}, 1)
+	renewalCanceled := make(chan struct{}, 1)
+	var recoveryStart sync.Once
+	var releaseRecoveryOnce sync.Once
+	var quoteRequests atomic.Int32
+	var expiryRequests atomic.Int32
+	var wallUnix atomic.Int64
+	wallUnix.Store(1_700_000_000)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/solver-api/solver/identities":
+			_, _ = fmt.Fprintf(
+				w,
+				`{"data":[{"id":1,"createdAt":"now","updatedAt":"now","address":%q,"solverId":1}]}`,
+				cfg.Executor.Hex(),
+			)
+		case "/api/v1/solver/supported-contracts":
+			_, _ = fmt.Fprintf(
+				w,
+				`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:11155111","address":%q}],`+
+					`"outputSettler":[{"chain":"eip155:11155111","address":%q}]}}`,
+				cfg.InputSettler.Hex(),
+				cfg.OutputSettler.Hex(),
+			)
+		case "/orders":
+			recoveryStart.Do(func() { close(recoveryStarted) })
+			select {
+			case <-r.Context().Done():
+				return
+			case <-releaseRecovery:
+			}
+			_, _ = w.Write(testListedOrdersPageJSON(t, nil, 0, 0))
+		case "/quotes/submit":
+			var request quoteSubmissionRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode quote submission: %v", err)
+				return
+			}
+			if len(request.Quotes) > 0 && request.Quotes[0].Expiry < wallUnix.Load() {
+				if expiryRequests.Add(1) == 1 {
+					http.Error(w, "temporary expiry failure", http.StatusServiceUnavailable)
+					return
+				}
+				select {
+				case quoteExpired <- struct{}{}:
+				default:
+				}
+				_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+				return
+			}
+			if quoteRequests.Add(1) == 2 {
+				renewalStarted <- struct{}{}
+				<-r.Context().Done()
+				renewalCanceled <- struct{}{}
+				return
+			}
+			select {
+			case quoteSubmitted <- struct{}{}:
+			default:
+			}
+			_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer orderServer.Close()
+	defer releaseRecoveryOnce.Do(func() { close(releaseRecovery) })
+
+	upgrader := websocket.Upgrader{}
+	stopWebSocket := make(chan struct{})
+	var stopWebSocketOnce sync.Once
+	webSocketServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		<-stopWebSocket
+	}))
+	defer webSocketServer.Close()
+	defer stopWebSocketOnce.Do(func() { close(stopWebSocket) })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	solver := &Solver{
+		cfg: cfg, chainID: 11155111,
+		reader: fakeLifiReader{routes: []route{{
+			ID: "route-1", Adapter: adapter, TokenIn: tokenIn, TokenOut: tokenOut,
+			TokenInDecimals: 6, TokenOutDecimals: 6,
+		}}},
+		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
+		caller:   common.HexToAddress("0x5555555555555555555555555555555555555555"),
+		orders:   newOrderClient(orderServer.URL, "test-key", cfg.OrderServer.HTTPTimeout, 11155111),
+		feed: newOrderFeed(
+			"ws"+strings.TrimPrefix(webSocketServer.URL, "http"),
+			"test-key",
+			logr.Discard(),
+		),
+		txm: &fakeLifiTxSender{}, log: logr.Discard(),
+		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
+		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
+		txLaneState:  alwaysReadyTransactionLane(),
+	}
+	done := make(chan error, 1)
+	go func() { done <- solver.Run(ctx) }()
+
+	expectSignal(t, recoveryStarted)
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was published before initial recovery completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseRecoveryOnce.Do(func() { close(releaseRecovery) })
+	expectSignal(t, quoteSubmitted)
+	wallUnix.Store(1_700_007_200)
+	solver.requestQuoteRefresh()
+	expectSignal(t, renewalStarted)
+	stopWebSocketOnce.Do(func() { close(stopWebSocket) })
+	expectSignal(t, renewalCanceled)
+	select {
+	case <-quoteExpired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active quote was not expired after order feed disconnected")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+}
+
+func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	cfg.QuoteInterval = time.Hour
+	cfg.QuoteTTL = 2 * time.Hour
+	cfg.OrderServer.HTTPTimeout = time.Second
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	now := time.Unix(1_700_000_000, 0)
+	quoteSubmitted := make(chan struct{}, 1)
+	quoteExpired := make(chan struct{}, 1)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode quote submission: %v", err)
+			return
+		}
+		signal := quoteSubmitted
+		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+			signal = quoteExpired
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer orderServer.Close()
+
+	solver := &Solver{
+		cfg:      cfg,
+		reader:   fakeLifiReader{},
+		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
+		orders:   newOrderClient(orderServer.URL, "test-key", time.Second, 11155111),
+		log:      logr.Discard(),
+		now:      func(context.Context) (time.Time, error) { return now, nil },
+		wallNow:  func() time.Time { return now },
+		maxFeePerGas: func(context.Context) (*big.Int, error) {
+			return big.NewInt(1), nil
+		},
+		txLaneState: alwaysReadyTransactionLane(),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	defer cancelConnection()
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, nil, make(chan struct{}), feedConnections)
+	}()
+
+	expectSignal(t, quoteSubmitted)
+	cancel()
+	expectSignal(t, quoteExpired)
+	if connectionCtx.Err() != nil {
+		t.Fatalf("feed connection was canceled before quote expiry: %v", connectionCtx.Err())
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("quoteLoop did not stop after expiring quotes")
+	}
+}
+
+func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.T) {
+	cfg := testLifiConfig()
+	cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	cfg.QuoteInterval = time.Hour
+	cfg.QuoteTTL = 2 * time.Hour
+	cfg.OrderServer.HTTPTimeout = time.Second
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	now := time.Unix(1_700_000_000, 0)
+	quoteSubmitted := make(chan struct{}, 2)
+	quoteExpired := make(chan struct{}, 2)
+	orderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode quote submission: %v", err)
+			return
+		}
+		signal := quoteSubmitted
+		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+			signal = quoteExpired
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer orderServer.Close()
+
+	var ready atomic.Bool
+	ready.Store(false)
+	laneStateChanges := make(chan struct{}, 1)
+	laneStateSubscribed := make(chan struct{})
+	var unsubscribed atomic.Bool
+	refresh := make(chan struct{}, 1)
+	solver := &Solver{
+		cfg:      cfg,
+		reader:   fakeLifiReader{},
+		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
+		orders:   newOrderClient(orderServer.URL, "test-key", time.Second, 11155111),
+		log:      logr.Discard(),
+		now:      func(context.Context) (time.Time, error) { return now, nil },
+		wallNow:  func() time.Time { return now },
+		maxFeePerGas: func(context.Context) (*big.Int, error) {
+			return big.NewInt(1), nil
+		},
+		txLaneState: &testTransactionLaneState{
+			ready:       ready.Load,
+			changes:     laneStateChanges,
+			onSubscribe: func() { close(laneStateSubscribed) },
+			unsubscribe: func() {
+				unsubscribed.Store(true)
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	defer cancelConnection()
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, nil, refresh, feedConnections)
+	}()
+
+	// A busy initial state must suppress the first connected refresh.
+	expectSignal(t, laneStateSubscribed)
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was published while transaction lane was initially not ready")
+	case <-time.After(50 * time.Millisecond):
+	}
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+	ready.Store(false)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	refresh <- struct{}{}
+	select {
+	case <-quoteSubmitted:
+		t.Fatal("quote was renewed while transaction lane was not ready")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteSubmitted)
+
+	// A coalesced busy+idle transition leaves one undifferentiated notification with LaneReady already
+	// true. The listener must still expire the old curve before publishing the fresh one.
+	ready.Store(false)
+	ready.Store(true)
+	laneStateChanges <- struct{}{}
+	expectSignal(t, quoteExpired)
+	expectSignal(t, quoteSubmitted)
+	cancel()
+	expectSignal(t, quoteExpired)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("quoteLoop did not stop after resumed quote expiry")
+	}
+	if !unsubscribed.Load() {
+		t.Fatal("quoteLoop did not unsubscribe from transaction lane state")
+	}
+}
+
+func TestShutdownPreparationTimeoutIncludesQuoteAndInboxDrain(t *testing.T) {
+	solver := &Solver{cfg: &Config{OrderServer: OrderServerConfig{HTTPTimeout: 3 * time.Second}}}
+	if got, want := solver.ShutdownPreparationTimeout(), 6*time.Second; got != want {
+		t.Fatalf("shutdown preparation timeout = %s, want %s", got, want)
+	}
+}
+
 func (s *Solver) processOrder(ctx context.Context, routes []route, order *submittedOrder) {
 	s.processOrderWithPending(ctx, routes, order, nil)
 }
@@ -152,9 +566,41 @@ func (s fixedFillStrategy) DecideFill(context.Context, types.FillInput) (*types.
 	return s.plan, nil
 }
 
+type errorFillStrategy struct {
+	err error
+}
+
+func (errorFillStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s errorFillStrategy) DecideFill(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, s.err
+}
+
+type terminalNilFillStrategy struct {
+	calls int
+}
+
+func (*terminalNilFillStrategy) DecideQuotes(
+	context.Context,
+	types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s *terminalNilFillStrategy) DecideFill(
+	context.Context,
+	types.FillInput,
+) (*types.FillPlan, error) {
+	s.calls++
+	return nil, nil
+}
+
 type reservationAwareFillStrategy struct {
-	plan   *types.FillPlan
-	inputs chan types.FillInput
+	plan            *types.FillPlan
+	blockAtReserved *big.Int
+	inputs          chan types.FillInput
 }
 
 func (s reservationAwareFillStrategy) DecideQuotes(
@@ -169,10 +615,194 @@ func (s reservationAwareFillStrategy) DecideFill(
 	input types.FillInput,
 ) (*types.FillPlan, error) {
 	s.inputs <- input
-	if len(input.Reservations) != 0 {
+	reserved := input.Reservations[s.plan.Routes[0].CapacityID]
+	if reserved != nil && (s.blockAtReserved == nil || reserved.Cmp(s.blockAtReserved) >= 0) {
 		return nil, nil
 	}
 	return s.plan, nil
+}
+
+func (s reservationAwareFillStrategy) DecideFillWithoutReservations(
+	_ context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	input.Reservations = nil
+	s.inputs <- input
+	return s.plan, nil
+}
+
+type recoveryBarrierRetryStrategy struct {
+	plan          *types.FillPlan
+	failNextRetry bool
+	events        chan string
+}
+
+func (*recoveryBarrierRetryStrategy) DecideQuotes(
+	context.Context,
+	types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s *recoveryBarrierRetryStrategy) DecideFill(
+	_ context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	if input.OrderID == "pending" {
+		return s.plan, nil
+	}
+	if reserved := input.Reservations[s.plan.Routes[0].CapacityID]; reserved != nil && reserved.Sign() > 0 {
+		s.events <- "blocked"
+		return nil, nil
+	}
+	if s.failNextRetry {
+		s.failNextRetry = false
+		s.events <- "transient"
+		return nil, errors.New("temporary retry failure")
+	}
+	return s.plan, nil
+}
+
+func (s *recoveryBarrierRetryStrategy) DecideFillWithoutReservations(
+	context.Context,
+	types.FillInput,
+) (*types.FillPlan, error) {
+	s.events <- "probe"
+	return s.plan, nil
+}
+
+type reroutingFillStrategy struct {
+	plans           map[liquidlane.CapacityID]*types.FillPlan
+	blockedCapacity liquidlane.CapacityID
+	events          chan string
+}
+
+func (*reroutingFillStrategy) DecideQuotes(
+	context.Context,
+	types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s *reroutingFillStrategy) DecideFill(
+	_ context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	switch input.OrderID {
+	case "pending-a":
+		return s.plans["capacity-a"], nil
+	case "pending-b":
+		return s.plans["capacity-b"], nil
+	case "unrelated":
+		return s.plans["capacity-c"], nil
+	case "blocked":
+		for _, capacityID := range []liquidlane.CapacityID{"capacity-a", "capacity-b"} {
+			if reserved := input.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
+				s.blockedCapacity = capacityID
+				s.events <- "blocked-" + string(capacityID)
+				return nil, nil
+			}
+		}
+		s.events <- "fill-capacity-b"
+		return s.plans["capacity-b"], nil
+	default:
+		return nil, nil
+	}
+}
+
+func (s *reroutingFillStrategy) DecideFillWithoutReservations(
+	context.Context,
+	types.FillInput,
+) (*types.FillPlan, error) {
+	s.events <- "probe-" + string(s.blockedCapacity)
+	return s.plans[s.blockedCapacity], nil
+}
+
+func TestBlockedPlanCapacityIDsUsesOnlySelectedRoutes(t *testing.T) {
+	reservations := liquidlane.CapacityReservations{
+		"capacity-selected": big.NewInt(100),
+		"capacity-other":    big.NewInt(200),
+	}
+	plan := &types.FillPlan{Routes: []types.FillRoute{{
+		CapacityID: "capacity-selected",
+	}}}
+
+	blocked := blockedPlanCapacityIDs(reservations, plan)
+	if len(blocked) != 1 || !blocked["capacity-selected"] || blocked["capacity-other"] {
+		t.Fatalf("blocked capacity = %v, want only selected route", blocked)
+	}
+}
+
+func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy := &terminalNilFillStrategy{}
+	s := newProcessTestSolver(
+		fixture.cfg, fixture.caller, &fakeLifiTxSender{}, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	s.capacity.Set("pending-order", liquidlane.CapacityReservations{
+		"capacity-1": big.NewInt(1),
+	})
+
+	result := s.processOrderWithPending(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+		nil,
+	)
+	if result.fill != nil || len(result.blockedOn) != 0 {
+		t.Fatalf("external nil decision was retained: %+v", result)
+	}
+	if strategy.calls != 1 {
+		t.Fatalf("external fill decisions = %d, want 1", strategy.calls)
+	}
+}
+
+func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
+	transient := errors.New("strategy transport unavailable")
+	tests := []struct {
+		name             string
+		err              error
+		wantRetryable    bool
+		wantAttemptLimit int
+	}{
+		{
+			name:             "transient",
+			err:              transient,
+			wantRetryable:    true,
+			wantAttemptLimit: maximumStrategyRecoveryAttempts,
+		},
+		{
+			name: "permanent input rejection",
+			err:  types.MarkPermanentFillDecisionError(errors.New("unsupported output context")),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := immediateTestSetup(t)
+			s := newProcessTestSolver(
+				fixture.cfg, fixture.caller, &fakeLifiTxSender{}, errorFillStrategy{err: tt.err},
+				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+			)
+
+			result := s.processOrderWithPending(
+				t.Context(),
+				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+				nil,
+			)
+			if result.retryable != tt.wantRetryable {
+				t.Fatalf("retryable = %v, want %v", result.retryable, tt.wantRetryable)
+			}
+			if result.recoveryAttemptLimit != tt.wantAttemptLimit {
+				t.Fatalf(
+					"recovery attempt limit = %d, want %d",
+					result.recoveryAttemptLimit,
+					tt.wantAttemptLimit,
+				)
+			}
+		})
+	}
 }
 
 func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
@@ -193,6 +823,91 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	}
 	if txm.reqs[0].MaxFeePerGas == nil || txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(1)) != 0 {
 		t.Fatalf("fill max fee per gas = %v, want 1", txm.reqs[0].MaxFeePerGas)
+	}
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	}
+}
+
+func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	order.Order.Expires = 0
+	order.Order.FillDeadline = 0
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		order,
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if !txm.reqs[0].CancelAt.IsZero() {
+		t.Fatalf("fill CancelAt = %v, want global pending timeout", txm.reqs[0].CancelAt)
+	}
+}
+
+func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	wallNow := time.Unix(1_700_000_000, 0)
+	s.wallNow = func() time.Time { return wallNow }
+	s.now = func(context.Context) (time.Time, error) {
+		return time.Unix(1_700_000_010, 0), nil
+	}
+	statusReads := 0
+	reader := s.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		statusReads++
+		if statusReads == 2 {
+			wallNow = wallNow.Add(15 * time.Second)
+		}
+		return lifiOrderStatusDeposited, nil
+	}
+	s.reader = reader
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+	)
+
+	if len(txm.reqs) != 1 {
+		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	}
+	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].CancelAt.Equal(want) {
+		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.reqs[0].CancelAt, want)
 	}
 }
 
@@ -449,7 +1164,7 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 	close(orders)
 
 	if err := s.runOrderWorker(
-		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders,
+		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
 	); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
@@ -509,7 +1224,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- s.runOrderWorker(
-			context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders,
+			context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
 		)
 	}()
 
@@ -538,9 +1253,9 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	}
 }
 
-func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
+func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing.T) {
 	fixture := immediateTestSetup(t)
-	inputs := make(chan types.FillInput, 2)
+	inputs := make(chan types.FillInput, 6)
 	plan := &types.FillPlan{Routes: []types.FillRoute{{
 		RouteID:           "route-1",
 		CapacityID:        "capacity-1",
@@ -550,17 +1265,26 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 		MinAmountOut:      big.NewInt(990_001),
 		ReservedAmountOut: big.NewInt(1_000_000),
 	}}}
-	txm := &fakeLifiTxSender{hold: true}
+	submitted := make(chan chan<- txmanager.Result, 3)
+	txm := &fakeLifiTxSender{
+		hold: true,
+		onSend: func(_ int, result chan<- txmanager.Result) {
+			submitted <- result
+		},
+	}
 	s := newProcessTestSolver(
 		fixture.cfg,
 		fixture.caller,
 		txm,
-		reservationAwareFillStrategy{plan: plan, inputs: inputs},
+		reservationAwareFillStrategy{
+			plan: plan, blockAtReserved: big.NewInt(2_000_000), inputs: inputs,
+		},
 		fixture.tokenIn,
 		fixture.tokenOut,
 		fixture.adapter,
 		lifiOrderStatusDeposited,
 	)
+	s.quoteRefresh = make(chan struct{}, 8)
 	s.reader = fakeLifiReader{
 		status: lifiOrderStatusDeposited,
 		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
@@ -575,9 +1299,13 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 	secondValue := *first
 	secondValue.OrderID = "order-2"
 	secondValue.Order.Nonce = new(big.Int).Add(first.Order.Nonce, big.NewInt(1))
-	orders := make(chan *submittedOrder, 2)
+	thirdValue := *first
+	thirdValue.OrderID = "order-3"
+	thirdValue.Order.Nonce = new(big.Int).Add(first.Order.Nonce, big.NewInt(2))
+	orders := make(chan *submittedOrder, 3)
 	orders <- first
 	orders <- &secondValue
+	orders <- &thirdValue
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
@@ -585,6 +1313,8 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
+			nil,
+			nil,
 		)
 	}()
 
@@ -595,14 +1325,39 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 	if len(firstInput.Reservations) != 0 {
 		t.Fatalf("first fill reservations = %v, want none", firstInput.Reservations)
 	}
+	firstResult := receiveFillSubmission(t, submitted)
 	secondInput := receiveFillInput(t, inputs)
 	if got := secondInput.Reservations["capacity-1"]; got == nil || got.Cmp(big.NewInt(1_000_000)) != 0 {
 		t.Fatalf("second fill reservations = %v, want capacity-1=1000000", secondInput.Reservations)
 	}
-	if len(txm.reqs) != 1 {
-		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
+	secondResult := receiveFillSubmission(t, submitted)
+	thirdInput := receiveFillInput(t, inputs)
+	if got := thirdInput.Reservations["capacity-1"]; got == nil || got.Cmp(big.NewInt(2_000_000)) != 0 {
+		t.Fatalf("third fill reservations = %v, want capacity-1=2000000", thirdInput.Reservations)
 	}
-	txm.results[0] <- txm.fillResult()
+	unreservedInput := receiveFillInput(t, inputs)
+	if len(unreservedInput.Reservations) != 0 {
+		t.Fatalf("reservation probe = %v, want no reservations", unreservedInput.Reservations)
+	}
+	expectSignal(t, s.quoteRefresh)
+	expectSignal(t, s.quoteRefresh)
+	firstResult <- txm.fillResult()
+	retryInput := receiveFillInput(t, inputs)
+	if got := retryInput.Reservations["capacity-1"]; got == nil || got.Cmp(big.NewInt(1_000_000)) != 0 {
+		t.Fatalf("retried fill reservations = %v, want capacity-1=1000000", retryInput.Reservations)
+	}
+	thirdResult := receiveFillSubmission(t, submitted)
+	if len(txm.reqs) != 3 {
+		t.Fatalf("submitted fills = %d, want retry after first of two reservations released", len(txm.reqs))
+	}
+	expectSignal(t, s.quoteRefresh)
+	select {
+	case <-s.quoteRefresh:
+		t.Fatal("reservation replacement requested more than one quote refresh")
+	case <-time.After(50 * time.Millisecond):
+	}
+	secondResult <- txm.fillResult()
+	thirdResult <- txm.fillResult()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -610,6 +1365,251 @@ func TestOrderWorkerPassesPendingReservationsToNextFillDecision(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not finish after receipt")
+	}
+}
+
+func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	plan := &types.FillPlan{Routes: []types.FillRoute{{
+		RouteID:           "route-1",
+		CapacityID:        "capacity-1",
+		Adapter:           fixture.adapter,
+		AmountIn:          big.NewInt(1_000_000),
+		ExpectedAmountOut: big.NewInt(1_000_000),
+		MinAmountOut:      big.NewInt(990_001),
+		ReservedAmountOut: big.NewInt(1_000_000),
+	}}}
+	events := make(chan string, 3)
+	strategy := &recoveryBarrierRetryStrategy{plan: plan, failNextRetry: true, events: events}
+	submitted := make(chan chan<- txmanager.Result, 1)
+	txm := &fakeLifiTxSender{
+		hold: true,
+		onSend: func(_ int, result chan<- txmanager.Result) {
+			submitted <- result
+		},
+	}
+	s := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	s.reader = fakeLifiReader{
+		status: lifiOrderStatusDeposited,
+		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
+			return common.BigToHash(order.Nonce)
+		},
+		fillSnapshotsFn: func() []liquidlane.FillQuote {
+			return profitableFillSnapshots(fixture.tokenIn, fixture.tokenOut, fixture.adapter, 1_000_000)
+		},
+	}
+
+	pending := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	pending.OrderID = "pending"
+	blockedValue := *pending
+	blockedValue.OrderID = "blocked"
+	blockedValue.Order.Nonce = new(big.Int).Add(pending.Order.Nonce, big.NewInt(1))
+	blockedKey, err := localOrderKey(blockedValue.Order)
+	if err != nil {
+		t.Fatalf("blocked order key: %v", err)
+	}
+	blockedValue.dedupeKey = blockedKey
+	blocked := &blockedValue
+	barrier := &submittedOrder{processed: make(chan struct{})}
+	orders := make(chan *submittedOrder)
+	barrierDelivered := make(chan struct{})
+	go func() {
+		orders <- pending
+		orders <- blocked
+		orders <- barrier
+		close(barrierDelivered)
+		close(orders)
+	}()
+
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+	done := make(chan error, 1)
+	go func() {
+		done <- s.runOrderWorker(
+			t.Context(),
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			inbox.markRecoveryRetry,
+			nil,
+		)
+	}()
+
+	pendingResult := receiveFillSubmission(t, submitted)
+	expectRetryEvent(t, events, "blocked")
+	expectRetryEvent(t, events, "probe")
+	expectSignal(t, barrierDelivered)
+	select {
+	case <-barrier.processed:
+		t.Fatal("recovery barrier passed while a recovered order was waiting on capacity")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	pendingResult <- txm.fillResult()
+	expectRetryEvent(t, events, "transient")
+	select {
+	case <-barrier.processed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("recovery barrier did not pass after the capacity retry returned to recovery")
+	}
+	retries := inbox.takeRecoveryRetries()
+	if len(retries) != 1 || retries[0] != blocked {
+		t.Fatalf("recovery retries = %+v, want blocked order", retries)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOrderWorker: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not stop after retaining the capacity retry")
+	}
+}
+
+func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	capacities := []liquidlane.CapacityID{"capacity-a", "capacity-b", "capacity-c"}
+	routes := make([]route, 0, len(capacities))
+	quotes := make([]liquidlane.FillQuote, 0, len(capacities))
+	plans := make(map[liquidlane.CapacityID]*types.FillPlan, len(capacities))
+	for index, capacityID := range capacities {
+		routeID := liquidlane.RouteID("route-" + string(rune('a'+index)))
+		adapter := common.BigToAddress(big.NewInt(int64(index + 1)))
+		routes = append(routes, route{
+			ID: routeID, CapacityID: capacityID, Adapter: adapter,
+			TokenIn: fixture.tokenIn, TokenOut: fixture.tokenOut,
+			TokenInDecimals: 6, TokenOutDecimals: 6,
+		})
+		quotes = append(quotes, liquidlane.FillQuote{
+			Inventory: liquidlane.Inventory{
+				Route: liquidlane.Route{
+					ID: routeID, CapacityID: capacityID, Adapter: adapter,
+					TokenIn: fixture.tokenIn, TokenOut: fixture.tokenOut,
+				},
+				MaxAssets: big.NewInt(2_000_000),
+			},
+			AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(1_000_000),
+		})
+		plans[capacityID] = &types.FillPlan{Routes: []types.FillRoute{{
+			RouteID: routeID, CapacityID: capacityID, Adapter: adapter,
+			AmountIn: big.NewInt(1_000_000), ExpectedAmountOut: big.NewInt(1_000_000),
+			MinAmountOut: big.NewInt(990_001), ReservedAmountOut: big.NewInt(1_000_000),
+		}}}
+	}
+
+	events := make(chan string, 8)
+	strategy := &reroutingFillStrategy{plans: plans, events: events}
+	submitted := make(chan chan<- txmanager.Result, 4)
+	txm := &fakeLifiTxSender{
+		hold: true,
+		onSend: func(_ int, result chan<- txmanager.Result) {
+			submitted <- result
+		},
+	}
+	s := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	s.reader = fakeLifiReader{
+		status: lifiOrderStatusDeposited,
+		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
+			return common.BigToHash(order.Nonce)
+		},
+		fillSnapshotsFn: func() []liquidlane.FillQuote { return quotes },
+	}
+
+	base := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	orders := make(chan *submittedOrder, 4)
+	for index, orderID := range []string{"pending-a", "pending-b", "blocked", "unrelated"} {
+		order := *base
+		order.OrderID = orderID
+		order.Order.Nonce = new(big.Int).Add(base.Order.Nonce, big.NewInt(int64(index)))
+		orders <- &order
+	}
+	close(orders)
+	done := make(chan error, 1)
+	go func() { done <- s.runOrderWorker(t.Context(), routes, orders, nil, nil) }()
+
+	results := []chan<- txmanager.Result{
+		receiveFillSubmission(t, submitted),
+		receiveFillSubmission(t, submitted),
+		receiveFillSubmission(t, submitted),
+	}
+	expectRetryEvent(t, events, "blocked-capacity-a")
+	expectRetryEvent(t, events, "probe-capacity-a")
+
+	results[0] <- txm.fillResult()
+	expectRetryEvent(t, events, "blocked-capacity-b")
+	expectRetryEvent(t, events, "probe-capacity-b")
+	results[1] <- txm.fillResult()
+	results = append(results, receiveFillSubmission(t, submitted))
+	expectRetryEvent(t, events, "fill-capacity-b")
+
+	results[2] <- txm.fillResult()
+	results[3] <- txm.fillResult()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOrderWorker: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not finish after rerouted retry")
+	}
+}
+
+func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	submitted := make(chan chan<- txmanager.Result, 1)
+	txm := &fakeLifiTxSender{
+		hold: true,
+		onSend: func(_ int, result chan<- txmanager.Result) {
+			submitted <- result
+		},
+	}
+	s := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	orders := make(chan *submittedOrder, 1)
+	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	close(orders)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.runOrderWorker(
+			ctx,
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			nil,
+			nil,
+		)
+	}()
+
+	result := receiveFillSubmission(t, submitted)
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("worker returned before accepted fill completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	result <- txm.fillResult()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runOrderWorker error = %v, want context cancellation after drain", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not finish after draining accepted fill")
+	}
+	if s.capacity.Len() != 0 {
+		t.Fatalf("capacity reservations after drain = %d, want 0", s.capacity.Len())
 	}
 }
 
@@ -632,6 +1632,18 @@ func receiveFillSubmission(t *testing.T, submitted <-chan chan<- txmanager.Resul
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for fill submission")
 		return nil
+	}
+}
+
+func expectRetryEvent(t *testing.T, events <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-events:
+		if got != want {
+			t.Fatalf("retry event = %q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for retry event %q", want)
 	}
 }
 
@@ -670,6 +1682,7 @@ func newProcessTestSolver(
 		strategy: strategy, caller: caller, txm: txm, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
+		wallNow:      func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 }
 

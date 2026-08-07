@@ -15,15 +15,38 @@ import (
 )
 
 type fillState struct {
-	snapshots       fillSnapshotSet
+	fillSnapshotObservation
+
 	discountQuotes  []liquidlane.FillQuote
 	signedDiscounts map[common.Hash]*discounts.Signed
+}
+
+type fillSnapshotObservation struct {
+	snapshots       fillSnapshotSet
 	chainTime       time.Time
+	chainObservedAt time.Time
 }
 
 type preparedFill struct {
 	input           types.FillInput
 	signedDiscounts map[common.Hash]*discounts.Signed
+	chainObservedAt time.Time
+}
+
+type orderProcessingResult struct {
+	fill                 *pendingFill
+	blockedOn            map[liquidlane.CapacityID]bool
+	retryable            bool
+	recoveryAttemptLimit int
+}
+
+var errOrderNotDeposited = errors.New("order is not deposited")
+
+type reservationRetryProber interface {
+	DecideFillWithoutReservations(
+		ctx context.Context,
+		input types.FillInput,
+	) (*types.FillPlan, error)
 }
 
 func (s *Solver) processOrderWithPending(
@@ -31,54 +54,129 @@ func (s *Solver) processOrderWithPending(
 	routes []route,
 	order *submittedOrder,
 	pending *pendingFillState,
-) *pendingFill {
+) orderProcessingResult {
+	result := s.processOrderUsingReservations(ctx, routes, order, pending, nil)
+	if result.fill != nil {
+		s.requestQuoteRefresh()
+	}
+	return result
+}
+
+func (s *Solver) processOrderUsingReservations(
+	ctx context.Context,
+	routes []route,
+	order *submittedOrder,
+	pending *pendingFillState,
+	reservations *liquidlane.CapacityReservations,
+) orderProcessingResult {
 	if !s.cfg.TokenPolicy.Allows(order.TokenIn) {
 		s.log.V(1).Info("order skipped: input token out of scope",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(), "scope", s.cfg.TokenPolicy.Scope())
-		return nil
+		return orderProcessingResult{}
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
 		s.log.Error(err, "order skipped: governance fee invariant failed",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"inputSettler", s.cfg.InputSettler.Hex())
-		return nil
+		return orderProcessingResult{retryable: true}
 	}
-	orderID, ok := s.openedOrderID(ctx, order)
-	if !ok {
-		return nil
+	orderID, err := s.openedOrderID(ctx, order)
+	if err != nil {
+		return orderProcessingResult{retryable: !errors.Is(err, errOrderNotDeposited)}
 	}
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
 		s.log.V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
-		return nil
+		return orderProcessingResult{}
 	}
-	prepared := s.prepareFill(ctx, routes, order)
+	prepared, err := s.prepareFill(ctx, routes, order, reservations)
+	if err != nil {
+		s.log.Error(err, "order fill: prepare current state", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		return orderProcessingResult{retryable: true}
+	}
 	if prepared == nil {
-		return nil
+		return orderProcessingResult{}
 	}
 	plan, err := s.strategy.DecideFill(ctx, prepared.input)
 	if err != nil {
 		s.log.Error(err, "order fill: strategy", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil
+		if types.IsPermanentFillDecisionError(err) {
+			return orderProcessingResult{}
+		}
+		return orderProcessingResult{
+			retryable:            true,
+			recoveryAttemptLimit: maximumStrategyRecoveryAttempts,
+		}
 	}
 	if plan == nil {
 		s.log.V(1).Info("order skipped: no immediate fill plan", "orderId", order.OrderID,
 			"quoteId", order.QuoteID, "routes", len(prepared.input.Quotes))
-		return nil
+		prober, probeOK := s.strategy.(reservationRetryProber)
+		if !probeOK || len(prepared.input.Reservations) == 0 {
+			return orderProcessingResult{}
+		}
+		unreservedInput := prepared.input
+		unreservedInput.Reservations = nil
+		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
+		if err != nil {
+			s.log.Error(err, "order fill: strategy without pending reservations",
+				"orderId", order.OrderID, "quoteId", order.QuoteID)
+			return orderProcessingResult{}
+		}
+		if unreservedPlan == nil {
+			return orderProcessingResult{}
+		}
+		if err := validateFillPlan(unreservedInput, unreservedPlan); err != nil {
+			s.log.Error(err, "order fill: reject strategy plan without pending reservations",
+				"orderId", order.OrderID, "quoteId", order.QuoteID)
+			return orderProcessingResult{}
+		}
+		return orderProcessingResult{
+			blockedOn: blockedPlanCapacityIDs(prepared.input.Reservations, unreservedPlan),
+		}
 	}
 	if err := validateFillPlan(prepared.input, plan); err != nil {
 		s.log.Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
 			"quoteId", order.QuoteID)
-		return nil
+		return orderProcessingResult{}
 	}
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
 		s.log.Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		return orderProcessingResult{}
+	}
+	fill, err := s.submitFill(
+		ctx,
+		order,
+		plan,
+		calldata,
+		prepared.input.MaxFeePerGas,
+		prepared.input.ChainTime,
+		prepared.chainObservedAt,
+	)
+	if err != nil {
+		s.log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		return orderProcessingResult{retryable: true}
+	}
+	return orderProcessingResult{fill: fill}
+}
+
+func blockedPlanCapacityIDs(
+	reservations liquidlane.CapacityReservations,
+	plan *types.FillPlan,
+) map[liquidlane.CapacityID]bool {
+	blocked := make(map[liquidlane.CapacityID]bool)
+	for _, route := range plan.Routes {
+		if reserved := reservations[route.CapacityID]; reserved != nil && reserved.Sign() > 0 {
+			blocked[route.CapacityID] = true
+		}
+	}
+	if len(blocked) == 0 {
 		return nil
 	}
-	return s.submitFill(ctx, order, plan, calldata, prepared.input.MaxFeePerGas)
+	return blocked
 }
 
 func validateFillPlan(input types.FillInput, plan *types.FillPlan) error {
@@ -96,49 +194,52 @@ func validateFillPlan(input types.FillInput, plan *types.FillPlan) error {
 	return nil
 }
 
-func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (common.Hash, bool) {
+func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (common.Hash, error) {
 	orderID, err := s.reader.orderIdentifier(ctx, s.cfg.InputSettler, order.Order)
 	if err != nil {
 		s.log.Error(err, "order fill: identify order", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return common.Hash{}, false
+		return common.Hash{}, err
 	}
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, orderID)
 	if err != nil {
 		s.log.Error(err, "order fill: read initial order status", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
-		return common.Hash{}, false
+		return common.Hash{}, err
 	}
 	if status != lifiOrderStatusDeposited {
 		s.log.Info("order skipped: on-chain order is not deposited", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
-		return common.Hash{}, false
+		return common.Hash{}, errOrderNotDeposited
 	}
-	return orderID, true
+	return orderID, nil
 }
 
 func (s *Solver) prepareFill(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-) *preparedFill {
+	reservationOverride *liquidlane.CapacityReservations,
+) (*preparedFill, error) {
 	pairRoutes := routesForPair(routes, order.TokenIn, order.TokenOut)
 	if len(pairRoutes) == 0 {
 		s.log.V(1).Info("order skipped: no configured route for pair", "orderId", order.OrderID,
 			"quoteId", order.QuoteID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex())
-		return nil
+		return nil, nil
 	}
 	state, err := s.loadFillState(ctx, pairRoutes, order)
 	if err != nil {
-		s.log.Error(err, "order fill: prepare current state", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil
+		return nil, err
 	}
 	if state == nil {
-		return nil
+		return nil, nil
 	}
 	maxFeePerGas, err := s.readMaxFeePerGas(ctx)
 	if err != nil {
-		s.log.Error(err, "order fill: read max fee per gas", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil
+		return nil, err
+	}
+	reservations := s.capacity.Snapshot()
+	if reservationOverride != nil {
+		reservations = *reservationOverride
 	}
 	quotes := append([]liquidlane.FillQuote(nil), state.snapshots.Direct...)
 	quotes = append(quotes, state.discountQuotes...)
@@ -156,14 +257,15 @@ func (s *Solver) prepareFill(
 			FillDeadline:       order.Order.FillDeadline,
 			RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn),
 			Quotes:             quotes,
-			Reservations:       s.capacity.Snapshot(),
+			Reservations:       reservations,
 			GasSnapshot:        state.snapshots.GasSnapshot,
 			GasPrices:          state.snapshots.GasPrices,
 			MaxFeePerGas:       maxFeePerGas,
 			ChainTime:          state.chainTime,
 		},
 		signedDiscounts: state.signedDiscounts,
-	}
+		chainObservedAt: state.chainObservedAt,
+	}, nil
 }
 
 func (s *Solver) loadFillState(
@@ -171,28 +273,29 @@ func (s *Solver) loadFillState(
 	routes []route,
 	order *submittedOrder,
 ) (*fillState, error) {
-	snapshots, chainTime, err := s.readFillSnapshot(ctx, routes, order)
+	observation, err := s.readFillSnapshot(ctx, routes, order)
 	if err != nil {
 		return nil, err
 	}
-	if s.skipExpiredOrder(order, chainTime) {
+	if s.skipExpiredOrder(order, observation.chainTime) {
 		return nil, nil
 	}
-	state := &fillState{snapshots: snapshots, chainTime: chainTime}
-	if s.discounts == nil || len(snapshots.Physical) == 0 {
+	state := &fillState{fillSnapshotObservation: observation}
+	if s.discounts == nil || len(observation.snapshots.Physical) == 0 {
 		return state, nil
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, s.cfg.OrderServer.HTTPTimeout)
 	state.discountQuotes, state.signedDiscounts = s.fillDiscountQuotes(
-		resolveCtx, snapshots.Physical, chainTime,
+		resolveCtx, observation.snapshots.Physical, observation.chainTime,
 	)
 	cancel()
 
-	state.snapshots, state.chainTime, err = s.readFillSnapshot(ctx, routes, order)
+	observation, err = s.readFillSnapshot(ctx, routes, order)
 	if err != nil {
 		return nil, errors.Errorf("refresh after private discount resolution: %w", err)
 	}
+	state.fillSnapshotObservation = observation
 	if s.skipExpiredOrder(order, state.chainTime) {
 		return nil, nil
 	}
@@ -211,16 +314,19 @@ func (s *Solver) readFillSnapshot(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-) (fillSnapshotSet, time.Time, error) {
+) (fillSnapshotObservation, error) {
+	chainObservedAt := s.wallNow()
 	chainTime, err := s.now(ctx)
 	if err != nil {
-		return fillSnapshotSet{}, time.Time{}, errors.Errorf("read latest block time: %w", err)
+		return fillSnapshotObservation{}, errors.Errorf("read latest block time: %w", err)
 	}
 	snapshots, err := s.reader.fillSnapshots(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn, chainTime)
 	if err != nil {
-		return fillSnapshotSet{}, time.Time{}, errors.Errorf("read routes: %w", err)
+		return fillSnapshotObservation{}, errors.Errorf("read routes: %w", err)
 	}
-	return snapshots, chainTime, nil
+	return fillSnapshotObservation{
+		snapshots: snapshots, chainTime: chainTime, chainObservedAt: chainObservedAt,
+	}, nil
 }
 
 func (s *Solver) skipExpiredOrder(order *submittedOrder, chainTime time.Time) bool {
@@ -269,9 +375,6 @@ func uint32Unix(t time.Time) uint32 {
 }
 
 func orderExpired(order *submittedOrder, now time.Time) bool {
-	chainTime := uint32Unix(now)
-	if order.Order.Expires != 0 && chainTime >= order.Order.Expires {
-		return true
-	}
-	return order.Order.FillDeadline != 0 && chainTime >= order.Order.FillDeadline
+	deadline := orderDeadline(order)
+	return !deadline.IsZero() && !now.Before(deadline)
 }

@@ -12,10 +12,10 @@ import (
 
 func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if input.AmountIn == nil || input.AmountIn.Sign() <= 0 {
-		return nil, errors.New("amountIn: must be positive")
+		return nil, types.MarkPermanentFillDecisionError(errors.New("amountIn: must be positive"))
 	}
 	if input.OutputAmount == nil || input.OutputAmount.Sign() <= 0 {
-		return nil, errors.New("outputAmount: must be positive")
+		return nil, types.MarkPermanentFillDecisionError(errors.New("outputAmount: must be positive"))
 	}
 	if input.AmountIn.Cmp(s.minAmount) < 0 {
 		return nil, nil
@@ -30,7 +30,7 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	}
 	output, err := parseOutputContext(input.OutputAmount, input.OutputContext)
 	if err != nil {
-		return nil, err
+		return nil, types.MarkPermanentFillDecisionError(err)
 	}
 	maxRoutes := types.MaxRoutes
 	if input.RequireSingleRoute {
@@ -66,4 +66,14 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		return nil, nil
 	}
 	return &types.FillPlan{Routes: routes}, nil
+}
+
+// DecideFillWithoutReservations lets the LI.FI worker distinguish a capacity-blocked order from
+// any other terminal nil decision without issuing a second decision to external strategies.
+func (s *Strategy) DecideFillWithoutReservations(
+	ctx context.Context,
+	input types.FillInput,
+) (*types.FillPlan, error) {
+	input.Reservations = nil
+	return s.DecideFill(ctx, input)
 }

@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
@@ -13,6 +14,13 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+)
+
+const (
+	orderRecoveryPageLimit int32 = 50
+	orderRecoveryMaxOffset int32 = 1_000
+	orderStatusSigned            = "Signed"
+	orderStatusDelivered         = "Delivered"
 )
 
 type orderClient struct {
@@ -103,7 +111,6 @@ func supportedContractsDTO(
 	}
 	dto.InputSettler = appendSupportedContract(dto.InputSettler, chain, inputSettler)
 	dto.OutputSettler = appendSupportedContract(dto.OutputSettler, chain, outputSettler)
-	dto.Oracle = appendSupportedContract(dto.Oracle, chain, outputSettler)
 	return dto
 }
 
@@ -137,8 +144,7 @@ func supportsConfiguredContracts(
 	inputSettler, outputSettler common.Address,
 ) bool {
 	return hasChainAddress(contracts.InputSettler, chain, inputSettler) &&
-		hasChainAddress(contracts.OutputSettler, chain, outputSettler) &&
-		hasChainAddress(contracts.Oracle, chain, outputSettler)
+		hasChainAddress(contracts.OutputSettler, chain, outputSettler)
 }
 
 func hasChainAddress(items []lifiorder.ChainAddressDto, chain string, address common.Address) bool {
@@ -150,23 +156,122 @@ func hasChainAddress(items []lifiorder.ChainAddressDto, chain string, address co
 	return false
 }
 
+func (c *orderClient) listRecoverableOrders(
+	ctx context.Context,
+	executor common.Address,
+) ([]json.RawMessage, error) {
+	statuses := [...]string{orderStatusSigned, orderStatusDelivered}
+	var orders []json.RawMessage
+	for _, status := range statuses {
+		listed, err := c.listRecoverableOrdersByStatus(ctx, executor, status)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, listed...)
+	}
+	return orders, nil
+}
+
+func (c *orderClient) listRecoverableOrdersByStatus(
+	ctx context.Context,
+	executor common.Address,
+	status string,
+) ([]json.RawMessage, error) {
+	var orders []json.RawMessage
+	for offset := int32(0); ; {
+		// exclusiveFor scopes quote ownership to this solver; it is independent from
+		// the output context's optional on-chain exclusivity window.
+		response, httpResp, err := c.api.BridgeAPIAPI.
+			OrdersControllerGetOrders(c.withAuth(ctx)).
+			Limit(orderRecoveryPageLimit).
+			Offset(offset).
+			Status(status).
+			ExclusiveFor(executor.Hex()).
+			OriginChainId(c.chain).
+			DestinationChainId(c.chain).
+			Execute()
+		closeResp(httpResp)
+		if err != nil {
+			return nil, apiErr("get "+status+" orders", httpResp, err)
+		}
+		if response == nil {
+			return nil, errors.Errorf("lifi order server: get %s orders: empty response", status)
+		}
+		if len(response.Data) > int(orderRecoveryPageLimit) {
+			return nil, errors.Errorf(
+				"lifi order server: get %s orders: page has %d items, maximum is %d",
+				status,
+				len(response.Data),
+				orderRecoveryPageLimit,
+			)
+		}
+		for i := range response.Data {
+			raw, marshalErr := json.Marshal(response.Data[i])
+			if marshalErr != nil {
+				return nil, errors.Errorf("lifi order server: encode %s order %d: %w", status, i, marshalErr)
+			}
+			orders = append(orders, raw)
+		}
+
+		pageSize := int32(len(response.Data))
+		nextOffset := offset + pageSize
+		if response.Meta.Total > 0 {
+			if float32(nextOffset) >= response.Meta.Total {
+				return orders, nil
+			}
+			if pageSize == 0 {
+				return nil, errors.Errorf(
+					"lifi order server: get %s orders: empty page at offset %d before total %v",
+					status,
+					offset,
+					response.Meta.Total,
+				)
+			}
+		} else if pageSize < orderRecoveryPageLimit {
+			return orders, nil
+		}
+		if nextOffset > orderRecoveryMaxOffset {
+			return nil, errors.Errorf(
+				"lifi order server: get %s orders: pagination requires offset %d, maximum is %d (reported total %v)",
+				status,
+				nextOffset,
+				orderRecoveryMaxOffset,
+				response.Meta.Total,
+			)
+		}
+		offset = nextOffset
+	}
+}
+
 func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) error {
 	dtoQuotes := make([]lifiorder.SubmitQuotesDtoQuotesInner, 0, len(quotes))
+	expectedRanges := 0
 	for i, quote := range quotes {
 		dto, err := submitQuoteDTO(c.chain, quote, i)
 		if err != nil {
 			return err
 		}
 		dtoQuotes = append(dtoQuotes, dto)
+		expectedRanges += len(dto.Ranges)
 	}
 
-	_, httpResp, err := c.api.SolverAPIAPI.
+	response, httpResp, err := c.api.SolverAPIAPI.
 		QuotesControllerSubmitQuotes(c.withAuth(ctx)).
 		SubmitQuotesDto(lifiorder.SubmitQuotesDto{Quotes: dtoQuotes}).
 		Execute()
 	closeResp(httpResp)
 	if err != nil {
 		return apiErr("submit quotes", httpResp, err)
+	}
+	if response == nil {
+		return errors.New("lifi order server: submit quotes: empty response")
+	}
+	if response.QuotesAdded != float32(expectedRanges) {
+		return errors.Errorf(
+			"lifi order server: submit quotes: quotesAdded %v, want %d",
+			response.QuotesAdded,
+			expectedRanges,
+		)
 	}
 	return nil
 }

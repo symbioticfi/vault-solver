@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -49,8 +50,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if debugFlagSet {
 		debug = debugFlag
 	}
-	log, sync := observability.NewLogger(debug)
-	defer sync()
+	log, syncLog := observability.NewLogger(debug)
+	defer syncLog()
 
 	solverNames := make([]string, len(cfg.Solvers))
 	for i, s := range cfg.Solvers {
@@ -73,7 +74,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
-	// writeRpcUrl (if set) is a separate client used only to broadcast transactions.
+	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
 	if err != nil {
@@ -98,29 +99,150 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		TipGwei:             cfg.TxManager.TipGwei,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
+		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
 	}, log)
-	go txm.Start(ctx)
+	runCtx, reportFatal := context.WithCancelCause(ctx)
+	defer reportFatal(nil)
 
-	// Build every configured solver. They share the chain client, signer, and the single
-	// nonce-serialized txManager — running multiple solver types in one process is exactly what the
-	// shared txManager exists for, so they never race on nonces.
-	deps := solver.Deps{Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics}
+	// Build every configured solver. Transaction-sending solvers share the single nonce-serialized
+	// txManager so they never race on nonces.
+	deps := solver.Deps{
+		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
+		ReportFatal: reportFatal,
+	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
 		slv, err := solver.New(sc.Name, sc.Config, deps)
 		if err != nil {
 			return err
 		}
 		solvers = append(solvers, slv)
+		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+	}
+	if requiresTxManager {
+		if err := cfg.ValidateTxManager(); err != nil {
+			return errors.Errorf("invalid config %q: %w", configPath, err)
+		}
+		if err := txm.ValidateFeeHeadroom(); err != nil {
+			return errors.Errorf("invalid config %q: txManager: %w", configPath, err)
+		}
+		if err := txm.Initialize(runCtx); err != nil {
+			return errors.Errorf("initialize tx manager: %w", err)
+		}
+	}
+
+	var stopTx context.CancelFunc
+	if requiresTxManager {
+		// Accepted transactions outlive solver intake cancellation: solvers first stop admitting
+		// work and drain their pending results, then this detached context stops the shared manager.
+		txCtx, cancelTx := context.WithCancel(context.WithoutCancel(runCtx))
+		stopTx = cancelTx
+		txDone := make(chan struct{})
+		go func() {
+			defer close(txDone)
+			txm.Start(txCtx)
+		}()
+		defer func() {
+			stopTx()
+			<-txDone
+		}()
 	}
 
 	health.SetReady(true)
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
-	g, gctx := errgroup.WithContext(ctx)
+	var shutdownPreparationTimeout time.Duration
+	for _, slv := range solvers {
+		if preparer, ok := slv.(solver.ShutdownPreparer); ok {
+			shutdownPreparationTimeout = max(
+				shutdownPreparationTimeout,
+				preparer.ShutdownPreparationTimeout(),
+			)
+		}
+	}
+	g, gctx := errgroup.WithContext(runCtx)
+	var background sync.WaitGroup
+	if requiresTxManager {
+		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
+		background.Go(func() {
+			defer unsubscribe()
+			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
+		})
+	}
 	for _, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, log) })
 	}
-	return g.Wait()
+
+	var (
+		solversDone      chan struct{}
+		drainMonitorDone chan struct{}
+	)
+	if requiresTxManager {
+		solversDone = make(chan struct{})
+		drainMonitorDone = make(chan struct{})
+		// The finite shutdown budget covers solver preparation, one pending-timeout window, and one
+		// replacement interval. It bounds how long the process waits before stopping txmanager;
+		// txmanager then applies its own configured lifecycle drain timeout.
+		shutdownTimeout := shutdownPreparationTimeout + time.Duration(
+			cfg.TxManager.PendingTimeoutMs+cfg.TxManager.ReplacementIntervalMs,
+		)*time.Millisecond
+		go func() {
+			defer close(drainMonitorDone)
+			monitorTransactionDrain(gctx.Done(), solversDone, shutdownTimeout, func() {
+				log.Info("solver shutdown timed out; stopping tx manager", "timeout", shutdownTimeout.String())
+				stopTx()
+			})
+		}()
+	}
+	err = g.Wait()
+	if requiresTxManager {
+		close(solversDone)
+		<-drainMonitorDone
+	}
+	background.Wait()
+	if err == nil {
+		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return cause
+		}
+	}
+	return err
+}
+
+func watchReadiness(
+	ctx context.Context,
+	laneStateChanged <-chan struct{},
+	laneReady func() bool,
+	setReady func(bool),
+) {
+	for {
+		select {
+		case <-laneStateChanged:
+			setReady(laneReady())
+		case <-ctx.Done():
+			setReady(false)
+			return
+		}
+	}
+}
+
+func monitorTransactionDrain(
+	shutdown <-chan struct{},
+	solversDone <-chan struct{},
+	timeout time.Duration,
+	onTimeout func(),
+) {
+	select {
+	case <-shutdown:
+	case <-solversDone:
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		onTimeout()
+	case <-solversDone:
+	}
 }

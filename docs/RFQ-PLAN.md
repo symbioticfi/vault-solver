@@ -68,7 +68,19 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
 - **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns the nonce, send, and receipt/revert.
+  builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
+  replacement/cancellation, and confirmed receipt. Each request uses the earliest signed-order or selected
+  discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
+  expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
+  the shared nonce lane.
+- **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
+  the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
+  records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
+  stop for an unresolved lifecycle.
+- **Quotes follow transaction-lane readiness.** `/quote` preserves pure request validation, then returns the
+  normal no-quote `204` before chain reads or strategy work while the lane is occupied or conflicted. Readiness
+  is checked again after strategy planning so a pass that observes a mid-plan state change is discarded before
+  its response.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.
@@ -289,6 +301,26 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
 ## 5. Open items / prerequisites
 
+- **Pareto AA_FalconXUSDC readiness** — the RFQ implementation is already token-agnostic and supports
+  the 18-decimal mainnet tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing
+  permissioned, single-route path. Deployed and verified on mainnet as of 2026-08-06: the bounded
+  Symbiotic `ParetoOracle` (`0xba833D6288aC591BFffbeD16909B8B824e7fA9F2`, block 25697403, already
+  wired into the rfq-backend and rfq-frontend token entries) and the Pareto account
+  factory/implementation (`0xa47cE86c304e251198F1a318c569e5217b694e1F` /
+  `0xE54219880a1296D028CcD7B3d5a34c65fb0B7CAB`). Still outstanding, because each is an instance
+  someone must create rather than an address to configure: the Keyring-onboarded account proxy, the
+  LiquidLane adapter, the RFQ Executor's authorized caller, and backend token enablement. At
+  activation, on an instance already scoped `tokensToQuote: permissioned` (the default `all` scope
+  admits every token, so `permissionedTokens` governs nothing there), configure the token in
+  `permissionedTokens`, set its 1-token floor (`1000000000000000000`) in `minAmountsIn`, and point
+  the instance at the LiquidLane adapter holding it via `adapters`. No dedicated per-token process
+  exists: separate solver instances differ only by executor and settlement adapter, not by asset.
+  The checked-in RFQ example carries the exact token/floor snippet; no protocol branch belongs in
+  solver code.
+
+  Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
+  for the external operator-facing runtime and configuration surface.
+
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
@@ -300,9 +332,11 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 - **RPC**: a primary `chain.rpcUrl` plus optional `chain.rpcFallbackUrls` (HTTP(S), tried in order
   when the primary is unavailable). Fallback is implemented in the generic `internal/chain` layer as a
   barebones viem-style HTTP transport that fails over on transport/5xx/429 errors only (never on a
-  JSON-RPC error such as a revert), so every read/send path inherits it unchanged. Endpoints are
-  operator-configured (no hardcoded public-RPC lists); duplicates are de-duped; all must be the same
-  chain. A single `rpcUrl` keeps the plain dial (any scheme).
+  JSON-RPC error such as a revert), so read paths inherit it unchanged. Broadcasts and startup nonce
+  reads use one non-fallback endpoint: `chain.writeRpcUrl` when configured, otherwise the primary.
+  An explicit write endpoint is chain-ID checked against the active read chain. Read endpoints are
+  operator-configured (no hardcoded public-RPC lists), de-duplicated, and must all target that chain.
+  A single non-HTTP `rpcUrl` keeps the plain dial; HTTP(S) uses the bounded transport even with one endpoint.
 - **Pricing follows the TS greedy port for all inputs** — permissioned inputs additionally use the
   single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy

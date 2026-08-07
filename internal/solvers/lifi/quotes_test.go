@@ -2,7 +2,11 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -17,6 +22,7 @@ import (
 
 type fakeQuoteSubmitter struct {
 	calls [][]types.Quote
+	err   error
 }
 
 func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
@@ -48,7 +54,7 @@ func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
 func (f *fakeQuoteSubmitter) submitQuotes(_ context.Context, quotes []types.Quote) error {
 	copyOfQuotes := append([]types.Quote(nil), quotes...)
 	f.calls = append(f.calls, copyOfQuotes)
-	return nil
+	return f.err
 }
 
 func TestQuoteStatePublishesAndReplacesChangedTopology(t *testing.T) {
@@ -150,31 +156,6 @@ func TestShouldRefreshQuotesInBlockMode(t *testing.T) {
 	}
 }
 
-func TestCapacityChangesRequestImmediateQuoteRefresh(t *testing.T) {
-	solver := &Solver{quoteRefresh: make(chan struct{}, 1)}
-	reservations := liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)}
-
-	solver.reserve("order-1", reservations)
-	select {
-	case <-solver.quoteRefresh:
-	default:
-		t.Fatal("reservation did not request quote refresh")
-	}
-	if got := solver.capacity.Snapshot()["capacity-1"]; got == nil || got.String() != "400" {
-		t.Fatalf("reserved capacity = %v, want 400", got)
-	}
-
-	solver.releaseReservation("order-1")
-	select {
-	case <-solver.quoteRefresh:
-	default:
-		t.Fatal("reservation release did not request quote refresh")
-	}
-	if got := solver.capacity.Snapshot()["capacity-1"]; got != nil {
-		t.Fatalf("released capacity = %v, want nil", got)
-	}
-}
-
 func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	routeItem := testQuoteRoute()
 	state := newQuoteState(30 * time.Second)
@@ -192,6 +173,101 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	if removed != 1 || len(submitter.calls) != 1 || len(submitter.calls[0]) != 1 ||
 		len(submitter.calls[0][0].Ranges) == 0 || submitter.calls[0][0].Expiry >= now.Unix() {
 		t.Fatalf("remove: removed=%d calls=%#v", removed, submitter.calls)
+	}
+}
+
+func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
+	routeItem := testQuoteRoute()
+	state := newQuoteState(30 * time.Second)
+	submitter := &fakeQuoteSubmitter{err: errors.New("lost response")}
+	now := time.Unix(1_800_000_000, 0)
+
+	if _, err := state.reconcile(
+		context.Background(),
+		submitter,
+		[]types.Quote{testStandingQuote(routeItem, 1_000)},
+		now,
+	); err == nil {
+		t.Fatal("publish unexpectedly succeeded")
+	}
+	if len(state.active) != 1 {
+		t.Fatalf("uncertain active pairs = %d, want 1", len(state.active))
+	}
+	for _, pair := range state.active {
+		if pair.expiry != 0 {
+			t.Fatalf("uncertain pair expiry = %d, want forced renewal", pair.expiry)
+		}
+	}
+
+	submitter.err = nil
+	submitter.calls = nil
+	removed, err := state.reconcile(context.Background(), submitter, nil, now)
+	if err != nil {
+		t.Fatalf("expire uncertain pair: %v", err)
+	}
+	if removed != 1 || len(state.active) != 0 || len(submitter.calls) != 1 ||
+		len(submitter.calls[0]) != 1 || submitter.calls[0][0].Expiry >= now.Unix() {
+		t.Fatalf(
+			"expire uncertain pair: removed=%d active=%d calls=%#v",
+			removed,
+			len(state.active),
+			submitter.calls,
+		)
+	}
+}
+
+func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) {
+	var calls int
+	var expiries []int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var dto lifiorder.SubmitQuotesDto
+		if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+			t.Errorf("decode submit quotes: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if len(dto.Quotes) != 1 || len(dto.Quotes[0].Ranges) != 1 {
+			t.Errorf("submitted quotes = %#v, want one quote with one range", dto.Quotes)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+
+		calls++
+		expiries = append(expiries, dto.Quotes[0].Expiry)
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 2 {
+			_, _ = w.Write([]byte(`{"status":"success","quotesAdded":0}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+	}))
+	defer srv.Close()
+
+	state := newQuoteState(30 * time.Second)
+	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+	now := time.Unix(1_800_000_000, 0)
+	quote := testStandingQuote(testQuoteRoute(), 1_000)
+	if _, err := state.reconcile(context.Background(), client, []types.Quote{quote}, now); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	removed, err := state.reconcile(context.Background(), client, nil, now)
+	if err == nil || !strings.Contains(err.Error(), "quotesAdded 0, want 1") {
+		t.Fatalf("first expire error = %v, want acknowledgement mismatch", err)
+	}
+	if removed != 1 || len(state.active) != 1 {
+		t.Fatalf("failed expire: removed=%d active=%d, want 1/1", removed, len(state.active))
+	}
+
+	removed, err = state.reconcile(context.Background(), client, nil, now)
+	if err != nil {
+		t.Fatalf("retry expire: %v", err)
+	}
+	if removed != 1 || len(state.active) != 0 || calls != 3 {
+		t.Fatalf("retried expire: removed=%d active=%d calls=%d, want 1/0/3", removed, len(state.active), calls)
+	}
+	if len(expiries) != 3 || int64(expiries[1]) >= now.Unix() || int64(expiries[2]) >= now.Unix() {
+		t.Fatalf("submitted expiries = %v, want both retry attempts expired", expiries)
 	}
 }
 
