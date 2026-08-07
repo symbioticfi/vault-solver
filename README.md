@@ -280,8 +280,16 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 When used, the shared `txManager` owns one unresolved signed nonce lifecycle at a time. Later
 submissions are neither accepted nor signed until the active lifecycle has a terminal receipt. Every
 `replacementIntervalMs` it attempts a replacement using fresh fees and at least a 12.5% bump over the
-previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
-the request's earlier deadline), replacements switch to a same-nonce cancellation.
+previous attempt; if fresh fees are unavailable, it bumps the cached fees. When a submission returns an
+ambiguous transport error, the first replacement tick instead rebroadcasts those exact signed bytes once
+without changing the hash or fees; a later tick may fee-bump it. Cancellation deadlines and shutdown bypass
+that grace retry. At `pendingTimeoutMs` (or the request's earlier deadline), replacements switch to a
+same-nonce cancellation. Each submission RPC is bounded independently by `broadcastTimeoutMs` (5 seconds
+by default), so a short replacement cadence does not prematurely time out a private write RPC.
+
+After lifecycle admission and immediately before signing, requests without an explicit gas limit run
+`eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
+to that estimate. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
 
 The transaction lane is ready for new external commitments only while it has no queued or admitted
 lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ

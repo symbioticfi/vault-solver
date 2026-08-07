@@ -44,6 +44,7 @@ type mockBackend struct {
 
 	sendErrs  []error // returned, in order, by successive SendTransaction calls
 	sendCalls int
+	attempted []*types.Transaction
 	sent      []*types.Transaction
 	receipts  map[common.Hash]*types.Receipt
 }
@@ -148,12 +149,19 @@ func (b *mockBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 	defer b.mu.Unlock()
 	i := b.sendCalls
 	b.sendCalls++
+	b.attempted = append(b.attempted, tx)
 	if i < len(b.sendErrs) && b.sendErrs[i] != nil {
 		return b.sendErrs[i]
 	}
 	b.sent = append(b.sent, tx)
 	b.receipts[tx.Hash()] = successfulReceipt(tx, b.head)
 	return nil
+}
+
+func (b *mockBackend) attemptedTransactions() []*types.Transaction {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]*types.Transaction(nil), b.attempted...)
 }
 
 func (b *mockBackend) TransactionReceipt(_ context.Context, h common.Hash) (*types.Receipt, error) {
@@ -225,9 +233,9 @@ func TestSend_HappyPath(t *testing.T) {
 	if tx.Type() != types.DynamicFeeTxType {
 		t.Fatalf("expected EIP-1559 tx, got type %d", tx.Type())
 	}
-	// gas = estimate + 20%
-	if tx.Gas() != 60_000 {
-		t.Fatalf("expected gas 60000 (50000 + 20%%), got %d", tx.Gas())
+	// gas = estimate + 5%
+	if tx.Gas() != 52_500 {
+		t.Fatalf("expected gas 52500 (50000 + 5%%), got %d", tx.Gas())
 	}
 }
 
@@ -415,6 +423,25 @@ func TestBroadcastRejectsExpiredRequest(t *testing.T) {
 	})
 	if err == nil || b.sendCalls != 0 {
 		t.Fatalf("expired broadcast = %v, send calls = %d", err, b.sendCalls)
+	}
+}
+
+func TestBroadcastTimeout(t *testing.T) {
+	for name, test := range map[string]struct {
+		configured time.Duration
+		want       time.Duration
+	}{
+		"independent default": {want: defaultBroadcastTimeout},
+		"explicit override":   {configured: 7 * time.Second, want: 7 * time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := New(nil, nil, nil, Config{
+				BroadcastTimeout: test.configured, ReplacementInterval: 2 * time.Millisecond,
+			}, logr.Discard())
+			if got := m.broadcastTimeout(); got != test.want {
+				t.Fatalf("broadcast timeout = %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 
@@ -903,9 +930,12 @@ func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 	}
 }
 
-func TestAmbiguousReplacementAdvancesFeeState(t *testing.T) {
+func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 	b := newMockBackend()
-	b.sendErrs = []error{errors.New("temporary broadcast failure")}
+	b.sendErrs = []error{
+		errors.New("temporary broadcast failure"),
+		errors.New("temporary exact rebroadcast failure"),
+	}
 	m := New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{MaxFeeGwei: 100, PollInterval: time.Millisecond},
@@ -929,17 +959,147 @@ func TestAmbiguousReplacementAdvancesFeeState(t *testing.T) {
 	if pending.fees.maxFee.Cmp(firstBump) != 0 {
 		t.Fatalf("ambiguous replacement max fee = %s, want %s", pending.fees.maxFee, firstBump)
 	}
-	if len(pending.attempts) != 1 {
+	if len(pending.attempts) != 1 || !pending.attempts[0].exactRebroadcastPending {
 		t.Fatalf("ambiguous replacement attempts = %+v", pending.attempts)
+	}
+	firstHash := pending.attempts[0].hash
+
+	m.tryReplace(t.Context(), pending, false)
+	attempted := b.attemptedTransactions()
+	if len(attempted) != 2 || attempted[0].Hash() != firstHash || attempted[1].Hash() != firstHash ||
+		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
+		t.Fatalf("exact replacement retry = %v, pending %+v", transactionHashes(attempted), pending)
 	}
 
 	m.tryReplace(t.Context(), pending, false)
 	if len(pending.attempts) != 2 {
-		t.Fatalf("successful retry attempts = %+v", pending.attempts)
+		t.Fatalf("post-retry replacement attempts = %+v", pending.attempts)
 	}
 	wantMaxFee := bumpFee(firstBump)
 	if pending.fees.maxFee.Cmp(wantMaxFee) != 0 {
-		t.Fatalf("successful retry max fee = %s, want %s", pending.fees.maxFee, wantMaxFee)
+		t.Fatalf("post-retry replacement max fee = %s, want %s", pending.fees.maxFee, wantMaxFee)
+	}
+}
+
+func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
+	b := newMockBackend()
+	b.sendErrs = []error{io.ErrUnexpectedEOF}
+	s := mustSigner(t)
+	m := New(b, s, big.NewInt(11155111), Config{MaxFeeGwei: 100}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000, Label: "shutdown",
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	pending.cancelDeadline = time.Now().Add(time.Hour)
+	pending.cancelRequested = make(chan struct{})
+	requestCancellation(pending)
+
+	m.tryReplace(t.Context(), pending, false)
+	attempted := b.attemptedTransactions()
+	if len(attempted) != 2 || attempted[1].Hash() == attempted[0].Hash() {
+		t.Fatalf("cancellation attempts = %v, want a new same-nonce transaction", transactionHashes(attempted))
+	}
+	cancellation := attempted[1]
+	if cancellation.To() == nil || *cancellation.To() != s.Address() || len(cancellation.Data()) != 0 ||
+		cancellation.Gas() != cancellationGasLimit || !pending.attempts[1].cancellation {
+		t.Fatalf("shutdown retry was not a self-cancellation: tx=%+v attempt=%+v", cancellation, pending.attempts[1])
+	}
+}
+
+func TestCancellationSignalDoesNotSendBackToBackReplacements(t *testing.T) {
+	b := &replacementBackend{mockBackend: newMockBackend()}
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{
+		MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: time.Second,
+	}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "simultaneous cancellation",
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	pending.cancelDeadline = time.Now().Add(-time.Second)
+	pending.cancelRequested = make(chan struct{})
+	requestCancellation(pending)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan Result, 1)
+	go func() { result <- m.waitForPendingTransaction(ctx, pending) }()
+	waitForSentTransactions(t, b.mockBackend, 2)
+	cancel()
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("pending lifecycle did not stop")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.sent) != 2 {
+		t.Fatalf("sent transactions = %d, want initial plus one cancellation", len(b.sent))
+	}
+}
+
+func TestExactRebroadcastNonceTooLowReconcilesOriginalReceipt(t *testing.T) {
+	b := &replacementNonceRaceBackend{
+		mockBackend: newMockBackend(), publishOwnedReceipt: true, firstSendErr: io.ErrUnexpectedEOF,
+	}
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 100}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "exact retry inclusion",
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+
+	m.tryReplace(t.Context(), pending, false)
+	attempted := b.attemptedTransactions()
+	if len(attempted) != 2 || attempted[0].Hash() != attempted[1].Hash() || len(pending.attempts) != 1 {
+		t.Fatalf("nonce-low exact retry = %v, tracked = %+v", transactionHashes(attempted), pending.attempts)
+	}
+	if !m.Available() {
+		t.Fatal("owned original receipt paused the nonce lane")
+	}
+	result, done := m.receiptResult(t.Context(), pending)
+	if !done || result.Err != nil || result.Receipt == nil || result.Hash != pending.originalHash {
+		t.Fatalf("reconciled receipt = (%+v, %v)", result, done)
+	}
+}
+
+func TestExactRebroadcastSlack(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	m := New(nil, nil, nil, Config{
+		BroadcastTimeout: 5 * time.Second, ReplacementInterval: 5 * time.Second,
+	}, logr.Discard())
+	for name, test := range map[string]struct {
+		deadline time.Time
+		want     bool
+	}{
+		"no deadline":        {want: true},
+		"at safety bound":    {deadline: now.Add(10 * time.Second)},
+		"after safety bound": {deadline: now.Add(11 * time.Second), want: true},
+	} {
+		if got := m.hasExactRebroadcastSlack(
+			&pendingTransaction{cancelDeadline: test.deadline}, now,
+		); got != test.want {
+			t.Errorf("%s: slack = %v, want %v", name, got, test.want)
+		}
+	}
+}
+
+func TestCappedNormalRebroadcastStopsAtCancellationDeadline(t *testing.T) {
+	b := &cappedRebroadcastDeadlineBackend{mockBackend: newMockBackend()}
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "capped deadline",
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	pending.cancelDeadline = time.Now().Add(time.Second)
+	if !m.rebroadcastLatestAttempt(t.Context(), pending, false) ||
+		!b.deadlineOK || !b.deadline.Equal(pending.cancelDeadline) {
+		t.Fatalf("capped rebroadcast deadline = (%s, %v), want %s", b.deadline, b.deadlineOK, pending.cancelDeadline)
 	}
 }
 
@@ -1541,6 +1701,7 @@ type replacementNonceRaceBackend struct {
 	*mockBackend
 
 	publishOwnedReceipt bool
+	firstSendErr        error
 }
 
 type shutdownWriteOutageBackend struct {
@@ -1548,6 +1709,21 @@ type shutdownWriteOutageBackend struct {
 
 	cancellationStarted chan struct{}
 	cancellationOnce    sync.Once
+}
+
+type cappedRebroadcastDeadlineBackend struct {
+	*mockBackend
+
+	deadline   time.Time
+	deadlineOK bool
+}
+
+func (b *cappedRebroadcastDeadlineBackend) SendTransaction(
+	ctx context.Context,
+	tx *types.Transaction,
+) error {
+	b.deadline, b.deadlineOK = ctx.Deadline()
+	return b.mockBackend.SendTransaction(ctx, tx)
 }
 
 func (b *acceptedThenNonceLowBackend) SendTransaction(
@@ -1592,8 +1768,9 @@ func (b *replacementNonceRaceBackend) SendTransaction(
 	defer b.mu.Unlock()
 	b.sendCalls++
 	b.sent = append(b.sent, tx)
+	b.attempted = append(b.attempted, tx)
 	if b.sendCalls == 1 {
-		return nil
+		return b.firstSendErr
 	}
 	if b.publishOwnedReceipt {
 		original := b.sent[0]
@@ -2070,11 +2247,28 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 		t.Fatalf("broadcast: %v", err)
 	}
 	if pending.nonce != 7 || len(pending.attempts) != 1 ||
-		pending.attempts[0].tx == nil || pending.attempts[0].hash != pending.attempts[0].tx.Hash() {
+		pending.attempts[0].tx == nil || pending.attempts[0].hash != pending.attempts[0].tx.Hash() ||
+		!pending.attempts[0].exactRebroadcastPending {
 		t.Fatalf("pending = nonce %d, attempts %+v", pending.nonce, pending.attempts)
 	}
 	if m.nonce != 8 {
 		t.Fatalf("next nonce = %d, want 8 while exact hash remains tracked", m.nonce)
+	}
+	originalHash, originalFees := pending.originalHash, cloneFeeQuote(pending.fees)
+	m.tryReplace(t.Context(), pending, false)
+	attempted := b.attemptedTransactions()
+	if len(attempted) != 2 || attempted[0].Hash() != originalHash || attempted[1].Hash() != originalHash ||
+		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
+		t.Fatalf("exact retry = %v, attempts %+v", transactionHashes(attempted), pending.attempts)
+	}
+	if pending.fees.maxFee.Cmp(originalFees.maxFee) != 0 || pending.fees.tip.Cmp(originalFees.tip) != 0 {
+		t.Fatalf("exact retry changed fees: got %+v want %+v", pending.fees, originalFees)
+	}
+	m.tryReplace(t.Context(), pending, false)
+	attempted = b.attemptedTransactions()
+	if len(attempted) != 3 || attempted[2].Hash() == originalHash || len(pending.attempts) != 2 ||
+		pending.fees.maxFee.Cmp(bumpFee(originalFees.maxFee)) != 0 {
+		t.Fatalf("post-retry replacement = %v, pending %+v", transactionHashes(attempted), pending)
 	}
 }
 
@@ -2096,6 +2290,17 @@ func TestDefiniteBroadcastRejectionDoesNotConsumeNonce(t *testing.T) {
 	}
 	if pending.nonce != 7 {
 		t.Fatalf("retry nonce = %d, want original 7", pending.nonce)
+	}
+}
+
+func TestKnownTransactionErrorClassificationIsNarrow(t *testing.T) {
+	if !isKnownTransactionError(errors.New("already known")) {
+		t.Fatal("already-known transaction was not recognized")
+	}
+	for _, message := range []string{"unknown transaction", "unknown transaction type", "nonce too low"} {
+		if isKnownTransactionError(errors.New(message)) {
+			t.Fatalf("%q was incorrectly classified as already known", message)
+		}
 	}
 }
 
@@ -2591,6 +2796,14 @@ func mustSigner(t *testing.T) signer.Signer {
 		t.Fatalf("signer: %v", err)
 	}
 	return s
+}
+
+func transactionHashes(transactions []*types.Transaction) []common.Hash {
+	hashes := make([]common.Hash, len(transactions))
+	for i, transaction := range transactions {
+		hashes[i] = transaction.Hash()
+	}
+	return hashes
 }
 
 func ptr[T any](value T) *T {
