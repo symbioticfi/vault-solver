@@ -84,11 +84,10 @@ use one candidate route. Other scopes keep the existing multi-route behavior.
 a request below its token's minimum is not quoted (HTTP 204), while an amount equal to the minimum
 still quotes; unlisted tokens have no floor.
 Pareto's mainnet `AA_FalconXUSDC` tranche (`0xC26A…f99C`) uses this existing generic path and needs no
-token-specific solver code. On an instance already running `tokensToQuote: permissioned` — which is
-what admits by `permissionedTokens` at all, since the default `all` scope admits every token
-regardless — onboarding it is the same two config edits as any other permissioned token: add it to
-`permissionedTokens`, and give it a base-unit floor in `minAmountsIn`. Quoting it also requires a
-LiquidLane adapter holding the token in `adapters`.
+token-specific solver code. The production deployment config already includes it in
+`permissionedTokens` with a one-token `minAmountsIn` floor. A solver instance can route it only after
+its configured LiquidLane adapter has onboarded the token. Execution also requires either direct
+`owner`/`marketMaker`/`isFiller` authorization or a live signed discount in internal mode.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
