@@ -7,7 +7,6 @@ package txmanager
 import (
 	"context"
 	"math/big"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +48,7 @@ type Config struct {
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
 	TipGwei             float64       // minimum priority fee; 0 => derive it from recent fee history
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
+	BroadcastTimeout    time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
 	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
 	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
@@ -101,9 +101,10 @@ type pendingTransaction struct {
 }
 
 type txAttempt struct {
-	hash         common.Hash
-	tx           *types.Transaction
-	cancellation bool
+	hash                    common.Hash
+	tx                      *types.Transaction
+	cancellation            bool
+	exactRebroadcastPending bool
 }
 
 // Manager serializes signed lifecycles and owns accepted work through its terminal result.
@@ -148,11 +149,11 @@ const (
 	defaultReplacementInterval = 30 * time.Second
 	defaultPendingTimeout      = 5 * time.Minute
 	defaultShutdownTimeout     = time.Minute
+	defaultBroadcastTimeout    = 5 * time.Second
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
-	maxBroadcastTimeout        = 3 * time.Second
 	feeHistoryBlocks           = 5
-	feeHistoryPercentile       = 75.0
+	feeHistoryPercentile       = 25.0
 	replacementBumpNumerator   = 9
 	replacementBumpDenominator = 8
 	cancellationGasLimit       = 21_000
@@ -171,6 +172,9 @@ var (
 func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
+	}
+	if cfg.BroadcastTimeout <= 0 {
+		cfg.BroadcastTimeout = defaultBroadcastTimeout
 	}
 	if cfg.ReplacementInterval <= 0 {
 		cfg.ReplacementInterval = defaultReplacementInterval
@@ -567,20 +571,26 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
 	hash := signed.Hash()
-	if sendErr != nil {
+	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
+	if broadcastUncertain {
 		m.log.Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
 			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+	} else if sendErr != nil {
+		m.log.Info("transaction already known by write RPC",
+			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
 	} else {
 		m.log.Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
-		req:          req,
-		nonce:        nonce,
-		gas:          gas,
-		value:        new(big.Int).Set(value),
-		fees:         cloneFeeQuote(fees),
-		attempts:     []txAttempt{{hash: hash, tx: signed}},
+		req:   req,
+		nonce: nonce,
+		gas:   gas,
+		value: new(big.Int).Set(value),
+		fees:  cloneFeeQuote(fees),
+		attempts: []txAttempt{{
+			hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
+		}},
 		originalHash: hash,
 	}, nil
 }
@@ -624,6 +634,10 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	defer timeout.Stop()
 
 	cancelling := false
+	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
+	startCancellation := func() {
+		cancelling, cancelRequested, timeoutC = true, nil, nil
+	}
 	for {
 		if receiptResult, done := m.receiptResult(ctx, pending); done {
 			return receiptResult
@@ -631,17 +645,17 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		select {
 		case <-ctx.Done():
 			return Result{Hash: pending.attempts[0].hash, Err: context.Cause(ctx)}
-		case <-pending.cancelRequested:
-			cancelling = true
+		case <-cancelRequested:
+			startCancellation()
 			m.tryReplace(ctx, pending, true)
 		case <-poll.C:
 		case <-replace.C:
-			if !pending.req.CancelAt.IsZero() && !time.Now().Before(pending.req.CancelAt) {
-				cancelling = true
+			if !cancelling && pending.cancellationDue(time.Now()) {
+				startCancellation()
 			}
 			m.tryReplace(ctx, pending, cancelling)
-		case <-timeout.C:
-			cancelling = true
+		case <-timeoutC:
+			startCancellation()
 			m.log.Info("pending transaction timed out; cancelling nonce",
 				"label", pending.req.Label,
 				"nonce", pending.nonce,
@@ -758,11 +772,19 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	if m.hasNonceConflict(pending.nonce) {
 		return
 	}
+	cancellation = cancellation || pending.cancellationDue(time.Now())
+	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
+		return
+	}
 	limit := m.normalFeeLimit(pending.req)
 	if cancellation {
 		limit = m.globalFeeLimit()
 	}
 	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
+	if !cancellation && pending.cancellationDue(time.Now()) {
+		m.tryReplace(ctx, pending, true)
+		return
+	}
 	if err != nil {
 		if errors.Is(err, errReplacementLimitReached) &&
 			m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
@@ -785,7 +807,13 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		value = new(big.Int)
 		gas = cancellationGasLimit
 	}
-	signed, sendErr := m.signAndSend(ctx, pending.nonce, to, data, value, gas, fees, true)
+	if !cancellation && pending.cancellationDue(time.Now()) {
+		m.tryReplace(ctx, pending, true)
+		return
+	}
+	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
+	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true)
+	cancelSend()
 	if signed == nil {
 		m.log.Error(sendErr, "pending transaction replacement rejected",
 			"label", pending.req.Label,
@@ -795,20 +823,31 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		return
 	}
 	hash := signed.Hash()
+	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	pending.fees = cloneFeeQuote(fees)
 	pending.attempts = append(pending.attempts, txAttempt{
-		hash: hash, tx: signed, cancellation: cancellation,
+		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
 	})
 	if isNonceConsumedError(sendErr) {
 		pending.nonceConflictHash = hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
 	}
-	if sendErr != nil {
+	if broadcastUncertain {
 		m.log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash",
 			"label", pending.req.Label,
 			"hash", hash.Hex(),
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
+		)
+		return
+	}
+	if sendErr != nil {
+		m.log.Info("replacement already known by write RPC",
+			"label", pending.req.Label,
+			"hash", hash.Hex(),
+			"nonce", pending.nonce,
+			"cancellation", cancellation,
+			"rpcResult", sendErr.Error(),
 		)
 		return
 	}
@@ -822,6 +861,61 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	)
 }
 
+// rebroadcastUncertainAttempt gives a transport-ambiguous normal submission one exact-byte retry
+// before escalating its fees. It never appends a duplicate attempt or changes the cached fee state.
+func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pendingTransaction) bool {
+	now := time.Now()
+	if pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now) {
+		return false
+	}
+	if len(pending.attempts) == 0 {
+		return false
+	}
+	attempt := &pending.attempts[len(pending.attempts)-1]
+	if attempt.cancellation || attempt.tx == nil || !attempt.exactRebroadcastPending {
+		return false
+	}
+	attempt.exactRebroadcastPending = false
+	err := m.sendSigned(ctx, attempt.tx, true)
+	known := isKnownTransactionError(err)
+	if isNonceConsumedError(err) {
+		pending.nonceConflictHash = attempt.hash
+		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
+	switch {
+	case err == nil:
+		m.log.Info("uncertain transaction rebroadcast",
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+			"reason", "ambiguous-broadcast",
+		)
+	case known:
+		m.log.Info("uncertain transaction already known by write RPC",
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+			"reason", "ambiguous-broadcast",
+			"rpcResult", err.Error(),
+		)
+	default:
+		m.log.Error(err, "uncertain transaction exact rebroadcast failed; replacement deferred",
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+			"reason", "ambiguous-broadcast",
+		)
+	}
+	return true
+}
+
+func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time.Time) bool {
+	if pending.cancelDeadline.IsZero() {
+		return true
+	}
+	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval
+}
+
 func (m *Manager) rebroadcastLatestAttempt(
 	ctx context.Context,
 	pending *pendingTransaction,
@@ -832,7 +926,9 @@ func (m *Manager) rebroadcastLatestAttempt(
 		if attempt.cancellation != cancellation || attempt.tx == nil {
 			continue
 		}
-		err := m.sendSigned(ctx, attempt.tx, true)
+		sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
+		err := m.sendSigned(sendCtx, attempt.tx, true)
+		cancelSend()
 		if isNonceConsumedError(err) {
 			pending.nonceConflictHash = attempt.hash
 			m.reconcileExistingLifecycleNonce(ctx, pending)
@@ -855,6 +951,19 @@ func (m *Manager) rebroadcastLatestAttempt(
 		return true
 	}
 	return false
+}
+
+// Normal replacement broadcasts must not outlive the request's cancellation deadline. Cancellation
+// transactions use the lifecycle context because the request deadline has already elapsed for them.
+func replacementBroadcastContext(
+	ctx context.Context,
+	pending *pendingTransaction,
+	cancellation bool,
+) (context.Context, context.CancelFunc) {
+	if cancellation || pending.cancelDeadline.IsZero() {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, pending.cancelDeadline)
 }
 
 func (m *Manager) nextReplacementFees(
@@ -925,7 +1034,7 @@ func (m *Manager) trackUnminedTransaction(pending *pendingTransaction) {
 		pending.cancelDeadline = m.cancellationDeadline(pending.req)
 	}
 	if pending.cancelRequested == nil {
-		pending.cancelRequested = make(chan struct{}, 1)
+		pending.cancelRequested = make(chan struct{})
 	}
 	m.unminedMu.Lock()
 	defer m.unminedMu.Unlock()
@@ -961,7 +1070,19 @@ func (m *Manager) deliverActiveShutdownTimeout() {
 }
 
 func requestCancellation(pending *pendingTransaction) {
-	pending.cancelOnce.Do(func() { pending.cancelRequested <- struct{}{} })
+	pending.cancelOnce.Do(func() { close(pending.cancelRequested) })
+}
+
+func (pending *pendingTransaction) cancellationDue(now time.Time) bool {
+	if !pending.cancelDeadline.IsZero() && !now.Before(pending.cancelDeadline) {
+		return true
+	}
+	select {
+	case <-pending.cancelRequested:
+		return true
+	default:
+		return false
+	}
 }
 
 // currentFees computes the current EIP-1559 base fee, tip, and fee cap under the supplied lifecycle
@@ -1030,21 +1151,17 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 }
 
 func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
-	if history == nil || len(history.Reward) == 0 || len(history.Reward) > feeHistoryBlocks {
+	if history == nil || len(history.Reward) != feeHistoryBlocks {
 		return nil, false
 	}
-	rewards := make([]*big.Int, len(history.Reward))
-	for i, blockRewards := range history.Reward {
+	var tip *big.Int
+	for _, blockRewards := range history.Reward {
 		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
 			return nil, false
 		}
-		rewards[i] = new(big.Int).Set(blockRewards[0])
-	}
-	slices.SortFunc(rewards, func(left, right *big.Int) int { return left.Cmp(right) })
-	middle := len(rewards) / 2
-	tip := new(big.Int).Set(rewards[middle])
-	if len(rewards)%2 == 0 {
-		tip.Add(tip, rewards[middle-1]).Div(tip, big.NewInt(2))
+		if tip == nil || blockRewards[0].Cmp(tip) < 0 {
+			tip = new(big.Int).Set(blockRewards[0])
+		}
 	}
 	return tip, true
 }
@@ -1065,8 +1182,8 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
-	// 20% headroom over the estimate.
-	return gas + gas/5, nil
+	// 5% headroom over the estimate.
+	return gas + gas/20, nil
 }
 
 func optionalBigString(value *big.Int) string {
@@ -1201,6 +1318,14 @@ func isNonceConsumedError(err error) bool {
 	return strings.Contains(message, "nonce too low") ||
 		strings.Contains(message, "nonce is too low") ||
 		strings.Contains(message, "nonce has already been used")
+}
+
+func isKnownTransactionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "already known")
 }
 
 func isPendingNonceCollision(err error) bool {
@@ -1554,7 +1679,7 @@ func (m *Manager) receiptReadTimeout() time.Duration {
 }
 
 func (m *Manager) broadcastTimeout() time.Duration {
-	return minPositiveDuration(maxBroadcastTimeout, m.cfg.ReplacementInterval/2)
+	return m.cfg.BroadcastTimeout
 }
 
 func minPositiveDuration(fallback, candidate time.Duration) time.Duration {

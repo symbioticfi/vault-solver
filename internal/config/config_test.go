@@ -39,7 +39,8 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if cfg.TxManager.Confirmations != DefaultConfirmations {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
-	if cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
+	if cfg.TxManager.BroadcastTimeoutMs != DefaultBroadcastTimeoutMs ||
+		cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
 		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs ||
 		cfg.TxManager.ShutdownTimeoutMs != DefaultShutdownTimeoutMs {
 		t.Fatalf("unexpected tx replacement defaults: %+v", cfg.TxManager)
@@ -279,6 +280,12 @@ bogus: true
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, replacementIntervalMs: -1}
+solvers: [{name: x}]
+`,
+		"negative broadcast timeout": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, broadcastTimeoutMs: -1}
 solvers: [{name: x}]
 `,
 		"timeout below replacement interval": `

@@ -286,8 +286,16 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 When used, the shared `txManager` owns one unresolved signed nonce lifecycle at a time. Later
 submissions are neither accepted nor signed until the active lifecycle has a terminal receipt. Every
 `replacementIntervalMs` it attempts a replacement using fresh fees and at least a 12.5% bump over the
-previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
-the request's earlier deadline), replacements switch to a same-nonce cancellation.
+previous attempt; if fresh fees are unavailable, it bumps the cached fees. When a submission returns an
+ambiguous transport error, the first replacement tick instead rebroadcasts those exact signed bytes once
+without changing the hash or fees; a later tick may fee-bump it. Cancellation deadlines and shutdown bypass
+that grace retry. At `pendingTimeoutMs` (or the request's earlier deadline), replacements switch to a
+same-nonce cancellation. Each submission RPC is bounded independently by `broadcastTimeoutMs` (5 seconds
+by default), so a short replacement cadence does not prematurely time out a private write RPC.
+
+After lifecycle admission and immediately before signing, requests without an explicit gas limit run
+`eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
+to that estimate. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
 
 The transaction lane is ready for new external commitments only while it has no queued or admitted
 lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
@@ -312,10 +320,11 @@ and its replacements; cancellation may exceed that request cap but never `maxFee
 `tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
 to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
 positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
-when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
-instead uses the median p75 priority reward from the latest five blocks, likewise clamped to available
-headroom. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor
-provides the operator-controlled fallback.
+when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
+txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
+the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
+Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
+operator-controlled fallback.
 
 ## Requirements
 
