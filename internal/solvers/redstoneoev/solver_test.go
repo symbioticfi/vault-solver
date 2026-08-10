@@ -13,8 +13,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"gopkg.in/yaml.v3"
 
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
@@ -45,6 +45,11 @@ func newQuote(maxRate string, maxAssets *big.Int) defaultstrategy.AdapterQuote {
 // (RedStone source), a stateCache with healthy accounting, and an in-memory signer — exactly the
 // surface buildBid reads. nowFn drives accrual/breaker timing deterministically.
 func seededSolver(t *testing.T) (*Solver, *testSigner) {
+	t.Helper()
+	return seededSolverWithGasAccounting(t, true)
+}
+
+func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *testSigner) {
 	t.Helper()
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -91,6 +96,9 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		MaxTxGasPrice:       big.NewInt(1_000_000_000),
 		ExecutorStateMaxAge: defaultExecutorStateMaxAge,
 	}
+	if gasAccounting {
+		cfg.Gas = &liquidlanegas.OracleConfig{}
+	}
 
 	s := &Solver{
 		cfg:     cfg,
@@ -108,12 +116,28 @@ func seededSolver(t *testing.T) (*Solver, *testSigner) {
 		MaxStateAge: defaultExecutorStateMaxAge,
 		Sizing:      defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
 	})
-	s.strategy = defaultstrategy.NewWithSnapshotForTest(strategyCfg, seedAdapter, seedCallback, seed, logr.Discard(), sgnr)
-	seedDefaultDecisionState(t, s, mustBig("2500000000"))
+	s.strategy = defaultstrategy.NewWithSnapshotForTest(
+		strategyCfg,
+		seedAdapter,
+		seedCallback,
+		gasAccounting,
+		seed,
+		logr.Discard(),
+		sgnr,
+	)
+	seedDefaultDecisionState(t, s)
 	// Healthy accounting: deposit clears MIN_DEPOSIT.
+	adapterSnapshot := seedAdapterSnapshot()
+	var gasPrices *liquidlanegas.PriceSnapshot
+	if gasAccounting {
+		gasPrices = liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{
+			adapterSnapshot.Loan: mustBig("2500000000"),
+		})
+	}
 	s.state.store(cachedState{
 		Exec:      ExecutorState{Nonce: big.NewInt(7), Deposit: mustBig("100000000000000000"), Locked: false},
-		Adapter:   seedAdapterSnapshot(),
+		Adapter:   adapterSnapshot,
+		GasPrices: gasPrices,
 		GasLimit:  2_000_000,
 		UpdatedAt: auctionClock()(),
 	})
@@ -139,19 +163,19 @@ func seedAdapterSnapshot() types.AdapterSnapshot {
 	}
 }
 
-func seedDefaultDecisionState(t testFataler, s *Solver, rate *big.Int) {
+func seedDefaultDecisionState(t testFataler, s *Solver) {
 	t.Helper()
-	seedDefaultDecisionStateAt(t, s, rate, auctionClock()())
+	seedDefaultDecisionStateAt(t, s, auctionClock()())
 }
 
-func seedDefaultDecisionStateAt(t testFataler, s *Solver, rate *big.Int, at time.Time) {
+func seedDefaultDecisionStateAt(t testFataler, s *Solver, at time.Time) {
 	t.Helper()
-	seedDefaultDecisionStateWithCallbackBalance(t, s, rate, mustBig("1000000000000000000"), at)
+	seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("1000000000000000000"), at)
 }
 
-func seedDefaultDecisionStateWithCallbackBalance(t testFataler, s *Solver, rate, callbackNative *big.Int, at time.Time) {
+func seedDefaultDecisionStateWithCallbackBalance(t testFataler, s *Solver, callbackNative *big.Int, at time.Time) {
 	t.Helper()
-	defaultStrategyOf(t, s).StoreDecisionStateForTest(rate, callbackNative, at)
+	defaultStrategyOf(t, s).StoreDecisionStateForTest(callbackNative, at)
 }
 
 type testFataler interface {
@@ -231,7 +255,7 @@ func setSnapshotBlockTime(t *testing.T, s *Solver, tsMs int64) {
 		st.UpdatedAt = now
 		s.state.store(st)
 	}
-	seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), now)
+	seedDefaultDecisionStateAt(t, s, now)
 }
 
 // auctionClock returns a clock within ±600s of the captured auction's timestamp, so clampTsAt keeps
@@ -269,7 +293,7 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 		st, _ := s.state.load()
 		st.UpdatedAt = pastMax()
 		s.state.store(st)
-		seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), base)
+		seedDefaultDecisionStateAt(t, s, base)
 		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != types.SkipReasonStaleState {
 			t.Fatalf("skip = %q, want %q", d.skip, types.SkipReasonStaleState)
 		}
@@ -343,6 +367,10 @@ func TestBuildBidLetsStrategyOwnDecisionState(t *testing.T) {
 	if strategy.input.Context.ExecutorMinDeposit.Cmp(minDeposit) != 0 {
 		t.Fatalf("executor minimum deposit = %s, want %s", strategy.input.Context.ExecutorMinDeposit, minDeposit)
 	}
+	rate := strategy.input.Context.GasPrices.TokenOutPerNative(strategy.input.Adapter.Loan)
+	if rate == nil || rate.Cmp(mustBig("2500000000")) != 0 {
+		t.Fatalf("shared gas price = %v, want 2500000000", rate)
+	}
 }
 
 func TestDefaultStrategyUsesBidInputAdapterSnapshot(t *testing.T) {
@@ -371,14 +399,31 @@ func TestBuildBidGasProfitabilityGate(t *testing.T) {
 		}
 	})
 
-	t.Run("dry-run without rate skips because callback auth needs loan profit floors", func(t *testing.T) {
+	t.Run("configured gas without shared rate fails closed", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		s.dryRun = true
-		seedDefaultDecisionState(t, s, nil)
+		st, _ := s.state.load()
+		st.GasPrices = nil
+		s.state.store(st)
 		if d := s.buildBid(t.Context(), a, auctionClock()); d.skip != types.SkipReasonGasUnprofitable {
-			t.Fatalf("dry-run no-rate path should skip %q, got %q", types.SkipReasonGasUnprofitable, d.skip)
+			t.Fatalf("missing shared rate should skip %q, got %q", types.SkipReasonGasUnprofitable, d.skip)
 		}
 	})
+}
+
+func TestBuildBidWithoutGasAccountingUsesGrossSelectionAndFixedBid(t *testing.T) {
+	s, _ := seededSolverWithGasAccounting(t, false)
+	d := s.buildBid(t.Context(), decodeAuction(t), auctionClock())
+	if d.skip != "" || d.solve.Data.Bid != "0.0005" {
+		t.Fatalf("gross-mode decision = skip %q bid %q, want fixed bid 0.0005", d.skip, d.solve.Data.Bid)
+	}
+
+	s, _ = seededSolverWithGasAccounting(t, false)
+	st, _ := s.state.load()
+	st.GasLimit = 1
+	s.state.store(st)
+	if limited := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); limited.skip != types.SkipReasonNoLegs {
+		t.Fatalf("low gas limit skip = %q, want %q", limited.skip, types.SkipReasonNoLegs)
+	}
 }
 
 func TestBuildBidSignsConfiguredGasPriceCap(t *testing.T) {
@@ -394,21 +439,6 @@ func TestBuildBidSignsConfiguredGasPriceCap(t *testing.T) {
 	}
 	if got := recoverSolveSigner(t, s, d.solve.Data); got != s.deps.Signer.Address() {
 		t.Fatalf("recovered %s, want signer %s", got, s.deps.Signer.Address())
-	}
-}
-
-func TestFactoryRejectsLiveBiddingWithoutRateSource(t *testing.T) {
-	var node yaml.Node
-	raw := wsline + addrs + "strategy:\n  name: default\n  config:\n    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\"}\n"
-	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := parseConfig(node)
-	if err == nil {
-		_, err = defaultstrategy.ParseConfig(cfg.Strategy.Config)
-	}
-	if err == nil {
-		t.Fatal("expected default strategy construction to reject config without loanEthFeed")
 	}
 }
 
@@ -448,7 +478,7 @@ func TestBuildBidPriceSource(t *testing.T) {
 
 func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
 	s, _ := seededSolver(t)
-	seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("2500000000"), big.NewInt(1), auctionClock()())
+	seedDefaultDecisionStateWithCallbackBalance(t, s, big.NewInt(1), auctionClock()())
 
 	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "callback_balance" {
 		t.Fatalf("callback balance is strategy-owned; skip = %q, want callback_balance", d.skip)
@@ -456,16 +486,20 @@ func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
 }
 
 func TestBuildBidLetsDefaultStrategyOwnDepositGasHeadroom(t *testing.T) {
-	s, _ := seededSolver(t)
-	st, ok := s.state.load()
-	if !ok {
-		t.Fatal("missing cached state")
-	}
-	st.Exec.Deposit = new(big.Int).Add(minDeposit, big.NewInt(1))
-	s.state.store(st)
+	for _, gasAccounting := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enabled", false: "disabled"}[gasAccounting], func(t *testing.T) {
+			s, _ := seededSolverWithGasAccounting(t, gasAccounting)
+			st, ok := s.state.load()
+			if !ok {
+				t.Fatal("missing cached state")
+			}
+			st.Exec.Deposit = new(big.Int).Add(minDeposit, big.NewInt(1))
+			s.state.store(st)
 
-	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "deposit_low" {
-		t.Fatalf("deposit gas headroom is default-strategy-owned; skip = %q, want deposit_low", d.skip)
+			if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "deposit_low" {
+				t.Fatalf("deposit gas headroom is default-strategy-owned; skip = %q, want deposit_low", d.skip)
+			}
+		})
 	}
 }
 
@@ -527,7 +561,7 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != types.SkipReasonNoLegs {
 		t.Fatalf("resolved position should remain reserved until balance refresh, got %q", d3.skip)
 	}
-	seedDefaultDecisionStateAt(t, s, mustBig("2500000000"), auctionClock()().Add(time.Second))
+	seedDefaultDecisionStateAt(t, s, auctionClock()().Add(time.Second))
 	if d4 := s.buildBid(t.Context(), a, auctionClock()); d4.skip != "" {
 		t.Fatalf("after callback balance refresh the strategy should be allowed again, got %q", d4.skip)
 	}
@@ -1091,7 +1125,7 @@ func TestBuildBidSkips(t *testing.T) {
 			s.cfg.MaxBidWei = big.NewInt(1)
 		}, want: "bid_cap"},
 		{name: "callback_balance", mut: func(s *Solver) {
-			seedDefaultDecisionStateWithCallbackBalance(t, s, mustBig("2500000000"), big.NewInt(1), clock())
+			seedDefaultDecisionStateWithCallbackBalance(t, s, big.NewInt(1), clock())
 		}, want: "callback_balance"},
 		{name: "no_legs_when_healthy", priceOverride: healthy, want: "no_legs"},
 	}

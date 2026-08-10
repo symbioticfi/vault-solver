@@ -22,6 +22,7 @@ type Deps struct {
 	Adapter             common.Address
 	Callback            common.Address
 	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
+	GasAccounting       bool
 }
 
 type Factory func(raw yaml.Node, deps Deps) (types.Strategy, error)

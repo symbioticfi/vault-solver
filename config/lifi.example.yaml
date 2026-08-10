@@ -43,8 +43,9 @@ solvers:
           rangeCount: 8              # geometric ranges per pair (default 8, max 16)
           executionDeadlineBuffer: 12s # one Ethereum block left for order and private signatures
 
-      # Gas conversion is a solver fact shared by every strategy. Configure one Chainlink USD feed for
-      # every distinct adapter vault asset (tokenOut); startup fails if any resolved route is uncovered.
+      # Optional. Omit to use zero economic gas cost and skip gas-state/Chainlink reads; txmanager still
+      # prices actual transactions under global maxFeeGwei. When present, configure one token/USD feed for
+      # every distinct adapter vault asset (tokenOut), or startup fails.
       gas:
         nativeUsdFeed: ${ETH_USD_FEED}
         nativeMaxAge: 2h          # actual heartbeat plus testnet publication slack

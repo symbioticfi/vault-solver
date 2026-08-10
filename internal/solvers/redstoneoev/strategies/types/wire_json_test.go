@@ -8,9 +8,16 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
 func TestBidInputMarshalJSON(t *testing.T) {
+	loan := common.HexToAddress("0x00000000000000000000000000000000000000ee")
+	rate, ok := new(big.Int).SetString("1234567890123456789012345", 10)
+	if !ok {
+		t.Fatal("parse gas rate")
+	}
 	input := BidInput{
 		Now: time.Unix(10, 0).UTC(),
 		Auction: AuctionSnapshot{
@@ -26,7 +33,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		Adapter: AdapterSnapshot{
 			Address:      common.HexToAddress("0x00000000000000000000000000000000000000cc"),
 			Vault:        common.HexToAddress("0x00000000000000000000000000000000000000cd"),
-			Loan:         common.HexToAddress("0x00000000000000000000000000000000000000ee"),
+			Loan:         loan,
 			LoanDecimals: 6,
 			FreeAssets:   big.NewInt(100),
 			Withdrawable: big.NewInt(90),
@@ -47,7 +54,10 @@ func TestBidInputMarshalJSON(t *testing.T) {
 			ExecutorDeposit:    big.NewInt(1000),
 			ExecutorMinDeposit: big.NewInt(100),
 			MaxTxGasPrice:      big.NewInt(30),
-			GasLimit:           2_000_000,
+			GasPrices: liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{
+				loan: rate,
+			}),
+			GasLimit: 2_000_000,
 		},
 		PendingAuctions: []PendingAuction{{
 			ID:        "a0",
@@ -80,6 +90,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		`"callback":"0x00000000000000000000000000000000000000ab"`,
 		`"executorDeposit":"1000"`,
 		`"executorMinDeposit":"100"`,
+		`"gasPrices":{"tokenOutPerNative":{"0x00000000000000000000000000000000000000ee":"1234567890123456789012345"}}`,
 		`"price":"123456789"`,
 		`"pendingAuctions":`,
 		`"won":true`,
@@ -87,6 +98,14 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		if !strings.Contains(js, want) {
 			t.Fatalf("json %s missing %s", js, want)
 		}
+	}
+	input.Context.GasPrices = nil
+	disabled, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("MarshalJSON without gas: %v", err)
+	}
+	if !strings.Contains(string(disabled), `"gasPrices":null`) {
+		t.Fatalf("disabled gas JSON = %s, want explicit null gasPrices", disabled)
 	}
 }
 

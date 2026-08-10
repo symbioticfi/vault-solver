@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
 type Decision string
@@ -90,6 +92,7 @@ type BidContext struct {
 	ExecutorDeposit    *big.Int
 	ExecutorMinDeposit *big.Int
 	MaxTxGasPrice      *big.Int
+	GasPrices          *liquidlanegas.PriceSnapshot
 	GasLimit           uint64
 }
 
