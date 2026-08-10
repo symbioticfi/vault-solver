@@ -28,7 +28,7 @@ txManager:
   replacementIntervalMs: 30000     # attempt a capped fee bump every 30s
   pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s
-  # tipGwei: 1                     # optional floor; omit/zero to use recent eth_feeHistory rewards
+  # tipGwei: 1                     # optional floor; omit/zero to use the minimum p25 tip over five blocks
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)

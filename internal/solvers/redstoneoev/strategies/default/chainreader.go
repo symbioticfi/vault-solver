@@ -4,13 +4,11 @@ import (
 	"context"
 	"math/big"
 	"slices"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/chainlink/aggregator"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
 	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/oracle"
@@ -20,7 +18,6 @@ import (
 
 var (
 	callbackABI = callback.NewSymbioticOevSolver()
-	feedABI     = aggregator.NewAggregatorV3()
 	morphoABI   = morphobinding.NewMorpho()
 	oracleABI   = oracle.NewMorphoOracle()
 )
@@ -35,72 +32,6 @@ func newChainReader(c *chain.Client, log logr.Logger) *chainReader {
 		chain: c,
 		log:   log,
 	}
-}
-
-const maxFeedDecimals = 36
-
-func feedDecimalsInBounds(loanDec, ethDec uint8) bool {
-	return loanDec <= maxFeedDecimals && ethDec <= maxFeedDecimals
-}
-
-func feedFresh(updatedAt, nowSec, maxAge int64) bool {
-	age := nowSec - updatedAt
-	return age >= 0 && age <= maxAge
-}
-
-func decodeLatestRoundData(data []byte) (answer, updatedAt *big.Int, err error) {
-	out, e := feedABI.UnpackLatestRoundData(data)
-	if e != nil {
-		return nil, nil, errors.Errorf("decode latestRoundData: %w", e)
-	}
-	if out.Answer == nil || out.UpdatedAt == nil {
-		return nil, nil, errors.New("decode latestRoundData: nil field")
-	}
-	return out.Answer, out.UpdatedAt, nil
-}
-
-func decodeFeedDecimals(data []byte) (uint8, error) {
-	d, err := feedABI.UnpackDecimals(data)
-	if err != nil {
-		return 0, errors.Errorf("decode decimals: %w", err)
-	}
-	return d, nil
-}
-
-func (r *chainReader) ReadLoanEthRate(ctx context.Context, loanDecimals int, feed *loanEthFeed, now time.Time) *big.Int {
-	if feed == nil {
-		return nil
-	}
-	res, err := r.chain.Multicall(ctx, []chain.Call{
-		{Target: feed.LoanUsdFeed, AllowFailure: true, Data: feedABI.PackLatestRoundData()},
-		{Target: feed.LoanUsdFeed, AllowFailure: true, Data: feedABI.PackDecimals()},
-		{Target: feed.EthUsdFeed, AllowFailure: true, Data: feedABI.PackLatestRoundData()},
-		{Target: feed.EthUsdFeed, AllowFailure: true, Data: feedABI.PackDecimals()},
-	})
-	if err != nil || !allSuccess(res, 4) {
-		return nil
-	}
-	loanAns, loanUp, e1 := decodeLatestRoundData(res[0].ReturnData)
-	loanDecFeed, e2 := decodeFeedDecimals(res[1].ReturnData)
-	ethAns, ethUp, e3 := decodeLatestRoundData(res[2].ReturnData)
-	ethDecFeed, e4 := decodeFeedDecimals(res[3].ReturnData)
-	if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
-		return nil
-	}
-	if !feedDecimalsInBounds(loanDecFeed, ethDecFeed) {
-		r.log.Error(errors.New("feed decimals out of bounds"),
-			"loanPerEth feed rejected", "loanFeedDec", loanDecFeed, "ethFeedDec", ethDecFeed, "max", maxFeedDecimals)
-		return nil
-	}
-	nowSec, maxAge := now.Unix(), int64((feed.MaxAge+time.Second-1)/time.Second)
-	if !feedFresh(loanUp.Int64(), nowSec, maxAge) || !feedFresh(ethUp.Int64(), nowSec, maxAge) {
-		r.log.V(1).Info("loan/ETH rate feeds stale",
-			"loanFeed", feed.LoanUsdFeed.Hex(), "loanAgeSec", nowSec-loanUp.Int64(),
-			"ethFeed", feed.EthUsdFeed.Hex(), "ethAgeSec", nowSec-ethUp.Int64(),
-			"maxAgeSec", maxAge)
-		return nil
-	}
-	return composeLoanPerEth(ethAns, loanAns, int(ethDecFeed), int(loanDecFeed), loanDecimals)
 }
 
 func (r *chainReader) ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error) {

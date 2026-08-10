@@ -74,7 +74,9 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected solver type %T", built)
 	}
-	s.refreshState(ctx)
+	if err := s.refreshState(ctx); err != nil {
+		t.Fatalf("refresh solver state: %v", err)
+	}
 	strategy := defaultStrategyOf(t, s)
 	go strategy.Run(ctx)
 	snap := waitForStrategySnapshot(t, ctx, strategy)

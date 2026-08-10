@@ -109,8 +109,16 @@ func TestSelectBundleSingleToken(t *testing.T) {
 	})
 
 	t.Run("empty scored set", func(t *testing.T) {
-		if _, skip := testBundleEngine(Config{}).selectBundle(nil); skip != "no_legs" {
+		if _, skip := testBundleEngine(Config{}).selectBundleWithGas(nil, nil, 0, defaultPriceUpdateFeeds); skip != "no_legs" {
 			t.Fatalf("skip = %q, want no_legs", skip)
+		}
+	})
+
+	t.Run("net selection rejects an invalid rate", func(t *testing.T) {
+		if _, skip := testBundleEngine(Config{}).selectNetBundle(
+			[]scoredLeg{scoredFor(1, big.NewInt(1))}, nil, nil, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds,
+		); skip != skipGasUnprofitable {
+			t.Fatalf("skip = %q, want %q", skip, skipGasUnprofitable)
 		}
 	})
 
@@ -133,6 +141,47 @@ func TestSelectBundleSingleToken(t *testing.T) {
 				b.legs[0].Borrower[19], b.legs[1].Borrower[19], b.legs[2].Borrower[19])
 		}
 	})
+}
+
+func TestPriceBundleWithoutGasAccountingKeepsNativeSafetyAndOneUnitFloors(t *testing.T) {
+	engine := testBundleEngine(Config{BidWei: big.NewInt(100)})
+	bundle := chosenBundle{
+		grossLoan: big.NewInt(1_000_000),
+		legs: []bundleLeg{
+			{
+				selectedLeg: selectedLeg{
+					MarketId: common.Hash{31: 1}, Borrower: common.Address{19: 1},
+					MaxSeizeAssets: big.NewInt(10), MinProfit: big.NewInt(999),
+				},
+				expectedLoanOut: big.NewInt(500_000),
+			},
+			{
+				selectedLeg: selectedLeg{
+					MarketId: common.Hash{31: 2}, Borrower: common.Address{19: 2},
+					MaxSeizeAssets: big.NewInt(20), MinProfit: big.NewInt(999),
+				},
+				expectedLoanOut: big.NewInt(500_000),
+			},
+		},
+	}
+	gasPrice := big.NewInt(2)
+	priced := engine.priceBundleWithoutGasAccounting(bundle, nil, gasPrice, defaultPriceUpdateFeeds)
+
+	if priced.bidNative.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("bid = %s, want fixed bid 100", priced.bidNative)
+	}
+	if priced.minBundleProfitLoan.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("minimum bundle profit = %s, want 1", priced.minBundleProfitLoan)
+	}
+	for i, leg := range priced.selectedLegs {
+		if leg.MinProfit == nil || leg.MinProfit.Cmp(big.NewInt(1)) != 0 {
+			t.Fatalf("leg %d minimum profit = %v, want 1", i, leg.MinProfit)
+		}
+	}
+	wantGasNative := new(big.Int).Mul(new(big.Int).SetUint64(priced.gas.Units), gasPrice)
+	if priced.gas.Units == 0 || priced.gasNative.Cmp(wantGasNative) != 0 {
+		t.Fatalf("gas reservation = %s for %d units, want %s", priced.gasNative, priced.gas.Units, wantGasNative)
+	}
 }
 
 func TestSelectBundlePerCollateralBudget(t *testing.T) {

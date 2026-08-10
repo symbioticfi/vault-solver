@@ -84,11 +84,10 @@ use one candidate route. Other scopes keep the existing multi-route behavior.
 a request below its token's minimum is not quoted (HTTP 204), while an amount equal to the minimum
 still quotes; unlisted tokens have no floor.
 Pareto's mainnet `AA_FalconXUSDC` tranche (`0xC26A…f99C`) uses this existing generic path and needs no
-token-specific solver code. On an instance already running `tokensToQuote: permissioned` — which is
-what admits by `permissionedTokens` at all, since the default `all` scope admits every token
-regardless — onboarding it is the same two config edits as any other permissioned token: add it to
-`permissionedTokens`, and give it a base-unit floor in `minAmountsIn`. Quoting it also requires a
-LiquidLane adapter holding the token in `adapters`.
+token-specific solver code. The production deployment config already includes it in
+`permissionedTokens` with a one-token `minAmountsIn` floor. A solver instance can route it only after
+its configured LiquidLane adapter has onboarded the token. Execution also requires either direct
+`owner`/`marketMaker`/`isFiller` authorization or a live signed discount in internal mode.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
@@ -109,18 +108,21 @@ On settlement it liquidates the position and exits the seized collateral through
 settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
 LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
 `operationData`. Operators can set `maxBidWei` as a per-auction spend ceiling over any strategy; it is
-required for the external `webhook` strategy and optional for the built-in `default`. Design, config,
-and roadmap:
+required for the external `webhook` strategy and optional for the built-in `default`. The common `gas:`
+block is optional, and its shared oracle facts are passed to the selected strategy. The built-in strategy
+uses them for after-cost economics; without them, it selects gross-profitable bundles while retaining the
+signed gas-price cap and native funding checks. When `gas:` is configured, startup requires a feed for the
+resolved adapter loan asset and a readable initial oracle snapshot. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 
 ### LI.FI Same-Chain Intents — `lifi-samechain`
 
-A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
-standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
+A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
+from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
 publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
-rechecks the canonical order status, adapter state, gas cost, and strategy decision, then atomically claims
+rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
@@ -143,8 +145,11 @@ solver greedily rebuilds the best current route plan, and redeemed output above 
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
 floor yields a positive output, then prices the published suffix by running the shared LiquidLane exact-input
 quote solver at both endpoints. It caps the lower of the two endpoint rates by that floor for interior route
-transitions, worst-case route gas, and rounding.
+transitions, rounding, and, when configured, worst-case route gas.
 `strategy.config.rangeCount` sets the geometric curve resolution (default `8`, maximum `16`).
+
+Omitting LI.FI's `gas:` block disables gas accounting in quote/fill decisions and skips gas-state and
+Chainlink reads; the tx manager still prices and pays the actual transaction gas.
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
 a caller signature bound to the executor's EIP-712 domain, appears as `exclusiveFor` in quotes, and calls the
@@ -164,8 +169,8 @@ scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders 
 admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
-route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
-its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
+route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
+Chainlink feed has its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
 available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
@@ -271,7 +276,7 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
   LI.FI and UniswapX own separate strategy contracts and independently reject returned fills that exceed
-  current capacity or do not cover the order plus gas. UniswapX delegates each concrete quote to
+  current capacity or do not cover the order plus configured gas. UniswapX delegates each concrete quote to
   `POST /decide-quote` and each current fill plan to `POST /decide-fill` under the configured webhook URL.
 
 This is the seam for customizing a solver without forking. Contract and trust model:
@@ -280,8 +285,16 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 When used, the shared `txManager` owns one unresolved signed nonce lifecycle at a time. Later
 submissions are neither accepted nor signed until the active lifecycle has a terminal receipt. Every
 `replacementIntervalMs` it attempts a replacement using fresh fees and at least a 12.5% bump over the
-previous attempt; if fresh fees are unavailable, it bumps the cached fees. At `pendingTimeoutMs` (or
-the request's earlier deadline), replacements switch to a same-nonce cancellation.
+previous attempt; if fresh fees are unavailable, it bumps the cached fees. When a submission returns an
+ambiguous transport error, the first replacement tick instead rebroadcasts those exact signed bytes once
+without changing the hash or fees; a later tick may fee-bump it. Cancellation deadlines and shutdown bypass
+that grace retry. At `pendingTimeoutMs` (or the request's earlier deadline), replacements switch to a
+same-nonce cancellation. Each submission RPC is bounded independently by `broadcastTimeoutMs` (5 seconds
+by default), so a short replacement cadence does not prematurely time out a private write RPC.
+
+After lifecycle admission and immediately before signing, requests without an explicit gas limit run
+`eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
+to that estimate. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
 
 The transaction lane is ready for new external commitments only while it has no queued or admitted
 lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
@@ -306,10 +319,11 @@ and its replacements; cancellation may exceed that request cap but never `maxFee
 `tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
 to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
 positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
-when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted), txmanager
-instead uses the median p75 priority reward from the latest five blocks, likewise clamped to available
-headroom. Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor
-provides the operator-controlled fallback.
+when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
+txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
+the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
+Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
+operator-controlled fallback.
 
 ## Requirements
 

@@ -340,6 +340,7 @@ func (s *Solver) runOrderFeed(
 			orderFeedConnectionHooks{
 				beforeRead: func(context.Context) {
 					inbox.beginRecovery()
+					s.log.V(1).Info("order recovery started", "executor", s.cfg.Executor.Hex())
 				},
 				whileConnected: func(connectionCtx context.Context) {
 					defer inbox.endRecovery()
@@ -355,7 +356,15 @@ func (s *Solver) runOrderFeed(
 			func(_ context.Context, msg orderMessage) {
 				order := s.parseOrderMessage(msg)
 				if err := inbox.enqueue(order); err != nil {
-					s.log.Error(err, "order feed: dropped order", "event", msg.Event)
+					fields := []any{"event", msg.Event}
+					if order != nil {
+						fields = append(fields,
+							"orderId", order.OrderID,
+							"onChainOrderId", order.OnChainOrderID,
+							"quoteId", order.QuoteID,
+						)
+					}
+					s.log.Error(err, "order feed: dropped order", fields...)
 				}
 			},
 		)
@@ -398,6 +407,13 @@ func (s *Solver) recoverOrdersUntilSuccess(
 		result, err := s.recoverOrders(ctx, inbox, recovered)
 		if err == nil {
 			successfulSweeps++
+			s.log.V(1).Info(
+				"order recovery sweep completed",
+				"sweep", successfulSweeps,
+				"listedOrders", result.listed,
+				"discoveredOrders", result.discovered,
+				"seenOrders", len(recovered),
+			)
 			if result.discovered == 0 && inbox.tryEndRecovery(result.processedGen) {
 				s.log.Info("order recovery completed", "listedOrders", result.listed, "seenOrders", len(recovered))
 				return true
@@ -502,6 +518,12 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 		"onChainOrderId", order.OnChainOrderID,
 		"quoteId", order.QuoteID,
 		"inputSettler", order.InputSettler.Hex(),
+		"tokenIn", order.TokenIn.Hex(),
+		"tokenOut", order.TokenOut.Hex(),
+		"amountIn", bigString(order.AmountIn),
+		"requiredAmountOut", bigString(order.OutputAmount),
+		"expires", order.Order.Expires,
+		"fillDeadline", order.Order.FillDeadline,
 	)
 	return order
 }
@@ -540,12 +562,23 @@ func (s *Solver) runOrderWorker(
 		if len(result.blockedOn) == 0 || pending.len() == 0 {
 			return
 		}
+		queuedBefore := retries.len()
 		if err := retries.enqueue(order, reservationReleaseGen); err != nil {
 			s.log.Error(err, "order retry queue: dropped newest order",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
 				"capacity", orderRetryCapacity,
+			)
+		} else if retries.len() > queuedBefore {
+			s.log.V(1).Info(
+				"order fill deferred by pending capacity",
+				"orderId", order.OrderID,
+				"onChainOrderId", order.OnChainOrderID,
+				"quoteId", order.QuoteID,
+				"blockedCapacityGroups", len(result.blockedOn),
+				"pendingFills", pending.len(),
+				"retryQueue", retries.len(),
 			)
 		}
 	}
@@ -564,6 +597,14 @@ func (s *Solver) runOrderWorker(
 			if order == nil {
 				break
 			}
+			s.log.V(1).Info(
+				"order fill retry started",
+				"orderId", order.OrderID,
+				"onChainOrderId", order.OnChainOrderID,
+				"quoteId", order.QuoteID,
+				"pendingFills", pending.len(),
+				"retryQueue", retries.len(),
+			)
 			reservations := s.capacity.SnapshotExcluding(completion.fill.reservationKey)
 			process(order, &reservations)
 		}
@@ -571,6 +612,13 @@ func (s *Solver) runOrderWorker(
 			retries.clear()
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
+			s.log.V(1).Info(
+				"fill capacity released",
+				"orderId", completion.fill.order.OrderID,
+				"onChainOrderId", completion.fill.orderID.Hex(),
+				"quoteId", completion.fill.order.QuoteID,
+				"pendingFills", s.capacity.Len(),
+			)
 			s.requestQuoteRefresh()
 		}
 		releaseRecoveryBarrier()

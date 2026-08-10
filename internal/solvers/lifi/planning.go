@@ -28,9 +28,10 @@ type fillSnapshotObservation struct {
 }
 
 type preparedFill struct {
-	input           types.FillInput
-	signedDiscounts map[common.Hash]*discounts.Signed
-	chainObservedAt time.Time
+	input                   types.FillInput
+	signedDiscounts         map[common.Hash]*discounts.Signed
+	transactionMaxFeePerGas *big.Int
+	chainObservedAt         time.Time
 }
 
 type orderProcessingResult struct {
@@ -91,7 +92,17 @@ func (s *Solver) processOrderUsingReservations(
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return orderProcessingResult{}
 	}
-	prepared, err := s.prepareFill(ctx, routes, order, reservations)
+	s.log.V(1).Info(
+		"order fill planning started",
+		"orderId", order.OrderID,
+		"onChainOrderId", orderID.Hex(),
+		"quoteId", order.QuoteID,
+		"tokenIn", order.TokenIn.Hex(),
+		"tokenOut", order.TokenOut.Hex(),
+		"amountIn", bigString(order.AmountIn),
+		"requiredAmountOut", bigString(order.OutputAmount),
+	)
+	prepared, err := s.prepareFill(ctx, routes, order, orderID, reservations)
 	if err != nil {
 		s.log.Error(err, "order fill: prepare current state", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true}
@@ -111,14 +122,28 @@ func (s *Solver) processOrderUsingReservations(
 		}
 	}
 	if plan == nil {
-		s.log.V(1).Info("order skipped: no immediate fill plan", "orderId", order.OrderID,
-			"quoteId", order.QuoteID, "routes", len(prepared.input.Quotes))
+		s.log.V(1).Info(
+			"order fill strategy declined",
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"fillQuotes", len(prepared.input.Quotes),
+			"reservationDomains", len(prepared.input.Reservations),
+			"amountIn", bigString(order.AmountIn),
+			"requiredAmountOut", bigString(order.OutputAmount),
+		)
 		prober, probeOK := s.strategy.(reservationRetryProber)
 		if !probeOK || len(prepared.input.Reservations) == 0 {
 			return orderProcessingResult{}
 		}
 		unreservedInput := prepared.input
 		unreservedInput.Reservations = nil
+		unreservedInput.Trace = s.decisionTrace(
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"reservationProbe", true,
+		)
 		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
 		if err != nil {
 			s.log.Error(err, "order fill: strategy without pending reservations",
@@ -142,6 +167,7 @@ func (s *Solver) processOrderUsingReservations(
 			"quoteId", order.QuoteID)
 		return orderProcessingResult{}
 	}
+	s.logFillPlan(order, orderID, plan)
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
 		s.log.Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
@@ -152,7 +178,7 @@ func (s *Solver) processOrderUsingReservations(
 		order,
 		plan,
 		calldata,
-		prepared.input.MaxFeePerGas,
+		prepared.transactionMaxFeePerGas,
 		prepared.input.ChainTime,
 		prepared.chainObservedAt,
 	)
@@ -194,6 +220,41 @@ func validateFillPlan(input types.FillInput, plan *types.FillPlan) error {
 	return nil
 }
 
+func (s *Solver) logFillPlan(order *submittedOrder, orderID common.Hash, plan *types.FillPlan) {
+	discountRoutes := 0
+	for index, route := range plan.Routes {
+		if route.DiscountID != nil {
+			discountRoutes++
+		}
+		fields := []any{
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"route", index,
+			"routeId", route.RouteID,
+			"adapter", route.Adapter.Hex(),
+			"amountIn", bigString(route.AmountIn),
+			"expectedAmountOut", bigString(route.ExpectedAmountOut),
+			"minAmountOut", bigString(route.MinAmountOut),
+			"reservedAmountOut", bigString(route.ReservedAmountOut),
+			"capacityId", route.CapacityID,
+			"private", route.DiscountID != nil,
+		}
+		if route.DiscountID != nil {
+			fields = append(fields, "discountId", route.DiscountID.Hex())
+		}
+		s.log.V(1).Info("order fill route selected", fields...)
+	}
+	s.log.V(1).Info(
+		"order fill plan selected",
+		"orderId", order.OrderID,
+		"onChainOrderId", orderID.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(plan.Routes),
+		"discountRoutes", discountRoutes,
+	)
+}
+
 func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (common.Hash, error) {
 	orderID, err := s.reader.orderIdentifier(ctx, s.cfg.InputSettler, order.Order)
 	if err != nil {
@@ -218,6 +279,7 @@ func (s *Solver) prepareFill(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
+	orderID common.Hash,
 	reservationOverride *liquidlane.CapacityReservations,
 ) (*preparedFill, error) {
 	pairRoutes := routesForPair(routes, order.TokenIn, order.TokenOut)
@@ -233,9 +295,14 @@ func (s *Solver) prepareFill(
 	if state == nil {
 		return nil, nil
 	}
-	maxFeePerGas, err := s.readMaxFeePerGas(ctx)
-	if err != nil {
-		return nil, err
+	pricingMaxFeePerGas := new(big.Int)
+	var transactionMaxFeePerGas *big.Int
+	if s.cfg.Gas != nil {
+		pricingMaxFeePerGas, err = s.readMaxFeePerGas(ctx)
+		if err != nil {
+			return nil, err
+		}
+		transactionMaxFeePerGas = liquidlane.CloneBig(pricingMaxFeePerGas)
 	}
 	reservations := s.capacity.Snapshot()
 	if reservationOverride != nil {
@@ -243,6 +310,22 @@ func (s *Solver) prepareFill(
 	}
 	quotes := append([]liquidlane.FillQuote(nil), state.snapshots.Direct...)
 	quotes = append(quotes, state.discountQuotes...)
+	s.log.V(1).Info(
+		"order fill snapshot loaded",
+		"orderId", order.OrderID,
+		"onChainOrderId", orderID.Hex(),
+		"quoteId", order.QuoteID,
+		"routes", len(pairRoutes),
+		"fillQuotes", len(quotes),
+		"directQuotes", len(state.snapshots.Direct),
+		"physicalQuotes", len(state.snapshots.Physical),
+		"discountQuotes", len(state.discountQuotes),
+		"reservationDomains", len(reservations),
+		"pendingFills", s.capacity.Len(),
+		"gasAccounting", s.cfg.Gas != nil,
+		"pricingMaxFeePerGas", pricingMaxFeePerGas.String(),
+		"chainTime", state.chainTime.Unix(),
+	)
 	return &preparedFill{
 		input: types.FillInput{
 			OrderID:            order.OrderID,
@@ -260,11 +343,17 @@ func (s *Solver) prepareFill(
 			Reservations:       reservations,
 			GasSnapshot:        state.snapshots.GasSnapshot,
 			GasPrices:          state.snapshots.GasPrices,
-			MaxFeePerGas:       maxFeePerGas,
+			MaxFeePerGas:       pricingMaxFeePerGas,
 			ChainTime:          state.chainTime,
+			Trace: s.decisionTrace(
+				"orderId", order.OrderID,
+				"onChainOrderId", orderID.Hex(),
+				"quoteId", order.QuoteID,
+			),
 		},
-		signedDiscounts: state.signedDiscounts,
-		chainObservedAt: state.chainObservedAt,
+		signedDiscounts:         state.signedDiscounts,
+		transactionMaxFeePerGas: transactionMaxFeePerGas,
+		chainObservedAt:         state.chainObservedAt,
 	}, nil
 }
 

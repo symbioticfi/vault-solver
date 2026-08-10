@@ -32,6 +32,7 @@ type fakeLifiReader struct {
 	fillSet          *fillSnapshotSet
 	fillSetFn        func() fillSnapshotSet
 	fillSnapshotsFn  func() []liquidlane.FillQuote
+	omitGasFacts     bool
 	routes           []route
 	executorErr      error
 	directAuthErr    error
@@ -66,16 +67,23 @@ func (f fakeLifiReader) fillSnapshots(
 	context.Context, []route, common.Address, common.Address, *big.Int, time.Time,
 ) (fillSnapshotSet, error) {
 	if f.fillSetFn != nil {
-		return withFakeGasPrices(f.fillSetFn()), nil
+		return f.withGasFacts(f.fillSetFn()), nil
 	}
 	if f.fillSet != nil {
-		return withFakeGasPrices(*f.fillSet), nil
+		return f.withGasFacts(*f.fillSet), nil
 	}
 	if f.fillSnapshotsFn != nil {
 		fill := f.fillSnapshotsFn()
-		return withFakeGasPrices(fillSnapshotSet{Direct: fill, Physical: fill}), nil
+		return f.withGasFacts(fillSnapshotSet{Direct: fill, Physical: fill}), nil
 	}
-	return withFakeGasPrices(fillSnapshotSet{Direct: f.fill, Physical: f.fill}), nil
+	return f.withGasFacts(fillSnapshotSet{Direct: f.fill, Physical: f.fill}), nil
+}
+
+func (f fakeLifiReader) withGasFacts(set fillSnapshotSet) fillSnapshotSet {
+	if f.omitGasFacts {
+		return set
+	}
+	return withFakeGasPrices(set)
 }
 
 func withFakeGasPrices(set fillSnapshotSet) fillSnapshotSet {

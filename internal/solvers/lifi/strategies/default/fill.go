@@ -18,14 +18,29 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		return nil, types.MarkPermanentFillDecisionError(errors.New("outputAmount: must be positive"))
 	}
 	if input.AmountIn.Cmp(s.minAmount) < 0 {
+		input.Trace.Decline(
+			"fill", "amount-below-minimum",
+			"amountIn", input.AmountIn.String(),
+			"minAmount", s.minAmount.String(),
+		)
 		return nil, nil
 	}
 	validAfter := input.ChainTime.Add(s.executionBuffer)
 	deadlineCutoff := uint32Time(validAfter)
 	if input.Expires != 0 && input.Expires <= deadlineCutoff {
+		input.Trace.Decline(
+			"fill", "expiry-too-close",
+			"expires", input.Expires,
+			"validAfter", validAfter,
+		)
 		return nil, nil
 	}
 	if input.FillDeadline != 0 && input.FillDeadline <= deadlineCutoff {
+		input.Trace.Decline(
+			"fill", "fill-deadline-too-close",
+			"fillDeadline", input.FillDeadline,
+			"validAfter", validAfter,
+		)
 		return nil, nil
 	}
 	output, err := parseOutputContext(input.OutputAmount, input.OutputContext)
@@ -53,16 +68,29 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
 		InventoryReserveBps: s.cfg.InventoryReserveBps,
 		GasPricing:          &gasPricing,
+		Trace:               input.Trace,
 	})
 	if err != nil || allocation == nil {
 		return nil, err
 	}
 	requiredAmountOut, ok := output.fill(input.Solver, input.ChainTime, allocation.MaxAmountOut())
 	if !ok {
+		input.Trace.Decline(
+			"fill", "output-condition-not-satisfied",
+			"requiredAmountOut", input.OutputAmount.String(),
+			"maxAmountOut", allocation.MaxAmountOut().String(),
+			"exclusive", output.exclusive,
+			"exclusiveUntil", output.startTime,
+		)
 		return nil, nil
 	}
 	routes := allocation.Finalize(requiredAmountOut)
 	if len(routes) == 0 {
+		input.Trace.Decline(
+			"fill", "finalization-failed",
+			"requiredAmountOut", requiredAmountOut.String(),
+			"maxAmountOut", allocation.MaxAmountOut().String(),
+		)
 		return nil, nil
 	}
 	return &types.FillPlan{Routes: routes}, nil

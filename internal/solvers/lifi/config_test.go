@@ -61,6 +61,9 @@ quoteRefreshMode: block
 		t.Fatalf("strategy = %q", cfg.Strategy.Name)
 	}
 	permissioned := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	if cfg.Gas == nil {
+		t.Fatal("gas oracle config is nil")
+	}
 	if cfg.Gas.NativeUSDFeed.MaxAge != 30*time.Minute ||
 		cfg.Gas.TokenUSDFeeds[permissioned].MaxAge != time.Hour {
 		t.Fatalf("gas oracle config = %+v", cfg.Gas)
@@ -194,7 +197,24 @@ adapters:
 	}
 }
 
-func TestParseConfigRequiresGasOracleFeeds(t *testing.T) {
+func TestParseConfigAllowsMissingGas(t *testing.T) {
+	cfg := parseConfigYAML(t, `
+orderServer:
+  baseUrl: https://order.example
+  wsUrl: wss://order.example
+  apiKeyEnv: LIFI_SOLVER_API_KEY
+inputSettler: "0x2222222222222222222222222222222222222222"
+outputSettler: "0x3333333333333333333333333333333333333333"
+executor: "0x4444444444444444444444444444444444444444"
+adapters:
+  - "0x5555555555555555555555555555555555555555"
+`)
+	if cfg.Gas != nil {
+		t.Fatalf("gas oracle config = %+v, want nil", cfg.Gas)
+	}
+}
+
+func TestParseConfigRejectsMalformedGas(t *testing.T) {
 	_, err := parseConfig(parseYAMLNode(t, `
 orderServer:
   baseUrl: https://order.example
@@ -205,6 +225,7 @@ outputSettler: "0x3333333333333333333333333333333333333333"
 executor: "0x4444444444444444444444444444444444444444"
 adapters:
   - "0x5555555555555555555555555555555555555555"
+gas: {}
 `))
 	if err == nil || !strings.Contains(err.Error(), "gas.nativeUsdFeed") {
 		t.Fatalf("err = %v", err)

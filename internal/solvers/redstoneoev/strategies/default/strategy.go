@@ -25,25 +25,23 @@ type monitorSource interface {
 }
 
 type Strategy struct {
-	cfg          Config
-	adapter      common.Address
-	callback     common.Address
-	loadAdapter  func() (types.AdapterSnapshot, bool)
-	reader       Reader
-	signer       signer
-	chainID      *big.Int
-	mon          monitorSource
-	engine       bundleEngine
-	state        decisionStateCache
-	reservations decisionReservations
-	maxAge       time.Duration
-	log          logr.Logger
+	cfg           Config
+	adapter       common.Address
+	callback      common.Address
+	gasAccounting bool
+	reader        Reader
+	signer        signer
+	chainID       *big.Int
+	mon           monitorSource
+	engine        bundleEngine
+	state         decisionStateCache
+	reservations  decisionReservations
+	maxAge        time.Duration
+	log           logr.Logger
 }
 
 type decisionState struct {
-	Rate              *big.Int
 	CallbackNative    *big.Int
-	RateUpdatedAt     time.Time
 	CallbackUpdatedAt time.Time
 }
 
@@ -52,7 +50,6 @@ type decisionStateCache struct {
 }
 
 func (c *decisionStateCache) store(st decisionState) {
-	st.Rate = cloneBig(st.Rate)
 	st.CallbackNative = cloneBig(st.CallbackNative)
 	c.v.Store(&st)
 }
@@ -63,7 +60,6 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 		return decisionState{}, false
 	}
 	st := *(v.(*decisionState))
-	st.Rate = cloneBig(st.Rate)
 	st.CallbackNative = cloneBig(st.CallbackNative)
 	return st, true
 }
@@ -90,6 +86,7 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 		Adapter:             deps.Adapter,
 		Callback:            deps.Callback,
 		LoadAdapterSnapshot: deps.LoadAdapterSnapshot,
+		GasAccounting:       deps.GasAccounting,
 		TestMonitor:         testMonitor,
 	})
 }
@@ -103,6 +100,12 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 	}
 	if deps.LoadAdapterSnapshot == nil {
 		return nil, errors.New("adapter snapshot source is required")
+	}
+	if !deps.GasAccounting && cfg.TotalBundleProfitBps != 0 {
+		return nil, errors.New("strategy.config.bid.totalBundleProfitBps requires gas accounting")
+	}
+	if !deps.GasAccounting && cfg.MinBundleProfitBidBps != 0 {
+		return nil, errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
 	}
 	var (
 		mon monitorSource
@@ -120,17 +123,17 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
 	}
 	return &Strategy{
-		cfg:         cfg,
-		adapter:     deps.Adapter,
-		callback:    deps.Callback,
-		loadAdapter: deps.LoadAdapterSnapshot,
-		reader:      deps.Reader,
-		signer:      deps.Signer,
-		chainID:     big.NewInt(deps.ChainID),
-		mon:         mon,
-		engine:      newBundleEngine(cfg, deps.Log),
-		maxAge:      cfg.MaxStateAge,
-		log:         deps.Log,
+		cfg:           cfg,
+		adapter:       deps.Adapter,
+		callback:      deps.Callback,
+		gasAccounting: deps.GasAccounting,
+		reader:        deps.Reader,
+		signer:        deps.Signer,
+		chainID:       big.NewInt(deps.ChainID),
+		mon:           mon,
+		engine:        newBundleEngine(cfg, deps.Log),
+		maxAge:        cfg.MaxStateAge,
+		log:           deps.Log,
 	}, nil
 }
 
@@ -164,19 +167,7 @@ func (s *Strategy) refreshState(ctx context.Context) {
 	if s.reader == nil {
 		return
 	}
-	now := time.Now()
 	prev, _ := s.state.load()
-	var rate *big.Int
-	if s.loadAdapter != nil {
-		if adapter, ok := s.loadAdapter(); ok {
-			rate = s.reader.ReadLoanEthRate(ctx, adapter.LoanDecimals, s.cfg.LoanEthFeed, now)
-		}
-	}
-	rateUpdatedAt := time.Now()
-	if rate == nil {
-		rate = prev.Rate
-		rateUpdatedAt = prev.RateUpdatedAt
-	}
 	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
 	callbackUpdatedAt := time.Now()
 	if err != nil {
@@ -185,9 +176,7 @@ func (s *Strategy) refreshState(ctx context.Context) {
 		callbackUpdatedAt = prev.CallbackUpdatedAt
 	}
 	s.state.store(decisionState{
-		Rate:              rate,
 		CallbackNative:    callbackNative,
-		RateUpdatedAt:     rateUpdatedAt,
 		CallbackUpdatedAt: callbackUpdatedAt,
 	})
 }
@@ -210,7 +199,7 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return skipBid(skipStaleState), nil
 	}
 	st, ok := s.state.load()
-	if !ok || !freshAt(st.RateUpdatedAt, input.Now, s.maxAge) || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
+	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
 		return skipBid(skipStaleState), nil
 	}
 	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {
@@ -222,24 +211,37 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
-	rate := validRate(st.Rate)
-	if rate == nil {
-		s.log.Info("bid skipped: loan/ETH rate unavailable",
-			"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", auctionFeedCount(input.Auction))
-		return skipBid(skipGasUnprofitable), nil
-	}
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
 	feedCount := auctionFeedCount(input.Auction)
-	b, skip := s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-	if skip != "" {
-		if skip == skipGasUnprofitable && len(b.legs) > 0 {
+	var (
+		b      chosenBundle
+		priced pricedBundle
+		skip   string
+	)
+	if s.gasAccounting {
+		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
+		if rate == nil {
+			s.log.Info("bid skipped: loan/native gas rate unavailable",
+				"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
+			return skipBid(skipGasUnprofitable), nil
+		}
+		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
+		if skip == "" {
+			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
+		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
 			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
 				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
 		}
+	} else {
+		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
+		if skip == "" {
+			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
+		}
+	}
+	if skip != "" {
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
-	priced := s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
 	reservedAndCurrentGas := new(big.Int).Add(reserved.gasNative, priced.gasNative)
 	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, reservedAndCurrentGas) {
 		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",

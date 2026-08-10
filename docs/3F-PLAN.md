@@ -109,10 +109,13 @@ vault-solver/
 A single service owns the on-chain sending EOA. Before readiness it requires the latest and pending
 nonces from one non-fallback write endpoint to agree, then admits one signed lifecycle at a time. The
 worker signs, broadcasts, replaces or cancels that nonce, and tracks every exact signed hash through a
-terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from median p75
-rewards in the latest five blocks. Normal replacements respect both request and global fee caps, while
-cancellation may leave the request's profitability cap but never the global cap. During replacement, a
-fresh-fee timeout falls back to bumping the last signed fees. Solvers **never** send directly — they build
+terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from the minimum
+gas-weighted p25 reward in the latest five blocks, aligned with the observed behavior of Etherscan Gas
+Tracker's Fast tier. Normal replacements respect both request and global fee caps, while cancellation may
+leave the request's profitability cap but never the global cap. During replacement, a fresh-fee timeout
+falls back to bumping the last signed fees. A transport-ambiguous attempt receives one exact-byte rebroadcast
+before fee escalation; cancellation deadlines and shutdown bypass that grace retry.
+Solvers **never** send directly — they build
 calldata (packed via the abigen ABI, e.g.
 `adapter.PackMulticall(finalizeRequest…)`) and receive a `txmanager.Result`. Serializing the complete
 lifecycle eliminates parallel-nonce races and prevents later calldata from being signed behind a
@@ -165,7 +168,7 @@ the chosen solver decodes it into its own typed struct.
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
+txManager: { confirmations: 2, maxFeeGwei, tipGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl

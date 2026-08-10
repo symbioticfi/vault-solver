@@ -8,6 +8,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
 func TestParseSubmittedOrder(t *testing.T) {
@@ -328,6 +330,7 @@ func testLifiConfig() *Config {
 		InputSettler:  common.HexToAddress("0x2222222222222222222222222222222222222222"),
 		OutputSettler: common.HexToAddress("0x3333333333333333333333333333333333333333"),
 		Executor:      common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		Gas:           &liquidlanegas.OracleConfig{},
 	}
 }
 
