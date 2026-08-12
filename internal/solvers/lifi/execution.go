@@ -552,37 +552,9 @@ func (s *Solver) runOrderWorker(
 	if retryNow == nil {
 		retryNow = time.Now
 	}
-	var depositRetryTimer *time.Timer
-	var depositRetryTimerC <-chan time.Time
-	stopDepositRetryTimer := func() {
-		depositRetryTimerC = nil
-		if depositRetryTimer == nil || depositRetryTimer.Stop() {
-			return
-		}
-		select {
-		case <-depositRetryTimer.C:
-		default:
-		}
-	}
-	resetDepositRetryTimer := func() {
-		stopDepositRetryTimer()
-		readyAt, ok := depositRetries.nextReadyAt()
-		if !ok {
-			return
-		}
-		delay := orderDepositRetryDelay(readyAt, retryNow())
-		if depositRetryTimer == nil {
-			depositRetryTimer = time.NewTimer(delay)
-		} else {
-			depositRetryTimer.Reset(delay)
-		}
-		depositRetryTimerC = depositRetryTimer.C
-	}
-	clearDepositRetries := func() {
-		depositRetries.clear()
-		resetDepositRetryTimer()
-	}
-	defer stopDepositRetryTimer()
+	depositRetryTimer := time.NewTimer(maximumOrderDepositRetryWindow)
+	depositRetryTimer.Stop()
+	defer depositRetryTimer.Stop()
 	releaseRecoveryBarrier := func() {
 		if recoveryBarrier == nil || retries.len() > 0 {
 			return
@@ -617,11 +589,9 @@ func (s *Solver) runOrderWorker(
 					)
 				}
 			}
-			resetDepositRetryTimer()
 			return
 		}
 		depositRetries.finish(order)
-		resetDepositRetryTimer()
 		if result.fill != nil {
 			pending.add(result.fill)
 			go awaitFill(result.fill, completions)
@@ -695,7 +665,7 @@ func (s *Solver) runOrderWorker(
 			ctxDone = nil
 			orders = nil
 			retries.clear()
-			clearDepositRetries()
+			depositRetries.clear()
 		}
 		if runErr != nil && pending.len() == 0 {
 			return runErr
@@ -706,18 +676,23 @@ func (s *Solver) runOrderWorker(
 			// extend the retry set protected by this barrier.
 			orderInput = nil
 		}
+		var depositRetryC <-chan time.Time
+		depositRetryTimer.Stop()
+		if readyAt, ok := depositRetries.nextReadyAt(); ok {
+			depositRetryTimer.Reset(max(readyAt.Sub(retryNow()), 0))
+			depositRetryC = depositRetryTimer.C
+		}
 		select {
 		case <-ctxDone:
 			runErr = ctx.Err()
 			ctxDone = nil
 			orders = nil
 			retries.clear()
-			clearDepositRetries()
+			depositRetries.clear()
 		case completion := <-completions:
 			complete(completion)
-		case <-depositRetryTimerC:
+		case <-depositRetryC:
 			order, err := depositRetries.popReady(retryNow())
-			resetDepositRetryTimer()
 			if err != nil {
 				s.log.Info("order skipped: deposit did not become visible within retry bounds",
 					"orderId", order.OrderID,
@@ -733,7 +708,7 @@ func (s *Solver) runOrderWorker(
 		case order, ok := <-orderInput:
 			if !ok {
 				orders = nil
-				clearDepositRetries()
+				depositRetries.clear()
 				releaseRecoveryBarrier()
 				if inputDrained != nil {
 					close(inputDrained)
@@ -746,7 +721,7 @@ func (s *Solver) runOrderWorker(
 				ctxDone = nil
 				orders = nil
 				retries.clear()
-				clearDepositRetries()
+				depositRetries.clear()
 				continue
 			}
 			if order.processed != nil {

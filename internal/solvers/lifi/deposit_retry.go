@@ -1,7 +1,6 @@
 package lifi
 
 import (
-	"sort"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -21,21 +20,16 @@ var (
 )
 
 type orderDepositRetry struct {
-	order          *submittedOrder
-	key            string
-	backoffStep    int
-	startedAt      time.Time
-	readyAt        time.Time
-	endAt          time.Time
-	endErr         error
-	finalScheduled bool
+	order     *submittedOrder
+	backoff   time.Duration
+	startedAt time.Time
+	readyAt   time.Time
 }
 
 // orderDepositRetryQueue is owned exclusively by the order worker. A state remains
 // indexed while its order is being retried, so a concurrent feed replay cannot reset
 // the backoff/window state between status reads.
 type orderDepositRetryQueue struct {
-	items    []*orderDepositRetry
 	byKey    map[string]*orderDepositRetry
 	capacity int
 }
@@ -63,41 +57,26 @@ func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) 
 		if len(q.byKey) >= q.capacity {
 			return errOrderDepositRetryFull
 		}
-		state = &orderDepositRetry{key: key, startedAt: now}
+		state = &orderDepositRetry{startedAt: now}
 		q.byKey[key] = state
 	}
 	state.order = order
-	if state.finalScheduled {
-		delete(q.byKey, key)
-		return state.endErr
-	}
-
 	retryEnd, boundErr := orderDepositRetryEnd(order, state.startedAt)
-	state.endAt = retryEnd
-	state.endErr = boundErr
-	if !now.Before(retryEnd) {
-		delete(q.byKey, key)
-		return boundErr
-	}
 	finalReadyAt := retryEnd.Add(-initialOrderDepositRetryBackoff)
 	if !now.Before(finalReadyAt) {
 		delete(q.byKey, key)
 		return boundErr
 	}
 
-	state.backoffStep++
-	readyAt := now.Add(orderDepositRetryBackoff(state.backoffStep))
-	if !readyAt.Before(finalReadyAt) {
-		readyAt = finalReadyAt
-		state.finalScheduled = true
+	if state.backoff == 0 {
+		state.backoff = initialOrderDepositRetryBackoff
+	} else {
+		state.backoff = min(2*state.backoff, maximumOrderDepositRetryBackoff)
 	}
-	state.readyAt = readyAt
-	index := sort.Search(len(q.items), func(index int) bool {
-		return !q.items[index].readyAt.Before(readyAt)
-	})
-	q.items = append(q.items, nil)
-	copy(q.items[index+1:], q.items[index:])
-	q.items[index] = state
+	state.readyAt = now.Add(state.backoff)
+	if finalReadyAt.Before(state.readyAt) {
+		state.readyAt = finalReadyAt
+	}
 	return nil
 }
 
@@ -110,73 +89,54 @@ func orderDepositRetryEnd(order *submittedOrder, startedAt time.Time) (time.Time
 	return windowEnd, errOrderDepositRetryWindow
 }
 
-func orderDepositRetryBackoff(step int) time.Duration {
-	backoff := initialOrderDepositRetryBackoff
-	for range max(0, step-1) {
-		backoff = min(2*backoff, maximumOrderDepositRetryBackoff)
-	}
-	return backoff
-}
-
-func orderDepositRetryDelay(readyAt, now time.Time) time.Duration {
-	return max(readyAt.Sub(now), 0)
-}
-
 func (q *orderDepositRetryQueue) contains(order *submittedOrder) bool {
 	_, ok := q.byKey[orderInboxKey(order)]
 	return ok
 }
 
 func (q *orderDepositRetryQueue) nextReadyAt() (time.Time, bool) {
-	if len(q.items) == 0 {
+	state := q.next()
+	if state == nil {
 		return time.Time{}, false
 	}
-	return q.items[0].readyAt, true
+	return state.readyAt, true
 }
 
 func (q *orderDepositRetryQueue) popReady(now time.Time) (*submittedOrder, error) {
-	if len(q.items) == 0 || q.items[0].readyAt.After(now) {
+	state := q.next()
+	if state == nil || state.readyAt.After(now) {
 		return nil, nil
 	}
-	state := q.items[0]
-	q.items[0] = nil
-	q.items = q.items[1:]
-	if len(q.items) == 0 {
-		q.items = nil
-	}
 	state.readyAt = time.Time{}
-	if !now.Before(state.endAt) {
-		delete(q.byKey, state.key)
-		return state.order, state.endErr
+	retryEnd, boundErr := orderDepositRetryEnd(state.order, state.startedAt)
+	if !now.Before(retryEnd) {
+		delete(q.byKey, orderInboxKey(state.order))
+		return state.order, boundErr
 	}
 	return state.order, nil
 }
 
-func (q *orderDepositRetryQueue) finish(order *submittedOrder) {
-	key := orderInboxKey(order)
-	state := q.byKey[key]
-	if state == nil {
-		return
-	}
-	if !state.readyAt.IsZero() {
-		for index, item := range q.items {
-			if item != state {
-				continue
-			}
-			copy(q.items[index:], q.items[index+1:])
-			q.items[len(q.items)-1] = nil
-			q.items = q.items[:len(q.items)-1]
-			break
+func (q *orderDepositRetryQueue) next() *orderDepositRetry {
+	var next *orderDepositRetry
+	for _, state := range q.byKey {
+		if state.readyAt.IsZero() {
+			continue
+		}
+		if next == nil || state.readyAt.Before(next.readyAt) {
+			next = state
 		}
 	}
-	delete(q.byKey, key)
+	return next
+}
+
+func (q *orderDepositRetryQueue) finish(order *submittedOrder) {
+	delete(q.byKey, orderInboxKey(order))
 }
 
 func (q *orderDepositRetryQueue) len() int {
-	return len(q.items)
+	return len(q.byKey)
 }
 
 func (q *orderDepositRetryQueue) clear() {
-	q.items = nil
 	clear(q.byKey)
 }

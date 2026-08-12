@@ -31,6 +31,34 @@ func TestOrderDepositRetryQueueIsBoundedAndCoalescesReplays(t *testing.T) {
 	}
 }
 
+func TestOrderDepositRetryQueueReturnsEarliestState(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	queue := newOrderDepositRetryQueue(2)
+	later := &submittedOrder{OrderID: "later"}
+	earlier := &submittedOrder{OrderID: "earlier"}
+	if err := queue.schedule(later, now.Add(100*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.schedule(earlier, now); err != nil {
+		t.Fatal(err)
+	}
+
+	readyAt, ok := queue.nextReadyAt()
+	if !ok || !readyAt.Equal(now.Add(initialOrderDepositRetryBackoff)) {
+		t.Fatalf("next retry = %s/%t", readyAt, ok)
+	}
+	if order := popOrderDepositRetry(t, queue, readyAt); order != earlier {
+		t.Fatalf("first retry = %p, want %p", order, earlier)
+	}
+	readyAt, ok = queue.nextReadyAt()
+	if !ok || !readyAt.Equal(now.Add(100*time.Millisecond+initialOrderDepositRetryBackoff)) {
+		t.Fatalf("following retry = %s/%t", readyAt, ok)
+	}
+	if order := popOrderDepositRetry(t, queue, readyAt); order != later {
+		t.Fatalf("second retry = %p, want %p", order, later)
+	}
+}
+
 func TestOrderDepositRetryQueueStopsAtOrderDeadline(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	order := &submittedOrder{OrderID: "expiring"}
@@ -99,25 +127,6 @@ func TestOrderDepositRetryQueueSchedulesFinalReadBeforeWindow(t *testing.T) {
 	}
 	if queue.len() != 0 || len(queue.byKey) != 0 {
 		t.Fatalf("elapsed queue: ready=%d tracked=%d, want 0/0", queue.len(), len(queue.byKey))
-	}
-}
-
-func TestOrderDepositRetryDelayUsesRetryClock(t *testing.T) {
-	now := time.Unix(1_234_567, 0)
-	for _, tt := range []struct {
-		name    string
-		readyAt time.Time
-		want    time.Duration
-	}{
-		{name: "future", readyAt: now.Add(3 * time.Second), want: 3 * time.Second},
-		{name: "ready", readyAt: now},
-		{name: "past", readyAt: now.Add(-time.Second)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := orderDepositRetryDelay(tt.readyAt, now); got != tt.want {
-				t.Fatalf("delay = %s, want %s", got, tt.want)
-			}
-		})
 	}
 }
 
