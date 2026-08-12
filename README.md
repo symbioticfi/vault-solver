@@ -140,6 +140,10 @@ strategy failures get at most three attempts per order during each recovery sess
 shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
 timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
 hard stop.
+If a newly opened order reaches the feed before the RPC endpoint exposes its deposit, the worker retries the
+status-`None` read with bounded exponential backoff (at most nine retries and 30 seconds, never past the order
+deadline). Duplicate deliveries are coalesced during that wait; claimed, refunded, and unknown statuses remain
+terminal. Stopping intake drops these unaccepted retries immediately.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative

@@ -26,6 +26,7 @@ type fakeLifiReader struct {
 	status           uint8
 	statusErr        error
 	statusFn         func() (uint8, error)
+	statusForOrderFn func(common.Hash) (uint8, error)
 	latestBlock      uint64
 	latestBlockErr   error
 	fill             []liquidlane.FillQuote
@@ -106,7 +107,10 @@ func (f fakeLifiReader) orderIdentifier(
 	return f.orderID, nil
 }
 
-func (f fakeLifiReader) orderStatus(context.Context, common.Address, common.Hash) (uint8, error) {
+func (f fakeLifiReader) orderStatus(_ context.Context, _ common.Address, orderID common.Hash) (uint8, error) {
+	if f.statusForOrderFn != nil {
+		return f.statusForOrderFn(orderID)
+	}
 	if f.statusFn != nil {
 		return f.statusFn()
 	}

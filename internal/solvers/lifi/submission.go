@@ -32,10 +32,15 @@ func (s *Solver) submitFill(
 	if err != nil {
 		return nil, errors.Errorf("read order status for %s: %w", calldata.OrderID.Hex(), err)
 	}
-	if status != lifiOrderStatusDeposited {
-		s.log.Info("order skipped: on-chain order is not deposited", "orderId", order.OrderID,
+	if status == lifiOrderStatusNone {
+		s.log.Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
-		return nil, nil
+		return nil, errOrderDepositNotVisible
+	}
+	if status != lifiOrderStatusDeposited {
+		s.log.Info("order skipped: on-chain order is no longer fillable at submission", "orderId", order.OrderID,
+			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
+		return nil, errOrderNotFillable
 	}
 	var cancelAt time.Time
 	if !calldata.Deadline.IsZero() {

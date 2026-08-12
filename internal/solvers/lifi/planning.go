@@ -37,11 +37,15 @@ type preparedFill struct {
 type orderProcessingResult struct {
 	fill                 *pendingFill
 	blockedOn            map[liquidlane.CapacityID]bool
+	depositNotVisible    bool
 	retryable            bool
 	recoveryAttemptLimit int
 }
 
-var errOrderNotDeposited = errors.New("order is not deposited")
+var (
+	errOrderDepositNotVisible = errors.New("order deposit is not visible")
+	errOrderNotFillable       = errors.New("order is no longer fillable")
+)
 
 type reservationRetryProber interface {
 	DecideFillWithoutReservations(
@@ -84,7 +88,10 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	orderID, err := s.openedOrderID(ctx, order)
 	if err != nil {
-		return orderProcessingResult{retryable: !errors.Is(err, errOrderNotDeposited)}
+		if errors.Is(err, errOrderDepositNotVisible) {
+			return orderProcessingResult{depositNotVisible: true}
+		}
+		return orderProcessingResult{retryable: !errors.Is(err, errOrderNotFillable)}
 	}
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
@@ -183,6 +190,12 @@ func (s *Solver) processOrderUsingReservations(
 		prepared.chainObservedAt,
 	)
 	if err != nil {
+		if errors.Is(err, errOrderDepositNotVisible) {
+			return orderProcessingResult{depositNotVisible: true}
+		}
+		if errors.Is(err, errOrderNotFillable) {
+			return orderProcessingResult{}
+		}
 		s.log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true}
 	}
@@ -267,10 +280,15 @@ func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (comm
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return common.Hash{}, err
 	}
-	if status != lifiOrderStatusDeposited {
-		s.log.Info("order skipped: on-chain order is not deposited", "orderId", order.OrderID,
+	if status == lifiOrderStatusNone {
+		s.log.Info("on-chain order deposit is not visible yet", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
-		return common.Hash{}, errOrderNotDeposited
+		return common.Hash{}, errOrderDepositNotVisible
+	}
+	if status != lifiOrderStatusDeposited {
+		s.log.Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
+		return common.Hash{}, errOrderNotFillable
 	}
 	return orderID, nil
 }

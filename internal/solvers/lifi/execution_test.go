@@ -3,6 +3,7 @@ package lifi
 import (
 	"context"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -503,6 +505,362 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 		}
 	default:
 		t.Fatal("transient worker failure was not returned to recovery")
+	}
+}
+
+func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		statuses []uint8
+	}{
+		{
+			name: "before planning",
+			statuses: []uint8{
+				lifiOrderStatusNone,
+				lifiOrderStatusNone,
+				lifiOrderStatusDeposited,
+				lifiOrderStatusDeposited,
+			},
+		},
+		{
+			name: "before submission",
+			statuses: []uint8{
+				lifiOrderStatusDeposited,
+				lifiOrderStatusNone,
+				lifiOrderStatusDeposited,
+				lifiOrderStatusDeposited,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := immediateTestSetup(t)
+			strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+			if err != nil {
+				t.Fatalf("New strategy: %v", err)
+			}
+			submitted := make(chan struct{}, 1)
+			txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
+			solver := newProcessTestSolver(
+				fixture.cfg,
+				fixture.caller,
+				txm,
+				strategy,
+				fixture.tokenIn,
+				fixture.tokenOut,
+				fixture.adapter,
+				test.statuses[0],
+			)
+			solver.wallNow = time.Now
+			var statusReads atomic.Int32
+			reader := solver.reader.(fakeLifiReader)
+			reader.statusFn = func() (uint8, error) {
+				index := int(statusReads.Add(1) - 1)
+				return test.statuses[index], nil
+			}
+			solver.reader = reader
+			orders := make(chan *submittedOrder, 1)
+			orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+			done := make(chan error, 1)
+			go func() {
+				done <- solver.runOrderWorker(
+					t.Context(),
+					testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+					orders,
+					nil,
+					nil,
+				)
+			}()
+
+			select {
+			case <-submitted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("worker did not fill after deposit became visible")
+			}
+			close(orders)
+			if err := <-done; err != nil {
+				t.Fatalf("runOrderWorker: %v", err)
+			}
+			if got, want := statusReads.Load(), int32(len(test.statuses)); got != want {
+				t.Fatalf("status reads = %d, want %d", got, want)
+			}
+			if len(txm.reqs) != 1 {
+				t.Fatalf("fill submissions = %d, want 1", len(txm.reqs))
+			}
+		})
+	}
+}
+
+func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	submitted := make(chan struct{}, 1)
+	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
+	solver := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusNone,
+	)
+	solver.wallNow = time.Now
+	var statusReads atomic.Int32
+	reader := solver.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		if statusReads.Add(1) == 1 {
+			return lifiOrderStatusNone, nil
+		}
+		return lifiOrderStatusDeposited, nil
+	}
+	solver.reader = reader
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	orders := make(chan *submittedOrder, 2)
+	orders <- order
+	orders <- order
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.runOrderWorker(
+			t.Context(),
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			nil,
+			nil,
+		)
+	}()
+
+	select {
+	case <-submitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not fill the retried order")
+	}
+	close(orders)
+	if err := <-done; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
+	}
+	if got := statusReads.Load(); got != 3 {
+		t.Fatalf("status reads = %d, duplicate delivery was not coalesced", got)
+	}
+	if len(txm.reqs) != 1 {
+		t.Fatalf("fill submissions = %d, want 1", len(txm.reqs))
+	}
+}
+
+func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	submitted := make(chan struct{}, 1)
+	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
+	solver := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusNone,
+	)
+	solver.wallNow = time.Now
+	first := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	first.OrderID = "waiting"
+	first.OnChainOrderID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	first.dedupeKey = "waiting-key"
+	secondValue := *first
+	secondValue.OrderID = "ready"
+	secondValue.OnChainOrderID = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	secondValue.dedupeKey = "ready-key"
+	secondValue.Order.Nonce = new(big.Int).Add(first.Order.Nonce, big.NewInt(1))
+	second := &secondValue
+	firstOrderID := common.BigToHash(first.Order.Nonce)
+	secondOrderID := common.BigToHash(second.Order.Nonce)
+	var firstReads atomic.Int32
+	var secondReads atomic.Int32
+	var unexpectedStatus atomic.Bool
+	reader := solver.reader.(fakeLifiReader)
+	reader.orderIDFn = func(order inputsettler.StandardOrder) common.Hash {
+		return common.BigToHash(order.Nonce)
+	}
+	reader.statusForOrderFn = func(orderID common.Hash) (uint8, error) {
+		switch orderID {
+		case firstOrderID:
+			firstReads.Add(1)
+			return lifiOrderStatusNone, nil
+		case secondOrderID:
+			secondReads.Add(1)
+			return lifiOrderStatusDeposited, nil
+		default:
+			unexpectedStatus.Store(true)
+			return 255, nil
+		}
+	}
+	solver.reader = reader
+	orders := make(chan *submittedOrder, 2)
+	orders <- first
+	orders <- second
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.runOrderWorker(
+			t.Context(),
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			nil,
+			nil,
+		)
+	}()
+
+	filled := false
+	select {
+	case <-submitted:
+		filled = true
+	case <-time.After(3 * time.Second):
+	}
+	close(orders)
+	if err := <-done; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
+	}
+	if !filled {
+		t.Fatalf("later deposited order was blocked by the delayed retry: first reads=%d second reads=%d txs=%d",
+			firstReads.Load(), secondReads.Load(), len(txm.reqs))
+	}
+	if got := firstReads.Load(); got != 1 {
+		t.Fatalf("waiting order status reads before intake close = %d, want 1", got)
+	}
+	if got := secondReads.Load(); got != 2 {
+		t.Fatalf("ready order status reads = %d, want planning and submission reads", got)
+	}
+	if len(txm.reqs) != 1 {
+		t.Fatalf("fill submissions = %d, want 1", len(txm.reqs))
+	}
+	if unexpectedStatus.Load() {
+		t.Fatal("worker read status for an unexpected order id")
+	}
+}
+
+func TestOrderWorkerDepositRetryDoesNotHoldRecoveryBarrier(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	solver := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		&fakeLifiTxSender{},
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusNone,
+	)
+	solver.wallNow = time.Now
+	barrier := &submittedOrder{processed: make(chan struct{})}
+	orders := make(chan *submittedOrder, 2)
+	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	orders <- barrier
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.runOrderWorker(
+			ctx,
+			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders,
+			nil,
+			nil,
+		)
+	}()
+
+	select {
+	case <-barrier.processed:
+	case <-time.After(time.Second):
+		t.Fatal("deposit propagation retry held the recovery barrier")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runOrderWorker error = %v, want context cancellation", err)
+	}
+}
+
+func TestOrderWorkerDropsDepositRetriesWhenIntakeStops(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		cancel bool
+	}{
+		{name: "closed intake"},
+		{name: "canceled context", cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := immediateTestSetup(t)
+			strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+			if err != nil {
+				t.Fatalf("New strategy: %v", err)
+			}
+			txm := &fakeLifiTxSender{}
+			solver := newProcessTestSolver(
+				fixture.cfg,
+				fixture.caller,
+				txm,
+				strategy,
+				fixture.tokenIn,
+				fixture.tokenOut,
+				fixture.adapter,
+				lifiOrderStatusNone,
+			)
+			solver.wallNow = time.Now
+			statusRead := make(chan struct{}, 1)
+			reader := solver.reader.(fakeLifiReader)
+			reader.statusFn = func() (uint8, error) {
+				statusRead <- struct{}{}
+				return lifiOrderStatusNone, nil
+			}
+			solver.reader = reader
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			orders := make(chan *submittedOrder, 1)
+			orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+			if !test.cancel {
+				close(orders)
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- solver.runOrderWorker(
+					ctx,
+					testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+					orders,
+					nil,
+					nil,
+				)
+			}()
+			select {
+			case <-statusRead:
+			case <-time.After(time.Second):
+				t.Fatal("worker did not read the initial order status")
+			}
+			if test.cancel {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if test.cancel && !errors.Is(err, context.Canceled) {
+					t.Fatalf("runOrderWorker error = %v, want context cancellation", err)
+				}
+				if !test.cancel && err != nil {
+					t.Fatalf("runOrderWorker: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("worker retained a deposit retry after intake stopped")
+			}
+			if len(txm.reqs) != 0 {
+				t.Fatalf("fill submissions = %d, want 0", len(txm.reqs))
+			}
+		})
 	}
 }
 
