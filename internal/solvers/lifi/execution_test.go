@@ -102,6 +102,61 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 	}
 }
 
+func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
+	cfg := testLifiConfig()
+	foreignSettler := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
+	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
+		order := mapField(t, body, "order")
+		order["originChainId"] = "1"
+		order["inputOracle"] = foreignSettler.Hex()
+		output := sliceField(t, order, "outputs")[0].(map[string]any)
+		output["chainId"] = "1"
+		output["oracle"] = hexID(foreignSettler)
+		output["settler"] = hexID(foreignSettler)
+	})
+
+	var logs []string
+	solver := &Solver{
+		cfg:     cfg,
+		chainID: 11155111,
+		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
+	}
+	logged := strings.Join(logs, "\n")
+	if !strings.Contains(logged, "order feed: ignored order for another chain") ||
+		!strings.Contains(logged, "order is for a different chain") ||
+		strings.Contains(logged, `"error"`) {
+		t.Fatalf("foreign order log = %s", logged)
+	}
+}
+
+func TestParseOrderMessageKeepsTargetMismatchAtError(t *testing.T) {
+	cfg := testLifiConfig()
+	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
+		mapField(t, body, "order")["inputOracle"] =
+			common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17").Hex()
+	})
+
+	var logs []string
+	solver := &Solver{
+		cfg:     cfg,
+		chainID: 11155111,
+		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
+	}
+	logged := strings.Join(logs, "\n")
+	if !strings.Contains(logged, "order feed: ignored order") ||
+		!strings.Contains(logged, "does not match outputSettler") ||
+		!strings.Contains(logged, `"error"`) ||
+		strings.Contains(logged, "another chain") {
+		t.Fatalf("target mismatch log = %s", logged)
+	}
+}
+
 func TestOrderInboxCoalescesQueuedReplay(t *testing.T) {
 	inbox := newOrderInbox(2)
 	first := &submittedOrder{OrderID: "api-1", OnChainOrderID: "chain-1"}

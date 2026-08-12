@@ -499,6 +499,10 @@ func (s *Solver) recoverOrders(
 func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 	order, err := parseSubmittedOrder(msg.Data, s.cfg, s.chainID)
 	if err != nil {
+		if errors.Is(err, errOrderForDifferentChain) {
+			s.log.Info("order feed: ignored order for another chain", "event", msg.Event, "reason", err.Error())
+			return nil
+		}
 		s.log.Error(err, "order feed: ignored order", "event", msg.Event)
 		return nil
 	}

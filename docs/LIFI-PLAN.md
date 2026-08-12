@@ -296,9 +296,11 @@ the WS event.
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
 `pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
-chain until a pass adds no new immutable-order fingerprints. REST rows and live events pass through the same parser and
-bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first copy has left
-the queue. Recovery applies backpressure
+chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
+other chains; after full structural parsing, origin/output chain mismatches are ignored at info level, while
+malformed payloads and target-chain contract mismatches remain errors. REST rows and live events pass through
+the same parser and bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first
+copy has left the queue. Recovery applies backpressure
 instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
 passed every recovered row, any accepted fill has installed its reservation, and transient chain/state failures
 have been re-enqueued from their retained payloads even when the next REST sweep does not list them yet. If a
@@ -319,11 +321,12 @@ fills until txmanager completion or its finite hard stop.
 The solver does not persist or resubmit transaction attempts. A fresh match can race RPC head propagation:
 when either pre-admission status read returns OIF `None` (`0`), the worker retains the immutable order in a
 separate 128-entry delayed queue and retries after 250ms exponential backoff capped at 5s. These are fixed
-solver safety bounds rather than deployment-tuning knobs. The worker performs at most
-nine retries and never waits beyond 30s or the earlier of `expires` / `fillDeadline`. A replay with the same
-stable order fingerprint is coalesced while that retry is pending. `Claimed` (`2`), `Refunded` (`3`), and
-unknown non-`Deposited` statuses remain terminal. Deposit propagation retries do not hold the recovery barrier;
-intake close or cancellation drops them immediately, while already-admitted fill transactions still drain.
+solver safety bounds rather than deployment-tuning knobs. The worker retries until the 30s window or the
+earlier of `expires` / `fillDeadline`, clamping the final scheduled status read to 250ms before that boundary.
+A replay with the same stable order fingerprint is coalesced while that retry is pending. `Claimed` (`2`),
+`Refunded` (`3`), and unknown non-`Deposited` statuses remain terminal. Deposit propagation retries do not hold
+the recovery barrier; intake close or cancellation drops them immediately, while already-admitted fill
+transactions still drain.
 Each live message is a
 `SubmitOrderDto`:
 ```

@@ -141,9 +141,10 @@ shutdown the solver keeps the feed alive while it expires active curves with the
 timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
 hard stop.
 If a newly opened order reaches the feed before the RPC endpoint exposes its deposit, the worker retries the
-status-`None` read with bounded exponential backoff (at most nine retries and 30 seconds, never past the order
-deadline). Duplicate deliveries are coalesced during that wait; claimed, refunded, and unknown statuses remain
-terminal. Stopping intake drops these unaccepted retries immediately.
+status-`None` read with bounded exponential backoff capped at 5 seconds until the 30-second window or earlier
+order deadline. The final scheduled read is clamped to 250 milliseconds before that boundary. Duplicate
+deliveries are coalesced during the wait; claimed, refunded, and unknown statuses remain terminal. Stopping
+intake drops these unaccepted retries immediately.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
@@ -170,7 +171,9 @@ distinct credentials.
 
 Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
 scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at order-feed
-admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
+admission and logged as unsupported. Fully valid feed orders routed to another origin or output chain are
+expected noise and logged at info; malformed payloads and target-chain contract mismatches remain errors.
+`solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each

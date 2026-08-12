@@ -11,30 +11,29 @@ const (
 	initialOrderDepositRetryBackoff = 250 * time.Millisecond
 	maximumOrderDepositRetryBackoff = 5 * time.Second
 	maximumOrderDepositRetryWindow  = 30 * time.Second
-	maximumOrderDepositRetries      = 9
 )
 
 var (
-	errOrderDepositRetryFull     = errors.New("order deposit retry queue is full")
-	errOrderDepositRetryKey      = errors.New("order deposit retry requires a stable order key")
-	errOrderDepositRetryAttempts = errors.New("order deposit retry attempt limit reached")
-	errOrderDepositRetryExpired  = errors.New("order expired before deposit became visible")
-	errOrderDepositRetryWindow   = errors.New("order deposit retry window elapsed")
+	errOrderDepositRetryFull    = errors.New("order deposit retry queue is full")
+	errOrderDepositRetryKey     = errors.New("order deposit retry requires a stable order key")
+	errOrderDepositRetryExpired = errors.New("order expired before deposit became visible")
+	errOrderDepositRetryWindow  = errors.New("order deposit retry window elapsed")
 )
 
 type orderDepositRetry struct {
-	order     *submittedOrder
-	key       string
-	attempts  int
-	startedAt time.Time
-	readyAt   time.Time
-	endAt     time.Time
-	endErr    error
+	order          *submittedOrder
+	key            string
+	backoffStep    int
+	startedAt      time.Time
+	readyAt        time.Time
+	endAt          time.Time
+	endErr         error
+	finalScheduled bool
 }
 
 // orderDepositRetryQueue is owned exclusively by the order worker. A state remains
 // indexed while its order is being retried, so a concurrent feed replay cannot reset
-// the attempt/window budget between status reads.
+// the backoff/window state between status reads.
 type orderDepositRetryQueue struct {
 	items    []*orderDepositRetry
 	byKey    map[string]*orderDepositRetry
@@ -68,10 +67,9 @@ func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) 
 		q.byKey[key] = state
 	}
 	state.order = order
-	state.attempts++
-	if state.attempts > maximumOrderDepositRetries {
+	if state.finalScheduled {
 		delete(q.byKey, key)
-		return errOrderDepositRetryAttempts
+		return state.endErr
 	}
 
 	retryEnd, boundErr := orderDepositRetryEnd(order, state.startedAt)
@@ -81,10 +79,17 @@ func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) 
 		delete(q.byKey, key)
 		return boundErr
 	}
-	readyAt := now.Add(orderDepositRetryBackoff(state.attempts))
-	if !readyAt.Before(retryEnd) {
+	finalReadyAt := retryEnd.Add(-initialOrderDepositRetryBackoff)
+	if !now.Before(finalReadyAt) {
 		delete(q.byKey, key)
 		return boundErr
+	}
+
+	state.backoffStep++
+	readyAt := now.Add(orderDepositRetryBackoff(state.backoffStep))
+	if !readyAt.Before(finalReadyAt) {
+		readyAt = finalReadyAt
+		state.finalScheduled = true
 	}
 	state.readyAt = readyAt
 	index := sort.Search(len(q.items), func(index int) bool {
@@ -105,9 +110,9 @@ func orderDepositRetryEnd(order *submittedOrder, startedAt time.Time) (time.Time
 	return windowEnd, errOrderDepositRetryWindow
 }
 
-func orderDepositRetryBackoff(attempts int) time.Duration {
+func orderDepositRetryBackoff(step int) time.Duration {
 	backoff := initialOrderDepositRetryBackoff
-	for range max(0, attempts-1) {
+	for range max(0, step-1) {
 		backoff = min(2*backoff, maximumOrderDepositRetryBackoff)
 	}
 	return backoff

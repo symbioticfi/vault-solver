@@ -61,31 +61,44 @@ func TestOrderDepositRetryQueueStopsAtOrderDeadline(t *testing.T) {
 	}
 }
 
-func TestOrderDepositRetryQueueStopsAfterNineRetries(t *testing.T) {
+func TestOrderDepositRetryQueueSchedulesFinalReadBeforeWindow(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	order := &submittedOrder{OrderID: "missing"}
 	queue := newOrderDepositRetryQueue(1)
-	if err := queue.schedule(order, now); err != nil {
-		t.Fatal(err)
+	wantOffsets := []time.Duration{
+		250 * time.Millisecond,
+		750 * time.Millisecond,
+		1750 * time.Millisecond,
+		3750 * time.Millisecond,
+		7750 * time.Millisecond,
+		12750 * time.Millisecond,
+		17750 * time.Millisecond,
+		22750 * time.Millisecond,
+		27750 * time.Millisecond,
+		maximumOrderDepositRetryWindow - initialOrderDepositRetryBackoff,
 	}
-	for retry := 1; retry <= maximumOrderDepositRetries; retry++ {
+	checkAt := now
+	for retry, wantOffset := range wantOffsets {
+		if err := queue.schedule(order, checkAt); err != nil {
+			t.Fatalf("retry %d schedule: %v", retry+1, err)
+		}
 		readyAt, ok := queue.nextReadyAt()
-		if !ok || popOrderDepositRetry(t, queue, readyAt) != order {
-			t.Fatalf("retry %d was not ready", retry)
+		if !ok {
+			t.Fatalf("retry %d was not scheduled", retry+1)
 		}
-		err := queue.schedule(order, readyAt)
-		if retry < maximumOrderDepositRetries {
-			if err != nil {
-				t.Fatalf("retry %d reschedule: %v", retry, err)
-			}
-			continue
+		if got := readyAt.Sub(now); got != wantOffset {
+			t.Fatalf("retry %d offset = %s, want %s", retry+1, got, wantOffset)
 		}
-		if !errors.Is(err, errOrderDepositRetryAttempts) {
-			t.Fatalf("retry %d error = %v, want %v", retry, err, errOrderDepositRetryAttempts)
+		if popOrderDepositRetry(t, queue, readyAt) != order {
+			t.Fatalf("retry %d was not ready", retry+1)
 		}
+		checkAt = readyAt
+	}
+	if err := queue.schedule(order, checkAt); !errors.Is(err, errOrderDepositRetryWindow) {
+		t.Fatalf("final retry error = %v, want %v", err, errOrderDepositRetryWindow)
 	}
 	if queue.len() != 0 || len(queue.byKey) != 0 {
-		t.Fatalf("exhausted queue: ready=%d tracked=%d, want 0/0", queue.len(), len(queue.byKey))
+		t.Fatalf("elapsed queue: ready=%d tracked=%d, want 0/0", queue.len(), len(queue.byKey))
 	}
 }
 
