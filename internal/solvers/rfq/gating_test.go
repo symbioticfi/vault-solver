@@ -56,7 +56,7 @@ func TestParseConfigMinAmountsIn(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+oneAdapter+`
 minAmountsIn:
   "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "100000000000000000000"
-  "0xaaa0008c8cf3a7dca931adaf04336a5d808c82cc": "1000000000000000000000"
+  "0xaaa0008c8cf3a7dca931adaf04336a5d808c82cc": "1000000000000000000"
 `)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -70,8 +70,8 @@ minAmountsIn:
 		t.Fatalf("HYBOND minimum = %v, want 100e18", got)
 	}
 	got = cfg.MinAmountsIn[common.HexToAddress("0xAAA0008C8CF3A7Dca931adaF04336A5D808C82Cc")]
-	if got == nil || got.Cmp(mustBig(t, "1000000000000000000000")) != 0 {
-		t.Fatalf("deJAAA minimum = %v, want 1000e18", got)
+	if got == nil || got.Cmp(mustBig(t, "1000000000000000000")) != 0 {
+		t.Fatalf("deJAAA minimum = %v, want 1e18", got)
 	}
 
 	def, err := parseCfg(t, minimalConfig+oneAdapter)
