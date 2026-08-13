@@ -23,7 +23,12 @@ import (
 
 const Name = "lifi-samechain"
 
-const lifiOrderStatusDeposited uint8 = 1
+const (
+	lifiOrderStatusNone uint8 = iota
+	lifiOrderStatusDeposited
+	lifiOrderStatusClaimed
+	lifiOrderStatusRefunded
+)
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {

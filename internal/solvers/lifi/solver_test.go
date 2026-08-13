@@ -1127,11 +1127,20 @@ func TestProcessOrderChecksOnChainStatusBeforeSend(t *testing.T) {
 		t.Fatalf("New strategy: %v", err)
 	}
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, 2)
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusClaimed,
+	)
 	fillReads := 0
 	s.reader = fakeLifiReader{
 		orderID: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-		status:  2,
+		status:  lifiOrderStatusClaimed,
 		fillSnapshotsFn: func() []liquidlane.FillQuote {
 			fillReads++
 			return profitableFillSnapshots(fixture.tokenIn, fixture.tokenOut, fixture.adapter, 1_000_000)
@@ -1141,6 +1150,101 @@ func TestProcessOrderChecksOnChainStatusBeforeSend(t *testing.T) {
 	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 	if len(txm.reqs) != 0 || fillReads != 0 {
 		t.Fatalf("closed order txs = %d fillReads = %d", len(txm.reqs), fillReads)
+	}
+}
+
+func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	orderID := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	tests := []struct {
+		name    string
+		status  uint8
+		wantErr error
+	}{
+		{name: "none", status: lifiOrderStatusNone, wantErr: errOrderDepositNotVisible},
+		{name: "deposited", status: lifiOrderStatusDeposited},
+		{name: "claimed", status: lifiOrderStatusClaimed, wantErr: errOrderNotFillable},
+		{name: "refunded", status: lifiOrderStatusRefunded, wantErr: errOrderNotFillable},
+		{name: "unknown", status: 255, wantErr: errOrderNotFillable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			solver := &Solver{
+				cfg: fixture.cfg,
+				reader: fakeLifiReader{
+					orderID: orderID,
+					status:  test.status,
+				},
+				log: logr.Discard(),
+			}
+			got, err := solver.openedOrderID(t.Context(), order)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("openedOrderID error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && got != orderID {
+				t.Fatalf("openedOrderID = %s, want %s", got.Hex(), orderID.Hex())
+			}
+		})
+	}
+}
+
+func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	tests := []struct {
+		name                  string
+		status                uint8
+		wantDepositNotVisible bool
+	}{
+		{name: "none", status: lifiOrderStatusNone, wantDepositNotVisible: true},
+		{name: "claimed", status: lifiOrderStatusClaimed},
+		{name: "refunded", status: lifiOrderStatusRefunded},
+		{name: "unknown", status: 255},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			txm := &fakeLifiTxSender{}
+			solver := newProcessTestSolver(
+				fixture.cfg,
+				fixture.caller,
+				txm,
+				strategy,
+				fixture.tokenIn,
+				fixture.tokenOut,
+				fixture.adapter,
+				lifiOrderStatusDeposited,
+			)
+			statusReads := 0
+			reader := solver.reader.(fakeLifiReader)
+			reader.statusFn = func() (uint8, error) {
+				statusReads++
+				if statusReads == 1 {
+					return lifiOrderStatusDeposited, nil
+				}
+				return test.status, nil
+			}
+			solver.reader = reader
+
+			result := solver.processOrderWithPending(
+				t.Context(),
+				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+				nil,
+			)
+			if result.depositNotVisible != test.wantDepositNotVisible {
+				t.Fatalf("depositNotVisible = %t, want %t", result.depositNotVisible, test.wantDepositNotVisible)
+			}
+			if result.fill != nil || result.retryable {
+				t.Fatalf("submission status result = %+v, want no fill or generic retry", result)
+			}
+			if statusReads != 2 || len(txm.reqs) != 0 {
+				t.Fatalf("status reads = %d submissions = %d, want 2/0", statusReads, len(txm.reqs))
+			}
+		})
 	}
 }
 

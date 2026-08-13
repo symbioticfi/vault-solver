@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/go-errors/errors"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
@@ -39,6 +40,102 @@ func TestParseSubmittedOrder(t *testing.T) {
 	order.OutputAmount.SetInt64(1)
 	if order.Output.Amount.String() != "990000" {
 		t.Fatalf("output amount aliases mandate output: %s", order.Output.Amount)
+	}
+}
+
+func TestParseSubmittedOrderClassifiesDifferentChain(t *testing.T) {
+	foreignSettler := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "origin",
+			mutate: func(body map[string]any) {
+				order := mapField(t, body, "order")
+				order["originChainId"] = "1"
+				order["inputOracle"] = foreignSettler.Hex()
+			},
+		},
+		{
+			name: "output",
+			mutate: func(body map[string]any) {
+				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+				output["chainId"] = "1"
+				output["oracle"] = hexID(foreignSettler)
+				output["settler"] = hexID(foreignSettler)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testLifiConfig()
+			raw := mutatedTestOrderJSON(t, cfg, tt.mutate)
+			_, err := parseSubmittedOrder(raw, cfg, 11155111)
+			if !errors.Is(err, errOrderForDifferentChain) {
+				t.Fatalf("error = %v, want %v", err, errOrderForDifferentChain)
+			}
+		})
+	}
+}
+
+func TestParseSubmittedOrderKeepsInvalidOrdersActionable(t *testing.T) {
+	foreignOracle := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
+	tests := []struct {
+		name       string
+		mutate     func(map[string]any)
+		wantReason string
+	}{
+		{
+			name: "target chain input settler mismatch",
+			mutate: func(body map[string]any) {
+				body["inputSettler"] = foreignOracle.Hex()
+			},
+			wantReason: "does not match configured",
+		},
+		{
+			name: "target chain oracle mismatch",
+			mutate: func(body map[string]any) {
+				mapField(t, body, "order")["inputOracle"] = foreignOracle.Hex()
+			},
+			wantReason: "does not match outputSettler",
+		},
+		{
+			name: "target chain output oracle mismatch",
+			mutate: func(body map[string]any) {
+				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+				output["oracle"] = hexID(foreignOracle)
+			},
+			wantReason: "outputs[0].oracle does not match outputSettler",
+		},
+		{
+			name: "target chain output settler mismatch",
+			mutate: func(body map[string]any) {
+				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+				output["settler"] = hexID(foreignOracle)
+			},
+			wantReason: "outputs[0].settler does not match outputSettler",
+		},
+		{
+			name: "malformed foreign order",
+			mutate: func(body map[string]any) {
+				order := mapField(t, body, "order")
+				order["originChainId"] = "1"
+				sliceField(t, order, "inputs")[0].([]any)[1] = float64(1_000_000)
+			},
+			wantReason: "expected decimal string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testLifiConfig()
+			_, err := parseSubmittedOrder(mutatedTestOrderJSON(t, cfg, tt.mutate), cfg, 11155111)
+			if err == nil || errors.Is(err, errOrderForDifferentChain) || !strings.Contains(err.Error(), tt.wantReason) {
+				t.Fatalf("error = %v, want actionable %q error", err, tt.wantReason)
+			}
+		})
 	}
 }
 
@@ -370,6 +467,25 @@ func testOrderJSON(t *testing.T, cfg *Config, tokenIn, tokenOut common.Address) 
 			"quoteId":         "quote-from-meta",
 		},
 	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal order: %v", err)
+	}
+	return raw
+}
+
+func mutatedTestOrderJSON(t *testing.T, cfg *Config, mutate func(map[string]any)) []byte {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(testOrderJSON(
+		t,
+		cfg,
+		common.HexToAddress("0x6666666666666666666666666666666666666666"),
+		common.HexToAddress("0x7777777777777777777777777777777777777777"),
+	), &body); err != nil {
+		t.Fatalf("unmarshal order: %v", err)
+	}
+	mutate(body)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal order: %v", err)

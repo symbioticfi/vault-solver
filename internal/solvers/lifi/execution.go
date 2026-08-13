@@ -19,6 +19,7 @@ const (
 	orderRecoverySeenCapacity  = 4_096
 	orderInboxCapacity         = orderRecoverySeenCapacity
 	orderRetryCapacity         = orderInboxCapacity
+	orderDepositRetryCapacity  = 128
 	maximumOrderRecoverySweeps = 8
 	// Strategy failures are often deterministic for one input. Two retries preserve a
 	// short transient window without allowing one order to hold readiness forever.
@@ -498,6 +499,10 @@ func (s *Solver) recoverOrders(
 func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 	order, err := parseSubmittedOrder(msg.Data, s.cfg, s.chainID)
 	if err != nil {
+		if errors.Is(err, errOrderForDifferentChain) {
+			s.log.Info("order feed: ignored order for another chain", "event", msg.Event, "reason", err.Error())
+			return nil
+		}
 		s.log.Error(err, "order feed: ignored order", "event", msg.Event)
 		return nil
 	}
@@ -538,17 +543,55 @@ func (s *Solver) runOrderWorker(
 	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
 	completions := make(chan fillCompletion, fillCompletionCapacity)
 	retries := newReservationRetryQueue(orderRetryCapacity)
+	depositRetries := newOrderDepositRetryQueue(orderDepositRetryCapacity)
 	var reservationReleaseGen uint64
 	ctxDone := ctx.Done()
 	var runErr error
 	var recoveryBarrier chan struct{}
+	retryNow := s.wallNow
+	if retryNow == nil {
+		retryNow = time.Now
+	}
+	depositRetryTimer := time.NewTimer(maximumOrderDepositRetryWindow)
+	depositRetryTimer.Stop()
+	defer depositRetryTimer.Stop()
+	releaseRecoveryBarrier := func() {
+		if recoveryBarrier == nil || retries.len() > 0 {
+			return
+		}
+		close(recoveryBarrier)
+		recoveryBarrier = nil
+	}
 	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations) {
+		defer releaseRecoveryBarrier()
+
 		var result orderProcessingResult
 		if reservations == nil {
 			result = s.processOrderWithPending(ctx, routes, order, &pending)
 		} else {
 			result = s.processOrderUsingReservations(ctx, routes, order, &pending, reservations)
 		}
+		if result.depositNotVisible {
+			if err := depositRetries.schedule(order, retryNow()); err != nil {
+				if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
+					s.log.Error(err, "order deposit retry: dropped order",
+						"orderId", order.OrderID,
+						"onChainOrderId", order.OnChainOrderID,
+						"quoteId", order.QuoteID,
+						"capacity", orderDepositRetryCapacity,
+					)
+				} else {
+					s.log.Info("order skipped: deposit did not become visible within retry bounds",
+						"orderId", order.OrderID,
+						"onChainOrderId", order.OnChainOrderID,
+						"quoteId", order.QuoteID,
+						"reason", err.Error(),
+					)
+				}
+			}
+			return
+		}
+		depositRetries.finish(order)
 		if result.fill != nil {
 			pending.add(result.fill)
 			go awaitFill(result.fill, completions)
@@ -581,13 +624,6 @@ func (s *Solver) runOrderWorker(
 				"retryQueue", retries.len(),
 			)
 		}
-	}
-	releaseRecoveryBarrier := func() {
-		if recoveryBarrier == nil || retries.len() > 0 {
-			return
-		}
-		close(recoveryBarrier)
-		recoveryBarrier = nil
 	}
 	complete := func(completion fillCompletion) {
 		s.completeFill(&pending, completion)
@@ -623,12 +659,13 @@ func (s *Solver) runOrderWorker(
 		}
 		releaseRecoveryBarrier()
 	}
-	for orders != nil || pending.len() > 0 || retries.len() > 0 {
+	for orders != nil || pending.len() > 0 || retries.len() > 0 || depositRetries.len() > 0 {
 		if runErr == nil && ctx.Err() != nil {
 			runErr = ctx.Err()
 			ctxDone = nil
 			orders = nil
 			retries.clear()
+			depositRetries.clear()
 		}
 		if runErr != nil && pending.len() == 0 {
 			return runErr
@@ -639,17 +676,40 @@ func (s *Solver) runOrderWorker(
 			// extend the retry set protected by this barrier.
 			orderInput = nil
 		}
+		var depositRetryC <-chan time.Time
+		depositRetryTimer.Stop()
+		if readyAt, ok := depositRetries.nextReadyAt(); ok {
+			depositRetryTimer.Reset(max(readyAt.Sub(retryNow()), 0))
+			depositRetryC = depositRetryTimer.C
+		}
 		select {
 		case <-ctxDone:
 			runErr = ctx.Err()
 			ctxDone = nil
 			orders = nil
 			retries.clear()
+			depositRetries.clear()
 		case completion := <-completions:
 			complete(completion)
+		case <-depositRetryC:
+			order, err := depositRetries.popReady(retryNow())
+			if err != nil {
+				s.log.Info("order skipped: deposit did not become visible within retry bounds",
+					"orderId", order.OrderID,
+					"onChainOrderId", order.OnChainOrderID,
+					"quoteId", order.QuoteID,
+					"reason", err.Error(),
+				)
+				continue
+			}
+			if order != nil {
+				process(order, nil)
+			}
 		case order, ok := <-orderInput:
 			if !ok {
 				orders = nil
+				depositRetries.clear()
+				releaseRecoveryBarrier()
 				if inputDrained != nil {
 					close(inputDrained)
 					inputDrained = nil
@@ -661,11 +721,20 @@ func (s *Solver) runOrderWorker(
 				ctxDone = nil
 				orders = nil
 				retries.clear()
+				depositRetries.clear()
 				continue
 			}
 			if order.processed != nil {
 				recoveryBarrier = order.processed
 				releaseRecoveryBarrier()
+				continue
+			}
+			if depositRetries.contains(order) {
+				s.log.V(1).Info("order feed replay coalesced while awaiting on-chain deposit",
+					"orderId", order.OrderID,
+					"onChainOrderId", order.OnChainOrderID,
+					"quoteId", order.QuoteID,
+				)
 				continue
 			}
 			process(order, nil)

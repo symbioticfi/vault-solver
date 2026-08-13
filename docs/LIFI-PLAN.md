@@ -296,9 +296,11 @@ the WS event.
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
 `pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
-chain until a pass adds no new immutable-order fingerprints. REST rows and live events pass through the same parser and
-bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first copy has left
-the queue. Recovery applies backpressure
+chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
+other chains; after full structural parsing, origin/output chain mismatches are ignored at info level, while
+malformed payloads and target-chain contract mismatches remain errors. REST rows and live events pass through
+the same parser and bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first
+copy has left the queue. Recovery applies backpressure
 instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
 passed every recovered row, any accepted fill has installed its reservation, and transient chain/state failures
 have been re-enqueued from their retained payloads even when the next REST sweep does not list them yet. If a
@@ -316,7 +318,16 @@ sweeps likewise enter bounded backoff and restart convergence. Graceful process 
 but keeps the feed alive while a fresh context, bounded by `orderServer.httpTimeout`, expires known active curves.
 It then stops intake, gives the already-admitted inbox one more HTTP-timeout window to drain, and waits for accepted
 fills until txmanager completion or its finite hard stop.
-The solver does not persist transaction attempts or retry them on a timer. Each live message is a
+The solver does not persist or resubmit transaction attempts. A fresh match can race RPC head propagation:
+when either pre-admission status read returns OIF `None` (`0`), the worker retains the immutable order in a
+separate 128-entry delayed queue and retries after 250ms exponential backoff capped at 5s. These are fixed
+solver safety bounds rather than deployment-tuning knobs. The worker retries until the 30s window or the
+earlier of `expires` / `fillDeadline`, clamping the final scheduled status read to 250ms before that boundary.
+A replay with the same stable order fingerprint is coalesced while that retry is pending. `Claimed` (`2`),
+`Refunded` (`3`), and unknown non-`Deposited` statuses remain terminal. Deposit propagation retries do not hold
+the recovery barrier; intake close or cancellation drops them immediately, while already-admitted fill
+transactions still drain.
+Each live message is a
 `SubmitOrderDto`:
 ```
 { orderType?, quoteId,
@@ -449,7 +460,9 @@ deliveries. Each reservation release advances a generation and
 re-evaluates
 every older retry once against fresh order status, deadlines, inventory, gas, and routing. A still-blocked order,
 including one whose fresh plan moved from capacity A to capacity B, returns to the FIFO tail at the current
-generation; a full queue deterministically logs and drops the newest retry. There is no retry timer.
+generation; a full queue deterministically logs and drops the newest retry. That reservation queue has no timer.
+A separate worker-owned deposit-propagation timer handles only OIF status `None` as described in §4; it does
+not re-run reservation-blocked decisions or accepted transactions.
 A successful tx-manager admission immediately sends a coalesced refresh signal. During completion the worker
 keeps the completed fill's reservation visible globally while retry planning uses a snapshot excluding only that
 fill. Any accepted replacement reservation is therefore installed before the old reservation is removed; quote
@@ -503,8 +516,9 @@ failure does not.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.
-There is no solver-level pending plan, timer, or future-auction scheduling. Reservation-blocked built-in
-decisions have only the bounded completion-driven FIFO retry described above. The txmanager
+There is no solver-level pending plan or future-auction scheduling. Apart from the bounded status-`None`
+propagation queue, reservation-blocked built-in decisions have only the bounded completion-driven FIFO retry
+described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
