@@ -147,8 +147,9 @@ chain read, so a below-minimum request costs nothing and returns the usual no-qu
 204). The comparison is strict: `amountIn == min` still quotes. Keys are parsed into `common.Address`,
 so configured checksum casing does not matter; values must parse as positive integers (zero, negative,
 non-numeric, or a zero/invalid address key is a startup error, as is the same token listed twice in
-different casing). Tokens absent from the map have no floor. This is how RWA inputs (HYBOND, deJAAA,
-deJTRSY) enforce a redemption-sized minimum without a per-token code path. Covered by
+different casing). Tokens absent from the map have no floor. This is how an RWA input such as HYBOND
+enforces a redemption-sized minimum without a per-token code path; inputs whose issuer sets no
+minimum, including the deJAAA/deJTRSY deRWA share classes, carry a 1-token dust floor. Covered by
 `gating_test.go` (`TestParseConfigMinAmountsIn`, `TestParseConfigMinAmountsInErrors`,
 `TestQuoteMinAmountIn`) and `server_test.go` (`TestServer_QuoteBelowMinAmountNoContent`).
 
