@@ -848,6 +848,72 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	}
 }
 
+func TestProcessOrderAttachesOnChainObsolescenceCheck(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	txm := &fakeLifiTxSender{}
+	s := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		txm,
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusDeposited,
+	)
+	orderID := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	status := lifiOrderStatusDeposited
+	var statusErr error
+	reader := s.reader.(fakeLifiReader)
+	reader.statusForOrderFn = func(got common.Hash) (uint8, error) {
+		if got != orderID {
+			t.Fatalf("order status ID = %s, want %s", got.Hex(), orderID.Hex())
+		}
+		return status, statusErr
+	}
+	s.reader = reader
+
+	s.processOrder(
+		t.Context(),
+		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+	)
+	if len(txm.reqs) != 1 || txm.reqs[0].Obsolete == nil {
+		t.Fatalf("submitted requests = %d, obsolescence check configured = %v",
+			len(txm.reqs), len(txm.reqs) == 1 && txm.reqs[0].Obsolete != nil)
+	}
+	check := txm.reqs[0].Obsolete
+
+	for _, closedStatus := range []uint8{
+		lifiOrderStatusNone,
+		lifiOrderStatusClaimed,
+		lifiOrderStatusRefunded,
+		255,
+	} {
+		status = closedStatus
+		obsolete, checkErr := check(t.Context())
+		if checkErr != nil || !obsolete {
+			t.Errorf("status %d: obsolete = %v, error = %v; want true, nil", closedStatus, obsolete, checkErr)
+		}
+	}
+
+	status = lifiOrderStatusDeposited
+	obsolete, checkErr := check(t.Context())
+	if checkErr != nil || obsolete {
+		t.Fatalf("deposited status: obsolete = %v, error = %v; want false, nil", obsolete, checkErr)
+	}
+
+	statusErr = errors.New("status RPC unavailable")
+	obsolete, checkErr = check(t.Context())
+	if obsolete || !errors.Is(checkErr, statusErr) {
+		t.Fatalf("status error: obsolete = %v, error = %v; want false, wrapped RPC error", obsolete, checkErr)
+	}
+}
+
 func TestProcessOrderWithoutGasAccountingSkipsFeeReaderAndRequestCap(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	fixture.cfg.Gas = nil

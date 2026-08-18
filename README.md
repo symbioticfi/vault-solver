@@ -129,7 +129,11 @@ decisions and standing quotes until those transactions complete. Each token pair
 available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
 terminal result. Receipted fills, reverts, and cancellations wait for the configured confirmation depth;
-pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt.
+pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt. Before
+signing and on every receipt poll, the tx manager rechecks that the LI.FI order is still `Deposited`. A
+confirmed non-deposited status makes the fill obsolete and immediately switches its owned nonce to
+cancellation instead of retaining liquidity until `pendingTimeoutMs`; an unavailable status read leaves the
+current lifecycle unchanged and is retried.
 Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
@@ -301,7 +305,10 @@ by default), so a short replacement cadence does not prematurely time out a priv
 
 After lifecycle admission and immediately before signing, requests without an explicit gas limit run
 `eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
-to that estimate. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
+to that estimate. A request may also supply a protocol-owned obsolescence check: the manager evaluates it
+before signing and at every receipt poll, drops an obsolete unsigned call, and switches an obsolete signed
+call to same-nonce cancellation. Check errors preserve the current lifecycle because the execution contract
+remains authoritative. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
 
 The transaction lane is ready for new external commitments only while it has no queued or admitted
 lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
