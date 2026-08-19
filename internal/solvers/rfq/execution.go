@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
@@ -19,8 +20,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// txSender sends a transaction and blocks until its receipt (the shared txmanager). A revert is
-// reported as Result.Err, so callers only check Err.
+// txSender sends a transaction and blocks until the shared txmanager reports its typed outcome.
 type txSender interface {
 	Send(ctx context.Context, req txmanager.Request) txmanager.Result
 }
@@ -48,20 +48,22 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID          int64
-	executor         common.Address
-	orderLimit       int
-	vaults           []recoveryVault
-	whitelist        adapterWhitelist // nil disables adapter filtering
-	tokenPolicy      tokenpolicy.Policy
-	discountsEnabled bool // false (external solver) skips the backend discounts API entirely
-	backend          orderBackend
-	store            *store
-	reader           fillReader
-	strategy         types.Strategy
-	txm              txSender
-	log              logr.Logger
-	now              func() time.Time
+	chainID           int64
+	executor          common.Address
+	orderLimit        int
+	vaults            []recoveryVault
+	whitelist         adapterWhitelist // nil disables adapter filtering
+	tokenPolicy       tokenpolicy.Policy
+	discountsEnabled  bool // false (external solver) skips the backend discounts API entirely
+	backend           orderBackend
+	store             *store
+	reader            fillReader
+	strategy          types.Strategy
+	txm               txSender
+	metrics           *rfqMetrics
+	orderPollObserver *observability.OperationObserver
+	log               logr.Logger
+	now               func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -106,17 +108,32 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
 }
 
-func (e *executionService) pollOpenOrders(ctx context.Context) error {
+func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
+	started := time.Now()
+	defer func() {
+		outcome := observability.ExternalOperationSuccess
+		if ctx.Err() != nil {
+			outcome = observability.ExternalOperationSkipped
+		} else if err != nil {
+			outcome = observability.ExternalOperationError
+		}
+		e.orderPollObserver.Observe(outcome, time.Since(started))
+	}()
 	orders, err := e.backend.listOpenOrders(ctx, lowerAddr(e.executor), e.orderLimit)
 	if err != nil {
 		return err
 	}
 	for i := range orders {
 		o := &orders[i]
-		e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID})
+		if e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID}) {
+			e.metrics.observeWin()
+		}
 	}
 	if len(orders) > 0 {
 		e.log.V(1).Info("polled open orders", "count", len(orders))
+	}
+	if e.metrics != nil {
+		e.metrics.observeOrderPoll(e.now())
 	}
 	return nil
 }
@@ -215,12 +232,32 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		To: e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
 	})
 	attempt := e.store.recordAttempt(orderID)
-	if res.Err != nil {
-		e.log.Error(res.Err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
-		e.fail(orderID, res.Err.Error())
+	outcome := res.Outcome
+	if !outcome.Included() {
+		err := res.Err
+		if err == nil {
+			err = errors.Errorf("unknown transaction outcome %q", outcome)
+		}
+		e.log.Error(err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+		e.fail(orderID, err.Error())
 		return
 	}
-	e.log.Info("filled order", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
+	if outcome == txmanager.OutcomeConfirmed {
+		e.log.Info("filled order", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
+	} else {
+		e.log.Error(res.Err, "fill included but confirmation wait failed",
+			"orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+	}
+	if e.metrics != nil {
+		e.metrics.fillAmounts.Observe(
+			res.Receipt,
+			order.Request.TokenIn,
+			order.Request.AmountIn,
+			outputToken,
+			required,
+			liquidlane.PlannedSurplus(selected.QuotedAmountOut, required),
+		)
+	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
 	e.reconcileTerminalStatus(ctx, orderID)
 }
@@ -257,7 +294,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		e.store.markStatus(orderID, statusFilled, txHash, "")
 	case "expired":
 		e.store.markStatus(orderID, statusExpired, txHash, "")
-	case "open":
+	case backendOrderStatusOpen:
 		// still open; leave as-is for the next cycle
 	default:
 		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)

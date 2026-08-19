@@ -11,12 +11,15 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 // Name is the registry key that selects this solver from config.
 const Name = "redstone-oev"
+
+const stateRefreshOperation = "state_refresh"
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
@@ -25,26 +28,27 @@ func init() {
 
 // Solver is the RedStone OEV solver runtime.
 type Solver struct {
-	cfg          *Config
-	deps         solver.Deps
-	chainID      *big.Int
-	dryRun       bool // OEV_DRY_RUN: observe mode: sign + log would-bids, never send (env knob, not config)
-	strategyName string
-	reader       *reader
-	strategy     types.Strategy
-	nonces       *nonceStore
-	breaker      *breaker
-	metrics      *metrics
-	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
-	log          logr.Logger
+	cfg                  *Config
+	deps                 solver.Deps
+	chainID              *big.Int
+	dryRun               bool // OEV_DRY_RUN: observe mode: sign + log would-bids, never send (env knob, not config)
+	strategyName         string
+	stateSource          stateSnapshotSource
+	strategy             types.Strategy
+	nonces               *nonceStore
+	breaker              *breaker
+	metrics              *metrics
+	stateRefreshObserver *observability.OperationObserver
+	ws                   *wsClient
+	seen                 *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
+	log                  logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
 	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.
 	stateRefreshCh chan struct{}
 
-	// resMu guards sent-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
-	// below the on-chain nonce (submitted -> settled or reverted; the fresh read reflects it) or it aged past
+	// resMu guards enqueued-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
+	// below the on-chain nonce (enqueued -> settled or reverted; the fresh read reflects it) or it aged past
 	// reservationTTL as a last-resort cleanup for missed result frames.
 	resMu sync.Mutex
 	res   []reservedBid

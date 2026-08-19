@@ -17,8 +17,10 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -565,8 +567,9 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 
 func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		statuses []uint8
+		name                string
+		statuses            []uint8
+		wantDepositDeferred float64
 	}{
 		{
 			name: "before planning",
@@ -576,6 +579,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				lifiOrderStatusDeposited,
 				lifiOrderStatusDeposited,
 			},
+			wantDepositDeferred: 2,
 		},
 		{
 			name: "before submission",
@@ -585,6 +589,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				lifiOrderStatusDeposited,
 				lifiOrderStatusDeposited,
 			},
+			wantDepositDeferred: 1,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -605,6 +610,12 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				fixture.adapter,
 				test.statuses[0],
 			)
+			reg := prometheus.NewRegistry()
+			metrics, err := newLIFIMetrics(reg, nil, "")
+			if err != nil {
+				t.Fatalf("newLIFIMetrics: %v", err)
+			}
+			solver.metrics = metrics
 			solver.wallNow = time.Now
 			var statusReads atomic.Int32
 			reader := solver.reader.(fakeLifiReader)
@@ -640,6 +651,15 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 			}
 			if len(txm.reqs) != 1 {
 				t.Fatalf("fill submissions = %d, want 1", len(txm.reqs))
+			}
+			wantByOutcome := map[string]float64{
+				string(orderProcessingDepositDeferred): test.wantDepositDeferred,
+				string(orderProcessingSubmitted):       1,
+			}
+			for _, outcome := range orderProcessingOutcomes {
+				metricstest.RequireWorkflowEventCount(
+					t, reg, Name, "order_processing", string(outcome), wantByOutcome[string(outcome)],
+				)
 			}
 		})
 	}
@@ -964,6 +984,12 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 		lifiOrderStatusDeposited,
 	)
 	solver.orders = newOrderClient(orderServer.URL, "test-key", time.Second, 11155111)
+	operationReg := prometheus.NewRegistry()
+	operationMetrics, err := newLIFIMetrics(operationReg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver.operations = operationMetrics.operations
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	inbox := newOrderInbox(2)
@@ -995,6 +1021,9 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	if err := <-workerDone; err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
+	metricstest.RequireExternalOperationCount(
+		t, operationReg, Name, orderRecoveryOperation, "success", 1,
+	)
 }
 
 func TestAwaitFillTreatsClosedResultChannelAsFailure(t *testing.T) {
@@ -1122,5 +1151,29 @@ func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
 	}
 	if got := requests.Load(); got < 4 {
 		t.Fatalf("GET /orders requests = %d, want at least two empty sweeps", got)
+	}
+}
+
+func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
+	var logs []string
+	solver := &Solver{
+		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	fill := &pendingFill{
+		order:          &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID:        common.HexToHash("0x1"),
+		reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+
+	solver.completeFill(pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
+	}})
+
+	logged := strings.Join(logs, "\n")
+	if pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		!strings.Contains(logged, "order fill included but confirmation wait failed") {
+		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
 	}
 }

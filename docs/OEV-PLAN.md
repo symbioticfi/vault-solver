@@ -127,10 +127,29 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   callback balance, configured bundle profitability, and the adapter's `isFiller` gate. The default strategy computes the bid **off-chain** from the
   configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec §8); optional solver-owned `maxBidWei`
   caps the final signed bid for every strategy. The contract carries no on-chain bid cap.
-- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): auctions/bids/wins/
-  failed-liquidations counters, a `skips_total{reason}` vector, a hot-path latency histogram, and deposit
-  gauges. The breaker halts bidding after N failed liquidations in a rolling window,
-  and immediately on a `blacklisted` frame.
+- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): bounded workflow events
+  classify every `auction/<outcome>` and the `bid/{enqueued,won,settled_success,settled_failed,unresolved}`
+  lifecycle; native bid amounts use the same stage as `kind`. A full parsed-frame latency histogram covers
+  the decision budget. Deposit and matched-win backlog/age remain dedicated scrape-time signals. Breaker
+  failures and state refreshes are bounded workflow events. The reservation stores the local win-transition timestamp, so the oldest still-inflight win
+  age measures settlement pressure without auction IDs in Prometheus and returns zero when none remain.
+  WebSocket connectivity becomes ready only after all topic subscriptions are written. State freshness
+  advances after a complete fallback-capable `latest` read bracketed by an unchanged head number and hash,
+  so a same-height reorg cannot install mixed state. A boundary crossing gets one immediate retry; a second
+  crossing fails startup or retains the runtime's last-known-good cache until the next poll. The generic
+  `state_refresh` histogram classifies installs as `success`, retained last-known-good data as `degraded`,
+  cancellation as `skipped`,
+  and other failures as `error`. Queue acceptance is deliberately called `enqueued`, not sent or
+  server-accepted.
+  Per-event workflow timestamps make an idle pipeline distinguishable from a stuck one without
+  introducing auction identifiers. Win/settlement lifecycle events intentionally include only frames
+  matched while their local bid reservation is active; late
+  frames after nonce/TTL reconciliation are excluded from those metrics,
+  while breaker failures still include late failed frames for our callback; identifiable replays are
+  deduplicated by frame ID or transaction hash. The breaker
+  halts bidding after N failed liquidations in a rolling window, and immediately on a `blacklisted`
+  frame. Exact names and labels are in the
+  [README metrics table](../README.md#metrics).
 - **Bindings.** The RedStone `Executor`, `IMorpho` (subset), `IAdaptiveCurveIrm`, `IOracle`, and our
   `SymbioticOevSolver`, and `AggregatorV3` feeds are **abigen --v2** bindings under `api/bindings/oev/*`
   (vendored ABIs in `api/abi/`: the external contracts hand-vendored, the Executor ABI mirroring the
@@ -248,8 +267,8 @@ has no block tag/timestamp or when its block timestamp is more than a small Ethe
 window behind the auction timestamp. This allows ordinary one-block monitor/API lag without letting a
 stuck API cache bid indefinitely. The solver ops loop is separate: it refreshes Executor state, latest
 header gas limit, configured adapter snapshot, and optional gas-oracle facts on `opsPollMs` and after our `liquidation-result`.
-`Run` requires one coherent initial snapshot before opening the auction stream; configured gas-token
-coverage or oracle-read failures therefore fail startup instead of leaving a ready process that cannot bid.
+`Run` requires one complete initial snapshot before opening the auction stream; configured gas-token coverage
+or oracle-read failures fail startup instead of leaving a ready process that cannot bid.
 The LiquidLane adapter is solver-owned config; its exchange price/capacity/liquidity snapshot is strategy
 input. The default strategy uses that same cached adapter snapshot to scope its Morpho monitor and loan
 decimals instead of maintaining a second adapter reader. It owns only its callback-balance refresh.
@@ -390,7 +409,7 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 
 ## 5. Settlement, reservation & safety
 
-- **In-flight reservation.** A sent bid records `reservedBid{nonce, at, auctionID, callback}` as lifecycle
+- **In-flight reservation.** An enqueued bid records `reservedBid{nonce, at, auctionID, callback}` as lifecycle
   state. The solver passes pending auction IDs to the strategy; strategy-specific duplicate-position,
   callback funding, and gas risk avoidance stay inside the strategy because the solver no longer knows
   callback operation semantics or Morpho legs. The default strategy keeps its own per-auction bid, predicted
@@ -410,7 +429,8 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
   de-dup + `timeoutMs` drop, optional operator bid cap (`bid_cap`), configured after-cost profitability (`gas_unprofitable`), Executor deposit floor
   (`deposit_low`) + callback-native funding. The default bid is bounded **off-chain** by
   `strategy.config.bid.bidEth` plus optional `strategy.config.bid.totalBundleProfitBps`, and the solver can cap the final signed bid with `maxBidWei`.
-  There is no on-chain bid cap. A deposit below MIN_DEPOSIT raises an `oev_deposit_below_floor` gauge + error log.
+  There is no on-chain bid cap. A deposit below MIN_DEPOSIT raises an error log and skips bidding;
+  monitoring derives the condition directly from `oev_deposit_wei`.
   The operator tops up that deposit and the callback's payBid native balance out-of-band.
 - **No self-funding.** The bot moves no funds outside the signed settlement: the callback's payBid native
   pool is owner-refilled out-of-band and the signer's Executor gas deposit is topped up out-of-band. The

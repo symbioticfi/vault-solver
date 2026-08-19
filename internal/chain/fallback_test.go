@@ -18,6 +18,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
@@ -590,8 +593,8 @@ func rpcRecorder(methods *[]string, result func(method string) string) *httptest
 }
 
 // TestDial_WriteRPCRoutesBroadcastsAndNonces confirms a separate writeRpcUrl carries the
-// transaction broadcast and both startup nonce reads. The write endpoint's chain id is validated once;
-// block number and every other read stay on the primary endpoint. This is the mevblocker-style split:
+// transaction broadcast, sender telemetry, and both startup nonce reads. The write endpoint's chain id is
+// validated once; block number and every other read stay on the primary endpoint. This is the mevblocker-style split:
 // private submissions and their nonce view share one endpoint while ordinary reads use a normal RPC.
 func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	var readMethods, writeMethods []string
@@ -606,15 +609,24 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		if m == "eth_chainId" {
 			return `"0x7a69"`
 		}
-		if m == "eth_getTransactionCount" {
+		if m == rpcMethodGetTransactionCount {
 			return `"0x2"`
+		}
+		if m == "eth_getBalance" {
+			return `"0x3"`
 		}
 		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
 	})
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	rpcMetrics, err := NewRPCMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := DialWithMetrics(
+		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics, logr.Discard(),
+	)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -635,6 +647,11 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	} else if nonce != 2 {
 		t.Fatalf("NonceAt = %d, want 2", nonce)
 	}
+	if balance, err := c.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil); err != nil {
+		t.Fatalf("TransactionSenderBalanceAt: %v", err)
+	} else if balance.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("TransactionSenderBalanceAt = %s, want 3", balance)
+	}
 	// A broadcast hits the write endpoint only.
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   big.NewInt(31337),
@@ -650,8 +667,11 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	if !slices.Contains(writeMethods, "eth_sendRawTransaction") {
 		t.Fatalf("write endpoint did not receive the broadcast, saw: %v", writeMethods)
 	}
-	if !slices.Contains(writeMethods, "eth_getTransactionCount") {
+	if !slices.Contains(writeMethods, rpcMethodGetTransactionCount) {
 		t.Fatalf("write endpoint did not receive startup nonce reads, saw: %v", writeMethods)
+	}
+	if !slices.Contains(writeMethods, "eth_getBalance") {
+		t.Fatalf("write endpoint did not receive the sender balance read, saw: %v", writeMethods)
 	}
 	if !slices.Contains(writeMethods, "eth_chainId") {
 		t.Fatalf("write endpoint chain id was not validated, saw: %v", writeMethods)
@@ -659,12 +679,20 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	if slices.Contains(writeMethods, "eth_blockNumber") {
 		t.Fatalf("reads leaked onto the write endpoint: %v", writeMethods)
 	}
-	if slices.Contains(readMethods, "eth_sendRawTransaction") || slices.Contains(readMethods, "eth_getTransactionCount") {
+	if slices.Contains(readMethods, rpcMethodSendRawTransaction) ||
+		slices.Contains(readMethods, rpcMethodGetTransactionCount) ||
+		slices.Contains(readMethods, "eth_getBalance") {
 		t.Fatalf("write-side operation leaked onto the read endpoint: %v", readMethods)
 	}
 	if !slices.Contains(readMethods, "eth_blockNumber") {
 		t.Fatalf("read endpoint did not receive the read, saw: %v", readMethods)
 	}
+	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
+		rpcRoleWrite, "eth_getBalance", string(rpcOutcomeSuccess),
+	), 1)
+	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
+		rpcRoleRead, "eth_blockNumber", string(rpcOutcomeSuccess),
+	), 1)
 }
 
 func TestDial_RejectsMismatchedWriteRPCChainID(t *testing.T) {

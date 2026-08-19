@@ -45,6 +45,29 @@ type Client struct {
 // read account nonces (see SendTransaction, NonceAt, and PendingNonceAt). Every other read stays on
 // the primary. When it is empty, broadcasts and nonce reads use rpcURLs[0] without falling over.
 func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr string, log logr.Logger) (*Client, error) {
+	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, nil, log)
+}
+
+// DialWithMetrics is Dial with generic HTTP JSON-RPC instrumentation on the supplied registry.
+func DialWithMetrics(
+	ctx context.Context,
+	rpcURLs []string,
+	writeRPCURL string,
+	multicallAddr string,
+	rpcMetrics *RPCMetrics,
+	log logr.Logger,
+) (*Client, error) {
+	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, rpcMetrics, log)
+}
+
+func dial(
+	ctx context.Context,
+	rpcURLs []string,
+	writeRPCURL string,
+	multicallAddr string,
+	rpcMetrics *RPCMetrics,
+	log logr.Logger,
+) (*Client, error) {
 	if len(rpcURLs) == 0 {
 		return nil, errors.New("chain: no rpc url configured")
 	}
@@ -52,7 +75,15 @@ func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr stri
 		return nil, errors.Errorf("chain: invalid multicall address %q", multicallAddr)
 	}
 
-	ec, err := dialClient(ctx, rpcURLs, log)
+	writeEndpoint := writeRPCURL
+	if writeEndpoint == "" && len(rpcURLs) > 1 {
+		writeEndpoint = rpcURLs[0]
+	}
+	readRole := rpcRoleRead
+	if writeEndpoint == "" {
+		readRole = rpcRoleShared
+	}
+	ec, err := dialClient(ctx, rpcURLs, readRole, rpcMetrics, log)
 	if err != nil {
 		return nil, err
 	}
@@ -67,12 +98,8 @@ func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr stri
 	// writes from a multi-endpoint read client: replaying eth_sendRawTransaction across endpoints can
 	// hide an ambiguous acceptance behind a later nonce-too-low response.
 	writeClient := ec
-	writeEndpoint := writeRPCURL
-	if writeEndpoint == "" && len(rpcURLs) > 1 {
-		writeEndpoint = rpcURLs[0]
-	}
 	if writeEndpoint != "" {
-		wc, wcErr := dialClient(ctx, []string{writeEndpoint}, log)
+		wc, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics, log)
 		if wcErr != nil {
 			ec.Close()
 			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
@@ -120,6 +147,16 @@ func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (ui
 	return c.writeClient.PendingNonceAt(ctx, account)
 }
 
+// TransactionSenderBalanceAt reads the sender balance through the write endpoint. It is intentionally
+// separate from promoted BalanceAt, which remains a fallback-capable ordinary read for solvers.
+func (c *Client) TransactionSenderBalanceAt(
+	ctx context.Context,
+	account common.Address,
+	blockNumber *big.Int,
+) (*big.Int, error) {
+	return c.writeClient.BalanceAt(ctx, account, blockNumber)
+}
+
 // Close closes the primary client and, when a separate write client was dialed, that one too. It
 // overrides the promoted ethclient method so the write client is not leaked.
 func (c *Client) Close() {
@@ -131,7 +168,13 @@ func (c *Client) Close() {
 
 // dialClient builds the ethclient. A single non-HTTP endpoint keeps a plain dial; HTTP(S) endpoints
 // use fallbackTransport so each attempt remains bounded.
-func dialClient(ctx context.Context, rpcURLs []string, log logr.Logger) (*ethclient.Client, error) {
+func dialClient(
+	ctx context.Context,
+	rpcURLs []string,
+	role string,
+	rpcMetrics *RPCMetrics,
+	log logr.Logger,
+) (*ethclient.Client, error) {
 	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
 		ec, err := ethclient.DialContext(ctx, rpcURLs[0])
 		if err != nil {
@@ -143,7 +186,14 @@ func dialClient(ctx context.Context, rpcURLs []string, log logr.Logger) (*ethcli
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{Transport: &fallbackTransport{endpoints: endpoints, base: http.DefaultTransport, log: log}}
+	rpcMetrics.bindTransport(role, len(endpoints))
+	httpClient := &http.Client{Transport: &fallbackTransport{
+		endpoints: endpoints,
+		base:      http.DefaultTransport,
+		metrics:   rpcMetrics,
+		role:      role,
+		log:       log,
+	}}
 	rc, err := rpc.DialOptions(ctx, rpcURLs[0], rpc.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, errors.Errorf("chain: dial (fallback): %w", err)

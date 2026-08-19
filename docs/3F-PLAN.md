@@ -377,6 +377,34 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
-**Testing:**
+**Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
-- **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
+- **Metrics.** The shared bounded workflow families report `offer/{success,error}` and
+  `redeem/success` events plus principal/quoted-expected-yield amounts by deposit asset.
+  `solver_bot_workflow_observed_items{solver="3f-bridge-facilitator",view}` reports installed valid
+  targets, offers, active requests, and redeemable requests; matching observation freshness
+  distinguishes current zeroes from retained last-known-good state. Each
+  complete authoritative `active_requests`/`redeemable` observation also maintains a process-local
+  non-empty-since timestamp. It is retained across later complete non-empty and incomplete observations,
+  cleared by an authoritative empty snapshot, and resets on process restart; it is intentionally not
+  called an oldest-request age because the contract views do not expose that transition time. Its initial
+  zero is ambiguous with an authoritative empty state and must be read with the matching freshness. Each
+  complete target refresh publishes freshness, including a successful empty snapshot. A partial
+  per-adapter read still installs the safe resolved runtime subset, but retains the previous target
+  count and freshness; while that parent snapshot is non-authoritative, the derived `offers`,
+  `active_requests`, and `redeemable` views also retain their last-known-good counts and freshness.
+  Whole-batch discovery/read failures retain both runtime and metrics. Each redeem pass publishes only
+  a complete all-adapter observation, then rescans each candidate immediately before building calldata.
+  Malformed sub-call data withholds freshness while valid ready requests are still redeemed best-effort.
+  Malformed live-offer status, expiration, or amount likewise withholds
+  offer-view freshness. The generic external-operation histogram times the fixed
+  `target_refresh`, `offer_refresh`, `active_request_refresh`, and `redeemable_refresh` read phases.
+  Complete (including empty), partial/last-known-good, shutdown-interrupted, and failed passes map to
+  bounded `success`, `degraded`, `skipped`, and `error` outcomes. Offer strategy execution and API
+  submission are outside `offer_refresh`; redemption sends are outside `redeemable_refresh`, so these
+  dependency timings never absorb transaction latency. Successful API offers publish token-native
+  principal/yield workflow amounts. Event freshness accompanies successful offers and redeem batches;
+  transaction outcomes, in-flight requests, gas, and replacements
+  remain sourced from txmanager. The API does
+  not attribute consumed offers to this solver, so no speculative 3F “wins” or realized-yield counter
+  is exposed. Exact names and labels are in the [README metrics table](../README.md#metrics).

@@ -46,71 +46,109 @@ type quoteCandidateReader interface {
 	) ([]liquidlane.QuoteCandidate, error)
 }
 
-// quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
-// can't quote it (wrong type/chain, input token out of scope or below its configured minimum, no
-// whitelisted adapter, no matching asset, or no viable strategy). An error is returned only for
-// malformed input or a failed chain read.
-func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteResponse, error) {
+type quoteDecisionOutcome string
+
+const (
+	quoteDecisionQuoted           quoteDecisionOutcome = "quoted"
+	quoteDecisionLaneUnavailable  quoteDecisionOutcome = "lane_unavailable"
+	quoteDecisionNotQuotable      quoteDecisionOutcome = "not_quotable"
+	quoteDecisionBelowMinimum     quoteDecisionOutcome = "below_minimum"
+	quoteDecisionNoCandidates     quoteDecisionOutcome = "no_candidates"
+	quoteDecisionStrategyDeclined quoteDecisionOutcome = "strategy_declined"
+	quoteDecisionError            quoteDecisionOutcome = "error"
+)
+
+var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
+	quoteDecisionQuoted,
+	quoteDecisionLaneUnavailable,
+	quoteDecisionNotQuotable,
+	quoteDecisionBelowMinimum,
+	quoteDecisionNoCandidates,
+	quoteDecisionStrategyDeclined,
+	quoteDecisionError,
+}
+
+// quoteDecision keeps the domain classification next to the response it produced. The HTTP handler
+// owns metrics observation, so direct/internal quote evaluation does not masquerade as transport
+// traffic and every authenticated handler invocation records exactly one terminal decision.
+type quoteDecision struct {
+	response    *quoteResponse
+	outcome     quoteDecisionOutcome
+	observation *quoteObservation
+}
+
+type quoteObservation struct {
+	tokenIn   common.Address
+	tokenOut  common.Address
+	amountIn  *big.Int
+	amountOut *big.Int
+}
+
+// quote returns a terminal domain decision. Its response is nil (→ HTTP 204) when the request is
+// well-formed but this filler can't quote it (wrong type/chain, input token out of scope or below its
+// configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
+// returned only for malformed input or a failed dependency.
+func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
-		return nil, &badRequestError{errors.Errorf("parse request: %w", err)}
+		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
 		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 	if parsed == nil {
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
 		qs.log.V(1).Info("declining quote: input token out of scope",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
 		qs.log.V(1).Info("declining quote: input amount below configured minimum",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
 			"amount", parsed.req.Amount.String(), "min", minIn.String())
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
 	if len(inv) == 0 {
 		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
 	if err != nil {
-		return nil, errors.Errorf("quote: read LiquidLane candidates: %w", err)
+		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
 	if len(candidates) == 0 {
 		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
 	out, err := qs.strategy.DecideQuote(ctx, input)
 	if err != nil {
-		return nil, errors.Errorf("quote: strategy: %w", err)
+		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
 	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
-		return nil, errors.Errorf("quote: strategy: %w", err)
+		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if !qs.canQuote() {
 		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
-		return nil, nil
+		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 
 	qs.log.V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
 		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
-	return &quoteResponse{
+	response := &quoteResponse{
 		ChainID:   qs.chainID,
 		AmountIn:  req.Amount.String(),
 		AmountOut: out.QuotedAmountOut.String(),
@@ -120,6 +158,14 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		TokenIn:   lowerAddr(req.TokenIn),
 		TokenOut:  lowerAddr(req.TokenOut),
 		QuoteID:   q.QuoteID,
+	}
+	return quoteDecision{
+		response: response,
+		outcome:  quoteDecisionQuoted,
+		observation: &quoteObservation{
+			tokenIn: req.TokenIn, tokenOut: req.TokenOut,
+			amountIn: req.Amount, amountOut: out.QuotedAmountOut,
+		},
 	}, nil
 }
 

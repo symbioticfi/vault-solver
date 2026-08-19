@@ -52,6 +52,8 @@ type Solver struct {
 	capacity     liquidlane.CapacityLedger
 	quoteRefresh chan struct{}
 	discounts    discounts.Provider
+	metrics      *lifiMetrics
+	operations   lifiOperationObservers
 }
 
 type chainReader interface {
@@ -102,6 +104,18 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey, log)
+	var (
+		metrics    *lifiMetrics
+		operations lifiOperationObservers
+	)
+	if deps.Metrics != nil {
+		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
+		if err != nil {
+			return nil, err
+		}
+		operations = metrics.operations
+	}
 	result := &Solver{
 		cfg:          cfg,
 		chainID:      chainID,
@@ -109,13 +123,15 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy:     strategy,
 		caller:       deps.Signer.Address(),
 		orders:       newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
-		feed:         newOrderFeed(cfg.OrderServer.WSURL, apiKey, log),
+		feed:         feed,
 		txm:          deps.TxManager,
 		log:          log,
 		now:          reader.latestBlockTime,
 		maxFeePerGas: deps.TxManager.MaxFeePerGas,
 		wallNow:      time.Now,
 		txLaneState:  deps.TxManager,
+		metrics:      metrics,
+		operations:   operations,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)

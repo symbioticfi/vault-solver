@@ -187,6 +187,25 @@ pending-capacity ledger lives in `internal/liquidlane`. Allocation policy remain
 route identity, capacity, amount, and gas-floor invariants.
 Public strategy interfaces, webhook DTOs, caches, protocol lifecycle, and calldata remain solver-local.
 
+All integrations bind their static event/outcome, amount-kind, state-view, and external-operation labels
+through the generic workflow metric families. Solver packages still own those protocol-specific enums and
+unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and UniswapX share the same
+`fill/success` event and token-native amount kinds. Gas, fee, failure, and transaction lifecycle accounting
+remains in txmanager.
+The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
+role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels. An active
+`txmanager` periodically installs one complete sender balance/latest-nonce/pending-nonce telemetry snapshot
+through the write endpoint, retaining the previous snapshot on failure. One locked collector emits the account
+identity, refresh counters, values, and freshness from a single scrape-consistent state; processes whose solvers
+do not start `txmanager` emit no txmanager account series. `solver_bot_solver_info{solver}` exposes bounded
+config-time membership for fleet joins.
+
+A process is one execution lane: one chain client (primary/fallback read set plus optional private write
+endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
+signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
+(or deployment-supplied `lane`) target labels. Application metrics do not carry URLs or deployment names.
+The same EOA must not appear in two lanes because independent txmanagers cannot coordinate its nonce.
+
 The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and
 UniswapX: parse and filter live offers, bind offers to physical routes, cap advertised rate/capacity,
 derive amount-specific candidates, and revalidate resolved id/adapter/token/deadlines plus the current

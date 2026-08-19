@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -38,6 +40,7 @@ type pendingFill struct {
 	order          *submittedOrder
 	orderID        common.Hash
 	reservationKey string
+	plannedSurplus *big.Int
 	result         <-chan txmanager.Result
 }
 
@@ -61,6 +64,7 @@ type orderRecoveryResult struct {
 type orderInbox struct {
 	mu                sync.Mutex
 	orders            []*submittedOrder
+	delivering        *submittedOrder
 	queued            map[string]bool
 	recoverySeen      map[string]bool
 	recoverySeenOrder []string
@@ -291,6 +295,7 @@ func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error 
 		order := q.orders[0]
 		q.orders[0] = nil
 		q.orders = q.orders[1:]
+		q.delivering = order
 		if len(q.orders) == 0 {
 			q.orders = nil
 		}
@@ -301,15 +306,53 @@ func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error 
 		}
 		select {
 		case <-ctx.Done():
+			q.mu.Lock()
+			q.delivering = nil
+			q.mu.Unlock()
 			return ctx.Err()
 		case out <- order:
 		}
+		q.mu.Lock()
+		q.delivering = nil
 		if key := orderInboxKey(order); key != "" {
-			q.mu.Lock()
 			delete(q.queued, key)
-			q.mu.Unlock()
 		}
+		q.mu.Unlock()
 	}
+}
+
+func (q *orderInbox) orderQueueSnapshot() orderQueueSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var snapshot orderQueueSnapshot
+	add := func(order *submittedOrder) {
+		if order == nil || order.processed != nil {
+			return
+		}
+		snapshot.backlog++
+		snapshot.nearestDeadline = earlierOrderDeadlineUnix(snapshot.nearestDeadline, order)
+	}
+	add(q.delivering)
+	for _, order := range q.orders {
+		add(order)
+	}
+	return snapshot
+}
+
+func (q *orderInbox) recoveryRetryQueueSnapshot() orderQueueSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var snapshot orderQueueSnapshot
+	for _, order := range q.recoveryRetry {
+		if order == nil || order.processed != nil {
+			continue
+		}
+		snapshot.backlog++
+		snapshot.nearestDeadline = earlierOrderDeadlineUnix(snapshot.nearestDeadline, order)
+	}
+	return snapshot
 }
 
 func orderInboxKey(order *submittedOrder) string {
@@ -328,6 +371,13 @@ func (s *Solver) runOrderFeed(
 	feedConnections chan<- context.Context,
 ) error {
 	inbox := newOrderInbox(orderInboxCapacity)
+	stopInboxMetrics := s.metrics.trackOrderQueue(orderQueueInbox, inbox.orderQueueSnapshot)
+	defer stopInboxMetrics()
+	stopRecoveryRetryMetrics := s.metrics.trackOrderQueue(
+		orderQueueRecoveryRetry,
+		inbox.recoveryRetryQueueSnapshot,
+	)
+	defer stopRecoveryRetryMetrics()
 	orders := make(chan *submittedOrder)
 	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
@@ -348,6 +398,7 @@ func (s *Solver) runOrderFeed(
 					if !s.recoverOrdersUntilSuccess(connectionCtx, inbox) {
 						return
 					}
+					s.feed.markRecoveryReady(connectionCtx)
 					select {
 					case feedConnections <- connectionCtx:
 					case <-connectionCtx.Done():
@@ -357,6 +408,7 @@ func (s *Solver) runOrderFeed(
 			func(_ context.Context, msg orderMessage) {
 				order := s.parseOrderMessage(msg)
 				if err := inbox.enqueue(order); err != nil {
+					s.metrics.observeOrderQueueDrop(orderQueueInbox, err)
 					fields := []any{"event", msg.Event}
 					if order != nil {
 						fields = append(fields,
@@ -401,6 +453,15 @@ func (s *Solver) recoverOrdersUntilSuccess(
 	ctx context.Context,
 	inbox *orderInbox,
 ) bool {
+	startedAt := time.Now()
+	outcome := observability.ExternalOperationError
+	defer func() {
+		if ctx.Err() != nil {
+			outcome = observability.ExternalOperationSkipped
+		}
+		s.operations.orderRecovery.Observe(outcome, time.Since(startedAt))
+	}()
+
 	backoff := initialOrderRecoveryBackoff
 	recovered := make(map[string]bool)
 	successfulSweeps := 0
@@ -416,6 +477,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 				"seenOrders", len(recovered),
 			)
 			if result.discovered == 0 && inbox.tryEndRecovery(result.processedGen) {
+				outcome = observability.ExternalOperationSuccess
 				s.log.Info("order recovery completed", "listedOrders", result.listed, "seenOrders", len(recovered))
 				return true
 			}
@@ -544,6 +606,10 @@ func (s *Solver) runOrderWorker(
 	completions := make(chan fillCompletion, fillCompletionCapacity)
 	retries := newReservationRetryQueue(orderRetryCapacity)
 	depositRetries := newOrderDepositRetryQueue(orderDepositRetryCapacity)
+	stopCapacityRetryMetrics := s.metrics.trackOrderQueue(orderQueueCapacityRetry, retries.orderQueueSnapshot)
+	defer stopCapacityRetryMetrics()
+	stopDepositRetryMetrics := s.metrics.trackOrderQueue(orderQueueDepositRetry, depositRetries.orderQueueSnapshot)
+	defer stopDepositRetryMetrics()
 	var reservationReleaseGen uint64
 	ctxDone := ctx.Done()
 	var runErr error
@@ -571,8 +637,14 @@ func (s *Solver) runOrderWorker(
 		} else {
 			result = s.processOrderUsingReservations(ctx, routes, order, &pending, reservations)
 		}
+		outcome := result.outcome
+		// Observe after retry admission: a deferred attempt can still become a
+		// bounded-queue drop before the worker retains it.
+		defer func() { s.metrics.observeOrderProcessing(outcome) }()
 		if result.depositNotVisible {
 			if err := depositRetries.schedule(order, retryNow()); err != nil {
+				outcome = orderProcessingNotActionable
+				s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
 				if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
 					s.log.Error(err, "order deposit retry: dropped order",
 						"orderId", order.OrderID,
@@ -603,10 +675,17 @@ func (s *Solver) runOrderWorker(
 		// Invariant: a queued reservation retry implies a pending fill. Completions are
 		// the only events that advance the retry generation and wake the worker.
 		if len(result.blockedOn) == 0 || pending.len() == 0 {
+			if len(result.blockedOn) > 0 {
+				outcome = orderProcessingOther
+			}
 			return
 		}
 		queuedBefore := retries.len()
 		if err := retries.enqueue(order, reservationReleaseGen); err != nil {
+			if errors.Is(err, errOrderRetryFull) {
+				outcome = orderProcessingCapacityDropped
+			}
+			s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
 			s.log.Error(err, "order retry queue: dropped newest order",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,

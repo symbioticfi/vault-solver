@@ -19,10 +19,12 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -545,12 +547,14 @@ func (f *fakeLifiTxSender) SendAsync(
 }
 
 func (f *fakeLifiTxSender) fillResult() txmanager.Result {
-	if f.result.Err != nil || f.result.Receipt != nil || f.result.Hash != (common.Hash{}) {
+	if f.result.Outcome != "" || f.result.Err != nil ||
+		f.result.Receipt != nil || f.result.Hash != (common.Hash{}) {
 		return f.result
 	}
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		Receipt: &ethtypes.Receipt{Status: ethtypes.ReceiptStatusSuccessful},
+		Outcome: txmanager.OutcomeConfirmed,
 	}
 }
 
@@ -753,6 +757,9 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 	if result.fill != nil || len(result.blockedOn) != 0 {
 		t.Fatalf("external nil decision was retained: %+v", result)
 	}
+	if result.outcome != orderProcessingStrategyDeclined {
+		t.Fatalf("outcome = %q, want %q", result.outcome, orderProcessingStrategyDeclined)
+	}
 	if strategy.calls != 1 {
 		t.Fatalf("external fill decisions = %d, want 1", strategy.calls)
 	}
@@ -765,16 +772,19 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 		err              error
 		wantRetryable    bool
 		wantAttemptLimit int
+		wantOutcome      orderProcessingOutcome
 	}{
 		{
 			name:             "transient",
 			err:              transient,
 			wantRetryable:    true,
 			wantAttemptLimit: maximumStrategyRecoveryAttempts,
+			wantOutcome:      orderProcessingRetryableError,
 		},
 		{
-			name: "permanent input rejection",
-			err:  types.MarkPermanentFillDecisionError(errors.New("unsupported output context")),
+			name:        "permanent input rejection",
+			err:         types.MarkPermanentFillDecisionError(errors.New("unsupported output context")),
+			wantOutcome: orderProcessingStrategyDeclined,
 		},
 	}
 	for _, tt := range tests {
@@ -800,6 +810,9 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 					result.recoveryAttemptLimit,
 					tt.wantAttemptLimit,
 				)
+			}
+			if result.outcome != tt.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", result.outcome, tt.wantOutcome)
 			}
 		})
 	}
@@ -989,12 +1002,15 @@ func TestProcessOrderSkipsInputTokenOutsideScopeBeforeChainReads(t *testing.T) {
 		return common.Hash{}
 	}}
 
-	s.processOrder(
+	result := s.processOrderWithPending(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
 		t.Fatalf("out-of-scope order: orderID reads=%d txs=%d", orderIDReads, len(txm.reqs))
+	}
+	if result.outcome != orderProcessingNotActionable {
+		t.Fatalf("outcome = %q, want %q", result.outcome, orderProcessingNotActionable)
 	}
 }
 
@@ -1016,12 +1032,15 @@ func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 	var logs []string
 	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
 
-	s.processOrder(
+	result := s.processOrderWithPending(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
 		t.Fatalf("fee-bearing order: orderID reads=%d txs=%d", orderIDReads, len(txm.reqs))
+	}
+	if !result.retryable || result.outcome != orderProcessingRetryableError {
+		t.Fatalf("result = %+v, want retryable_error", result)
 	}
 	logged := strings.Join(logs, "\n")
 	if !strings.Contains(logged, "governance fee invariant failed") || !strings.Contains(logged, `"error"`) {
@@ -1095,12 +1114,15 @@ func TestProcessOrderRejectsMultiRoutePlanForPermissionedToken(t *testing.T) {
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 	)
 
-	s.processOrder(
+	result := s.processOrderWithPending(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if len(txm.reqs) != 0 {
 		t.Fatalf("permissioned multi-route plan submitted %d transactions", len(txm.reqs))
+	}
+	if result.outcome != orderProcessingInvalidPlan {
+		t.Fatalf("outcome = %q, want %q", result.outcome, orderProcessingInvalidPlan)
 	}
 }
 
@@ -1199,11 +1221,15 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 		name                  string
 		status                uint8
 		wantDepositNotVisible bool
+		wantOutcome           orderProcessingOutcome
 	}{
-		{name: "none", status: lifiOrderStatusNone, wantDepositNotVisible: true},
-		{name: "claimed", status: lifiOrderStatusClaimed},
-		{name: "refunded", status: lifiOrderStatusRefunded},
-		{name: "unknown", status: 255},
+		{
+			name: "none", status: lifiOrderStatusNone,
+			wantDepositNotVisible: true, wantOutcome: orderProcessingDepositDeferred,
+		},
+		{name: "claimed", status: lifiOrderStatusClaimed, wantOutcome: orderProcessingNotActionable},
+		{name: "refunded", status: lifiOrderStatusRefunded, wantOutcome: orderProcessingNotActionable},
+		{name: "unknown", status: 255, wantOutcome: orderProcessingNotActionable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1238,6 +1264,9 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 			if result.depositNotVisible != test.wantDepositNotVisible {
 				t.Fatalf("depositNotVisible = %t, want %t", result.depositNotVisible, test.wantDepositNotVisible)
 			}
+			if result.outcome != test.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", result.outcome, test.wantOutcome)
+			}
 			if result.fill != nil || result.retryable {
 				t.Fatalf("submission status result = %+v, want no fill or generic retry", result)
 			}
@@ -1254,7 +1283,10 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New strategy: %v", err)
 	}
-	txm := &fakeLifiTxSender{result: txmanager.Result{Err: errors.New("send failed")}}
+	txm := &fakeLifiTxSender{result: txmanager.Result{
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("send failed"),
+	}}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 
 	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
@@ -1275,12 +1307,15 @@ func TestProcessOrderDropsWhenTransactionSubmissionIsRejected(t *testing.T) {
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 	)
 
-	s.processOrder(
+	result := s.processOrderWithPending(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if len(txm.reqs) != 0 {
 		t.Fatalf("busy sender accepted %d requests", len(txm.reqs))
+	}
+	if result.outcome != orderProcessingNotActionable {
+		t.Fatalf("outcome = %q, want %q", result.outcome, orderProcessingNotActionable)
 	}
 }
 
@@ -1451,6 +1486,12 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 		fixture.adapter,
 		lifiOrderStatusDeposited,
 	)
+	reg := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(reg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.metrics = metrics
 	s.quoteRefresh = make(chan struct{}, 8)
 	s.reader = fakeLifiReader{
 		status: lifiOrderStatusDeposited,
@@ -1532,6 +1573,14 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not finish after receipt")
+	}
+	wantByOutcome := map[string]float64{
+		string(orderProcessingSubmitted): 3, string(orderProcessingCapacityDeferred): 1,
+	}
+	for _, outcome := range orderProcessingOutcomes {
+		metricstest.RequireWorkflowEventCount(
+			t, reg, Name, "order_processing", string(outcome), wantByOutcome[string(outcome)],
+		)
 	}
 }
 

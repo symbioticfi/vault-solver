@@ -4,11 +4,11 @@ package observability
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -40,16 +40,21 @@ func NewLogger(debug bool) (logr.Logger, func()) {
 	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }
 }
 
-// Metrics owns the Prometheus registry. Solvers register their own collectors on Registerer();
-// the framework only records build info here so the package stays solver-agnostic.
+// Metrics owns the Prometheus registry. Solvers register their domain collectors on Registerer();
+// the framework records only integration-neutral process and external-dependency signals here.
 type Metrics struct {
-	registry  *prometheus.Registry
-	buildInfo *prometheus.GaugeVec
+	registry     *prometheus.Registry
+	buildInfo    *prometheus.GaugeVec
+	solverInfo   *prometheus.GaugeVec
+	serviceReady prometheus.GaugeFunc
+	health       *Health
 }
 
-// NewMetrics creates a registry seeded with build-info.
-func NewMetrics() *Metrics {
+// NewMetrics creates a registry seeded with framework and standard process metrics. Readiness is
+// returned as a separate framework-owned capability so solver-facing Metrics cannot mutate it.
+func NewMetrics() (*Metrics, *Health) {
 	reg := prometheus.NewRegistry()
+	health := &Health{}
 	buildInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "solver_bot",
@@ -58,9 +63,35 @@ func NewMetrics() *Metrics {
 		},
 		[]string{"version", "commit"},
 	)
+	solverInfo := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "solver_bot",
+			Name:      "solver_info",
+			Help:      "Configured solver membership; constant 1 for each solver in this runtime.",
+		},
+		[]string{"solver"},
+	)
+	serviceReady := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: "solver_bot",
+		Name:      "service_ready",
+		Help:      "1 when the process admits work through its readiness gate; 0 otherwise.",
+	}, health.readyValue)
 	// Standard Go runtime + process metrics, so /metrics carries CPU, memory, goroutines, GC, FDs, etc.
-	reg.MustRegister(buildInfo, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	return &Metrics{registry: reg, buildInfo: buildInfo}
+	reg.MustRegister(
+		buildInfo,
+		solverInfo,
+		serviceReady,
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	metrics := &Metrics{
+		registry:     reg,
+		buildInfo:    buildInfo,
+		solverInfo:   solverInfo,
+		serviceReady: serviceReady,
+		health:       health,
+	}
+	return metrics, health
 }
 
 // Registerer lets solvers register their domain metrics on the shared registry.
@@ -71,6 +102,49 @@ func (m *Metrics) SetBuildInfo(version, commit string) {
 	m.buildInfo.WithLabelValues(version, commit).Set(1)
 }
 
+// SetSolvers records the bounded, config-time solver membership of this runtime.
+func (m *Metrics) SetSolvers(names []string) {
+	for _, name := range names {
+		m.solverInfo.WithLabelValues(name).Set(1)
+	}
+}
+
+// ExternalOperationOutcome is the bounded result of an external dependency operation.
+// Its zero value is invalid and is recorded as ExternalOperationError.
+type ExternalOperationOutcome uint8
+
+const (
+	ExternalOperationSuccess ExternalOperationOutcome = iota + 1
+	ExternalOperationDegraded
+	ExternalOperationSkipped
+	ExternalOperationError
+)
+
+var externalOperationOutcomeLabels = [...]string{
+	ExternalOperationSuccess:  "success",
+	ExternalOperationDegraded: "degraded",
+	ExternalOperationSkipped:  "skipped",
+	ExternalOperationError:    "error",
+}
+
+// OperationObserver records one pre-bound solver/operation pair. All outcome series are also
+// pre-bound, so observing cannot introduce label values at runtime.
+type OperationObserver struct {
+	observers [ExternalOperationError + 1]prometheus.Observer
+}
+
+// Observe records a duration against a bounded outcome. Invalid outcome values fail closed into
+// the pre-bound error series instead of creating a new label value.
+func (o *OperationObserver) Observe(outcome ExternalOperationOutcome, duration time.Duration) {
+	if o == nil {
+		return
+	}
+	if outcome < ExternalOperationSuccess || outcome > ExternalOperationError {
+		outcome = ExternalOperationError
+	}
+	o.observers[outcome].Observe(duration.Seconds())
+}
+
 // Health tracks process liveness and readiness for the HTTP probes.
 type Health struct {
 	ready atomic.Bool
@@ -79,15 +153,22 @@ type Health struct {
 // SetReady marks the service ready (readyz returns 200) or not ready (503).
 func (h *Health) SetReady(ready bool) { h.ready.Store(ready) }
 
+func (h *Health) readyValue() float64 {
+	if h.ready.Load() {
+		return 1
+	}
+	return 0
+}
+
 // NewHTTPServer builds the observability HTTP server. Caller runs ListenAndServe and Shutdown.
-func NewHTTPServer(addr string, m *Metrics, h *Health) *http.Server {
+func NewHTTPServer(addr string, m *Metrics) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeText(w, http.StatusOK, "ok")
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if h.ready.Load() {
+		if m.health.ready.Load() {
 			writeText(w, http.StatusOK, "ready")
 			return
 		}

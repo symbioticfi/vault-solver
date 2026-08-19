@@ -91,9 +91,13 @@ func TestExternalModeNeverListsDiscounts(t *testing.T) {
 		log:       logr.Discard(),
 	}
 
-	quoteRoutes, quoted, err := solver.quoteRoutesWithDiscounts(t.Context(), []liquidlane.Route{route}, time.Now())
-	if err != nil || quoted != nil || len(quoteRoutes) != 1 {
-		t.Fatalf("external quote routes/list/error = %+v/%+v/%v", quoteRoutes, quoted, err)
+	quoteRoutes, err := solver.quoteRoutesWithDiscounts(
+		t.Context(),
+		[]liquidlane.Route{route},
+		time.Now(),
+	)
+	if err != nil || quoteRoutes.listed != nil || !quoteRoutes.complete || len(quoteRoutes.routes) != 1 {
+		t.Fatalf("external quote routes/error = %+v/%v", quoteRoutes, err)
 	}
 	fillRoutes, filled, err := solver.fillRoutesWithDiscounts(
 		t.Context(),

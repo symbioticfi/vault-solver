@@ -157,11 +157,11 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 		MaxAssets: "10000000", MaxRate: "1000000000000000000",
 	})
 
-	response, err := quoteServer.quotes.quote(t.Context(), &request)
+	decision, err := quoteServer.quotes.quote(t.Context(), &request)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("quote error = %v, want single-route rejection", err)
 	}
-	if response != nil {
-		t.Fatalf("quote response = %+v, want nil", response)
+	if decision.response != nil {
+		t.Fatalf("quote response = %+v, want nil", decision.response)
 	}
 }
