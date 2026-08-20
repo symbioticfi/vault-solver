@@ -464,32 +464,13 @@ Txmanager `label` values are stable operation names (`redeem`, `rfq-fill`, `lifi
 `included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
 different token labels must not be added without price/decimal normalization.
 
-Migration from removed metrics:
+### Grafana dashboards
 
-| Removed | How to migrate |
-|---|---|
-| `rfq_filler_http_requests_total` | `rfq_filler_http_request_duration_seconds_count` with the same labels |
-| `uniswapx_quote_requests_total` | `solver_bot_workflow_events_total{solver="uniswapx-filler",event="quote"}` grouped by `outcome` |
-| `uniswapx_fills_total` | `solver_bot_workflow_events_total{solver="uniswapx-filler",event="fill",outcome="success"}` for successful receipts; use txmanager outcomes for failures |
-| `oev_auctions_total`, `oev_bids_total`, `oev_skips_total` | `solver_bot_workflow_events_total{solver="redstone-oev",event="auction"}` grouped by bounded `outcome` |
-| `oev_bid_wei_total` | `solver_bot_workflow_amount_atomic_units_total{solver="redstone-oev",event="bid",asset="native"}`; the old stage is now `kind` |
-| `oev_failed_liquidations_total` | `solver_bot_workflow_events_total{solver="redstone-oev",event="breaker",outcome="failure"}` |
-| `oev_deposit_below_floor` | `oev_deposit_wei < bool 10000000000000` |
-| `threef_live_offers`, `threef_active_requests`, `threef_redeemable_requests` | `solver_bot_workflow_observed_items{solver="3f-bridge-facilitator",view=~"offers|active_requests|redeemable"}` |
-
-Grouped-label migration queries:
-
-```promql
-solver_bot_txmanager_requests_total{label="uniswapx-fill",outcome=~"confirmed|included_unconfirmed"}
-```
-
-```promql
-solver_bot_txmanager_requests_total{label="uniswapx-fill",outcome=~"reverted|cancelled|submission_error|tracking_stopped"}
-```
-
-```promql
-solver_bot_workflow_observed_items{solver="3f-bridge-facilitator",view=~"offers|active_requests|redeemable"}
-```
+Six native Grafana Dashboard Schema v2 templates are committed under
+[`dashboards/`](dashboards/): a fleet-safe Runtime dashboard and single-instance dashboards for 3F,
+RFQ, LI.FI, UniswapX, and OEV. Each JSON file is a bare `DashboardSpec` using a selectable
+`${datasource}` and Kubernetes target labels `namespace`, `kubernetes_pod`, `job`, and `instance`.
+Deployment resources and provisioning remain separate from these templates.
 
 ## Configuration
 
