@@ -175,8 +175,10 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 		t.Fatalf("offers = %+v, want none: truncated expectedReturn is below the 190 ppm floor", got.Offers)
 	}
 
-	// A hair more headroom (1.91 bps) leaves room, so the offer is made — and priced AT the floor
-	// (ceil(principal*190/1e6) = 114098544), not at the max rate.
+	// A hair more headroom (1.91 bps) leaves room, so the offer is made. The floor plus the full
+	// partial-consumption margin (ceil(principal*190/1e6) + ceil(principal/1e6) = 114699063) would break
+	// the 1.91 bps cap, so the price clamps to the cap (floor(principal*191/1e6) = 114699061), keeping
+	// the margin that fits above the floor.
 	auction.MaxRateBps = 1.91
 	input.Auctions = []types.AuctionSnapshot{auction}
 	got, err = New().DecideOffers(t.Context(), input)
@@ -186,8 +188,36 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 	if len(got.Offers) != 1 {
 		t.Fatalf("offers = %+v, want 1: 1.91 bps leaves room above the 190 ppm floor", got.Offers)
 	}
-	if want := big.NewInt(114098544); got.Offers[0].ExpectedReturn.Cmp(want) != 0 {
-		t.Fatalf("expectedReturn = %s, want %s (priced at the minYieldPerRequest floor)", got.Offers[0].ExpectedReturn, want)
+	if want := big.NewInt(114699061); got.Offers[0].ExpectedReturn.Cmp(want) != 0 {
+		t.Fatalf("expectedReturn = %s, want %s (margined, clamped to the auction max rate)", got.Offers[0].ExpectedReturn, want)
+	}
+}
+
+// TestStrategyPricesPartialConsumeMarginAboveFloor covers the normal case: when the auction max rate
+// leaves room, the offer is priced one ppm of principal above the floor so a partial consume() cannot
+// pro-rate below it (mainnet tx 0xc637…8386 failed TooLowYield on a floor-exact offer).
+func TestStrategyPricesPartialConsumeMarginAboveFloor(t *testing.T) {
+	const principal = 30_000_035_000
+	a := testAdapter(1, principal)
+	a.MinYieldPpm = big.NewInt(190)
+	auction := testAuction(10, principal)
+	auction.MaxRateBps = 200 // plenty of headroom above the 1.9 bps floor
+	input := types.OfferInput{
+		Now:      time.Unix(0, 0),
+		Adapters: []types.AdapterSnapshot{a},
+		Auctions: []types.AuctionSnapshot{auction},
+	}
+
+	got, err := New().DecideOffers(t.Context(), input)
+	if err != nil {
+		t.Fatalf("DecideOffers: %v", err)
+	}
+	if len(got.Offers) != 1 {
+		t.Fatalf("offers = %+v, want 1", got.Offers)
+	}
+	// ceil(principal*190/1e6) + ceil(principal/1e6) = 5700007 + 30001.
+	if want := big.NewInt(5_730_008); got.Offers[0].ExpectedReturn.Cmp(want) != 0 {
+		t.Fatalf("expectedReturn = %s, want %s (floor plus the partial-consumption margin)", got.Offers[0].ExpectedReturn, want)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -83,7 +84,11 @@ func (s *Solver) submitFill(
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
 		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
-		CancelAt: cancelAt, Label: "lifi-fill",
+		CancelAt: cancelAt,
+		Obsolete: func(checkCtx context.Context) (bool, error) {
+			return s.fillRequestObsolete(checkCtx, order, calldata.OrderID)
+		},
+		Label: "lifi-fill",
 	})
 	if !accepted {
 		s.log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
@@ -118,6 +123,31 @@ func (s *Solver) submitFill(
 		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
 		result:         result,
 	}, nil
+}
+
+func (s *Solver) fillRequestObsolete(
+	ctx context.Context,
+	order *submittedOrder,
+	orderID common.Hash,
+) (bool, error) {
+	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, orderID)
+	if err != nil {
+		return false, errors.Errorf("read order status for %s: %w", orderID.Hex(), err)
+	}
+	switch status {
+	case lifiOrderStatusNone, lifiOrderStatusDeposited:
+		return false, nil
+	case lifiOrderStatusClaimed, lifiOrderStatusRefunded:
+		s.log.Info("order fill invalidated by on-chain status",
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"status", status,
+		)
+		return true, nil
+	default:
+		return false, errors.Errorf("unsupported order status %d for %s", status, orderID.Hex())
+	}
 }
 
 func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {

@@ -273,11 +273,17 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
    each offer to the still-uncovered remainder, and track local adapter commitments across the pass. Each
-   offer is **priced at the adapter's `minYieldPerRequest` floor** (the most competitive rate it allows),
-   rounded up so the realised yield always clears the on-chain floor, and skipped if that floor rate
-   exceeds the auction's max rate for the sized principal. The submission loop re-checks every strategy's
-   offers (default and webhook) against the exact `minYieldPerRequest` before signing, so no path posts a
-   sub-floor offer the fill would revert.
+   offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
+   `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
+   the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
+   the floor check rounds up (mainnet tx `0xc637…8386`: 30,000.035 USDC at the 190 ppm floor consumed at
+   29,946.365238 delivered one base unit under the requirement). The margin guarantees any consumption of
+   at least half the offer — and, above 2e6 base units of principal, anything down to the 1e6-unit ppm
+   quantum — clears the floor for any ppm value and token scale. When the margin would exceed the
+   auction's max rate but the max rate itself clears the floor, the offer is priced at the max rate
+   (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
+   loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
+   before signing, so no path posts a sub-floor offer the fill would revert.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
