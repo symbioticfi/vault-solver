@@ -888,27 +888,31 @@ func TestProcessOrderAttachesOnChainObsolescenceCheck(t *testing.T) {
 	}
 	check := txm.reqs[0].Obsolete
 
-	for _, closedStatus := range []uint8{
-		lifiOrderStatusNone,
-		lifiOrderStatusClaimed,
-		lifiOrderStatusRefunded,
-		255,
+	for _, test := range []struct {
+		name         string
+		status       uint8
+		wantObsolete bool
+		wantErr      bool
+	}{
+		{name: "deposited", status: lifiOrderStatusDeposited},
+		{name: "lagging none", status: lifiOrderStatusNone},
+		{name: "claimed", status: lifiOrderStatusClaimed, wantObsolete: true},
+		{name: "refunded", status: lifiOrderStatusRefunded, wantObsolete: true},
+		{name: "unknown", status: 255, wantErr: true},
 	} {
-		status = closedStatus
-		obsolete, checkErr := check(t.Context())
-		if checkErr != nil || !obsolete {
-			t.Errorf("status %d: obsolete = %v, error = %v; want true, nil", closedStatus, obsolete, checkErr)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			status = test.status
+			obsolete, checkErr := check(t.Context())
+			if obsolete != test.wantObsolete || (checkErr != nil) != test.wantErr {
+				t.Fatalf("obsolete = %v, error = %v; want obsolete=%v, error=%v",
+					obsolete, checkErr, test.wantObsolete, test.wantErr)
+			}
+		})
 	}
 
 	status = lifiOrderStatusDeposited
-	obsolete, checkErr := check(t.Context())
-	if checkErr != nil || obsolete {
-		t.Fatalf("deposited status: obsolete = %v, error = %v; want false, nil", obsolete, checkErr)
-	}
-
 	statusErr = errors.New("status RPC unavailable")
-	obsolete, checkErr = check(t.Context())
+	obsolete, checkErr := check(t.Context())
 	if obsolete || !errors.Is(checkErr, statusErr) {
 		t.Fatalf("status error: obsolete = %v, error = %v; want false, wrapped RPC error", obsolete, checkErr)
 	}

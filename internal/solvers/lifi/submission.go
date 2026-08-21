@@ -131,16 +131,20 @@ func (s *Solver) fillRequestObsolete(
 	if err != nil {
 		return false, errors.Errorf("read order status for %s: %w", orderID.Hex(), err)
 	}
-	if status == lifiOrderStatusDeposited {
+	switch status {
+	case lifiOrderStatusNone, lifiOrderStatusDeposited:
 		return false, nil
+	case lifiOrderStatusClaimed, lifiOrderStatusRefunded:
+		s.log.Info("order fill invalidated by on-chain status",
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"status", status,
+		)
+		return true, nil
+	default:
+		return false, errors.Errorf("unsupported order status %d for %s", status, orderID.Hex())
 	}
-	s.log.Info("order fill invalidated by on-chain status",
-		"orderId", order.OrderID,
-		"onChainOrderId", orderID.Hex(),
-		"quoteId", order.QuoteID,
-		"status", status,
-	)
-	return true, nil
 }
 
 func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {

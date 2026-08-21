@@ -456,11 +456,12 @@ accepted fill tx is in flight, passes the aggregate reservation snapshot to ever
 and releases it only when the shared tx manager returns after the globally configured confirmation depth.
 Each fill request supplies the generic tx-manager obsolescence check with a fresh on-chain `orderStatus` read.
 The manager evaluates it immediately before signing and on every receipt poll. `Deposited` keeps normal
-replacements alive; a confirmed `None`, `Claimed`, `Refunded`, or unknown status drops an unsigned request or
-immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`. A read
-error preserves the current lifecycle and is retried. Capacity remains reserved until the tracked fill,
-revert, or cancellation reaches the configured confirmation depth, so an inconsistent RPC view or reorg cannot
-make the same liquidity available while owned calldata can still execute.
+replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
+pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
+immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
+Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity remains reserved until
+the tracked fill, revert, or cancellation reaches the configured confirmation depth, so an inconsistent RPC
+view or reorg cannot make the same liquidity available while owned calldata can still execute.
 The worker-owned retry FIFO is bounded to the same 4096 entries as the order inbox and coalesces immutable
 `StandardOrder` fingerprints rather than trusting order-server metadata IDs. It never blocks intake of later
 deliveries. Each reservation release advances a generation and
@@ -632,8 +633,9 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   read, so network latency cannot silently preserve the pre-resolution capacity snapshot.
 - **Competition** — same-chain fills are winner-take-all on-chain; `exclusiveFor` on our quotes routes
   matched orders to us, but a competitor may still claim an order first after on-chain exclusivity ends. Pending
-  fills recheck canonical `orderStatus`; once it is no longer `Deposited`, the tx manager stops fee-bumping the
-  stale calldata and cancels its nonce, retaining capacity until that lifecycle is confirmed.
+  fills recheck canonical `orderStatus`; once `Claimed` or `Refunded` is observed, the tx manager stops
+  fee-bumping the stale calldata and cancels its nonce, retaining capacity until that lifecycle is confirmed.
+  `None` and unknown statuses preserve the pending lifecycle because they are not reliable terminal evidence.
 - **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` discovery, physical-route
   matching, cap/rate clipping, and fresh signed-term validation. Advertised terms
   may shape standing quotes, but execution always resolves fresh signatures, recomputes output from the

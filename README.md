@@ -130,10 +130,10 @@ available capacity even when several pairs share one vault; accepting a fill res
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
 terminal result. Receipted fills, reverts, and cancellations wait for the configured confirmation depth;
 pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt. Before
-signing and on every receipt poll, the tx manager rechecks that the LI.FI order is still `Deposited`. A
-confirmed non-deposited status makes the fill obsolete and immediately switches its owned nonce to
-cancellation instead of retaining liquidity until `pendingTimeoutMs`; an unavailable status read leaves the
-current lifecycle unchanged and is retried.
+signing and on every receipt poll, the tx manager rechecks the LI.FI order status. An observed `Claimed` or
+`Refunded` status makes the fill obsolete and immediately switches its owned nonce to cancellation instead of
+retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
+leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
 Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
