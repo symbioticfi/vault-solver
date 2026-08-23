@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -138,6 +140,30 @@ type Client struct {
 	headers          map[string]string
 }
 
+// HTTPStatusError reports a non-successful response from a webhook endpoint.
+type HTTPStatusError struct {
+	statusCode   int
+	responseBody string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return "webhook: status " + strconv.Itoa(e.statusCode) + ": " + e.responseBody
+}
+
+// StatusCode returns the response's HTTP status code.
+func (e *HTTPStatusError) StatusCode() int {
+	return e.statusCode
+}
+
+// IsHTTPStatus reports whether err contains a webhook response with one of the supplied status codes.
+func IsHTTPStatus(err error, statusCodes ...int) bool {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return slices.Contains(statusCodes, statusErr.statusCode)
+}
+
 func normalizeConfig(cfg Config) (Config, error) {
 	if err := validateURL(cfg.URL); err != nil {
 		return Config{}, err
@@ -231,7 +257,7 @@ func (c *Client) DoJSON(ctx context.Context, method, route string, req, resp any
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1024))
-		return errors.Errorf("webhook: status %d: %s", httpResp.StatusCode, string(b))
+		return &HTTPStatusError{statusCode: httpResp.StatusCode, responseBody: string(b)}
 	}
 	b, err := readLimited(httpResp.Body, c.maxResponseBytes, "response body")
 	if err != nil {

@@ -60,10 +60,19 @@ func (ledger *CapacityLedger) Delete(key string) bool {
 
 // Snapshot returns the aggregate reservation without exposing ledger state.
 func (ledger *CapacityLedger) Snapshot() CapacityReservations {
+	return ledger.SnapshotExcluding("")
+}
+
+// SnapshotExcluding returns the aggregate reservation without one pending fill.
+// It lets an owner plan a replacement before releasing the old reservation.
+func (ledger *CapacityLedger) SnapshotExcluding(excludedKey string) CapacityReservations {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	out := make(CapacityReservations)
-	for _, reservations := range ledger.byKey {
+	for key, reservations := range ledger.byKey {
+		if key == excludedKey {
+			continue
+		}
 		out.AddAll(reservations)
 	}
 	return out

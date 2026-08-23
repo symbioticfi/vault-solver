@@ -68,7 +68,6 @@ type Config struct {
 	MinBundleProfitBidBps    int
 	TotalBundleProfitBps     int
 	Sizing                   SizingParams
-	LoanEthFeed              *loanEthFeed
 	CallbackAuthTTL          time.Duration
 	MonitorPoll              time.Duration
 	MaxStateAge              time.Duration
@@ -82,6 +81,7 @@ type Deps struct {
 	Adapter             common.Address
 	Callback            common.Address
 	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
+	GasAccounting       bool
 	TestMonitor         bool
 }
 
@@ -91,7 +91,6 @@ type signer interface {
 }
 
 type Reader interface {
-	ReadLoanEthRate(ctx context.Context, loanDecimals int, feed *loanEthFeed, now time.Time) *big.Int
 	ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error)
 	ResolveParams(ctx context.Context, morphoAddr common.Address, ids []common.Hash) (map[common.Hash]MarketParams, error)
 	ReadHead(ctx context.Context) (number uint64, timestamp uint64, err error)

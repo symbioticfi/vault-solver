@@ -4,6 +4,7 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -43,6 +44,7 @@ type Solver struct {
 	orders        orderPoller
 	discounts     liquiddiscounts.Provider
 	log           logr.Logger
+	reportFatal   func(error)
 
 	// refreshMu serializes chain snapshots. quoteState is immutable after publication and is
 	// replaced atomically. Quote requests are stateless because Uniswap intentionally hides
@@ -123,6 +125,8 @@ type orderPoller interface {
 type transactionManager interface {
 	MaxFeePerGas(ctx context.Context) (*big.Int, error)
 	SendAsync(ctx context.Context, request txmanager.Request) (<-chan txmanager.Result, bool)
+	LaneReady() bool
+	Available() bool
 }
 
 type contractCaller interface {
@@ -147,18 +151,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	var metrics *uniswapXMetrics
-	if deps.Metrics != nil {
-		metrics, err = newUniswapXMetrics(deps.Metrics.Registerer())
-		if err != nil {
-			return nil, err
-		}
-	}
 	var discountClient liquiddiscounts.Provider
 	if cfg.usesDiscounts() {
 		discountClient = liquiddiscounts.NewClient(cfg.Discounts.BaseURL)
 	}
-	return &Solver{
+	s := &Solver{
 		cfg:               cfg,
 		chainID:           deps.Chain.ChainID().Int64(),
 		solverAddress:     deps.Signer.Address(),
@@ -170,15 +167,22 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		orders:            newOrderClient(cfg.OrderServer, orderKey),
 		discounts:         discountClient,
 		log:               log,
+		reportFatal:       deps.ReportFatal,
 		refreshCh:         make(chan struct{}, 1),
 		filled:            make(map[common.Hash]time.Time),
 		retryAt:           make(map[common.Hash]time.Time),
 		inFlight:          make(map[common.Hash]bool),
 		attempts:          make(map[common.Hash]int),
-		metrics:           metrics,
 		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
-	}, nil
+	}
+	if deps.Metrics != nil {
+		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s.ready)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 func (s *Solver) Name() string { return Name }
@@ -255,14 +259,12 @@ func (s *Solver) Run(ctx context.Context) error {
 		"listen", s.cfg.QuoteServer.ListenAddress, "orderApi", s.cfg.OrderServer.BaseURL)
 
 	server := s.newQuoteHTTPServer()
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
+	if err != nil {
+		return errors.Errorf("listen for quotes: %w", err)
+	}
 	g, groupCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	})
+	g.Go(func() error { return s.serveQuoteServer(groupCtx, server, listener) })
 	g.Go(func() error {
 		<-groupCtx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(groupCtx), 2*time.Second)
@@ -274,4 +276,16 @@ func (s *Solver) Run(ctx context.Context) error {
 	g.Go(func() error { return s.orderLoop(groupCtx, orders) })
 	g.Go(func() error { return s.fillLoop(groupCtx, routes, orders) })
 	return g.Wait()
+}
+
+func (s *Solver) serveQuoteServer(ctx context.Context, server *http.Server, listener net.Listener) error {
+	err := server.Serve(listener)
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	err = errors.Errorf("serve quote server: %w", err)
+	if s.reportFatal != nil && ctx.Err() == nil {
+		s.reportFatal(err)
+	}
+	return err
 }

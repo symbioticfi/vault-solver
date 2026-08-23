@@ -9,11 +9,15 @@ import (
 
 	"github.com/go-errors/errors"
 
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// minDeposit is the Executor's MIN_DEPOSIT (0.00001 ETH); below this, settlement reverts.
-var minDeposit = big.NewInt(10_000_000_000_000)
+var (
+	// minDeposit is the Executor's MIN_DEPOSIT (0.00001 ETH); below this, settlement reverts.
+	minDeposit                   = big.NewInt(10_000_000_000_000)
+	errStateRefreshBlockBoundary = errors.New("state refresh crossed block boundary")
+)
 
 // Run warms the caches, starts the strategy + ops loops, and serves the WS stream until ctx cancels.
 func (s *Solver) Run(ctx context.Context) error {
@@ -25,7 +29,11 @@ func (s *Solver) Run(ctx context.Context) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	s.refreshState(runCtx) // seed executor + adapter state before strategy startup
+	if err := s.refreshState(runCtx); err != nil {
+		startupErr := errors.Errorf("initial state refresh: %w", err)
+		s.log.Error(startupErr, "initial state refresh failed")
+		return startupErr
+	}
 	wg.Go(func() { s.strategy.Run(runCtx) })
 	wg.Go(func() { s.opsLoop(runCtx) })
 
@@ -44,10 +52,20 @@ func (s *Solver) opsLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.refreshState(ctx)
+			s.refreshStateAndLog(ctx)
 		case <-s.stateRefreshCh:
-			s.refreshState(ctx)
+			s.refreshStateAndLog(ctx)
 		}
+	}
+}
+
+func (s *Solver) refreshStateAndLog(ctx context.Context) {
+	if err := s.refreshState(ctx); err != nil {
+		if errors.Is(err, errStateRefreshBlockBoundary) {
+			s.log.V(1).Info("state refresh crossed block boundary; keeping cache", "error", err)
+			return
+		}
+		s.log.Error(err, "state refresh failed; keeping cache")
 	}
 }
 
@@ -60,51 +78,59 @@ func (s *Solver) requestStateRefresh() {
 
 // refreshState reads solver-owned Executor and adapter state into the cache. Strategy-owned
 // callback/funding state is read inside strategies.
-func (s *Solver) refreshState(ctx context.Context) {
-	now := time.Now()
-	startHead, ok := s.readHead(ctx)
-	if !ok {
-		return
+func (s *Solver) refreshState(ctx context.Context) error {
+	observedAt := time.Now()
+	startHead, err := s.readHead(ctx)
+	if err != nil {
+		return err
 	}
 	st, err := s.reader.ReadExecutorState(ctx, s.cfg.Executor, s.deps.Signer.Address())
 	if err != nil {
-		s.log.Error(err, "read executor state failed; keeping cache")
-		return
+		return errors.Errorf("read executor state: %w", err)
 	}
 	adapter, err := s.reader.ReadAdapterSnapshot(ctx, s.cfg.Adapter, s.cfg.Callback)
 	if err != nil {
-		s.log.Error(err, "read adapter snapshot failed; keeping cache", "adapter", s.cfg.Adapter.Hex())
-		return
+		return errors.Errorf("read adapter snapshot %s: %w", s.cfg.Adapter.Hex(), err)
 	}
-	endHead, ok := s.readHead(ctx)
-	if !ok {
-		return
+	gasPrices, err := s.reader.ReadGasPrices(ctx, adapter, time.Unix(int64(startHead.Time), 0))
+	if err != nil {
+		return errors.Errorf("read gas prices for loan %s: %w", adapter.Loan.Hex(), err)
+	}
+	endHead, err := s.readHead(ctx)
+	if err != nil {
+		return err
 	}
 	if endHead.Number != startHead.Number {
-		s.log.V(1).Info("state refresh crossed block boundary; keeping cache",
-			"startBlock", startHead.Number, "endBlock", endHead.Number)
-		return
+		return errors.Errorf(
+			"%w: start %d, end %d",
+			errStateRefreshBlockBoundary,
+			startHead.Number,
+			endHead.Number,
+		)
 	}
-	s.state.store(cachedState{Exec: st, Adapter: adapter, GasLimit: startHead.GasLimit, UpdatedAt: now})
-	s.applyExecutorState(st, now)
+	s.state.store(cachedState{
+		Exec: st, Adapter: adapter, GasPrices: gasPrices,
+		GasLimit: startHead.GasLimit, UpdatedAt: observedAt,
+	})
+	s.applyExecutorState(st, observedAt)
+	return nil
 }
 
 type headSnapshot struct {
 	Number   uint64
 	GasLimit uint64
+	Time     uint64
 }
 
-func (s *Solver) readHead(ctx context.Context) (headSnapshot, bool) {
+func (s *Solver) readHead(ctx context.Context) (headSnapshot, error) {
 	header, err := s.deps.Chain.HeaderByNumber(ctx, nil)
 	if err != nil {
-		s.log.Error(err, "read latest header failed; keeping cache")
-		return headSnapshot{}, false
+		return headSnapshot{}, errors.Errorf("read latest header: %w", err)
 	}
 	if header == nil {
-		s.log.Error(errors.New("latest header missing"), "keeping cache")
-		return headSnapshot{}, false
+		return headSnapshot{}, errors.New("latest header missing")
 	}
-	return headSnapshot{Number: header.Number.Uint64(), GasLimit: header.GasLimit}, true
+	return headSnapshot{Number: header.Number.Uint64(), GasLimit: header.GasLimit, Time: header.Time}, nil
 }
 
 // applyExecutorState reconciles bookkeeping derived from the Executor state read.
@@ -133,6 +159,7 @@ func weiFloat(n *big.Int) float64 {
 type cachedState struct {
 	Exec      ExecutorState
 	Adapter   types.AdapterSnapshot
+	GasPrices *liquidlanegas.PriceSnapshot
 	GasLimit  uint64
 	UpdatedAt time.Time
 }

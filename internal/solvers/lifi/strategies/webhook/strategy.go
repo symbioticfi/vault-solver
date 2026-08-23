@@ -60,6 +60,9 @@ func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (ty
 func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	var out *types.FillPlan
 	if err := s.client.DoJSON(ctx, http.MethodPost, decideFillRoute, input, &out); err != nil {
+		if webhook.IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
+			return nil, types.MarkPermanentFillDecisionError(err)
+		}
 		return nil, err
 	}
 	if out == nil {

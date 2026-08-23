@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
@@ -18,6 +19,8 @@ const (
 	dutchAuctionContextType          byte = 0x01
 	exclusiveDutchAuctionContextType byte = 0xe1
 )
+
+var errOrderForDifferentChain = errors.New("order is for a different chain")
 
 type submittedOrderEvent struct {
 	OrderType    string                        `json:"orderType"`
@@ -39,6 +42,9 @@ type submittedOrder struct {
 	OrderStatus    string
 	OrderID        string
 	OnChainOrderID string
+	dedupeKey      string
+	processed      chan struct{}
+	recoveryGen    uint64
 
 	Order        inputsettler.StandardOrder
 	InputSettler common.Address
@@ -92,10 +98,14 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	if err != nil {
 		return nil, err
 	}
-	if inputSettler != cfg.InputSettler {
-		return nil, errors.Errorf("inputSettler %s does not match configured %s", inputSettler.Hex(), cfg.InputSettler.Hex())
+	parsed, err := parseStandardOrder(event.Order)
+	if err != nil {
+		return nil, err
 	}
-	parsed, err := parseStandardOrder(event.Order, cfg, chainID)
+	if err := validateOrderTarget(inputSettler, parsed.order, cfg, chainID); err != nil {
+		return nil, err
+	}
+	dedupeKey, err := localOrderKey(parsed.order)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +114,7 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OrderStatus:    event.Meta.OrderStatus,
 		OrderID:        event.Meta.OrderID,
 		OnChainOrderID: event.Meta.OnChainOrderID,
+		dedupeKey:      dedupeKey,
 		Order:          parsed.order,
 		InputSettler:   inputSettler,
 		TokenIn:        parsed.tokenIn,
@@ -112,6 +123,27 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OutputAmount:   new(big.Int).Set(parsed.outputAmount),
 		Output:         parsed.output,
 	}, nil
+}
+
+func localOrderKey(order inputsettler.StandardOrder) (string, error) {
+	if order.Nonce == nil || order.OriginChainId == nil || len(order.Inputs) == 0 || len(order.Outputs) == 0 {
+		return "", errors.New("incomplete order cannot be fingerprinted")
+	}
+	for _, input := range order.Inputs {
+		if input[0] == nil || input[1] == nil {
+			return "", errors.New("incomplete order input cannot be fingerprinted")
+		}
+	}
+	for _, output := range order.Outputs {
+		if output.ChainId == nil || output.Amount == nil {
+			return "", errors.New("incomplete order output cannot be fingerprinted")
+		}
+	}
+	data, err := lifiInputSettler.TryPackOrderIdentifier(order)
+	if err != nil {
+		return "", errors.Errorf("pack local order key: %w", err)
+	}
+	return crypto.Keccak256Hash(data).Hex(), nil
 }
 
 func isFillableOrderStatus(status string) bool {
@@ -137,8 +169,6 @@ func isOnChainOrderEvent(event submittedOrderEvent) bool {
 
 func parseStandardOrder(
 	dto lifiorder.SubmitOrderDtoOrder,
-	cfg *Config,
-	chainID int64,
 ) (*parsedStandardOrder, error) {
 	user, err := parseAddress(dto.User, "order.user")
 	if err != nil {
@@ -147,9 +177,6 @@ func parseStandardOrder(
 	inputOracle, err := parseAddress(dto.InputOracle, "order.inputOracle")
 	if err != nil {
 		return nil, err
-	}
-	if inputOracle != cfg.OutputSettler {
-		return nil, errors.Errorf("order.inputOracle %s does not match outputSettler %s", inputOracle.Hex(), cfg.OutputSettler.Hex())
 	}
 	if len(dto.Inputs) != 1 {
 		return nil, errors.Errorf("order.inputs: expected 1 input, got %d", len(dto.Inputs))
@@ -165,9 +192,6 @@ func parseStandardOrder(
 	originChainID, err := parseUint(dto.OriginChainId, "order.originChainId")
 	if err != nil {
 		return nil, err
-	}
-	if originChainID.Cmp(big.NewInt(chainID)) != 0 {
-		return nil, errors.Errorf("order.originChainId %s does not match chain %d", originChainID, chainID)
 	}
 	expires, err := parseUint32(dto.Expires, "order.expires")
 	if err != nil {
@@ -198,7 +222,7 @@ func parseStandardOrder(
 		return nil, errors.New("order.inputs[0][1]: must be positive")
 	}
 
-	output, err := parseOutput(dto.Outputs[0], cfg, chainID)
+	output, err := parseOutput(dto.Outputs[0])
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +248,6 @@ func parseStandardOrder(
 
 func parseOutput(
 	dto lifiorder.SubmitOrderDtoOrderOutputsInner,
-	cfg *Config,
-	chainID int64,
 ) (*parsedOutput, error) {
 	oracle, err := parseBytes32(dto.Oracle, "order.outputs[0].oracle")
 	if err != nil {
@@ -235,14 +257,6 @@ func parseOutput(
 	if err != nil {
 		return nil, err
 	}
-	wantSettler := addressIdentifier(cfg.OutputSettler)
-	if oracle != wantSettler {
-		return nil, errors.New("order.outputs[0].oracle does not match outputSettler")
-	}
-	if settler != wantSettler {
-		return nil, errors.New("order.outputs[0].settler does not match outputSettler")
-	}
-
 	tokenID, err := parseBytes32(dto.Token, "order.outputs[0].token")
 	if err != nil {
 		return nil, err
@@ -270,9 +284,6 @@ func parseOutput(
 	if err != nil {
 		return nil, err
 	}
-	if outputChainID.Cmp(big.NewInt(chainID)) != 0 {
-		return nil, errors.Errorf("order.outputs[0].chainId %s does not match chain %d", outputChainID, chainID)
-	}
 
 	callbackData, err := nullableHexBytes(dto.CallbackData, "order.outputs[0].callbackData")
 	if err != nil {
@@ -297,6 +308,43 @@ func parseOutput(
 		Context:      contextData,
 	}
 	return &parsedOutput{output: output, tokenOut: tokenOut, amount: amountOut}, nil
+}
+
+func validateOrderTarget(
+	inputSettler common.Address,
+	order inputsettler.StandardOrder,
+	cfg *Config,
+	chainID int64,
+) error {
+	wantChainID := big.NewInt(chainID)
+	outputChainID := order.Outputs[0].ChainId
+	if order.OriginChainId.Cmp(wantChainID) != 0 || outputChainID.Cmp(wantChainID) != 0 {
+		return errors.Errorf(
+			"%w: originChainId %s, outputChainId %s, configuredChainId %d",
+			errOrderForDifferentChain,
+			order.OriginChainId,
+			outputChainID,
+			chainID,
+		)
+	}
+	if inputSettler != cfg.InputSettler {
+		return errors.Errorf("inputSettler %s does not match configured %s", inputSettler.Hex(), cfg.InputSettler.Hex())
+	}
+	if order.InputOracle != cfg.OutputSettler {
+		return errors.Errorf(
+			"order.inputOracle %s does not match outputSettler %s",
+			order.InputOracle.Hex(),
+			cfg.OutputSettler.Hex(),
+		)
+	}
+	wantSettler := addressIdentifier(cfg.OutputSettler)
+	if order.Outputs[0].Oracle != wantSettler {
+		return errors.New("order.outputs[0].oracle does not match outputSettler")
+	}
+	if order.Outputs[0].Settler != wantSettler {
+		return errors.New("order.outputs[0].settler does not match outputSettler")
+	}
+	return nil
 }
 
 func eventQuoteID(event submittedOrderEvent) string {

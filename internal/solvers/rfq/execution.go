@@ -70,6 +70,7 @@ type executionService struct {
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
 type fillReader interface {
 	quoteCandidateReader
+	latestBlockTime(ctx context.Context) (time.Time, error)
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
@@ -162,7 +163,14 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(orderID, "validate order: "+err.Error())
 		return
 	}
-	if dl := order.Request.Deadline; dl == nil || dl.Int64() <= e.now().Unix() {
+	chainObservedAt := e.now()
+	chainTime, err := e.reader.latestBlockTime(ctx)
+	if err != nil {
+		e.log.Error(err, "read chain time", "orderId", orderID)
+		return
+	}
+	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
+	if !orderDeadline.After(chainTime) {
 		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
 		e.fail(orderID, "order deadline has passed")
 		return
@@ -175,7 +183,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 
 	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
-	discountSwaps, err := e.buildDiscountSwapInputs(ctx, selected)
+	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(ctx, selected, chainTime)
 	if err != nil {
 		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
 		// order instead of submitting. While the backend still lists the order open, the next poll
@@ -196,8 +204,16 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(orderID, "encode fill: "+err.Error())
 		return
 	}
+	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
+	cancelAt, ok := liquidlane.CancellationDeadline(deadline, chainTime, chainObservedAt, e.now())
+	if !ok {
+		e.fail(orderID, "fill execution deadline elapsed before submission")
+		return
+	}
 
-	res := e.txm.Send(ctx, txmanager.Request{To: e.executor, Data: calldata, Label: "rfq-fill"})
+	res := e.txm.Send(ctx, txmanager.Request{
+		To: e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+	})
 	attempt := e.store.recordAttempt(orderID)
 	if res.Err != nil {
 		e.log.Error(res.Err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
@@ -299,43 +315,57 @@ func (e *executionService) buildFillPlan(
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and
 // encodes it into the Executor's DiscountSwapInput. Direct-only strategies return nil.
 func (e *executionService) buildDiscountSwapInputs(
-	ctx context.Context, selected *fillPlan,
-) ([]executor.IReactorDiscountSwapInput, error) {
+	ctx context.Context,
+	selected *fillPlan,
+	chainTime time.Time,
+) ([]executor.IReactorDiscountSwapInput, time.Time, error) {
 	var out []executor.IReactorDiscountSwapInput
+	var validUntil time.Time
 	for _, leg := range selected.Legs {
 		if leg.DiscountID == nil {
 			continue
 		}
 		// Defensive: external solvers never produce discount legs; fail closed (see errDiscountsDisabled).
 		if !e.discountsEnabled {
-			return nil, errors.Errorf("%w: leg %s", errDiscountsDisabled, leg.DiscountID.Hex())
+			return nil, time.Time{}, errors.Errorf("%w: leg %s", errDiscountsDisabled, leg.DiscountID.Hex())
 		}
 		resolved, err := e.backend.resolveDiscount(ctx, leg.DiscountID.Hex())
 		if err != nil {
-			return nil, errors.Errorf("resolve discount %s: %w", leg.DiscountID.Hex(), err)
+			return nil, time.Time{}, errors.Errorf("resolve discount %s: %w", leg.DiscountID.Hex(), err)
 		}
 		parsed, err := discounts.ParseSigned(resolved)
 		if err != nil {
-			return nil, errors.Errorf("discount: %w", err)
+			return nil, time.Time{}, errors.Errorf("discount: %w", err)
 		}
 		if parsed.Adapter != leg.Adapter {
-			return nil, errors.Errorf(
+			return nil, time.Time{}, errors.Errorf(
 				"%w: resolved %s, leg %s", errDiscountAdapterMismatch, parsed.Adapter.Hex(), leg.Adapter.Hex(),
 			)
 		}
 		if err := discounts.ValidateSelection(parsed, discounts.Selection{
 			DiscountID: *leg.DiscountID,
 			Adapter:    leg.Adapter, TokenIn: selected.TokenIn,
-		}, e.now()); err != nil {
-			return nil, errors.Errorf("discount: %w", err)
+		}, chainTime); err != nil {
+			return nil, time.Time{}, errors.Errorf("discount: %w", err)
 		}
 		dsi, err := toDiscountSwapInput(parsed, leg, e.executor)
 		if err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		out = append(out, dsi)
+		deadline := discounts.ValidUntil(parsed)
+		if validUntil.IsZero() || deadline.Before(validUntil) {
+			validUntil = deadline
+		}
 	}
-	return out, nil
+	return out, validUntil, nil
+}
+
+func rfqFillDeadline(orderDeadline, discountValidUntil time.Time) time.Time {
+	if !discountValidUntil.IsZero() && discountValidUntil.Before(orderDeadline) {
+		return discountValidUntil
+	}
+	return orderDeadline
 }
 
 // discountInventories fetches offered discounts and turns those redeemable

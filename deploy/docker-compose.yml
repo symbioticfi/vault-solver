@@ -17,6 +17,9 @@ services:
         DATE: ${DATE:-unknown}
     image: vault-solver:${VERSION:-dev}
     restart: unless-stopped
+    # Example maximum: 20s LI.FI quote retirement + 5m pending + 30s replacement + 60s tx drain.
+    # Increase this when the mounted config uses larger shutdown-related timeouts.
+    stop_grace_period: 7m
     # Secrets (SOLVER_PRIVATE_KEY, API keys) — supplied via the gitignored .env file.
     env_file:
       - ../.env

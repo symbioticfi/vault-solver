@@ -19,8 +19,8 @@ are listed under [Solvers](#solvers).
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
-  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster with independent
-  receipt waits, shared across solvers.
+  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster that shares
+  one unresolved signed lifecycle across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -30,9 +30,10 @@ the relevant protocol API on each tick; no database.
 ## Solvers
 
 Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver in the process shares the chain client, signer, and the single nonce-serialized
-`txManager`, so multiple solvers on one EOA never race on nonces. Each entry's `config` block is typed
-and validated by its own solver. Adding a solver touches **no** framework code — see the recipe in
+Every solver shares the chain client and signer. Transaction-sending solvers also share the single
+nonce-serialized `txManager`, so multiple solvers on one EOA never race on nonces. Solvers whose
+settlement is submitted externally do not start it. Each entry's `config` block is typed and validated
+by its own solver. Adding a solver touches **no** framework code — see the recipe in
 [`CLAUDE.md`](./CLAUDE.md).
 
 | `solver.name` | Integration | Docs | Example config |
@@ -82,6 +83,11 @@ use one candidate route. Other scopes keep the existing multi-route behavior.
 `minAmountsIn` adds an optional per-input-token floor on request size (base units, decimal strings):
 a request below its token's minimum is not quoted (HTTP 204), while an amount equal to the minimum
 still quotes; unlisted tokens have no floor.
+Pareto's mainnet `AA_FalconXUSDC` tranche (`0xC26A…f99C`) uses this existing generic path and needs no
+token-specific solver code. The production deployment config already includes it in
+`permissionedTokens` with a one-token `minAmountsIn` floor. A solver instance can route it only after
+its configured LiquidLane adapter has onboarded the token. Execution also requires either direct
+`owner`/`marketMaker`/`isFiller` authorization or a live signed discount in internal mode.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
@@ -102,29 +108,57 @@ On settlement it liquidates the position and exits the seized collateral through
 settlement transaction — RedStone's auctioneer does. The solver config owns the RedStone Executor,
 LiquidLane adapter, and callback address; the selected strategy owns the callback-specific
 `operationData`. Operators can set `maxBidWei` as a per-auction spend ceiling over any strategy; it is
-required for the external `webhook` strategy and optional for the built-in `default`. Design, config,
-and roadmap:
+required for the external `webhook` strategy and optional for the built-in `default`. The common `gas:`
+block is optional, and its shared oracle facts are passed to the selected strategy. The built-in strategy
+uses them for after-cost economics; without them, it selects gross-profitable bundles while retaining the
+signed gas-price cap and native funding checks. When `gas:` is configured, startup requires a feed for the
+resolved adapter loan asset and a readable initial oracle snapshot. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 
 ### LI.FI Same-Chain Intents — `lifi-samechain`
 
-A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes gas-aware
-standing quotes from current adapter liquidity and receives matched, already-opened escrow orders over the
-LI.FI WebSocket feed. Before each fill it rechecks the canonical order status, adapter state, gas cost, and
-strategy decision, then atomically claims the input, redeems it through LiquidLane, and fills the output via
+A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
+from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
+LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
+publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
+rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
+the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
 available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
-and immediately refreshes every affected quote. A fill remains pending until the shared tx manager reaches
-the configured confirmation depth; only then is its reservation released and quote refresh requested.
+and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
+terminal result. Receipted fills, reverts, and cancellations wait for the configured confirmation depth;
+pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt. Before
+signing and on every receipt poll, the tx manager rechecks the LI.FI order status. An observed `Claimed` or
+`Refunded` status makes the fill obsolete and immediately switches its owned nonce to cancellation instead of
+retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
+leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
+Orders
+that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
+without blocking later deliveries. The worker retries them after every reservation release and returns a still-
+blocked order to the tail. During startup/reconnect recovery, quote publication remains suspended until each
+recovered order leaves the FIFO, either resolved or returned to the recovery sweep. Overflow drops the newest
+retry. A webhook `null` decision and an order-specific `400`/`422` fill rejection stay terminal; other
+strategy failures get at most three attempts per order during each recovery session. On graceful
+shutdown the solver keeps the feed alive while it expires active curves with the configured order-server HTTP
+timeout, then stops accepting orders and waits for already-accepted fills until completion or the finite process
+hard stop.
+If a newly opened order reaches the feed before the RPC endpoint exposes its deposit, the worker retries the
+status-`None` read with bounded exponential backoff capped at 5 seconds until the 30-second window or earlier
+order deadline. The final scheduled read is clamped to 250 milliseconds before that boundary. Duplicate
+deliveries are coalesced during the wait; claimed, refunded, and unknown statuses remain terminal. Stopping
+intake drops these unaccepted retries immediately.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
 floor yields a positive output, then prices the published suffix by running the shared LiquidLane exact-input
 quote solver at both endpoints. It caps the lower of the two endpoint rates by that floor for interior route
-transitions, worst-case route gas, and rounding.
+transitions, rounding, and, when configured, worst-case route gas.
 `strategy.config.rangeCount` sets the geometric curve resolution (default `8`, maximum `16`).
+
+Omitting LI.FI's `gas:` block disables gas accounting in quote/fill decisions and skips gas-state and
+Chainlink reads; the tx manager still prices and pays the actual transaction gas.
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
 a caller signature bound to the executor's EIP-712 domain, appears as `exclusiveFor` in quotes, and calls the
@@ -140,12 +174,14 @@ also requires external order coordination. The API key, executor owner key, and 
 distinct credentials.
 
 Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
-scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at WebSocket
-admission and logged as unsupported. `solverMode: external` serves direct filler-authorized adapters.
+scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at order-feed
+admission and logged as unsupported. Fully valid feed orders routed to another origin or output chain are
+expected noise and logged at info; malformed payloads and target-chain contract mismatches remain errors.
+`solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
-route. The order-server REST/WS endpoints are explicit required config, and each Chainlink gas feed has
-its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
+route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
+Chainlink feed has its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
 available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
@@ -173,7 +209,9 @@ requires that block; direct routes are authorization-filtered from each snapshot
 routes remain usable. In internal
 mode `adapters` is optional: a non-empty list scopes quotes and direct fills, while fill-time signed-discount
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
-discount-only. Every fill is simulated again immediately before submission.
+discount-only. Every fill is simulated again immediately before submission. The wall-clock anchor for
+a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
+validity instead of extending it.
 
 The quote path is stateless and uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
@@ -183,15 +221,20 @@ accounting in both quote and fill decisions and skips gas-state and Chainlink re
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. As soon as a polled order is
-admitted to the fill queue, quote publication pauses until planning either rejects it or atomically hands
-capacity ownership to an accepted transaction reservation. Every posted order gets a fresh route plan from
-the current chain state and is simulated before sending. The reservation remains effective while txmanager waits
-for the configured confirmations. On completion the quote snapshot is invalidated before capacity is
+admitted to the fill queue, quote publication and `GET /ready` pause. They remain paused during planning and,
+once the submission occupies the shared nonce lane, while it holds that queued or admitted lifecycle,
+including receipt confirmation. The fill's capacity reservation still protects already-awarded orders for
+the same period; it does not reopen quoting. Every posted order gets a fresh route plan from the current chain
+state and is simulated before sending. On completion the quote snapshot is invalidated before capacity is
 released, and that capacity is not advertised again until a fresh post-fill chain snapshot is published.
 A quote is returned only if its snapshot epoch and every blocking condition are unchanged after the strategy
 finishes. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery, fill
-planning, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. `GET /ready`
-exposes that state and also returns not-ready when the latest snapshot has no quotable inventory;
+planning, a queued or admitted txmanager lifecycle, an unavailable nonce lane, an active Uniswap
+`blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
+signed-discount resolution, calldata construction, or preflight while the nonce lane is paused. A txmanager
+result that failed before admission does not count toward the local fill breaker and is reported as
+`uniswapx_fills_total{outcome="not-admitted"}` rather than a failed fill. `GET /ready` exposes that state and
+also returns not-ready when the latest snapshot has no quotable inventory;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that
@@ -244,16 +287,57 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
   LI.FI and UniswapX own separate strategy contracts and independently reject returned fills that exceed
-  current capacity or do not cover the order plus gas. UniswapX delegates each concrete quote to
+  current capacity or do not cover the order plus configured gas. UniswapX delegates each concrete quote to
   `POST /decide-quote` and each current fill plan to `POST /decide-fill` under the configured webhook URL.
 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared `txManager` fee-bumps pending transactions on `replacementIntervalMs`. After
-`pendingTimeoutMs`, it cancels only the lowest unresolved nonce before allowing later queued nonces
-to proceed. The required `maxFeeGwei` is the absolute ceiling; normal sends reserve one fee bump
-inside that ceiling so cancellation still has headroom.
+When used, the shared `txManager` owns one unresolved signed nonce lifecycle at a time. Later
+submissions are neither accepted nor signed until the active lifecycle has a terminal receipt. Every
+`replacementIntervalMs` it attempts a replacement using fresh fees and at least a 12.5% bump over the
+previous attempt; if fresh fees are unavailable, it bumps the cached fees. When a submission returns an
+ambiguous transport error, the first replacement tick instead rebroadcasts those exact signed bytes once
+without changing the hash or fees; a later tick may fee-bump it. Cancellation deadlines and shutdown bypass
+that grace retry. At `pendingTimeoutMs` (or the request's earlier deadline), replacements switch to a
+same-nonce cancellation. Each submission RPC is bounded independently by `broadcastTimeoutMs` (5 seconds
+by default), so a short replacement cadence does not prematurely time out a private write RPC.
+
+After lifecycle admission and immediately before signing, requests without an explicit gas limit run
+`eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
+to that estimate. A request may also supply a protocol-owned obsolescence check: the manager evaluates it
+before signing and at every receipt poll, drops an obsolete unsigned call, and switches an obsolete signed
+call to same-nonce cancellation. Check errors preserve the current lifecycle because the execution contract
+remains authoritative. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
+
+The transaction lane is ready for new external commitments only while it has no queued or admitted
+lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
+decline new quotes, LI.FI retires its active standing curves, and 3F stops posting new offers.
+Reconciliation and already-accepted work continue. A normal submission that races a nonce conflict waits
+without signing until exact-hash reconciliation restores the lane, its request deadline expires, or shutdown
+begins; non-blocking admission declines immediately. This lets the process recover without abandoning an
+immutable order that has already been accepted from an upstream protocol.
+
+During graceful shutdown the manager remains alive while solvers stop external commitments and drain
+already-accepted work. The solver drain is bounded by its preparation timeout plus `pendingTimeoutMs`
+and `replacementIntervalMs`. When manager shutdown begins, new admission stops and it requests
+same-nonce cancellation when nonce ownership is not conflicted. It keeps draining exact signed attempts
+for at most `shutdownTimeoutMs`; if no terminal receipt is available by then, callers receive a
+shutdown-deadline error and the process exits instead of hanging indefinitely. Configure the
+orchestrator's SIGTERM grace to cover the sum of those bounds.
+
+The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation. Normal transactions
+stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump
+inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
+and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
+`tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
+to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
+positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
+when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
+txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
+the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
+Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
+operator-controlled fallback.
 
 ## Requirements
 
@@ -286,11 +370,42 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. Each solver has its
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
-including the shared `chain`/`signer`/`txManager`/`observability` blocks, is documented inline there.
+including the applicable shared `chain`/`signer`/`txManager`/`observability` blocks, is documented
+inline there.
+
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order when the primary is unavailable. LiquidLane state reads always use RPC `latest`; an archive
-node is not required. **Never commit a real key or live config** — keys are
-supplied via env/file behind the `Signer` interface; `*.local.*` and `.env` are gitignored.
+in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
+are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
+endpoints. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
+that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
+normal read fallback behavior. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
+to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. An unavailable
+or incoherent multi-read snapshot is retried on a later poll. An explicit write endpoint must report the same
+chain ID as the read endpoint.
+
+For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
+from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
+must be exclusive to this process: standard nonce reads cannot reveal a future transaction queued
+beyond a gap. Before upgrading from a build that allowed several unresolved signed nonces, drain that
+EOA's write-endpoint pool. After an unclean exit, nonce equality alone cannot rule out a private
+submission hidden by its relay. The packaged Docker Compose deployment restarts automatically with
+`unless-stopped`, so it can resume and reuse that nonce before the hidden submission becomes visible. If
+the old attempt later consumes the nonce, `txManager` pauses admissions and readiness and remains
+fail-closed for operator investigation; automatic restart does not recover the lost in-memory ownership.
+For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
+the EOA back.
+
+At runtime, a post-signing `nonce too low` makes `txManager` check every exact signed attempt. During a
+replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
+ownership immediately. The lane remains non-ready only because that owned lifecycle is still active until
+its confirmation depth is reached, not because ownership is uncertain. An initial-broadcast collision, or a
+replacement with no owned canonical receipt, keeps new transactions and readiness paused until terminal
+reconciliation or operator action; a later receipt reorg restores that pause. The calldata is not re-signed
+at another nonce solely from that response. LiquidLane state reads always use RPC `latest`; an archive node
+is not required.
+
+**Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
+interface; `*.local.*` and `.env` are gitignored.
 
 ## Code generation
 

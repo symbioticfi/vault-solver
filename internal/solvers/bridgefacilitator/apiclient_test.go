@@ -22,7 +22,11 @@ func (s fakeSigner) Address() common.Address { return s.addr }
 func (fakeSigner) SignHash(_ common.Hash) ([]byte, error) {
 	return make([]byte, 65), nil
 }
-func (fakeSigner) SignTx(tx *types.Transaction, _ *big.Int) (*types.Transaction, error) {
+func (fakeSigner) SignTx(
+	_ context.Context,
+	tx *types.Transaction,
+	_ *big.Int,
+) (*types.Transaction, error) {
 	return tx, nil
 }
 

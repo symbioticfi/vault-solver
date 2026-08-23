@@ -68,7 +68,7 @@ No historical event indexer, no DB.
 
 ```
 vault-solver/
-├── cmd/vault-solver/main.go         # bootstrap: config → chain → signer → txmanager → init solver → run
+├── cmd/vault-solver/                # bootstrap: config → chain → signer → solvers → txmanager init → run
 ├── internal/
 │   ├── config/                    # env + YAML loader; per-instance VAULT SELECTION; two-stage solver decode
 │   ├── chain/                     # GENERIC eth client primitives (Dial, ChainID). Solver-specific
@@ -106,18 +106,30 @@ vault-solver/
 
 ### 5.1 `txmanager` — nonce-serialized sender
 
-A single service owns the on-chain sending EOA. One worker goroutine drains a queue
-of `TxRequest{To, Data, Value, GasLimit?, Label}`; for each it tracks the nonce
-locally (seeded from the pending nonce, monotonic), sets EIP-1559 fees, signs via the
-`Signer`, sends, waits for the receipt, and handles `nonce too low` / stuck-tx bump +
-resync. Solvers **never** send directly — they build calldata (packed via the abigen
-ABI, e.g. `adapter.PackMulticall(finalizeRequest…)`) and hand it to the txmanager, receiving
-a `TxResult{Hash, Receipt, Err}`. Serializing through one worker eliminates
-parallel-nonce races across solvers.
+A single service owns the on-chain sending EOA. Before readiness it requires the latest and pending
+nonces from one non-fallback write endpoint to agree, then admits one signed lifecycle at a time. The
+worker signs, broadcasts, replaces or cancels that nonce, and tracks every exact signed hash through a
+terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from the minimum
+gas-weighted p25 reward in the latest five blocks, aligned with the observed behavior of Etherscan Gas
+Tracker's Fast tier. Normal replacements respect both request and global fee caps, while cancellation may
+leave the request's profitability cap but never the global cap. During replacement, a fresh-fee timeout
+falls back to bumping the last signed fees. A transport-ambiguous attempt receives one exact-byte rebroadcast
+before fee escalation; cancellation deadlines and shutdown bypass that grace retry.
+Solvers **never** send directly — they build
+calldata (packed via the abigen ABI, e.g.
+`adapter.PackMulticall(finalizeRequest…)`) and receive a `txmanager.Result`. Serializing the complete
+lifecycle eliminates parallel-nonce races and prevents later calldata from being signed behind a
+missing lower nonce. Shutdown joins a healthy active replacement/cancellation drain before the RPC
+clients are closed. At `shutdownTimeoutMs`, it instead returns a terminal deadline result and lets
+process teardown close RPC without waiting on a stuck dependency.
 
-> The **offerSigner** (EIP-712 offer signing, off-chain, gasless) and the **tx-sending
-> EOA** are distinct roles behind the same `Signer` interface, possibly the same key.
-> txmanager owns only the on-chain nonce.
+An occupied transaction lane or unresolved nonce-ownership conflict pauses new 3F commitments: offer
+discovery exits before chain/API planning, and lane readiness is checked again immediately before each
+`createOffer`. Existing offer tracking, auction reconciliation, and redemption continue so contention does
+not block recovery work.
+
+> The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
+> current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
 
 ### 5.2 `solver` — generic interface + registry
 
@@ -128,6 +140,7 @@ type Deps struct {
     Signer    signer.Signer
     Log       logr.Logger
     Metrics   *observability.Metrics
+    ReportFatal func(error)
 }
 
 type Solver interface {
@@ -140,7 +153,9 @@ type Factory func(raw yaml.Node, deps Deps) (Solver, error)
 
 A `registry` maps name→`Factory`. The 3F package self-registers in `init()`; `main`
 blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the only line referencing 3F.
-Adding a future solver is a register + config switch, no framework edit.
+Adding a future solver is a register + config switch, no framework edit. Solvers require txmanager by
+default; an externally submitted integration can implement `RequiresTxManager() bool` and return false,
+so an external-only process does not initialize or start the nonce lane.
 
 ---
 
@@ -151,9 +166,9 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 the chosen solver decodes it into its own typed struct.
 
 ```yaml
-chain: { rpcUrl, chainId, rpcFallbackUrls?, wsUrl? }   # rpcFallbackUrls: HTTP(S), tried on primary failure
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei }
+txManager: { confirmations: 2, maxFeeGwei, tipGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
@@ -258,11 +273,17 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
    each offer to the still-uncovered remainder, and track local adapter commitments across the pass. Each
-   offer is **priced at the adapter's `minYieldPerRequest` floor** (the most competitive rate it allows),
-   rounded up so the realised yield always clears the on-chain floor, and skipped if that floor rate
-   exceeds the auction's max rate for the sized principal. The submission loop re-checks every strategy's
-   offers (default and webhook) against the exact `minYieldPerRequest` before signing, so no path posts a
-   sub-floor offer the fill would revert.
+   offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
+   `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
+   the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
+   the floor check rounds up (mainnet tx `0xc637…8386`: 30,000.035 USDC at the 190 ppm floor consumed at
+   29,946.365238 delivered one base unit under the requirement). The margin guarantees any consumption of
+   at least half the offer — and, above 2e6 base units of principal, anything down to the 1e6-unit ppm
+   quantum — clears the floor for any ppm value and token scale. When the margin would exceed the
+   auction's max rate but the max rate itself clears the floor, the offer is priced at the max rate
+   (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
+   loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
+   before signing, so no path posts a sub-floor offer the fill would revert.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
@@ -298,7 +319,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 
 0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
 1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
-2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, graceful shutdown.
+2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, bounded graceful shutdown.
 3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
 4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
 5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
