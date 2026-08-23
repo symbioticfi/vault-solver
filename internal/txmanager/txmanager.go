@@ -57,14 +57,18 @@ type Config struct {
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
 // gas estimation re-simulates their exact calldata after lifecycle admission and immediately before signing.
 type Request struct {
-	To            common.Address
-	Data          []byte
-	Value         *big.Int
-	GasLimit      uint64
-	MaxFeePerGas  *big.Int  // optional normal-lifecycle EIP-1559 fee ceiling; cancellation may use the global ceiling
-	CancelAt      time.Time // optional deadline after which the manager replaces the call with a same-nonce cancellation
-	Confirmations *uint64   // optional wait override; nil uses Config.Confirmations
-	Label         string    // for logs/metrics, e.g. "redeem"
+	To           common.Address
+	Data         []byte
+	Value        *big.Int
+	GasLimit     uint64
+	MaxFeePerGas *big.Int  // optional normal-lifecycle EIP-1559 fee ceiling; cancellation may use the global ceiling
+	CancelAt     time.Time // optional deadline after which the manager replaces the call with a same-nonce cancellation
+	// Obsolete optionally reports that the call can no longer succeed. It must honor ctx and have no
+	// authorization role: errors preserve the current lifecycle. True before signing drops the call;
+	// true after broadcast switches the owned nonce to cancellation.
+	Obsolete      func(ctx context.Context) (bool, error)
+	Confirmations *uint64 // optional wait override; nil uses Config.Confirmations
+	Label         string  // for logs/metrics, e.g. "redeem"
 }
 
 // Result carries the outcome of one transaction request. NotAdmitted identifies manager-level
@@ -163,6 +167,7 @@ var (
 	errFreshFeesUnavailable    = errors.New("fresh fees unavailable")
 	errReplacementLimitReached = errors.New("replacement fee limit reached")
 	errReceiptReorged          = errors.New("transaction receipt reorged")
+	errRequestObsolete         = errors.New("transaction request is obsolete")
 	errNonceLanePaused         = errors.New("transaction manager nonce lane paused")
 	errManagerStopped          = errors.New("transaction manager stopped")
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
@@ -542,6 +547,15 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 			return nil, err
 		}
 	}
+	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
+	if obsoleteErr != nil {
+		// Obsolescence is only a liveness optimization. The solver already validated the call,
+		// and execution-time contracts remain authoritative, so an unknown check keeps it alive.
+		m.log.Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
+			"label", req.Label)
+	} else if obsolete {
+		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
+	}
 
 	value := req.Value
 	if value == nil {
@@ -649,6 +663,28 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			startCancellation()
 			m.tryReplace(ctx, pending, true)
 		case <-poll.C:
+			if cancelling || pending.req.Obsolete == nil {
+				continue
+			}
+			obsolete, err := m.requestObsolete(ctx, pending.req)
+			if err != nil {
+				m.log.Error(err, "pending transaction obsolescence check unavailable; retaining lifecycle",
+					"label", pending.req.Label,
+					"hash", pending.originalHash.Hex(),
+					"nonce", pending.nonce,
+				)
+				continue
+			}
+			if !obsolete {
+				continue
+			}
+			startCancellation()
+			m.log.Info("pending transaction became obsolete; cancelling nonce",
+				"label", pending.req.Label,
+				"hash", pending.originalHash.Hex(),
+				"nonce", pending.nonce,
+			)
+			m.tryReplace(ctx, pending, true)
 		case <-replace.C:
 			if !cancelling && pending.cancellationDue(time.Now()) {
 				startCancellation()
@@ -664,6 +700,19 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			m.tryReplace(ctx, pending, true)
 		}
 	}
+}
+
+func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error) {
+	if req.Obsolete == nil {
+		return false, nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	obsolete, err := req.Obsolete(checkCtx)
+	if err != nil {
+		return false, errors.Errorf("check transaction obsolescence: %w", err)
+	}
+	return obsolete, nil
 }
 
 func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
