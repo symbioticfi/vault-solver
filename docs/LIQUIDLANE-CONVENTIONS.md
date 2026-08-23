@@ -8,10 +8,10 @@ RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAd
 | Package | Owns |
 |---|---|
 | `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
-| `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and gas snapshot composition |
+| `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and optional gas snapshot composition |
 | `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
 | `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
-| `internal/liquidlane/gas` | shared YAML parsing and neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault facts |
+| `internal/liquidlane/gas` | shared optional Chainlink token/native facts plus neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault state |
 | `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
 

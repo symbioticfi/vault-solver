@@ -27,18 +27,10 @@ func (s *Solver) ready() bool {
 	lastPoll := s.lastExclusivePoll.Load()
 	epoch := s.quoteEpoch.Load()
 	state := s.quoteState.Load()
-	ready := lastPoll > 0 && !s.quoteBlocked(now.Unix()) &&
+	return lastPoll > 0 && !s.quoteBlocked(now.Unix()) &&
 		state != nil && len(state.inventory) > 0 &&
 		state.epoch == epoch && state.expiresAt.After(now) &&
 		s.quoteEpoch.Load() == epoch && s.quoteState.Load() == state
-	if s.metrics != nil {
-		if ready {
-			s.metrics.ready.Set(1)
-		} else {
-			s.metrics.ready.Set(0)
-		}
-	}
-	return ready
 }
 
 func (s *Solver) readyHandler(w http.ResponseWriter, _ *http.Request) {

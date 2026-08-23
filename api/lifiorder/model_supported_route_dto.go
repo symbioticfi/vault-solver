@@ -44,9 +44,11 @@ type SupportedRouteDto struct {
 	// Destination token record ID
 	ToTokenId NullableFloat32 `json:"toTokenId"`
 	// Whether the route is currently active
-	IsActive  bool                      `json:"isActive"`
+	IsActive bool `json:"isActive"`
+	// Source chain information
 	FromChain NullableRouteChainInfoDto `json:"fromChain"`
-	ToChain   NullableRouteChainInfoDto `json:"toChain"`
+	// Destination chain information
+	ToChain NullableRouteChainInfoDto `json:"toChain"`
 	// Source token information for this route
 	FromToken TokenInfoDto `json:"fromToken"`
 	// Destination token information for this route

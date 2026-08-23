@@ -13,13 +13,13 @@ type uniswapXMetrics struct {
 	polls         *prometheus.CounterVec
 	fills         *prometheus.CounterVec
 	blockUntil    prometheus.Gauge
-	ready         prometheus.Gauge
+	ready         prometheus.GaugeFunc
 	quoteRefresh  prometheus.Gauge
 	exclusivePoll prometheus.Gauge
 	pendingFills  prometheus.Gauge
 }
 
-func newUniswapXMetrics(reg prometheus.Registerer) (*uniswapXMetrics, error) {
+func newUniswapXMetrics(reg prometheus.Registerer, ready func() bool) (*uniswapXMetrics, error) {
 	m := &uniswapXMetrics{
 		quotes: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "uniswapx_quote_requests_total", Help: "UniswapX quote requests by bounded outcome.",
@@ -37,8 +37,13 @@ func newUniswapXMetrics(reg prometheus.Registerer) (*uniswapXMetrics, error) {
 		blockUntil: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "uniswapx_block_until_timestamp", Help: "Unix timestamp until which UniswapX quoting is blocked.",
 		}),
-		ready: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "uniswapx_ready", Help: "1 when quote cache and exclusive order delivery are healthy.",
+		ready: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "uniswapx_ready", Help: "1 when quote state, exclusive delivery, and the transaction nonce lane are healthy.",
+		}, func() float64 {
+			if ready() {
+				return 1
+			}
+			return 0
 		}),
 		quoteRefresh: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "uniswapx_last_quote_refresh_timestamp", Help: "Unix timestamp of the last successful quote refresh.",

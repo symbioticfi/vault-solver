@@ -38,6 +38,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 	}
+	reader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
+	if err != nil {
+		return nil, errors.Errorf("%s: gas reader: %w", Name, err)
+	}
 
 	s := &Solver{
 		cfg:            cfg,
@@ -45,7 +49,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		chainID:        chainID,
 		dryRun:         dryRun,
 		strategyName:   cfg.Strategy.Name,
-		reader:         newReader(deps.Chain, log, cfg.LiquidityLens),
+		reader:         reader,
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
 		metrics:        mx,
@@ -61,6 +65,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		Adapter:             cfg.Adapter,
 		Callback:            cfg.Callback,
 		LoadAdapterSnapshot: s.adapterSnapshot,
+		GasAccounting:       cfg.Gas != nil,
 	})
 	if err != nil {
 		return nil, errors.Errorf("%s: %w", Name, err)

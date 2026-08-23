@@ -77,12 +77,18 @@ func (s *Strategy) DecideOffers(
 			if st.belowMinAssets(principal) {
 				continue
 			}
-			// Price at the minYieldPerRequest floor (rounded up to clear it), or the auction max rate when
-			// there is no floor; ValidateYield drops the pair if the result isn't in [floor, maxRate]
-			// (including a 0 return).
-			expectedReturn := types.MinYieldReturn(principal, st.snapshot.MinYieldPpm)
+			// Price at the minYieldPerRequest floor plus a partial-consumption margin (a floor-exact
+			// offer reverts TooLowYield when consume() pro-rates a partial fill down), or the auction max
+			// rate when there is no floor. When the margin would break the auction cap but the cap itself
+			// clears the floor, price at the cap and keep whatever margin fits. ValidateYield drops the
+			// pair if the result isn't in [floor, maxRate] (including a 0 return).
+			expectedReturn := types.PartialSafeMinYieldReturn(principal, st.snapshot.MinYieldPpm)
 			if expectedReturn.Sign() <= 0 {
 				expectedReturn = types.ExpectedReturn(principal, auction.MaxRateBps)
+			} else if maxReturn := types.ExpectedReturn(principal, auction.MaxRateBps); maxReturn.Sign() > 0 &&
+				expectedReturn.Cmp(maxReturn) > 0 &&
+				types.MeetsMinYield(maxReturn, principal, st.snapshot.MinYieldPpm) {
+				expectedReturn = maxReturn
 			}
 			if types.ValidateYield(expectedReturn, principal, st.snapshot.MinYieldPpm, auction.MaxRateBps) != nil {
 				continue

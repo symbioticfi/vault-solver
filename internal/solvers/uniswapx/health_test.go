@@ -28,6 +28,23 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 	if !solver.ready() {
 		t.Fatal("fresh solver should be ready")
 	}
+	txm := &executionTestTxManager{unavailable: true}
+	solver.txm = txm
+	if solver.ready() {
+		t.Fatal("solver with a paused transaction nonce lane should not be ready")
+	}
+	txm.unavailable = false
+	if !solver.ready() {
+		t.Fatal("solver did not become ready after the transaction nonce lane resumed")
+	}
+	txm.busy = true
+	if solver.ready() {
+		t.Fatal("solver with a busy shared transaction nonce lane should not be ready")
+	}
+	txm.busy = false
+	if !solver.ready() {
+		t.Fatal("solver did not become ready after the shared transaction nonce lane became idle")
+	}
 	solver.beginFillPlanning()
 	if solver.ready() {
 		t.Fatal("solver planning a fill should not be ready")

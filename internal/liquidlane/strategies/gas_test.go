@@ -87,6 +87,47 @@ func TestGasPricingAppliesInventoryReserveBeforeRoutePrediction(t *testing.T) {
 	}
 }
 
+func TestGasPricingUsesExecutorDirectThenPrivateOrder(t *testing.T) {
+	tokenIn := common.HexToAddress("0x00000000000000000000000000000000000000ca")
+	tokenOut := common.HexToAddress("0x00000000000000000000000000000000000000cb")
+	directAdapter := common.HexToAddress("0x00000000000000000000000000000000000000a1")
+	privateAdapter := common.HexToAddress("0x00000000000000000000000000000000000000a2")
+	vault := common.HexToAddress("0x00000000000000000000000000000000000000f1")
+	snapshot := &liquidlanegas.Snapshot{
+		Adapters: map[common.Address]*liquidlanegas.AdapterState{
+			directAdapter:  {Vault: vault, Acquire: map[common.Address]*big.Int{}},
+			privateAdapter: {Vault: vault, Acquire: map[common.Address]*big.Int{}},
+		},
+		Vaults: map[common.Address]*liquidlanegas.VaultState{
+			vault: {FreeAssets: big.NewInt(100), Withdrawable: big.NewInt(150)},
+		},
+	}
+	legs := []GasLeg{
+		{
+			Route:     liquidlane.Route{Adapter: privateAdapter, Vault: vault, TokenIn: tokenIn},
+			AmountOut: big.NewInt(50), Private: true,
+		},
+		{
+			Route:     liquidlane.Route{Adapter: directAdapter, Vault: vault, TokenIn: tokenIn},
+			AmountOut: big.NewInt(120),
+		},
+	}
+	prices := liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{tokenOut: big.NewInt(nativeUnit)})
+
+	pricing, err := NewGasPricing(big.NewInt(1), tokenOut, prices, snapshot, 0, GasEnvelope{})
+	if err != nil {
+		t.Fatalf("NewGasPricing: %v", err)
+	}
+	cost := pricing.Cost(legs)
+	want := new(big.Int).SetUint64(
+		liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteDeallocate, true) +
+			liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteUnknown, true),
+	)
+	if cost.Cmp(want) != 0 {
+		t.Fatalf("cost = %s, want direct-then-private cost %s", cost, want)
+	}
+}
+
 func TestGasPricingMaxCostBoundsEveryRouteAsFirstUnknown(t *testing.T) {
 	tokenOut := common.HexToAddress("0x3333333333333333333333333333333333333333")
 	prices := liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{tokenOut: big.NewInt(nativeUnit)})

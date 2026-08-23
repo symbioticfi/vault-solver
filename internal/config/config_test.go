@@ -39,8 +39,10 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if cfg.TxManager.Confirmations != DefaultConfirmations {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
-	if cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
-		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs {
+	if cfg.TxManager.BroadcastTimeoutMs != DefaultBroadcastTimeoutMs ||
+		cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
+		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs ||
+		cfg.TxManager.ShutdownTimeoutMs != DefaultShutdownTimeoutMs {
 		t.Fatalf("unexpected tx replacement defaults: %+v", cfg.TxManager)
 	}
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
@@ -161,7 +163,7 @@ solvers:
 	if cfg.Chain.WriteRPCURL != "https://write.from.env" {
 		t.Fatalf("writeRpcUrl not expanded from env: %q", cfg.Chain.WriteRPCURL)
 	}
-	// The read RPC is untouched — writeRpcUrl only affects broadcasts.
+	// The general read RPC is untouched — writeRpcUrl affects broadcasts and account nonce reads.
 	if cfg.Chain.RPCURL != "https://read.example" {
 		t.Fatalf("rpcUrl changed unexpectedly: %q", cfg.Chain.RPCURL)
 	}
@@ -250,9 +252,10 @@ signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100}
 solvers: [{}]
 `,
-		"missing max fee cap": `
+		"negative max fee cap": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
+txManager: {maxFeeGwei: -1}
 solvers: [{name: x}]
 `,
 		"non-finite max fee cap": `
@@ -279,10 +282,22 @@ signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, replacementIntervalMs: -1}
 solvers: [{name: x}]
 `,
+		"negative broadcast timeout": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, broadcastTimeoutMs: -1}
+solvers: [{name: x}]
+`,
 		"timeout below replacement interval": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, replacementIntervalMs: 30000, pendingTimeoutMs: 10000}
+solvers: [{name: x}]
+`,
+		"negative shutdown timeout": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, shutdownTimeoutMs: -1}
 solvers: [{name: x}]
 `,
 	}
@@ -292,5 +307,24 @@ solvers: [{name: x}]
 				t.Fatalf("expected error for %q", name)
 			}
 		})
+	}
+}
+
+func TestValidateTxManagerRequiresMaxFeeOnlyWhenUsed(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+solvers: [{name: x}]
+`))
+	if err != nil {
+		t.Fatalf("Load without txManager: %v", err)
+	}
+	if err := cfg.ValidateTxManager(); err == nil {
+		t.Fatal("expected maxFeeGwei to be required for a transaction-sending solver")
+	}
+
+	cfg.TxManager.MaxFeeGwei = 100
+	if err := cfg.ValidateTxManager(); err != nil {
+		t.Fatalf("valid txManager: %v", err)
 	}
 }

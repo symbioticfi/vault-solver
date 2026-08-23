@@ -136,8 +136,8 @@ func (s *Strategy) priceQuoteRange(
 
 	inDecimals := candidates[0].Route.TokenInDecimals
 	outDecimals := candidates[0].Route.TokenOutDecimals
-	rate := liquidlane.RateForAmountOut(lowerQuote.AmountOut, lower, inDecimals, outDecimals)
-	upperRate := liquidlane.RateForAmountOut(upperQuote.AmountOut, upper, inDecimals, outDecimals)
+	rate := maximumNonOverquotingRate(lowerQuote.AmountOut, lower, inDecimals, outDecimals)
+	upperRate := maximumNonOverquotingRate(upperQuote.AmountOut, upper, inDecimals, outDecimals)
 	if upperRate.Cmp(rate) < 0 {
 		rate = upperRate
 	}
@@ -154,7 +154,8 @@ func (s *Strategy) priceQuoteRange(
 	if floorRate.Cmp(rate) < 0 {
 		rate = floorRate
 	}
-	if rate.Sign() <= 0 {
+	if rate.Sign() <= 0 ||
+		liquidlane.AmountOutForRate(lower, rate, inDecimals, outDecimals).Sign() <= 0 {
 		return nil, nil
 	}
 	return &types.QuoteRange{
@@ -162,6 +163,31 @@ func (s *Strategy) priceQuoteRange(
 		MaxAmount: new(big.Int).Set(upper),
 		Quote:     fixedPointDecimal(rate, rateScaleDigits),
 	}, nil
+}
+
+// maximumNonOverquotingRate returns the largest fixed-point rate whose rounded
+// output at amountIn does not exceed amountOut.
+func maximumNonOverquotingRate(
+	amountOut *big.Int,
+	amountIn *big.Int,
+	inDecimals int,
+	outDecimals int,
+) *big.Int {
+	if amountOut == nil || amountOut.Sign() < 0 || amountIn == nil || amountIn.Sign() <= 0 {
+		return new(big.Int)
+	}
+	// The first rate that rounds to amountOut+1 is the exclusive upper bound.
+	// RateForAmountOut floors it, so step back only when the bound is exact.
+	rate := liquidlane.RateForAmountOut(
+		new(big.Int).Add(amountOut, big.NewInt(1)),
+		amountIn,
+		inDecimals,
+		outDecimals,
+	)
+	if liquidlane.AmountOutForRate(amountIn, rate, inDecimals, outDecimals).Cmp(amountOut) > 0 {
+		rate.Sub(rate, big.NewInt(1))
+	}
+	return rate
 }
 
 func quoteBounds(

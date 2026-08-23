@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -30,14 +31,23 @@ type orderFeed struct {
 	log    logr.Logger
 }
 
+type orderFeedConnectionHooks struct {
+	beforeRead     func(context.Context) // Synchronous: establishes state before the first event.
+	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
+}
+
 func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
 	return &orderFeed{url: url, apiKey: apiKey, log: log}
 }
 
-func (f *orderFeed) run(ctx context.Context, handle func(context.Context, orderMessage)) error {
+func (f *orderFeed) run(
+	ctx context.Context,
+	hooks orderFeedConnectionHooks,
+	handle func(context.Context, orderMessage),
+) error {
 	backoff := initialWSBackoff
 	for {
-		connected, err := f.watchOnce(ctx, handle)
+		connected, err := f.watchOnce(ctx, hooks, handle)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -61,6 +71,7 @@ func (f *orderFeed) run(ctx context.Context, handle func(context.Context, orderM
 
 func (f *orderFeed) watchOnce(
 	ctx context.Context,
+	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
 ) (bool, error) {
 	headers := http.Header{}
@@ -88,6 +99,19 @@ func (f *orderFeed) watchOnce(
 	defer close(done)
 	defer conn.Close()
 
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	var work sync.WaitGroup
+	defer func() {
+		cancelConnection()
+		work.Wait()
+	}()
+	if hooks.beforeRead != nil {
+		hooks.beforeRead(connectionCtx)
+	}
+	if hooks.whileConnected != nil {
+		work.Go(func() { hooks.whileConnected(connectionCtx) })
+	}
+
 	f.log.Info("order feed connected", "url", f.url)
 	for {
 		messageType, msg, err := conn.ReadMessage()
@@ -113,7 +137,7 @@ func (f *orderFeed) watchOnce(
 			f.log.V(1).Info("order feed event ignored", "event", envelope.Event)
 			continue
 		}
-		handle(ctx, envelope)
+		handle(connectionCtx, envelope)
 	}
 }
 

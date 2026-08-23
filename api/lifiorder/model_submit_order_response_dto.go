@@ -22,7 +22,8 @@ var _ MappedNullable = &SubmitOrderResponseDto{}
 // SubmitOrderResponseDto struct for SubmitOrderResponseDto
 type SubmitOrderResponseDto struct {
 	// The order details
-	Order CompactOrderResponseDto        `json:"order"`
+	Order CompactOrderResponseDto `json:"order"`
+	// The quote details
 	Quote NullableSubmittedOrderQuoteDto `json:"quote"`
 	// Sponsor signature
 	SponsorSignature NullableString `json:"sponsorSignature,omitempty"`

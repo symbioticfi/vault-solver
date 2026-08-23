@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -17,12 +18,21 @@ import (
 // reader is the RFQ adapter over the shared LiquidLane read surface.
 type reader struct {
 	ll            *liquidlane.Reader
+	chain         *chain.Client
 	chainID       int64
 	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
 }
 
 func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
-	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chainID: c.ChainID().Int64()}
+	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chain: c, chainID: c.ChainID().Int64()}
+}
+
+func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
+	header, err := r.chain.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return time.Time{}, errors.Errorf("latest block header: %w", err)
+	}
+	return time.Unix(int64(header.Time), 0), nil
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config

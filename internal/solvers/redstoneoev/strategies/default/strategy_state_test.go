@@ -3,6 +3,7 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,39 +17,23 @@ import (
 type decisionStateReader struct {
 	Reader
 
-	rate             *big.Int
-	balance          *big.Int
-	balanceErr       error
-	readLoanDecimals *int
-}
-
-func (r decisionStateReader) ReadLoanEthRate(_ context.Context, loanDecimals int, _ *loanEthFeed, _ time.Time) *big.Int {
-	if r.readLoanDecimals != nil {
-		*r.readLoanDecimals = loanDecimals
-	}
-	return cloneBig(r.rate)
+	balance    *big.Int
+	balanceErr error
 }
 
 func (r decisionStateReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
 	return cloneBig(r.balance), r.balanceErr
 }
 
-func TestRefreshStateUsesSolverAdapterSnapshot(t *testing.T) {
-	gotDecimals := -1
+func TestRefreshStateReadsCallbackBalance(t *testing.T) {
 	s := &Strategy{
-		loadAdapter: func() (types.AdapterSnapshot, bool) {
-			return types.AdapterSnapshot{LoanDecimals: 6}, true
-		},
-		reader: decisionStateReader{
-			rate:             big.NewInt(10),
-			balance:          big.NewInt(20),
-			readLoanDecimals: &gotDecimals,
-		},
-		log: logr.Discard(),
+		reader: decisionStateReader{balance: big.NewInt(20)},
+		log:    logr.Discard(),
 	}
 	s.refreshState(t.Context())
-	if gotDecimals != 6 {
-		t.Fatalf("loan decimals = %d, want solver adapter snapshot value 6", gotDecimals)
+	got, ok := s.state.load()
+	if !ok || got.CallbackNative.Cmp(big.NewInt(20)) != 0 || got.CallbackUpdatedAt.IsZero() {
+		t.Fatalf("decision state = %+v, want fresh callback balance 20", got)
 	}
 }
 
@@ -59,9 +44,7 @@ func TestRefreshStatePreservesLastGoodValuesWithoutExtendingFreshness(t *testing
 		log:    logr.Discard(),
 	}
 	s.state.store(decisionState{
-		Rate:              big.NewInt(10),
 		CallbackNative:    big.NewInt(20),
-		RateUpdatedAt:     previousAt,
 		CallbackUpdatedAt: previousAt,
 	})
 
@@ -70,10 +53,32 @@ func TestRefreshStatePreservesLastGoodValuesWithoutExtendingFreshness(t *testing
 	if !ok {
 		t.Fatal("decision state missing")
 	}
-	if got.Rate.Int64() != 10 || got.CallbackNative.Int64() != 20 {
+	if got.CallbackNative.Int64() != 20 {
 		t.Fatalf("last good values not preserved: %+v", got)
 	}
-	if !got.RateUpdatedAt.Equal(previousAt) || !got.CallbackUpdatedAt.Equal(previousAt) {
+	if !got.CallbackUpdatedAt.Equal(previousAt) {
 		t.Fatalf("failed refresh extended freshness: %+v", got)
+	}
+}
+
+func TestNewRejectsGasDerivedProfitPoliciesWithoutGasAccounting(t *testing.T) {
+	deps := Deps{
+		Log:      logr.Discard(),
+		Adapter:  common.Address{19: 1},
+		Callback: common.Address{19: 2},
+		LoadAdapterSnapshot: func() (types.AdapterSnapshot, bool) {
+			return types.AdapterSnapshot{}, true
+		},
+	}
+	tests := map[string]Config{
+		"total bundle profit share":    {TotalBundleProfitBps: 1},
+		"minimum bundle profit margin": {MinBundleProfitBidBps: 1},
+	}
+	for name, cfg := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(cfg, deps); err == nil || !strings.Contains(err.Error(), "requires gas accounting") {
+				t.Fatalf("error = %v, want gas-accounting requirement", err)
+			}
+		})
 	}
 }

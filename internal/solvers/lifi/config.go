@@ -15,21 +15,21 @@ import (
 )
 
 type rawConfig struct {
-	OrderServer        rawOrderServerConfig    `yaml:"orderServer"`
-	InputSettler       string                  `yaml:"inputSettler"`
-	OutputSettler      string                  `yaml:"outputSettler"`
-	Executor           string                  `yaml:"executor"`
-	LiquidityLens      string                  `yaml:"liquidityLens"`
-	Adapters           []string                `yaml:"adapters"`
-	TokensToQuote      string                  `yaml:"tokensToQuote"`
-	PermissionedTokens []string                `yaml:"permissionedTokens"`
-	QuoteIntervalMs    int                     `yaml:"quoteIntervalMs"`
-	QuoteTTL           string                  `yaml:"quoteTtl"`
-	QuoteRefreshMode   string                  `yaml:"quoteRefreshMode"`
-	SolverMode         string                  `yaml:"solverMode"`
-	DiscountsURL       string                  `yaml:"privateDiscountsUrl"`
-	Gas                liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy           rawStrategyConfig       `yaml:"strategy"`
+	OrderServer        rawOrderServerConfig     `yaml:"orderServer"`
+	InputSettler       string                   `yaml:"inputSettler"`
+	OutputSettler      string                   `yaml:"outputSettler"`
+	Executor           string                   `yaml:"executor"`
+	LiquidityLens      string                   `yaml:"liquidityLens"`
+	Adapters           []string                 `yaml:"adapters"`
+	TokensToQuote      string                   `yaml:"tokensToQuote"`
+	PermissionedTokens []string                 `yaml:"permissionedTokens"`
+	QuoteIntervalMs    int                      `yaml:"quoteIntervalMs"`
+	QuoteTTL           string                   `yaml:"quoteTtl"`
+	QuoteRefreshMode   string                   `yaml:"quoteRefreshMode"`
+	SolverMode         string                   `yaml:"solverMode"`
+	DiscountsURL       string                   `yaml:"privateDiscountsUrl"`
+	Gas                *liquidlanegas.RawConfig `yaml:"gas"`
+	Strategy           rawStrategyConfig        `yaml:"strategy"`
 }
 
 type rawOrderServerConfig struct {
@@ -60,7 +60,7 @@ type Config struct {
 	QuoteRefreshMode string
 	SolverMode       string
 	DiscountsURL     string
-	Gas              liquidlanegas.OracleConfig
+	Gas              *liquidlanegas.OracleConfig
 	Strategy         StrategyConfig
 }
 
@@ -165,9 +165,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if solverMode == solverModeExternal && raw.DiscountsURL != "" {
 		return nil, errors.New("privateDiscountsUrl requires internal solverMode")
 	}
-	gas, err := liquidlanegas.ParseConfig(raw.Gas)
-	if err != nil {
-		return nil, err
+	var gas *liquidlanegas.OracleConfig
+	if raw.Gas != nil {
+		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
+		if gasErr != nil {
+			return nil, gasErr
+		}
+		gas = &parsed
 	}
 	return &Config{
 		OrderServer: OrderServerConfig{

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -300,6 +301,35 @@ func TestWebhookClientPostJSONFailures(t *testing.T) {
 				t.Fatalf("PostJSON error = %v, want contains %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestWebhookClientReturnsTypedHTTPStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid fill input", http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+	client, err := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	var resp struct{}
+	err = client.PostJSON(t.Context(), struct{}{}, &resp)
+	if err == nil {
+		t.Fatal("PostJSON error = nil, want HTTP status error")
+	}
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("PostJSON error type = %T, want *HTTPStatusError", err)
+	}
+	if got := statusErr.StatusCode(); got != http.StatusUnprocessableEntity {
+		t.Fatalf("status code = %d, want %d", got, http.StatusUnprocessableEntity)
+	}
+	if !IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
+		t.Fatalf("IsHTTPStatus(%v) = false, want true", err)
+	}
+	if IsHTTPStatus(err, http.StatusBadRequest, http.StatusTooManyRequests) {
+		t.Fatalf("IsHTTPStatus(%v) matched an unrelated status", err)
 	}
 }
 

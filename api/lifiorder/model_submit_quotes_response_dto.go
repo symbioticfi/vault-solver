@@ -23,7 +23,7 @@ var _ MappedNullable = &SubmitQuotesResponseDto{}
 type SubmitQuotesResponseDto struct {
 	// Status of the quote submission
 	Status string `json:"status"`
-	// Number of quotes successfully added
+	// Number of deduplicated quote ranges accepted by the submission. Identical resubmissions count as accepted even when no rows change.
 	QuotesAdded float32 `json:"quotesAdded"`
 }
 

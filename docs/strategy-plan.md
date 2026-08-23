@@ -67,7 +67,8 @@ its `strategies/types` package — this document intentionally does not restate 
 Solvers that use LiquidLane liquidity also follow
 [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): shared LiquidLane packages define
 read-side facts (`Route`, `Inventory`, `QuoteCandidate`, `FillQuote`, authorization, ids, freshness). The shared snapshot
-reader composes direct and physical state plus gas facts for LI.FI and UniswapX. RFQ-like exact-input
+reader composes direct and physical state plus optional gas facts for LI.FI and UniswapX. OEV consumes the
+same optional oracle facts while retaining its protocol-specific signed gas cap and deposit checks. RFQ-like exact-input
 paths can normalize amount-independent inventory against current per-route oracle quotes. The RFQ solver
 performs that protocol-to-LiquidLane normalization before calling its strategy; UniswapX and LI.FI already
 enter their strategies as typed LiquidLane inventory. Their default strategies build the same `QuoteTask`; RFQ, LI.FI, and
@@ -170,9 +171,9 @@ supplies the price-impact coverage rule without gas pricing; UniswapX supplies s
 buffer and gas pricing.
 
 LI.FI adapts the same exact-input task to its standing range wire format. It solves each geometric range at
-both endpoints, then caps that endpoint price with a linear conservative floor over route alternatives,
-worst-case complete-plan gas, and rounding. This keeps every interior amount executable without binary
-search or route-combination enumeration.
+both endpoints, caps each endpoint at the largest fixed-point rate that cannot overquote its integer output,
+then applies a linear conservative floor over route alternatives, worst-case complete-plan gas, and
+rounding. Every emitted minimum must still map to positive integer output.
 
 For fills, RFQ, LI.FI, and UniswapX pass current amount-specific `FillQuote`s to `SolveFill`. `FillTask`
 also carries pending `CapacityID` reservations, freshness, route limit, buffer, input coverage, and an
@@ -200,6 +201,8 @@ validated `discounts.Signed` into its own generated executor binding.
 - HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
 - literal or env-backed headers (parsed config retains only the env-var name; `NewClient` resolves it)
 - strict response decode; non-2xx and empty-body responses are errors
+- typed non-2xx status errors, so each solver strategy can distinguish permanent input rejection from a
+  retryable endpoint failure without putting protocol policy in the shared client
 
 It has no solver names, no strategy registry, and no per-solver DTOs — each solver's webhook strategy
 owns its own wire types (conventionally lower-camel JSON with decimal strings for big integers,

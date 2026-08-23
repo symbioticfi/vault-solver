@@ -3,7 +3,10 @@
 # Secrets are referenced by env-var name; ${VAR} values are expanded when the config is loaded.
 
 chain:
-  rpcUrl: ${ETH_RPC_URL_MAINNET} # primary Ethereum RPC for reads, fills, and receipts
+  rpcUrl: ${ETH_RPC_URL_MAINNET} # state, fees, and receipts
+  # rpcFallbackUrls:             # optional read-only fallbacks, tried in order
+  #   - ${ETH_RPC_URL_MAINNET_BACKUP}
+  writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts + nonce reads; must support same-nonce replacement/cancellation
   chainId: 1                     # must match the RPC chain ID
 
 signer:
@@ -11,6 +14,12 @@ signer:
 
 txManager:
   confirmations: 2               # confirmations awaited before capacity is released
+  maxFeeGwei: 50                  # global fee cap; the normal lifecycle stops one bump below it
+  broadcastTimeoutMs: 5000        # allow the private write RPC up to 5s per submission
+  replacementIntervalMs: 15000   # attempt a capped fee bump every 15s
+  pendingTimeoutMs: 300000        # switch the active nonce to cancellation after 5m
+  shutdownTimeoutMs: 60000        # bound SIGTERM cancellation + receipt drain to 60s
+  tipGwei: 0                      # observed Etherscan Fast: minimum p25 tip from the latest five blocks
 
 observability:
   addr: ":9090"                  # framework metrics and health endpoints
