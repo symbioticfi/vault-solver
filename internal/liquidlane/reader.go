@@ -699,6 +699,31 @@ func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, fil
 	return out, nil
 }
 
+// FilterAuthorizedAdapterAddresses returns the adapter-wide authorization subset without requiring
+// token routes to be resolved. Startup checks that are configured by adapter address (not token pair)
+// must use this surface rather than manufacturing incomplete Routes, which compactRoutes correctly drops.
+func (r *Reader) FilterAuthorizedAdapterAddresses(
+	ctx context.Context,
+	adapters []common.Address,
+	filler common.Address,
+) ([]common.Address, error) {
+	adapters = dedupeAddresses(adapters)
+	if len(adapters) == 0 {
+		return nil, nil
+	}
+	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]common.Address, 0, len(adapters))
+	for _, adapter := range adapters {
+		if adapter != (common.Address{}) && authorized[adapter] {
+			out = append(out, adapter)
+		}
+	}
+	return out, nil
+}
+
 func (r *Reader) authorizedAdapters(
 	ctx context.Context,
 	adapters []common.Address,

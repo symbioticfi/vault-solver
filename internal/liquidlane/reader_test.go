@@ -3,6 +3,7 @@ package liquidlane
 import (
 	"context"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 
@@ -548,6 +549,32 @@ func TestReaderReadAuthUsesDirectRolesAndDelegatedFiller(t *testing.T) {
 	}
 	if len(auth) != 3 || !auth[0].Authorized || !auth[1].Authorized || !auth[2].Authorized || !auth[2].IsFiller {
 		t.Fatalf("auth = %+v", auth)
+	}
+}
+
+func TestReaderFilterAuthorizedAdapterAddressesDoesNotRequireTokenRoutes(t *testing.T) {
+	filler := common.HexToAddress("0x0000000000000000000000000000000000000f11")
+	marketMaker := common.HexToAddress("0x0000000000000000000000000000000000000a11")
+	owner := common.HexToAddress("0x0000000000000000000000000000000000000b11")
+	adapters := []common.Address{
+		common.HexToAddress("0x0000000000000000000000000000000000000011"),
+		common.HexToAddress("0x0000000000000000000000000000000000000012"),
+	}
+	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
+		{
+			successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
+			successOutput(t, "marketMaker", marketMaker), successOutput(t, "owner", owner),
+		},
+		{successOutput(t, "isFiller", true)},
+	}}
+	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
+
+	got, err := r.FilterAuthorizedAdapterAddresses(t.Context(), adapters, filler)
+	if err != nil {
+		t.Fatalf("FilterAuthorizedAdapterAddresses: %v", err)
+	}
+	if !slices.Equal(got, adapters) {
+		t.Fatalf("authorized adapters = %v, want %v", got, adapters)
 	}
 }
 

@@ -196,15 +196,27 @@ func (r *reader) validateDirectAuthorization(
 	executor common.Address,
 	vaults []recoveryVault,
 ) error {
-	routes := make([]liquidlane.Route, len(vaults))
+	adapters := make([]common.Address, len(vaults))
 	for i := range vaults {
-		routes[i].Adapter = vaults[i].Adapter
+		adapters[i] = vaults[i].Adapter
 	}
-	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executor)
+	authorized, err := r.ll.FilterAuthorizedAdapterAddresses(ctx, adapters, executor)
 	if err != nil {
 		return err
 	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, authorized); len(missing) > 0 {
+	allowed := make(map[common.Address]bool, len(authorized))
+	for _, adapter := range authorized {
+		allowed[adapter] = true
+	}
+	missing := make([]common.Address, 0)
+	seen := make(map[common.Address]bool, len(adapters))
+	for _, adapter := range adapters {
+		if adapter != (common.Address{}) && !allowed[adapter] && !seen[adapter] {
+			missing = append(missing, adapter)
+			seen[adapter] = true
+		}
+	}
+	if len(missing) > 0 {
 		return errors.Errorf(
 			"executor %s is not authorized as direct filler for configured adapters: %v",
 			executor.Hex(), missing,
