@@ -365,6 +365,26 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ./bin/vault-solver run --config config/3f.example.yaml --debug
 ```
 
+## Integration E2E
+
+`.github/workflows/integration-e2e.yml` checks out the Docker harness from
+[`symbioticfi/rfq-integration`](https://github.com/symbioticfi/rfq-integration), builds the current
+vault-solver checkout as a named Docker context, and runs one real Anvil smoke flow for each solver
+profile in parallel. The integration gitlink is never used as the solver under test. Set the repository
+variable `RFQ_INTEGRATION_REF` to an immutable integration commit; manual runs can override it.
+The read-only Actions secret `RFQ_INTEGRATION_READ_TOKEN` must grant `contents:read` access to the private
+`rfq-integration`, `rfq-backend`, and `rfq-indexer` repositories. Private-fixture jobs deliberately skip
+fork and Dependabot pull requests, where that secret is unavailable.
+
+To reproduce one job with sibling local checkouts:
+
+```bash
+RFQ_INTEGRATION_DIR=../rfq-integration ./hack/integration-e2e.sh rfq smoke
+```
+
+Docker, Node/pnpm, and Foundry are required for this optional local gate. Failed CI jobs upload the
+Compose logs, generated configuration, deployment manifest, and container inspection.
+
 ## Configuration
 
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
