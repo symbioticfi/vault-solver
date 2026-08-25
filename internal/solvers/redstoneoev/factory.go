@@ -21,11 +21,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if apiKey == "" {
 		return nil, errors.Errorf("%s: ws api key env %q is empty", Name, cfg.APIKeyEnv)
 	}
-	// Dry-run is solver-owned because it suppresses outbound solve frames for every strategy.
-	dryRun, err := dryRunEnv()
-	if err != nil {
-		return nil, errors.Errorf("%s: %w", Name, err)
-	}
 	chainID := deps.Chain.ChainID()
 	if !chainID.IsInt64() || chainID.Sign() <= 0 {
 		return nil, errors.Errorf("%s: chain id %s out of supported range", Name, chainID)
@@ -47,7 +42,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		cfg:            cfg,
 		deps:           deps,
 		chainID:        chainID,
-		dryRun:         dryRun,
+		dryRun:         cfg.DryRun,
 		strategyName:   cfg.Strategy.Name,
 		reader:         reader,
 		nonces:         &nonceStore{},

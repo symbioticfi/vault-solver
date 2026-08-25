@@ -25,11 +25,8 @@ func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted
 }
 
-const (
-	// terminalOrderTTL is how long terminal orders (and their attempt counts) are retained for
-	// reconciliation/observability before eviction.
-	terminalOrderTTL = 3 * time.Hour
-)
+// terminalOrderTTL is how long terminal orders are retained for reconciliation and observability.
+const terminalOrderTTL = 3 * time.Hour
 
 // orderRecord is the local tracking state for one order. The executable payload (encodedOrder,
 // signature, deadline) is fetched fresh from the backend at fill time, so it is not persisted here.
@@ -39,6 +36,7 @@ type orderRecord struct {
 	Status    orderStatus
 	TxHash    common.Hash
 	LastError string
+	Attempts  int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -52,22 +50,16 @@ type queuedOrder struct {
 // store is the filler's in-memory operational state. The HTTP server and the poll loop touch it
 // concurrently, so every accessor is mutex-guarded.
 type store struct {
-	mu       sync.Mutex
-	orders   map[string]*orderRecord // by orderId
-	attempts map[string]int          // by orderId
-	now      func() time.Time
+	mu     sync.Mutex
+	orders map[string]*orderRecord // by orderId
+	now    func() time.Time
 }
 
 func newStore(now func() time.Time) *store {
-	return &store{
-		orders:   make(map[string]*orderRecord),
-		attempts: make(map[string]int),
-		now:      now,
-	}
+	return &store{orders: make(map[string]*orderRecord), now: now}
 }
 
-// sweep evicts stale entries so the in-memory maps don't grow without bound over a long run:
-// terminal orders (with their attempt counts) untouched for longer than terminalOrderTTL.
+// sweep evicts terminal orders untouched for longer than terminalOrderTTL.
 func (s *store) sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,7 +67,6 @@ func (s *store) sweep() {
 	for id, rec := range s.orders {
 		if !rec.Status.active() && now.Sub(rec.UpdatedAt) > terminalOrderTTL {
 			delete(s.orders, id)
-			delete(s.attempts, id)
 		}
 	}
 }
@@ -145,8 +136,12 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 func (s *store) recordAttempt(orderID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.attempts[orderID]++
-	return s.attempts[orderID]
+	rec := s.orders[orderID]
+	if rec == nil {
+		return 0
+	}
+	rec.Attempts++
+	return rec.Attempts
 }
 
 func cloneOrder(rec *orderRecord) *orderRecord {

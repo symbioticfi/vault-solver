@@ -3,12 +3,14 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -32,6 +34,28 @@ func (f *fakeDiscountProvider) ListDiscounts(context.Context) (*liquiddiscounts.
 
 func (f *fakeDiscountProvider) Resolve(context.Context, string) (*liquiddiscounts.Resolved, error) {
 	return f.resolved, nil
+}
+
+func TestResolveAdvertisedRoutesReportsInvalidDiscount(t *testing.T) {
+	var logs []string
+	solver := &Solver{
+		log: funcr.NewJSON(
+			func(entry string) { logs = append(logs, entry) },
+			funcr.Options{Verbosity: 1},
+		),
+	}
+	listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{{DiscountID: "invalid"}}}
+
+	if routes := solver.resolveAdvertisedRoutes(
+		t.Context(), listed, nil, time.Unix(1_000, 0), advertisedRouteFilter{},
+	); len(routes) != 0 {
+		t.Fatalf("routes = %v, want none", routes)
+	}
+	if len(logs) != 1 ||
+		!strings.Contains(logs[0], "ignore invalid advertised discount") ||
+		!strings.Contains(logs[0], `"discountId":"invalid"`) {
+		t.Fatalf("logs = %v", logs)
+	}
 }
 
 func TestDiscountInventoriesUseConfiguredPhysicalRoute(t *testing.T) {

@@ -3,7 +3,6 @@ package rfq
 import (
 	"context"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -30,8 +29,8 @@ type orderBackend interface {
 	listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error)
 	getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error)
 	getOrder(ctx context.Context, orderID string) (*backendOrder, error)
-	resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error)
-	listDiscounts(ctx context.Context) (*discountsResponse, error)
+	Resolve(ctx context.Context, discountID string) (*resolveDiscountResponse, error)
+	ListDiscounts(ctx context.Context) (*discountsResponse, error)
 }
 
 // executable is the resolved, typed payload needed to build a fill (from the backend executable view).
@@ -44,9 +43,7 @@ type executable struct {
 	outputs      []backendOut
 }
 
-// executionService polls the backend for open orders and fills them via the Executor. It runs in its
-// own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
-// double-submit the same order.
+// executionService polls the backend for open orders and fills them via the Executor.
 type executionService struct {
 	chainID          int64
 	executor         common.Address
@@ -62,9 +59,6 @@ type executionService struct {
 	txm              txSender
 	log              logr.Logger
 	now              func() time.Time
-
-	inflightMu sync.Mutex
-	inflight   map[string]bool
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -122,11 +116,6 @@ func (e *executionService) pollOpenOrders(ctx context.Context) error {
 }
 
 func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
-	if !e.acquire(o.OrderID) {
-		return
-	}
-	defer e.release(o.OrderID)
-
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
@@ -301,7 +290,7 @@ func (e *executionService) buildFillPlan(
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
-	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
+	input := newQuoteInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err := e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
 		return plan, err
@@ -329,7 +318,7 @@ func (e *executionService) buildDiscountSwapInputs(
 		if !e.discountsEnabled {
 			return nil, time.Time{}, errors.Errorf("%w: leg %s", errDiscountsDisabled, leg.DiscountID.Hex())
 		}
-		resolved, err := e.backend.resolveDiscount(ctx, leg.DiscountID.Hex())
+		resolved, err := e.backend.Resolve(ctx, leg.DiscountID.Hex())
 		if err != nil {
 			return nil, time.Time{}, errors.Errorf("resolve discount %s: %w", leg.DiscountID.Hex(), err)
 		}
@@ -375,7 +364,7 @@ func rfqFillDeadline(orderDeadline, discountValidUntil time.Time) time.Time {
 func (e *executionService) discountInventories(
 	ctx context.Context, tokenIn common.Address, direct []solverInventory,
 ) []solverInventory {
-	resp, err := e.backend.listDiscounts(ctx)
+	resp, err := e.backend.ListDiscounts(ctx)
 	if err != nil {
 		e.log.Error(err, "fill: list discounts")
 		return nil
@@ -462,22 +451,6 @@ func errString(err error) string {
 		return "not available"
 	}
 	return err.Error()
-}
-
-func (e *executionService) acquire(orderID string) bool {
-	e.inflightMu.Lock()
-	defer e.inflightMu.Unlock()
-	if e.inflight[orderID] {
-		return false
-	}
-	e.inflight[orderID] = true
-	return true
-}
-
-func (e *executionService) release(orderID string) {
-	e.inflightMu.Lock()
-	defer e.inflightMu.Unlock()
-	delete(e.inflight, orderID)
 }
 
 /* ───────── executable helpers ───────── */

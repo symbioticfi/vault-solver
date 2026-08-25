@@ -55,17 +55,6 @@ func newQuoteInput(
 	}
 }
 
-func newFillInput(
-	chainID int64,
-	executor common.Address,
-	req strategyRequest,
-	candidates []liquidlane.QuoteCandidate,
-	required *big.Int,
-	requireSingleRoute bool,
-	now time.Time,
-) types.FillInput {
-	return newQuoteInput(chainID, executor, req, candidates, required, requireSingleRoute, now)
-}
 func validateSingleRoute(requireSingleRoute bool, legCount int) error {
 	if requireSingleRoute && legCount != 1 {
 		return errors.Errorf("single-route input requires exactly one leg, got %d", legCount)

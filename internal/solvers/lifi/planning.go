@@ -58,7 +58,7 @@ func (s *Solver) processOrderWithPending(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-	pending *pendingFillState,
+	pending map[string]*pendingFill,
 ) orderProcessingResult {
 	result := s.processOrderUsingReservations(ctx, routes, order, pending, nil)
 	if result.fill != nil {
@@ -71,7 +71,7 @@ func (s *Solver) processOrderUsingReservations(
 	ctx context.Context,
 	routes []route,
 	order *submittedOrder,
-	pending *pendingFillState,
+	pending map[string]*pendingFill,
 	reservations *liquidlane.CapacityReservations,
 ) orderProcessingResult {
 	if !s.cfg.TokenPolicy.Allows(order.TokenIn) {
@@ -94,7 +94,7 @@ func (s *Solver) processOrderUsingReservations(
 		return orderProcessingResult{retryable: !errors.Is(err, errOrderNotFillable)}
 	}
 	reservationKey := orderID.Hex()
-	if pending != nil && pending.contains(reservationKey) {
+	if _, exists := pending[reservationKey]; exists {
 		s.log.V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return orderProcessingResult{}
@@ -145,7 +145,7 @@ func (s *Solver) processOrderUsingReservations(
 		}
 		unreservedInput := prepared.input
 		unreservedInput.Reservations = nil
-		unreservedInput.Trace = s.decisionTrace(
+		unreservedInput.Trace = liquidstrategies.NewDecisionTrace(s.log,
 			"orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(),
 			"quoteId", order.QuoteID,
@@ -363,7 +363,7 @@ func (s *Solver) prepareFill(
 			GasPrices:          state.snapshots.GasPrices,
 			MaxFeePerGas:       pricingMaxFeePerGas,
 			ChainTime:          state.chainTime,
-			Trace: s.decisionTrace(
+			Trace: liquidstrategies.NewDecisionTrace(s.log,
 				"orderId", order.OrderID,
 				"onChainOrderId", orderID.Hex(),
 				"quoteId", order.QuoteID,
@@ -427,7 +427,7 @@ func (s *Solver) readFillSnapshot(
 	if err != nil {
 		return fillSnapshotObservation{}, errors.Errorf("read latest block time: %w", err)
 	}
-	snapshots, err := s.reader.fillSnapshots(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn, chainTime)
+	snapshots, err := s.reader.Fill(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn, chainTime)
 	if err != nil {
 		return fillSnapshotObservation{}, errors.Errorf("read routes: %w", err)
 	}

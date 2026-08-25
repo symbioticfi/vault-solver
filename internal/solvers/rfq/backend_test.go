@@ -81,7 +81,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 	defer srv.Close()
 
 	id := "0x" + hash64
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), id)
+	res, err := newBackendClient(srv.URL).Resolve(context.Background(), id)
 	if err != nil {
 		t.Fatalf("resolveDiscount: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64)
+	res, err := newBackendClient(srv.URL).Resolve(context.Background(), "0x"+hash64)
 	if err != nil {
 		t.Fatalf("resolveDiscount (batch): %v", err)
 	}
@@ -134,7 +134,7 @@ func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64); err == nil {
+	if _, err := newBackendClient(srv.URL).Resolve(context.Background(), "0x"+hash64); err == nil {
 		t.Fatalf("expected an error when the backend resolves more than one discount")
 	}
 }
@@ -154,7 +154,7 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := newBackendClient(srv.URL).listDiscounts(context.Background())
+	resp, err := newBackendClient(srv.URL).ListDiscounts(context.Background())
 	if err != nil {
 		t.Fatalf("listDiscounts: %v", err)
 	}

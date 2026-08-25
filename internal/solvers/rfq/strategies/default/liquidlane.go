@@ -10,7 +10,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
-func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
+func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	if len(input.Candidates) == 0 {
 		return decline(), nil
 	}
@@ -24,7 +24,7 @@ func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types
 	return *out, nil
 }
 
-func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
+func (s *Strategy) BuildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if len(input.Candidates) == 0 {
 		return nil, nil
 	}

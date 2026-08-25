@@ -10,10 +10,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-var weiPerEth = exp10(18)
+var weiPerEth = chain.Exp10(18)
 
 const (
 	skipBidCap             = "bid_cap"
@@ -101,7 +103,9 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 
 func (s *Solver) handleBlacklisted(raw []byte) {
 	var b Blacklisted
-	_ = json.Unmarshal(raw, &b)
+	if err := json.Unmarshal(raw, &b); err != nil {
+		s.log.Error(err, "malformed blacklisted frame; halting bidding")
+	}
 	s.breaker.blacklist()
 	s.log.Error(errors.New("api key blacklisted"), "halting bidding", "msg", b.Data.Msg)
 }
@@ -147,7 +151,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	}
 	bidCtx, cancel := auctionBidContext(ctx, a, start)
 	defer cancel()
-	d := s.buildBidWithContext(bidCtx, a, time.Now)
+	d := s.buildBid(bidCtx, a, time.Now)
 	s.metrics.latency(time.Since(start))
 
 	if d.skip != "" {
@@ -232,10 +236,6 @@ func cacheAge(at, now time.Time) string {
 }
 
 func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
-	return s.buildBidWithContext(ctx, a, nowFn)
-}
-
-func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
 	now := nowFn()
 	if tripped, _ := s.breaker.tripped(now); tripped {
 		return bidDecision{skip: "breaker"}

@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
@@ -18,10 +19,6 @@ type evalItem struct {
 }
 
 type priceLookup func(id common.Hash, info MarketInfo) *big.Int
-
-func candidatesFromAuction(log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64) []evalItem {
-	return candidatesFromAuctionWithAdapter(log, snap, auction, nowTs, types.AdapterSnapshot{})
-}
 
 func candidatesFromAuctionWithAdapter(log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
 	frame := auctionPrices(log, auction)
@@ -87,7 +84,7 @@ func adapterQuotesByCollateral(adapter types.AdapterSnapshot) map[common.Address
 	if adapter.Paused || adapter.LoanDecimals < 0 {
 		return nil
 	}
-	loanScale := exp10(adapter.LoanDecimals)
+	loanScale := chain.Exp10(adapter.LoanDecimals)
 	out := make(map[common.Address]AdapterQuote, len(adapter.Redeemable))
 	for _, r := range adapter.Redeemable {
 		if r.Asset == (common.Address{}) || r.Decimals < 0 ||
@@ -99,7 +96,7 @@ func adapterQuotesByCollateral(adapter types.AdapterSnapshot) map[common.Address
 			MaxRate:   cloneBig(r.MaxRate),
 			MaxAssets: cloneBig(r.MaxAssets),
 			LoanScale: cloneBig(loanScale),
-			CollScale: exp10(r.Decimals),
+			CollScale: chain.Exp10(r.Decimals),
 		}
 	}
 	return out

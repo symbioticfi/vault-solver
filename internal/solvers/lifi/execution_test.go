@@ -482,13 +482,13 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 	inputDrained := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- solver.runOrderWorker(
+		done <- solver.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			inputDrained,
-		)
+		).run()
 	}()
 
 	select {
@@ -545,9 +545,9 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	}
 	marked := make(chan markedRecovery, 1)
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
+	if err := solver.newOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
 		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
-	}, nil); err != nil {
+	}, nil).run(); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	select {
@@ -617,13 +617,13 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 			orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 			done := make(chan error, 1)
 			go func() {
-				done <- solver.runOrderWorker(
+				done <- solver.newOrderWorker(
 					t.Context(),
 					testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 					orders,
 					nil,
 					nil,
-				)
+				).run()
 			}()
 
 			select {
@@ -679,13 +679,13 @@ func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
 	orders <- order
 	done := make(chan error, 1)
 	go func() {
-		done <- solver.runOrderWorker(
+		done <- solver.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	select {
@@ -762,13 +762,13 @@ func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
 	orders <- second
 	done := make(chan error, 1)
 	go func() {
-		done <- solver.runOrderWorker(
+		done <- solver.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	filled := false
@@ -823,13 +823,13 @@ func TestOrderWorkerDepositRetryDoesNotHoldRecoveryBarrier(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- solver.runOrderWorker(
+		done <- solver.newOrderWorker(
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	select {
@@ -885,13 +885,13 @@ func TestOrderWorkerDropsDepositRetriesWhenIntakeStops(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				done <- solver.runOrderWorker(
+				done <- solver.newOrderWorker(
 					ctx,
 					testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 					orders,
 					nil,
 					nil,
-				)
+				).run()
 			}()
 			select {
 			case <-statusRead:
@@ -973,13 +973,13 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	workerDone := make(chan error, 1)
 	go func() { inboxDone <- inbox.run(ctx, orders) }()
 	go func() {
-		workerDone <- solver.runOrderWorker(
+		workerDone <- solver.newOrderWorker(
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			inbox.markRecoveryRetry,
 			nil,
-		)
+		).run()
 	}()
 
 	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {

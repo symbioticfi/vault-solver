@@ -37,8 +37,8 @@ shared strategy facade.
 - **Safety.** Fail-closed pre-fill validation gates, quote-state epochs, post-fill snapshot refresh, and a
   fade-aware circuit breaker (Uniswap penalizes win-but-don't-fill — see §4, §6).
 - **State** — in-memory only: an immutable refreshed inventory and optional gas snapshot, its epoch, pending-fill capacity
-  reservations, exclusive-obligation reconciliation state, order dedup/retry state, and breaker timestamps;
-  TTL-swept.
+  reservations, and independently locked order-lifecycle, exclusive-obligation, and breaker state. Order and exclusive
+  lifecycle data each use one TTL-swept record map instead of parallel maps.
 
 **Scope decisions (locked):**
 
@@ -197,7 +197,8 @@ assertion because the PR19 ABI has no getter.
 | `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/healthz`, `/ready`; source-IP auth stays at ingress | net-new |
 | `quote_refresh.go` | background inventory and optional gas snapshots, epoch binding, and atomic publication | net-new |
 | `polling.go` | exclusive and public V2 polling; dedup/retry admission and exclusive reconciliation | net-new |
-| `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
+| `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion classification | mirror `rfq` + net-new |
+| `fill_worker.go` | single-goroutine order admission, cancellation, pending-fill tracking, and terminal-result drain | net-new |
 | `chainreader.go` | config-independent executor/route checks plus refreshed inventory/rate and optional gas snapshots | reader port |
 | `strategies/` | UniswapX-local contract, registry, `default`, and `webhook` decisions (§2.1) | net-new |
 | `order.go` | V2 Dutch codec, hashes, signature/exclusivity validation | net-new |

@@ -1,10 +1,11 @@
 package defaultstrategy
 
 import (
-	"math/big"
 	"net/url"
+	"strconv"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
@@ -22,13 +23,19 @@ const (
 )
 
 type rawConfig struct {
-	MorphoAPIURL        string     `yaml:"morphoApiUrl"`
-	DiscoveryMaxHF      *float64   `yaml:"discoveryMaxHealthFactor"`
-	MaxTrackedPositions *int       `yaml:"maxTrackedPositions"`
-	MonitorPollMs       *int       `yaml:"monitorPollMs"`
-	MaxStateAgeMs       *int       `yaml:"maxStateAgeMs"`
-	Bid                 rawBidPlan `yaml:"bid"`
-	Sizing              rawSizing  `yaml:"sizing"`
+	MorphoAPIURL        string          `yaml:"morphoApiUrl"`
+	DiscoveryMaxHF      *float64        `yaml:"discoveryMaxHealthFactor"`
+	MaxTrackedPositions *int            `yaml:"maxTrackedPositions"`
+	MonitorPollMs       *int            `yaml:"monitorPollMs"`
+	MaxStateAgeMs       *int            `yaml:"maxStateAgeMs"`
+	TestMonitor         *rawTestMonitor `yaml:"testMonitor"`
+	Bid                 rawBidPlan      `yaml:"bid"`
+	Sizing              rawSizing       `yaml:"sizing"`
+}
+
+type rawTestMonitor struct {
+	Markets   []string `yaml:"markets"`
+	Positions []string `yaml:"positions"`
 }
 
 type rawBidPlan struct {
@@ -43,6 +50,20 @@ type rawSizing struct {
 	SwapHaircutBps       *int  `yaml:"swapHaircutBps"`
 }
 
+func defaultConfig() Config {
+	return Config{
+		CallbackAuthTTL:          defaultCallbackAuthTTL,
+		MonitorPoll:              defaultMonitorPoll,
+		MaxStateAge:              defaultMaxStateAge,
+		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
+		MaxTrackedPositions:      defaultMaxTrackedPositions,
+		Sizing: SizingParams{
+			AllowFullLiquidation: defaultAllowFullLiquidation,
+			SwapHaircutBps:       defaultSwapHaircut,
+		},
+	}
+}
+
 func ParseConfig(node yaml.Node) (Config, error) {
 	var raw rawConfig
 	if err := parse.DecodeStrict(node, &raw); err != nil {
@@ -55,28 +76,13 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	if bidWei.Sign() <= 0 {
 		return Config{}, errors.New("strategy.config.bid.bidEth must be > 0")
 	}
-	cfg := Config{
-		BidWei:                   bidWei,
-		CallbackAuthTTL:          defaultCallbackAuthTTL,
-		MonitorPoll:              defaultMonitorPoll,
-		MaxStateAge:              defaultMaxStateAge,
-		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
-		MaxTrackedPositions:      defaultMaxTrackedPositions,
-		Sizing: SizingParams{
-			AllowFullLiquidation: defaultAllowFullLiquidation,
-			SwapHaircutBps:       defaultSwapHaircut,
-		},
+	cfg := defaultConfig()
+	cfg.BidWei = bidWei
+	authTTL, err := parse.MsDuration(raw.Bid.AuthTtlMs, cfg.CallbackAuthTTL, "strategy.config.bid.authTtlMs")
+	if err != nil {
+		return Config{}, err
 	}
-	if raw.Bid.AuthTtlMs != nil {
-		authTTL, err := parse.MsDuration(raw.Bid.AuthTtlMs, cfg.CallbackAuthTTL, "strategy.config.bid.authTtlMs")
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.CallbackAuthTTL = authTTL
-	}
-	if cfg.CallbackAuthTTL <= 0 {
-		return Config{}, errors.New("strategy.config.bid.authTtlMs must be > 0")
-	}
+	cfg.CallbackAuthTTL = authTTL
 	if raw.Bid.MinBundleProfitBidBps != nil {
 		if *raw.Bid.MinBundleProfitBidBps < 0 {
 			return Config{}, errors.New("strategy.config.bid.minBundleProfitBidBps must be >= 0")
@@ -98,6 +104,32 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	if cfg.Sizing.SwapHaircutBps < 0 || cfg.Sizing.SwapHaircutBps >= 10_000 {
 		return Config{}, errors.Errorf("strategy.config.sizing.swapHaircutBps must be in [0, 10000), got %d", cfg.Sizing.SwapHaircutBps)
 	}
+	if raw.TestMonitor != nil {
+		if len(raw.TestMonitor.Markets) == 0 {
+			return Config{}, errors.New("strategy.config.testMonitor.markets must not be empty")
+		}
+		if len(raw.TestMonitor.Positions) == 0 {
+			return Config{}, errors.New("strategy.config.testMonitor.positions must not be empty")
+		}
+		cfg.TestMonitor = &TestMonitorConfig{
+			Markets:   make([]common.Hash, len(raw.TestMonitor.Markets)),
+			Positions: make([]common.Address, len(raw.TestMonitor.Positions)),
+		}
+		for i, value := range raw.TestMonitor.Markets {
+			market, parseErr := parse.Hash(value, "strategy.config.testMonitor.markets["+strconv.Itoa(i)+"]")
+			if parseErr != nil {
+				return Config{}, parseErr
+			}
+			cfg.TestMonitor.Markets[i] = market
+		}
+		for i, value := range raw.TestMonitor.Positions {
+			position, parseErr := parse.Address(value, "strategy.config.testMonitor.positions["+strconv.Itoa(i)+"]")
+			if parseErr != nil {
+				return Config{}, parseErr
+			}
+			cfg.TestMonitor.Positions[i] = position
+		}
+	}
 	if raw.MorphoAPIURL != "" {
 		u, perr := url.Parse(raw.MorphoAPIURL)
 		if perr != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -117,67 +149,18 @@ func ParseConfig(node yaml.Node) (Config, error) {
 		}
 		cfg.MaxTrackedPositions = *raw.MaxTrackedPositions
 	}
-	if raw.MonitorPollMs != nil {
-		poll, err := parse.MsDuration(raw.MonitorPollMs, cfg.MonitorPoll, "strategy.config.monitorPollMs")
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.MonitorPoll = poll
+	poll, err := parse.MsDuration(raw.MonitorPollMs, cfg.MonitorPoll, "strategy.config.monitorPollMs")
+	if err != nil {
+		return Config{}, err
 	}
-	if raw.MaxStateAgeMs != nil {
-		maxAge, err := parse.MsDuration(raw.MaxStateAgeMs, cfg.MaxStateAge, "strategy.config.maxStateAgeMs")
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.MaxStateAge = maxAge
+	cfg.MonitorPoll = poll
+	maxAge, err := parse.MsDuration(raw.MaxStateAgeMs, cfg.MaxStateAge, "strategy.config.maxStateAgeMs")
+	if err != nil {
+		return Config{}, err
 	}
+	cfg.MaxStateAge = maxAge
 	if cfg.MonitorPoll >= cfg.MaxStateAge {
 		return Config{}, errors.Errorf("strategy.config.monitorPollMs (%s) must be < strategy.config.maxStateAgeMs (%s)", cfg.MonitorPoll, cfg.MaxStateAge)
 	}
 	return cfg, nil
-}
-
-func ConfigForTest(overrides Config) Config {
-	cfg := Config{
-		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
-		MaxTrackedPositions:      defaultMaxTrackedPositions,
-		CallbackAuthTTL:          defaultCallbackAuthTTL,
-		MonitorPoll:              defaultMonitorPoll,
-		MaxStateAge:              defaultMaxStateAge,
-		Sizing: SizingParams{
-			AllowFullLiquidation: defaultAllowFullLiquidation,
-			SwapHaircutBps:       defaultSwapHaircut,
-		},
-	}
-	if overrides.MorphoAPIURL != "" {
-		cfg.MorphoAPIURL = overrides.MorphoAPIURL
-	}
-	if overrides.DiscoveryMaxHealthFactor != 0 {
-		cfg.DiscoveryMaxHealthFactor = overrides.DiscoveryMaxHealthFactor
-	}
-	if overrides.MaxTrackedPositions != 0 {
-		cfg.MaxTrackedPositions = overrides.MaxTrackedPositions
-	}
-	if overrides.BidWei != nil {
-		cfg.BidWei = new(big.Int).Set(overrides.BidWei)
-	}
-	if overrides.MinBundleProfitBidBps != 0 {
-		cfg.MinBundleProfitBidBps = overrides.MinBundleProfitBidBps
-	}
-	if overrides.TotalBundleProfitBps != 0 {
-		cfg.TotalBundleProfitBps = overrides.TotalBundleProfitBps
-	}
-	if overrides.Sizing != (SizingParams{}) {
-		cfg.Sizing = overrides.Sizing
-	}
-	if overrides.CallbackAuthTTL != 0 {
-		cfg.CallbackAuthTTL = overrides.CallbackAuthTTL
-	}
-	if overrides.MonitorPoll != 0 {
-		cfg.MonitorPoll = overrides.MonitorPoll
-	}
-	if overrides.MaxStateAge != 0 {
-		cfg.MaxStateAge = overrides.MaxStateAge
-	}
-	return cfg
 }

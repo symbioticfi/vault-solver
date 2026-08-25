@@ -35,12 +35,12 @@ func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*back
 }
 func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
 
-func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
+func (f *fakeBackend) Resolve(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++
 	return f.discount, nil
 }
 
-func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+func (f *fakeBackend) ListDiscounts(context.Context) (*discountsResponse, error) {
 	f.listCalls++
 	if f.discounts == nil {
 		return &discountsResponse{}, nil
@@ -119,7 +119,6 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		strategy: fixedFillStrategy{plan: baseFillPlan()},
 		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
-		inflight: make(map[string]bool),
 	}
 }
 

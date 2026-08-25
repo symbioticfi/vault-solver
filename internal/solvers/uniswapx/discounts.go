@@ -76,7 +76,14 @@ func (s *Solver) resolveAdvertisedRoutes(
 	now time.Time,
 	filter advertisedRouteFilter,
 ) []liquidlane.Route {
-	offers, _ := liquiddiscounts.LiveOffers(listed, now)
+	offers, issues := liquiddiscounts.LiveOffers(listed, now)
+	for _, issue := range issues {
+		s.log.V(1).Info(
+			"ignore invalid advertised discount",
+			"discountId", issue.DiscountID,
+			"error", issue.Err.Error(),
+		)
+	}
 	type routeKey struct {
 		adapter  common.Address
 		tokenIn  common.Address
@@ -141,7 +148,7 @@ func (s *Solver) resolveAdvertisedRoutes(
 		}] {
 			continue
 		}
-		if err := s.reader.validateGasTokens([]liquidlane.Route{route}); err != nil {
+		if err := s.reader.ValidateGasTokens([]liquidlane.Route{route}); err != nil {
 			s.log.V(1).Info(
 				"skip advertised discount route",
 				"adapter", route.Adapter.Hex(),
@@ -160,7 +167,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 	ctx context.Context,
 	adapters []common.Address,
 ) []liquidlane.Route {
-	routes, err := s.reader.resolveRoutes(ctx, adapters)
+	routes, err := s.reader.ResolveRoutes(ctx, adapters)
 	if err == nil {
 		return routes
 	}
@@ -172,7 +179,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 
 	var resolved []liquidlane.Route
 	for _, adapter := range adapters {
-		adapterRoutes, err := s.reader.resolveRoutes(ctx, []common.Address{adapter})
+		adapterRoutes, err := s.reader.ResolveRoutes(ctx, []common.Address{adapter})
 		if err != nil {
 			s.log.Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
 			continue

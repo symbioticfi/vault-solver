@@ -112,7 +112,10 @@ required for the external `webhook` strategy and optional for the built-in `defa
 block is optional, and its shared oracle facts are passed to the selected strategy. The built-in strategy
 uses them for after-cost economics; without them, it selects gross-profitable bundles while retaining the
 signed gas-price cap and native funding checks. When `gas:` is configured, startup requires a feed for the
-resolved adapter loan asset and a readable initial oracle snapshot. Design, config, and roadmap:
+resolved adapter loan asset and a readable initial oracle snapshot. Set solver-level `dryRun: true` to
+observe and sign would-bids without sending them. Sepolia harness deployments configure
+`strategy.config.testMonitor.markets` and `.positions` in YAML; production omits `testMonitor` and sets
+`morphoApiUrl`. Design, config, and roadmap:
 [`docs/OEV-PLAN.md`](docs/OEV-PLAN.md) · example
 [`config/redstone-oev.example.yaml`](config/redstone-oev.example.yaml).
 

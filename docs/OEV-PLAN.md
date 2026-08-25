@@ -228,10 +228,10 @@ exchange snapshot instead: `paused`, per-collateral `getMaxRate`/`getMaxAssets`,
 `freeAssets`/`withdrawable`, and acquire balances. That lets any strategy price and capacity-check the
 configured LiquidLane route without doing its own adapter reads on the bid path.
 
-`strategy.config.morphoApiUrl` is a production hard requirement for the default strategy. The Sepolia harness is the only exception: with
-`OEV_TEST_MONITOR=true`, the bot reads a fixed seed set from `OEV_TEST_MARKETS`/`OEV_TEST_POSITIONS` and
-reads Morpho `market`/`position` state on-chain from the callback's `MORPHO()` getter. Public
-`api.morpho.org` does not index the custom Sepolia deployment.
+`strategy.config.morphoApiUrl` is a production hard requirement for the default strategy. The Sepolia
+harness is the only exception: `strategy.config.testMonitor.markets` and `.positions` provide a fixed
+seed set, and the bot reads Morpho `market`/`position` state on-chain from the callback's `MORPHO()`
+getter. Public `api.morpho.org` does not index the custom Sepolia deployment.
 
 ### 3.3 Snapshot concurrency model
 
@@ -556,8 +556,8 @@ The single-adapter stack settles real OEV liquidations end-to-end:
 - **Fork rehearsal** — on a Sepolia fork, the `SymbioticOevSolver` deployed + wired, the price dropped, and
   a real liquidation settled through real Morpho + the real LiquidLane adapter (status 1, collateral
   seized, profit retained = swap proceeds − repayment, matching callback settlement events).
-- **Live** — under `OEV_TEST_MONITOR=true` (and `OEV_DRY_RUN` unset → real bidding), the bot won a live RedStone auction and settled
-  a **two-leg** liquidation through the callback (both borrowers seized, **+61.66 TLOAN** retained
+- **Live** — with the Sepolia test monitor configured and `dryRun: false`, the bot won a live RedStone
+  auction and settled a **two-leg** liquidation through the callback (both borrowers seized, **+61.66 TLOAN** retained
   on-chain), paying `payBid` from callback native and debiting the deposit by the gas liability. Earlier
   single-leg runs proved +17.55 and +30.83 TLOAN. A deliberate unfunded revert confirmed the failure path
   (`LiquidationFailed`, nonce consumed, deposit debited the gas liability per §6.2).
@@ -567,9 +567,10 @@ The single-adapter stack settles real OEV liquidations end-to-end:
 
 **Dev-settlement caveat.** On the dev endpoint the auctioneer passes `priceAdapter=address(0)` with a
 frozen `priceUpdate`, so settlement does **not** write the auctioned price — every settlement reverts
-`HEALTHY_POSITION` unless the feed is moved out-of-band first. Hence `OEV_TEST_MONITOR=true` on dev
-testbeds that move the feed directly (size against cached `oracle.price()`) and production unset (the
-auctioneer applies the frame price atomically). The Sepolia profile also uses the test monitor because
+`HEALTHY_POSITION` unless the feed is moved out-of-band first. Hence dev testbeds configure
+`strategy.config.testMonitor` and move the feed directly (size against cached `oracle.price()`), while
+production omits that block because the auctioneer applies the frame price atomically. The Sepolia
+profile also uses the test monitor because
 public `api.morpho.org` does not index RedStone's custom test Morpho.
 
 ### 6.7 Test harness & money model
@@ -617,9 +618,11 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `executor` | Executor proxy |
 | `adapter` | solver-owned single LiquidLane adapter |
 | `callback` | solver-owned callback passed to RedStone Executor and into strategy input |
+| `dryRun` | when true, sign and log would-bids without sending solve frames; default false |
 | `strategy.name` | `default` for the built-in strategy backed by Morpho state, or `webhook` for an external decider |
 | `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve only while constructing the HTTP client; OEV route is `POST /decide-bid` |
 | `strategy.config.morphoApiUrl` / `discoveryMaxHealthFactor` | default-strategy production Morpho snapshot endpoint and API health-factor band |
+| `strategy.config.testMonitor.{markets[],positions[]}` | Sepolia-only fixed market and borrower seeds for the on-chain harness monitor; omit in production |
 | `strategy.config.maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
 | `gas.{nativeUsdFeed,nativeMaxAge,tokenUsdFeeds[]}` | optional shared token/native gas conversion; the token entry must cover the adapter loan asset |
 | `strategy.config.bid.{bidEth,authTtlMs,totalBundleProfitBps,minBundleProfitBidBps}` | default-strategy minimum bid, callback-auth replay window, optional gross-profit bid share, and optional bundle margin after gas + bid; the bps fields require `gas:` |
@@ -633,6 +636,9 @@ referenced by env-var name and read at point of use. The full annotated profile 
 
 Hard cutovers already applied:
 
+- `OEV_DRY_RUN`, `OEV_TEST_MONITOR`, `OEV_TEST_MARKETS`, and `OEV_TEST_POSITIONS` are removed as
+  direct runtime inputs. Use `dryRun` and `strategy.config.testMonitor.{markets,positions}` in YAML;
+  non-secret env expansion remains available inside the file.
 - OEV strategy fields moved under `strategy.config`: `morphoApiUrl`, discovery/monitor settings, `bid`,
   and `sizing`. Solver-owned `maxTxGasPriceWei` is top-level. The old unified
   `intervals.maxStateAgeMs` split into `intervals.executorStateMaxAgeMs` for solver state and
@@ -648,15 +654,17 @@ Hard cutovers already applied:
   limit, the observed RedStone settlement cap, and the route-aware gas prediction.
 - `sizing.maxSeizeFractionBps` is removed. Use `strategy.config.sizing.allowFullLiquidation`.
 
-Dev/test env knobs are not config fields:
+Operational controls remain file-driven:
 
-| Env | Meaning |
+| YAML field | Meaning |
 |---|---|
-| `OEV_TEST_MONITOR=true|1` | use the Sepolia harness monitor instead of Morpho API |
-| `OEV_TEST_MARKETS` / `OEV_TEST_POSITIONS` | comma/space-separated Sepolia harness seeds for `OEV_TEST_MONITOR` |
-| `OEV_DRY_RUN=true|1` | sign and log would-bids, never send solves |
+| `dryRun: true` | sign and log would-bids, never send solves |
+| `strategy.config.testMonitor.markets[]` | fixed Sepolia harness Morpho market ids |
+| `strategy.config.testMonitor.positions[]` | fixed Sepolia harness borrower addresses |
 
-Production leaves `OEV_TEST_MONITOR` unset and requires `strategy.config.morphoApiUrl` for the default strategy.
+Production sets `dryRun` according to the approved rollout, omits `strategy.config.testMonitor`, and
+requires `strategy.config.morphoApiUrl` for the default strategy. Non-secret `${VAR}` expansion may be
+used inside the YAML; environment variables are not read as a separate operational-config channel.
 
 Sepolia harness operation and deployed-address manifests live outside this repo. The solver only needs
 the config values for the selected environment plus the runtime secrets referenced by env-var name.

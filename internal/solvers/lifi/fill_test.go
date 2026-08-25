@@ -40,7 +40,7 @@ type fakeLifiReader struct {
 	governanceFeeErr error
 }
 
-func (f fakeLifiReader) resolveRoutes(context.Context, []common.Address) ([]route, error) {
+func (f fakeLifiReader) ResolveRoutes(context.Context, []common.Address) ([]route, error) {
 	return f.routes, nil
 }
 
@@ -58,13 +58,13 @@ func (f fakeLifiReader) validateDirectAuthorization(context.Context, common.Addr
 	return f.directAuthErr
 }
 
-func (f fakeLifiReader) validateGasTokens([]route) error { return nil }
+func (f fakeLifiReader) ValidateGasTokens([]route) error { return nil }
 
-func (f fakeLifiReader) quoteSnapshots(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
+func (f fakeLifiReader) Quote(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
 	return quoteSnapshotSet{}, nil
 }
 
-func (f fakeLifiReader) fillSnapshots(
+func (f fakeLifiReader) Fill(
 	context.Context, []route, common.Address, common.Address, *big.Int, time.Time,
 ) (fillSnapshotSet, error) {
 	if f.fillSetFn != nil {

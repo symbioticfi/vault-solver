@@ -23,7 +23,7 @@ push path; orders are found exclusively by polling the backend.
   sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
   adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
   leg's **adapter** address.
-- **State** — in-memory only: `orders` (state machine) and `attempts`.
+- **State** — in-memory only: one record per order containing lifecycle and attempt count.
 
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
 solver maps that boundary shape into the shared LiquidLane terms from
@@ -106,7 +106,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
 | `domain.ts` | `store.go` types + `strategies/types` (RFQ strategy input/output and fill plan) + shared `liquidlane.QuoteCandidate` |
 | `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
-| `db`/repositories | `store.go` (in-memory orders/attempts) |
+| `db`/repositories | `store.go` (in-memory order records) |
 | `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
 
 ### Pluggable strategy layer

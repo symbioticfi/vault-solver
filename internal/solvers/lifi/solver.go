@@ -55,16 +55,16 @@ type Solver struct {
 }
 
 type chainReader interface {
-	resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error)
+	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error)
 	validateExecutor(
 		ctx context.Context,
 		executor, inputSettler, outputSettler, caller common.Address,
 	) error
 	validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []route) error
-	validateGasTokens(routes []route) error
-	quoteSnapshots(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
-	fillSnapshots(
+	ValidateGasTokens(routes []route) error
+	Quote(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
+	Fill(
 		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
 	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
@@ -129,63 +129,51 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 	return 2 * s.cfg.OrderServer.HTTPTimeout
 }
 
+func (s *Solver) startupFailure(err error, message string, keysAndValues ...any) error {
+	s.log.Error(err, message, keysAndValues...)
+	return err
+}
+
 func (s *Solver) Run(ctx context.Context) error {
-	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
+	routes, err := s.reader.ResolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
-		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
-		s.log.Error(startupErr, "adapter resolution failed",
+		return s.startupFailure(errors.Errorf("lifi: resolve routes: %w", err), "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-		return startupErr
 	}
 	if len(routes) == 0 {
-		startupErr := errors.New("lifi: no quoteable routes resolved from configured adapters")
-		s.log.Error(startupErr, "adapter resolution failed",
-			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-		return startupErr
+		return s.startupFailure(errors.New("lifi: no quoteable routes resolved from configured adapters"),
+			"adapter resolution failed", "solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(),
+			"adapters", s.cfg.Adapters)
 	}
-	if err := s.reader.validateGasTokens(routes); err != nil {
-		startupErr := errors.Errorf("lifi: validate gas oracles: %w", err)
-		s.log.Error(startupErr, "gas oracle validation failed",
-			"routes", len(routes), "gasAccounting", s.cfg.Gas != nil)
-		return startupErr
+	if err := s.reader.ValidateGasTokens(routes); err != nil {
+		return s.startupFailure(errors.Errorf("lifi: validate gas oracles: %w", err),
+			"gas oracle validation failed", "routes", len(routes), "gasAccounting", s.cfg.Gas != nil)
 	}
 	if err := s.reader.validateExecutor(
 		ctx, s.cfg.Executor, s.cfg.InputSettler, s.cfg.OutputSettler, s.caller,
 	); err != nil {
-		startupErr := errors.Errorf("lifi: validate executor: %w", err)
-		s.log.Error(startupErr, "executor validation failed",
+		return s.startupFailure(errors.Errorf("lifi: validate executor: %w", err), "executor validation failed",
 			"executor", s.cfg.Executor.Hex(), "caller", s.caller.Hex(),
 			"inputSettler", s.cfg.InputSettler.Hex(), "outputSettler", s.cfg.OutputSettler.Hex())
-		return startupErr
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
-		startupErr := errors.Errorf("lifi: validate governance fee: %w", err)
-		s.log.Error(startupErr, "governance fee validation failed", "inputSettler", s.cfg.InputSettler.Hex())
-		return startupErr
+		return s.startupFailure(errors.Errorf("lifi: validate governance fee: %w", err),
+			"governance fee validation failed", "inputSettler", s.cfg.InputSettler.Hex())
 	}
 	if !s.cfg.usesDiscounts() {
 		if err := s.reader.validateDirectAuthorization(ctx, s.cfg.Executor, routes); err != nil {
-			startupErr := errors.Errorf("lifi: validate direct authorization: %w", err)
-			s.log.Error(startupErr, "external adapter authorization failed",
-				"solverMode", s.cfg.SolverMode,
-				"executor", s.cfg.Executor.Hex(),
-				"adapters", s.cfg.Adapters,
-			)
-			return startupErr
+			return s.startupFailure(errors.Errorf("lifi: validate direct authorization: %w", err),
+				"external adapter authorization failed", "solverMode", s.cfg.SolverMode,
+				"executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		}
 	}
 	if err := s.orders.validateExecutorRegistration(ctx, s.cfg.Executor); err != nil {
-		s.log.Error(err, "executor registration validation failed",
+		return s.startupFailure(err, "executor registration validation failed",
 			"executor", s.cfg.Executor.Hex(), "baseUrl", s.cfg.OrderServer.BaseURL)
-		return err
 	}
 	if err := s.orders.ensureSupportedContracts(ctx, s.chainID, s.cfg.InputSettler, s.cfg.OutputSettler); err != nil {
-		s.log.Error(err, "supported contract reconciliation failed",
-			"chainId", s.chainID,
-			"inputSettler", s.cfg.InputSettler.Hex(),
-			"outputSettler", s.cfg.OutputSettler.Hex(),
-		)
-		return err
+		return s.startupFailure(err, "supported contract reconciliation failed", "chainId", s.chainID,
+			"inputSettler", s.cfg.InputSettler.Hex(), "outputSettler", s.cfg.OutputSettler.Hex())
 	}
 
 	s.log.Info("starting",

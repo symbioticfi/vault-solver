@@ -70,10 +70,6 @@ func init() {
 }
 
 func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
-	testMonitor, err := testMonitorFromEnv()
-	if err != nil {
-		return nil, err
-	}
 	cfg, err := ParseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -87,7 +83,6 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 		Callback:            deps.Callback,
 		LoadAdapterSnapshot: deps.LoadAdapterSnapshot,
 		GasAccounting:       deps.GasAccounting,
-		TestMonitor:         testMonitor,
 	})
 }
 
@@ -111,14 +106,14 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		mon monitorSource
 		err error
 	)
-	if deps.TestMonitor {
-		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot)
+	if cfg.TestMonitor != nil {
+		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot, cfg.TestMonitor)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		if cfg.MorphoAPIURL == "" {
-			return nil, errors.New("morphoApiUrl is required unless test monitor is enabled")
+			return nil, errors.New("morphoApiUrl is required unless strategy.config.testMonitor is configured")
 		}
 		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
 	}

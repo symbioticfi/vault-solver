@@ -47,7 +47,7 @@ func init() {
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	var cfg Config
-	if err := decodeConfig(raw, &cfg); err != nil {
+	if err := solver.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
 	return New(cfg)
@@ -90,11 +90,4 @@ func New(cfg Config) (*Strategy, error) {
 	return &Strategy{
 		cfg: cfg, minAmount: minAmount, rangeCount: rangeCount, executionBuffer: executionBuffer,
 	}, nil
-}
-
-func decodeConfig(node yaml.Node, out any) error {
-	if node.Kind == 0 {
-		node = yaml.Node{Kind: yaml.MappingNode}
-	}
-	return solver.DecodeStrict(node, out)
 }

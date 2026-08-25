@@ -101,10 +101,10 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 	if solver.quoteState.Load() != nil {
 		t.Fatal("missed exclusive obligation did not invalidate quotes")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if solver.exclusiveState[hash].pending() {
 		t.Fatal("missed obligation remained pending")
 	}
-	if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
+	if !solver.exclusiveState[hash].terminal() {
 		t.Fatal("missed obligation was not marked terminal")
 	}
 
@@ -133,7 +133,7 @@ func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
 	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err == nil {
 		t.Fatal("temporary terminal lookup failure was accepted")
 	}
-	if tracked := solver.exclusiveUntil[hash]; !tracked.recoveredAtStart {
+	if tracked := solver.exclusiveState[hash]; !tracked.recoveredAtStart {
 		t.Fatal("startup recovery marker was lost after failed reconciliation")
 	}
 
@@ -144,7 +144,7 @@ func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
 	if solver.exclusiveBlockUntil.Load() != 0 {
 		t.Fatal("retried startup history opened exclusive breaker")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if solver.exclusiveState[hash].pending() {
 		t.Fatal("retried startup history remained pending")
 	}
 }
@@ -176,7 +176,7 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	if solver.exclusiveBlockUntil.Load() != 0 {
 		t.Fatal("in-time settlement tripped the exclusive breaker")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if solver.exclusiveState[hash].pending() {
 		t.Fatal("settled obligation remained pending")
 	}
 	reader := solver.reader.(*stateTestChainReader)
@@ -273,7 +273,7 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 			if solver.exclusiveBlockUntil.Load() != 0 {
 				t.Fatal("unresolved terminal result tripped the exclusive breaker")
 			}
-			if _, pending := solver.exclusiveUntil[hash]; !pending {
+			if !solver.exclusiveState[hash].pending() {
 				t.Fatal("unresolved obligation was removed instead of retried")
 			}
 		})
@@ -302,9 +302,8 @@ func TestClaimTracksInflightAndBackoff(t *testing.T) {
 	now := time.Now()
 	hash := common.HexToHash("0x1")
 	solver := &Solver{
-		cfg:    &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}},
-		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+		cfg:        &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}},
+		orderState: make(map[common.Hash]trackedOrder),
 	}
 	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
 	if !solver.claim(hash, now) || solver.claim(hash, now) {

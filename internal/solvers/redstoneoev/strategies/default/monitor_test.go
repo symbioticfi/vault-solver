@@ -34,7 +34,7 @@ func TestCandidatePriceSource(t *testing.T) {
 		Prices: []types.AuctionPrice{{Oracle: oracle, Price: framePx}},
 	}
 
-	apiCands := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
+	apiCands := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
 	if len(apiCands) != 1 || apiCands[0].price.Cmp(framePx) != 0 {
 		t.Fatalf("auction path price = %+v, want %v", apiCands, framePx)
 	}
@@ -83,7 +83,7 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 		{Oracle: oracle, Price: big.NewInt(0)},
 	}}
 
-	got := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
+	got := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
 	if len(got) != 0 {
 		t.Fatalf("market without positive auction price for its oracle must not produce candidates: %+v", got)
 	}

@@ -33,10 +33,6 @@ func orZero(v *big.Int) *big.Int {
 	return new(big.Int).Set(v)
 }
 
-func exp10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
-}
-
 func cloneAdapterSnapshot(in types.AdapterSnapshot) types.AdapterSnapshot {
 	out := in
 	out.FreeAssets = cloneBig(in.FreeAssets)

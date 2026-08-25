@@ -145,7 +145,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		Input:   orderToken{Token: tokenIn.Hex(), StartAmount: "100", EndAmount: "100"},
 		Outputs: []orderOutput{{Token: tokenOut.Hex(), StartAmount: "220", EndAmount: "200", Recipient: recipient.Hex()}},
 	}
-	resolved, err := parseAndResolveOrder(entry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0))
+	resolved, err := parseAndResolveV2Order(entry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0))
 	if err != nil {
 		t.Fatalf("parseAndResolveOrder: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		rotatedEntry := entry
 		rotatedEntry.EncodedOrder = hexutil.Encode(body)
 		rotatedEntry.OrderHash = rotatedHash.Hex()
-		if _, parseErr := parseAndResolveOrder(
+		if _, parseErr := parseAndResolveV2Order(
 			rotatedEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
 		); parseErr != nil {
 			t.Fatalf("order-authorized cosigner rejected: %v", parseErr)
@@ -211,7 +211,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 		publicEntry := entry
 		publicEntry.EncodedOrder = hexutil.Encode(body)
-		public, parseErr := parseAndResolveOrder(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0))
+		public, parseErr := parseAndResolveV2Order(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0))
 		if parseErr != nil {
 			t.Fatal(parseErr)
 		}
@@ -225,7 +225,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		publicOrder.Cosignature[64] += 27
 		body, _ = v2OrderArguments.Pack(publicOrder)
 		publicEntry.EncodedOrder = hexutil.Encode(body)
-		if _, parseErr = parseAndResolveOrder(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0)); parseErr == nil {
+		if _, parseErr = parseAndResolveV2Order(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0)); parseErr == nil {
 			t.Fatal("expected active strict exclusivity rejection")
 		}
 	})
@@ -234,7 +234,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		tampered := entry
 		tampered.Outputs = append([]orderOutput(nil), entry.Outputs...)
 		tampered.Outputs[0].EndAmount = "199"
-		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
+		if _, err := parseAndResolveV2Order(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
 			t.Fatal("expected envelope mismatch")
 		}
 	})
@@ -272,7 +272,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		decayingEntry.OrderHash = inputHash.Hex()
 		decayingEntry.Input.EndAmount = "140"
 		decayingEntry.Outputs[0].StartAmount = "200"
-		resolvedExactOutput, parseErr := parseAndResolveOrder(
+		resolvedExactOutput, parseErr := parseAndResolveV2Order(
 			decayingEntry,
 			orderSourceExclusiveV2,
 			cfg,
@@ -331,7 +331,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 				}
 				candidateEntry := entry
 				candidateEntry.EncodedOrder = hexutil.Encode(body)
-				if _, parseErr := parseAndResolveOrder(
+				if _, parseErr := parseAndResolveV2Order(
 					candidateEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
 				); parseErr == nil || !strings.Contains(parseErr.Error(), test.wantErr) {
 					t.Fatalf("err = %v, want %q", parseErr, test.wantErr)
@@ -371,7 +371,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		multiEntry.Outputs = append(append([]orderOutput(nil), entry.Outputs...), orderOutput{
 			Token: tokenOut.Hex(), StartAmount: "20", EndAmount: "10", Recipient: recipient.Hex(),
 		})
-		resolvedMulti, parseErr := parseAndResolveOrder(
+		resolvedMulti, parseErr := parseAndResolveV2Order(
 			multiEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
 		)
 		if parseErr != nil {
@@ -391,7 +391,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
-		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
+		if _, err := parseAndResolveV2Order(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
 			t.Fatal("expected exclusive filler mismatch")
 		}
 	})
@@ -405,7 +405,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
-		if _, err := parseAndResolveOrder(
+		if _, err := parseAndResolveV2Order(
 			tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
 		); err == nil || !strings.Contains(err.Error(), "cosigner must be non-zero") {
 			t.Fatalf("err = %v", err)
@@ -415,7 +415,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 	t.Run("rejects backend hash mismatch", func(t *testing.T) {
 		tampered := entry
 		tampered.OrderHash = common.HexToHash("0x01").Hex()
-		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
+		if _, err := parseAndResolveV2Order(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
 			t.Fatal("expected order hash mismatch")
 		}
 	})
@@ -430,7 +430,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
-		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
+		if _, err := parseAndResolveV2Order(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
 			t.Fatal("expected cosignature mismatch")
 		}
 	})

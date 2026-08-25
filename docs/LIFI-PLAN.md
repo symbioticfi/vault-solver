@@ -450,7 +450,9 @@ type Strategy interface {
   in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
   `FillPlan{Routes}`.
 
-The order worker owns pending fills and their capacity reservations. It reserves each direct route's
+The `orderWorker` state machine in `order_worker.go` owns pending fills, retry queues, the recovery
+barrier, and the deposit-retry timer on one goroutine; event-specific transitions keep that mutable
+lifecycle out of the feed/recovery orchestration in `execution.go`. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
 and releases it only when the shared tx manager returns after the globally configured confirmation depth.

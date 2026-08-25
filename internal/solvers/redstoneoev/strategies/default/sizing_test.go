@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 )
 
@@ -14,7 +15,7 @@ import (
 func newQuote(maxRate string, maxAssets *big.Int) AdapterQuote {
 	return AdapterQuote{
 		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
-		LoanScale: exp10(6), CollScale: exp10(18),
+		LoanScale: chain.Exp10(6), CollScale: chain.Exp10(18),
 	}
 }
 

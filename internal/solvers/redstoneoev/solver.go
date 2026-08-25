@@ -28,7 +28,7 @@ type Solver struct {
 	cfg          *Config
 	deps         solver.Deps
 	chainID      *big.Int
-	dryRun       bool // OEV_DRY_RUN: observe mode: sign + log would-bids, never send (env knob, not config)
+	dryRun       bool
 	strategyName string
 	reader       *reader
 	strategy     types.Strategy

@@ -130,7 +130,6 @@ func buildServices(
 		txm:              txm,
 		log:              log,
 		now:              time.Now,
-		inflight:         make(map[string]bool),
 	}
 	return quotes, exec
 }

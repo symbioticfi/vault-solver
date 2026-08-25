@@ -22,6 +22,7 @@ type rawConfig struct {
 	LiquidityLens    string                   `yaml:"liquidityLens"`
 	Gas              *liquidlanegas.RawConfig `yaml:"gas"`
 	Strategy         rawStrategyConfig        `yaml:"strategy"`
+	DryRun           bool                     `yaml:"dryRun"`
 	MaxTxGasPriceWei string                   `yaml:"maxTxGasPriceWei"`
 	MaxBidWei        string                   `yaml:"maxBidWei"`
 	Breaker          rawBreaker               `yaml:"breaker"`
@@ -65,6 +66,7 @@ type Config struct {
 	Gas           *liquidlanegas.OracleConfig
 
 	Strategy StrategyConfig
+	DryRun   bool
 
 	MaxTxGasPrice *big.Int
 	MaxBidWei     *big.Int
@@ -159,6 +161,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
 		},
+		DryRun:              raw.DryRun,
 		BreakerMaxFailures:  parse.OrDefault(raw.Breaker.MaxFailures, defaultBreakerFails),
 		BreakerWindow:       breakerWindow,
 		OpsPoll:             opsPoll,

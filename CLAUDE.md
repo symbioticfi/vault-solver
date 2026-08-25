@@ -9,12 +9,12 @@ It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 pluggable **solver** strategy against them. A "solver" is an off-chain integration with some external
 protocol that sources or prices liquidity on top of a Symbiotic vault adapter.
 
-The first implementation is the **3F (Grunt) Bridge Facilitator**. The repository is explicitly
-structured so additional integrations — **RFQ, Redstone/OEV, and others** — can be added *without
-touching the generic framework*. Keeping that boundary clean is the single most important design goal.
+The first implementation was the **3F (Grunt) Bridge Facilitator**. The service now also implements
+**RFQ, RedStone OEV, LI.FI, and UniswapX** without coupling those integrations to the generic framework.
+Keeping that boundary clean is the single most important design goal.
 
-See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) for the architecture,
-decisions, and the live TODO lists (§10).
+See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`, `docs/OEV-PLAN.md`,
+`docs/LIFI-PLAN.md`, and `docs/UNISWAPX-PLAN.md`) for the architecture, decisions, and live TODO lists.
 
 ## The modularity rule (most important)
 
@@ -23,9 +23,9 @@ Two layers, and code lives in exactly one:
 - **Generic framework** (integration-agnostic, shared by every solver):
   `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
   Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
-- **Integration packages** (fully self-contained): `internal/solvers/<name>/`
-  (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
-  live here.
+- **Integration packages** (fully self-contained): `internal/solvers/<name>/` — currently
+  `bridgefacilitator/`, `rfq/`, `redstoneoev/`, `lifi/`, and `uniswapx/`. All protocol-specific logic,
+  types, ABIs usage, pricing, and config live here.
 
 **Shared protocol code** used by ≥2 solvers lives in its own shared package or generated binding — e.g.
 Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/morphographql`, or neutral
@@ -34,9 +34,9 @@ rfq). Hand-written domain adapters stay inside the solver that owns the workflow
 actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
 helper package — `internal/parse`.
 
-To add a new integration (e.g. `rfq`):
-1. Create `internal/solvers/rfq/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
-   `Factory(raw yaml.Node, deps solver.Deps) (Solver, error)`.
+To add a new integration:
+1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
+   `factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error)`.
 2. Self-register in `init()` via `solver.Register(Name, factory)`; blank-import the package from `main`.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).

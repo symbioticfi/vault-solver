@@ -21,10 +21,6 @@ func orZero(v *big.Int) *big.Int {
 	return new(big.Int).Set(v)
 }
 
-func exp10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
-}
-
 func ceilMulDiv(x, y, denom *big.Int) *big.Int {
 	if x == nil || y == nil || denom == nil || x.Sign() <= 0 || y.Sign() <= 0 || denom.Sign() <= 0 {
 		return new(big.Int)

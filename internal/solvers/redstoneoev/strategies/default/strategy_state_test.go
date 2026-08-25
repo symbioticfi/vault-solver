@@ -61,6 +61,37 @@ func TestRefreshStatePreservesLastGoodValuesWithoutExtendingFreshness(t *testing
 	}
 }
 
+func TestNewUsesConfiguredTestMonitor(t *testing.T) {
+	market := common.Hash{31: 1}
+	position := common.Address{19: 2}
+	deps := Deps{
+		Log:      logr.Discard(),
+		Adapter:  common.Address{19: 1},
+		Callback: common.Address{19: 2},
+		LoadAdapterSnapshot: func() (types.AdapterSnapshot, bool) {
+			return types.AdapterSnapshot{}, true
+		},
+	}
+	strategy, err := New(Config{
+		TestMonitor: &TestMonitorConfig{
+			Markets:   []common.Hash{market},
+			Positions: []common.Address{position},
+		},
+		MonitorPoll: time.Second,
+	}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor, ok := strategy.mon.(*testMonitor)
+	if !ok {
+		t.Fatalf("monitor type = %T, want *testMonitor", strategy.mon)
+	}
+	if len(monitor.markets) != 1 || monitor.markets[0] != market ||
+		len(monitor.positions) != 1 || monitor.positions[0] != position {
+		t.Fatalf("monitor seeds = %v/%v", monitor.markets, monitor.positions)
+	}
+}
+
 func TestNewRejectsGasDerivedProfitPoliciesWithoutGasAccounting(t *testing.T) {
 	deps := Deps{
 		Log:      logr.Discard(),

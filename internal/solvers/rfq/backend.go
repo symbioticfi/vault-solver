@@ -47,8 +47,9 @@ type backendOut struct {
 // backendClient is a thin adapter over the generated rfqbackend client for filler-facing orders plus
 // the shared private-discounts client. Used from the single execution goroutine.
 type backendClient struct {
-	api       *rfqbackend.APIClient
-	discounts *discounts.Client
+	*discounts.Client
+
+	api *rfqbackend.APIClient
 }
 
 // newBackendClient builds a backend client rooted at baseURL. The generated client carries the
@@ -61,7 +62,7 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg.HTTPClient = &http.Client{
 		Timeout: 10 * time.Second,
 	}
-	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClient(baseURL)}
+	return &backendClient{api: rfqbackend.NewAPIClient(cfg), Client: discounts.NewClient(baseURL)}
 }
 
 // closeResp drains and closes the HTTP response body. The generated client already reads the body
@@ -184,19 +185,3 @@ type discountTerms = discounts.Terms
 type resolveDiscountResponse = discounts.Resolved
 type discountListItem = discounts.ListItem
 type discountsResponse = discounts.List
-
-// resolveDiscount fetches the fresh signed discount for a discountId (POST /discounts).
-//
-// The backend's ResolveDiscountResponse is an anyOf union of a single resolved discount (anyOf[0]) and
-// a batch (anyOf[1]). The filler resolves one discountId at a time, so it expects — and requires — the
-// single shape. If the backend returns the batch shape with exactly one entry, that lone entry is
-// accepted (it carries the same signed fields); anything else (neither shape, or a batch with ≠1
-// entries) is rejected so we never fill on an ambiguous resolution.
-func (c *backendClient) resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error) {
-	return c.discounts.Resolve(ctx, discountID)
-}
-
-// listDiscounts lists currently-offered discounts (GET /discounts).
-func (c *backendClient) listDiscounts(ctx context.Context) (*discountsResponse, error) {
-	return c.discounts.ListDiscounts(ctx)
-}

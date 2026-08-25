@@ -165,16 +165,6 @@ func mustV2HashArguments() v2HashABIs {
 	}
 }
 
-func parseAndResolveOrder(
-	entry orderEntry,
-	source orderSource,
-	cfg *Config,
-	chainID int64,
-	now time.Time,
-) (*resolvedOrder, error) {
-	return parseAndResolveV2Order(entry, source, cfg, chainID, now)
-}
-
 func exclusiveObligationFromEntry(
 	entry orderEntry,
 	cfg *Config,

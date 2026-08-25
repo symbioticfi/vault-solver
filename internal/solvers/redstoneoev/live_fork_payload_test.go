@@ -39,7 +39,7 @@ type forkPayload struct {
 // TestLiveSepoliaDumpForkPayload writes /tmp/oev-fork-payload.json for an anvil-fork settlement replay.
 //
 //	set -a; . ./.env.local; set +a
-//	OEV_TEST_MONITOR=true OEV_TEST_MARKETS=... OEV_TEST_POSITIONS=... \
+//	# Set strategy.config.testMonitor.markets/positions in $OEV_CONFIG.
 //	go test -tags live ./internal/solvers/redstoneoev -run TestLiveSepoliaDumpForkPayload -v
 func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if os.Getenv("ETH_RPC_URL_SEPOLIA") == "" || os.Getenv("OEV_SIGNER_PRIVATE_KEY") == "" {

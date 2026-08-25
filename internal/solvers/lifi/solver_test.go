@@ -1400,9 +1400,9 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 	orders <- &secondValue
 	close(orders)
 
-	if err := s.runOrderWorker(
+	if err := s.newOrderWorker(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
-	); err != nil {
+	).run(); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	if fillReads != 2 || feeReads != 2 {
@@ -1460,9 +1460,9 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
-		)
+		).run()
 	}()
 
 	results := make([]chan<- txmanager.Result, 0, 5)
@@ -1546,13 +1546,13 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	firstInput := receiveFillInput(t, inputs)
@@ -1666,13 +1666,13 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 	defer inbox.endRecovery()
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			inbox.markRecoveryRetry,
 			nil,
-		)
+		).run()
 	}()
 
 	pendingResult := receiveFillSubmission(t, submitted)
@@ -1768,7 +1768,7 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 	}
 	close(orders)
 	done := make(chan error, 1)
-	go func() { done <- s.runOrderWorker(t.Context(), routes, orders, nil, nil) }()
+	go func() { done <- s.newOrderWorker(t.Context(), routes, orders, nil, nil).run() }()
 
 	results := []chan<- txmanager.Result{
 		receiveFillSubmission(t, submitted),
@@ -1820,13 +1820,13 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	result := receiveFillSubmission(t, submitted)

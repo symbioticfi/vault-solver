@@ -95,7 +95,7 @@ func (s *Solver) submitFill(
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
 		return nil, nil
 	}
-	if s.reserveWithoutRefresh(reservationKey, reservations) {
+	if s.capacity.Set(reservationKey, reservations) {
 		s.log.V(1).Info(
 			"fill capacity reserved",
 			"orderId", order.OrderID,
@@ -147,9 +147,9 @@ func (s *Solver) fillRequestObsolete(
 	}
 }
 
-func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {
+func (s *Solver) completeFill(pending map[string]*pendingFill, completion fillCompletion) {
 	fill := completion.fill
-	pending.remove(fill.reservationKey)
+	delete(pending, fill.reservationKey)
 	if completion.result.Err == nil {
 		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
@@ -169,17 +169,6 @@ func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations
 		return nil, false
 	}
 	return liquidstrategies.FillRouteReservations(plan.Routes)
-}
-
-func (s *Solver) reserveWithoutRefresh(
-	orderKey string,
-	reservations liquidlane.CapacityReservations,
-) bool {
-	return s.capacity.Set(orderKey, reservations)
-}
-
-func (s *Solver) releaseReservationWithoutRefresh(orderKey string) bool {
-	return s.capacity.Delete(orderKey)
 }
 
 func (s *Solver) requestQuoteRefresh() {

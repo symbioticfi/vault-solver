@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -37,7 +40,7 @@ const (
 func newQuote(maxRate string, maxAssets *big.Int) defaultstrategy.AdapterQuote {
 	return defaultstrategy.AdapterQuote{
 		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
-		LoanScale: exp10(6), CollScale: exp10(18),
+		LoanScale: chain.Exp10(6), CollScale: chain.Exp10(18),
 	}
 }
 
@@ -111,11 +114,12 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}),
 	}
-	strategyCfg := defaultstrategy.ConfigForTest(defaultstrategy.Config{
-		BidWei:      seedBidWei,
-		MaxStateAge: defaultExecutorStateMaxAge,
-		Sizing:      defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
-	})
+	strategyCfg := defaultstrategy.Config{
+		BidWei:          seedBidWei,
+		CallbackAuthTTL: time.Minute,
+		MaxStateAge:     defaultExecutorStateMaxAge,
+		Sizing:          defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
+	}
 	s.strategy = defaultstrategy.NewWithSnapshotForTest(
 		strategyCfg,
 		seedAdapter,
@@ -797,6 +801,21 @@ func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 	}
 }
 
+func TestMalformedBlacklistedFrameTripsBreakerAndLogs(t *testing.T) {
+	s, _ := seededSolver(t)
+	var logs []string
+	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+
+	s.handleBlacklisted([]byte(`{"op":"blacklisted","data":`))
+
+	if tripped, _ := s.breaker.tripped(time.Now()); !tripped {
+		t.Fatal("malformed blacklisted frame did not trip breaker")
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0], "malformed blacklisted frame") {
+		t.Fatalf("logs = %v", logs)
+	}
+}
+
 func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 	s, _ := seededSolver(t)
 	blocking := &blockingBidStrategy{
@@ -853,7 +872,7 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 	}
 }
 
-// TestDryRunSuppressesSend pins the OEV_DRY_RUN observe mode: a profitable auction is fully evaluated
+// TestDryRunSuppressesSend pins configured observe mode: a profitable auction is fully evaluated
 // (counted as a would-bid via metrics.bid()) but NO solve is sent on the wire — the operator can watch the
 // bot's decisions against a live feed without funding or competing.
 func TestDryRunSuppressesSend(t *testing.T) {

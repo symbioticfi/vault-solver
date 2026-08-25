@@ -95,7 +95,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (*quoteRespo
 		return nil, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
+		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID, "reason", out.Reason)
 		return nil, nil
 	}
 	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {

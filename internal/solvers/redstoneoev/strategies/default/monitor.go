@@ -77,14 +77,18 @@ func (m *apiMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, ada
 }
 
 func (m *apiMonitor) run(ctx context.Context) {
-	tick := time.NewTicker(m.monitorPoll)
+	runMonitor(ctx, m.monitorPoll, m.refresh)
+}
+
+func runMonitor(ctx context.Context, poll time.Duration, refresh func(context.Context)) {
+	tick := time.NewTicker(poll)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			m.refresh(ctx)
+			refresh(ctx)
 		}
 	}
 }

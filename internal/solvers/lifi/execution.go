@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -44,10 +43,6 @@ type pendingFill struct {
 type fillCompletion struct {
 	fill   *pendingFill
 	result txmanager.Result
-}
-
-type pendingFillState struct {
-	byOrder map[string]*pendingFill
 }
 
 type orderRecoveryResult struct {
@@ -122,10 +117,7 @@ func (q *orderInbox) enqueue(order *submittedOrder) error {
 		q.markRecoverySeen(key)
 	}
 	q.mu.Unlock()
-	select {
-	case q.ready <- struct{}{}:
-	default:
-	}
+	q.signalReady()
 	return nil
 }
 
@@ -133,6 +125,10 @@ func (q *orderInbox) closeInput() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
+	q.signalReady()
+}
+
+func (q *orderInbox) signalReady() {
 	select {
 	case q.ready <- struct{}{}:
 	default:
@@ -184,18 +180,19 @@ func (q *orderInbox) waitUntilProcessed(ctx context.Context) (uint64, error) {
 func (q *orderInbox) beginRecovery() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.clearRecovery()
 	q.recoverySeen = make(map[string]bool)
-	q.recoverySeenOrder = nil
-	q.recoverySeenNext = 0
-	q.recoveryOverflow = false
 	q.recoveryRetry = make(map[string]*submittedOrder)
 	q.recoveryAttempts = make(map[string]int)
-	q.recoveryGen = 0
 }
 
 func (q *orderInbox) endRecovery() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.clearRecovery()
+}
+
+func (q *orderInbox) clearRecovery() {
 	q.recoverySeen = nil
 	q.recoverySeenOrder = nil
 	q.recoverySeenNext = 0
@@ -262,12 +259,7 @@ func (q *orderInbox) tryEndRecovery(processedGen uint64) bool {
 	if q.recoveryGen != processedGen {
 		return false
 	}
-	q.recoverySeen = nil
-	q.recoverySeenOrder = nil
-	q.recoverySeenNext = 0
-	q.recoveryRetry = nil
-	q.recoveryAttempts = nil
-	q.recoveryGen = 0
+	q.clearRecovery()
 	return true
 }
 
@@ -372,7 +364,7 @@ func (s *Solver) runOrderFeed(
 	}()
 	go func() { inboxDone <- inbox.run(workCtx, orders) }()
 	go func() {
-		workerDone <- s.runOrderWorker(workCtx, routes, orders, inbox.markRecoveryRetry, workerInputDrained)
+		workerDone <- s.newOrderWorker(workCtx, routes, orders, inbox.markRecoveryRetry, workerInputDrained).run()
 	}()
 
 	feedErr := <-feedDone
@@ -533,243 +525,10 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 	return order
 }
 
-func (s *Solver) runOrderWorker(
-	ctx context.Context,
-	routes []route,
-	orders <-chan *submittedOrder,
-	onRetryable func(*submittedOrder, int),
-	inputDrained chan<- struct{},
-) error {
-	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
-	completions := make(chan fillCompletion, fillCompletionCapacity)
-	retries := newReservationRetryQueue(orderRetryCapacity)
-	depositRetries := newOrderDepositRetryQueue(orderDepositRetryCapacity)
-	var reservationReleaseGen uint64
-	ctxDone := ctx.Done()
-	var runErr error
-	var recoveryBarrier chan struct{}
-	retryNow := s.wallNow
-	if retryNow == nil {
-		retryNow = time.Now
-	}
-	depositRetryTimer := time.NewTimer(maximumOrderDepositRetryWindow)
-	depositRetryTimer.Stop()
-	defer depositRetryTimer.Stop()
-	releaseRecoveryBarrier := func() {
-		if recoveryBarrier == nil || retries.len() > 0 {
-			return
-		}
-		close(recoveryBarrier)
-		recoveryBarrier = nil
-	}
-	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations) {
-		defer releaseRecoveryBarrier()
-
-		var result orderProcessingResult
-		if reservations == nil {
-			result = s.processOrderWithPending(ctx, routes, order, &pending)
-		} else {
-			result = s.processOrderUsingReservations(ctx, routes, order, &pending, reservations)
-		}
-		if result.depositNotVisible {
-			if err := depositRetries.schedule(order, retryNow()); err != nil {
-				if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
-					s.log.Error(err, "order deposit retry: dropped order",
-						"orderId", order.OrderID,
-						"onChainOrderId", order.OnChainOrderID,
-						"quoteId", order.QuoteID,
-						"capacity", orderDepositRetryCapacity,
-					)
-				} else {
-					s.log.Info("order skipped: deposit did not become visible within retry bounds",
-						"orderId", order.OrderID,
-						"onChainOrderId", order.OnChainOrderID,
-						"quoteId", order.QuoteID,
-						"reason", err.Error(),
-					)
-				}
-			}
-			return
-		}
-		depositRetries.finish(order)
-		if result.fill != nil {
-			pending.add(result.fill)
-			go awaitFill(result.fill, completions)
-			return
-		}
-		if result.retryable && onRetryable != nil {
-			onRetryable(order, result.recoveryAttemptLimit)
-		}
-		// Invariant: a queued reservation retry implies a pending fill. Completions are
-		// the only events that advance the retry generation and wake the worker.
-		if len(result.blockedOn) == 0 || pending.len() == 0 {
-			return
-		}
-		queuedBefore := retries.len()
-		if err := retries.enqueue(order, reservationReleaseGen); err != nil {
-			s.log.Error(err, "order retry queue: dropped newest order",
-				"orderId", order.OrderID,
-				"onChainOrderId", order.OnChainOrderID,
-				"quoteId", order.QuoteID,
-				"capacity", orderRetryCapacity,
-			)
-		} else if retries.len() > queuedBefore {
-			s.log.V(1).Info(
-				"order fill deferred by pending capacity",
-				"orderId", order.OrderID,
-				"onChainOrderId", order.OnChainOrderID,
-				"quoteId", order.QuoteID,
-				"blockedCapacityGroups", len(result.blockedOn),
-				"pendingFills", pending.len(),
-				"retryQueue", retries.len(),
-			)
-		}
-	}
-	complete := func(completion fillCompletion) {
-		s.completeFill(&pending, completion)
-		reservationReleaseGen++
-		for ctx.Err() == nil {
-			order := retries.popReady(reservationReleaseGen)
-			if order == nil {
-				break
-			}
-			s.log.V(1).Info(
-				"order fill retry started",
-				"orderId", order.OrderID,
-				"onChainOrderId", order.OnChainOrderID,
-				"quoteId", order.QuoteID,
-				"pendingFills", pending.len(),
-				"retryQueue", retries.len(),
-			)
-			reservations := s.capacity.SnapshotExcluding(completion.fill.reservationKey)
-			process(order, &reservations)
-		}
-		if ctx.Err() != nil {
-			retries.clear()
-		}
-		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
-			s.log.V(1).Info(
-				"fill capacity released",
-				"orderId", completion.fill.order.OrderID,
-				"onChainOrderId", completion.fill.orderID.Hex(),
-				"quoteId", completion.fill.order.QuoteID,
-				"pendingFills", s.capacity.Len(),
-			)
-			s.requestQuoteRefresh()
-		}
-		releaseRecoveryBarrier()
-	}
-	for orders != nil || pending.len() > 0 || retries.len() > 0 || depositRetries.len() > 0 {
-		if runErr == nil && ctx.Err() != nil {
-			runErr = ctx.Err()
-			ctxDone = nil
-			orders = nil
-			retries.clear()
-			depositRetries.clear()
-		}
-		if runErr != nil && pending.len() == 0 {
-			return runErr
-		}
-		orderInput := orders
-		if runErr != nil || recoveryBarrier != nil {
-			// Post-barrier orders belong to a later recovery generation and must not
-			// extend the retry set protected by this barrier.
-			orderInput = nil
-		}
-		var depositRetryC <-chan time.Time
-		depositRetryTimer.Stop()
-		if readyAt, ok := depositRetries.nextReadyAt(); ok {
-			depositRetryTimer.Reset(max(readyAt.Sub(retryNow()), 0))
-			depositRetryC = depositRetryTimer.C
-		}
-		select {
-		case <-ctxDone:
-			runErr = ctx.Err()
-			ctxDone = nil
-			orders = nil
-			retries.clear()
-			depositRetries.clear()
-		case completion := <-completions:
-			complete(completion)
-		case <-depositRetryC:
-			order, err := depositRetries.popReady(retryNow())
-			if err != nil {
-				s.log.Info("order skipped: deposit did not become visible within retry bounds",
-					"orderId", order.OrderID,
-					"onChainOrderId", order.OnChainOrderID,
-					"quoteId", order.QuoteID,
-					"reason", err.Error(),
-				)
-				continue
-			}
-			if order != nil {
-				process(order, nil)
-			}
-		case order, ok := <-orderInput:
-			if !ok {
-				orders = nil
-				depositRetries.clear()
-				releaseRecoveryBarrier()
-				if inputDrained != nil {
-					close(inputDrained)
-					inputDrained = nil
-				}
-				continue
-			}
-			if ctx.Err() != nil {
-				runErr = ctx.Err()
-				ctxDone = nil
-				orders = nil
-				retries.clear()
-				depositRetries.clear()
-				continue
-			}
-			if order.processed != nil {
-				recoveryBarrier = order.processed
-				releaseRecoveryBarrier()
-				continue
-			}
-			if depositRetries.contains(order) {
-				s.log.V(1).Info("order feed replay coalesced while awaiting on-chain deposit",
-					"orderId", order.OrderID,
-					"onChainOrderId", order.OnChainOrderID,
-					"quoteId", order.QuoteID,
-				)
-				continue
-			}
-			process(order, nil)
-		}
-	}
-	return runErr
-}
-
 func awaitFill(fill *pendingFill, completions chan<- fillCompletion) {
 	result, ok := <-fill.result
 	if !ok {
 		result.Err = errors.New("transaction result channel closed without a result")
 	}
 	completions <- fillCompletion{fill: fill, result: result}
-}
-
-func (s *pendingFillState) len() int {
-	if s == nil {
-		return 0
-	}
-	return len(s.byOrder)
-}
-
-func (s *pendingFillState) contains(key string) bool {
-	if s == nil {
-		return false
-	}
-	_, ok := s.byOrder[key]
-	return ok
-}
-
-func (s *pendingFillState) add(fill *pendingFill) {
-	s.byOrder[fill.reservationKey] = fill
-}
-
-func (s *pendingFillState) remove(key string) {
-	delete(s.byOrder, key)
 }
