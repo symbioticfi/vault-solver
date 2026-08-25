@@ -182,6 +182,19 @@ func abiEncodeUint256(t *testing.T, value int64) []byte {
 	return enc
 }
 
+func abiEncodeBool(t *testing.T, value bool) []byte {
+	t.Helper()
+	boolType, err := abi.NewType("bool", "", nil)
+	if err != nil {
+		t.Fatalf("abi.NewType bool: %v", err)
+	}
+	encoded, err := abi.Arguments{{Type: boolType}}.Pack(value)
+	if err != nil {
+		t.Fatalf("abi bool Pack: %v", err)
+	}
+	return encoded
+}
+
 // abiEncodeBytes4 ABI-encodes a bytes4 return value (the raw returnData for a Solidity function
 // returning bytes4, e.g. ERC-1271 isValidSignature).
 func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
@@ -195,6 +208,54 @@ func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
 		t.Fatalf("abi bytes4 Pack: %v", err)
 	}
 	return enc
+}
+
+func TestReadyToRedeem(t *testing.T) {
+	t.Parallel()
+
+	first := common.HexToAddress("0x0000000000000000000000000000000000000011")
+	second := common.HexToAddress("0x0000000000000000000000000000000000000022")
+	client, stop := newMulticallFakeClient(t,
+		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 2)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, first), abiEncodeAddress(t, second)),
+		abiEncodeAggregate3Results(t, abiEncodeBool(t, true), abiEncodeBool(t, false)),
+	)
+	defer stop()
+
+	ready, err := newReader(client, common.Address{}).readyToRedeem(
+		t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000A0"),
+	)
+	if err != nil {
+		t.Fatalf("readyToRedeem: %v", err)
+	}
+	if len(ready) != 1 || ready[0] != first {
+		t.Fatalf("ready = %v, want [%s]", ready, first.Hex())
+	}
+}
+
+func TestLiquidityAndExposure(t *testing.T) {
+	t.Parallel()
+
+	round := abiEncodeAggregate3Results(t,
+		abiEncodeUint256(t, 1_000),
+		abiEncodeUint256(t, 190),
+		abiEncodeUint256(t, 100),
+		abiEncodeUint256(t, 800),
+		abiEncodeUint256(t, 2),
+	)
+	client, stop := newMulticallFakeClient(t, round)
+	defer stop()
+
+	got, err := newReader(client, common.Address{}).liquidityAndExposure(
+		t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000A0"),
+	)
+	if err != nil {
+		t.Fatalf("liquidityAndExposure: %v", err)
+	}
+	if got.fundable.Cmp(big.NewInt(1_000)) != 0 || got.minYieldPpm.Cmp(big.NewInt(190)) != 0 ||
+		got.minAssets.Cmp(big.NewInt(100)) != 0 || got.maxAssets.Cmp(big.NewInt(800)) != 0 || got.openCount != 2 {
+		t.Fatalf("exposure = %+v", got)
+	}
 }
 
 func TestFactoryAdapters_EmptyRegistry(t *testing.T) {

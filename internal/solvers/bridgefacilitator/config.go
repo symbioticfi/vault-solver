@@ -161,11 +161,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
-	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
-	if strategy.Name == "" {
-		strategy.Name = defaultStrategyName
-	}
-
 	return &Config{
 		APIBaseURL:        raw.APIBaseURL,
 		RedeemBatchSize:   redeemBatch,
@@ -175,7 +170,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		AdapterFactory:    adapterFactory,
 		LiquidityLens:     liquidityLens,
 		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:          strategy,
+		Strategy: StrategyConfig{
+			Name: cfgparse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config,
+		},
 	}, nil
 }
 

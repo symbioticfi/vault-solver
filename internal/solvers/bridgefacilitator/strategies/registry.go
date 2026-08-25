@@ -10,9 +10,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-type Deps struct{}
-
-type Factory func(raw yaml.Node, deps Deps) (types.Strategy, error)
+type Factory func(raw yaml.Node) (types.Strategy, error)
 
 var (
 	mu       sync.RWMutex
@@ -34,14 +32,14 @@ func Register(name string, f Factory) {
 	registry[name] = f
 }
 
-func New(name string, raw yaml.Node, deps Deps) (types.Strategy, error) {
+func New(name string, raw yaml.Node) (types.Strategy, error) {
 	mu.RLock()
 	f, ok := registry[name]
 	mu.RUnlock()
 	if !ok {
 		return nil, errors.Errorf("unknown 3F strategy %q (registered: %v)", name, Registered())
 	}
-	return f(raw, deps)
+	return f(raw)
 }
 
 func Registered() []string {

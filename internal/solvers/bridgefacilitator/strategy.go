@@ -20,7 +20,7 @@ func newStrategy(spec StrategyConfig) (types.Strategy, error) {
 	if name == "" {
 		name = defaultStrategyName
 	}
-	return strategies.New(name, spec.Config, strategies.Deps{})
+	return strategies.New(name, spec.Config)
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.

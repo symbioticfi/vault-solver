@@ -21,7 +21,7 @@ func init() {
 	strategies.Register(Name, NewFromConfig)
 }
 
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
+func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	cfg, err := webhook.ParseConfig(raw)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,8 @@ package types
 import (
 	"math/big"
 	"testing"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 func TestExpectedReturn(t *testing.T) {
@@ -86,30 +88,37 @@ func TestMinYieldReturn(t *testing.T) {
 
 func TestValidateYield(t *testing.T) {
 	const amount = 600518648976 // ~600.5k USDC; floor 190 ppm → 114098544; maxRate 3 bps = 300 ppm
+	principal := big.NewInt(amount)
 	big190 := big.NewInt(190)
+	partialMinimum := big.NewInt(1_000_000)
+	partialSafe := PartialSafeMinYieldReturn(principal, partialMinimum, big190)
 	cases := []struct {
-		name    string
-		er      *big.Int
-		amount  *big.Int
-		minPpm  *big.Int
-		maxBps  float64
-		wantErr bool
+		name         string
+		er           *big.Int
+		amount       *big.Int
+		minPrincipal *big.Int
+		minPpm       *big.Int
+		maxBps       float64
+		wantErr      bool
 	}{
-		{"at floor, under max", big.NewInt(114098544), big.NewInt(amount), big190, 3, false},
-		{"one below floor", big.NewInt(114098543), big.NewInt(amount), big190, 3, true},
-		{"above max rate", big.NewInt(200000000), big.NewInt(amount), big190, 3, true},       // ~333 ppm > 300
-		{"at exactly max rate", big.NewInt(180155594), big.NewInt(amount), big190, 3, false}, // floor(180155594*1e6/amount)=300
-		{"nil expectedReturn", nil, big.NewInt(amount), big190, 3, true},
-		{"zero expectedReturn", big.NewInt(0), big.NewInt(amount), big190, 3, true},
-		{"zero expectedReturn, no floor no max", big.NewInt(0), big.NewInt(amount), big.NewInt(0), 0, true},
-		{"nil principal", big.NewInt(1), nil, big190, 3, true},
-		{"zero principal", big.NewInt(1), big.NewInt(0), big190, 3, true},
-		{"no floor, under max", big.NewInt(1), big.NewInt(amount), big.NewInt(0), 3, false},
-		{"no maxRate (unresolved), clears floor", big.NewInt(114098544), big.NewInt(amount), big190, 0, false},
+		{"at floor, full only", big.NewInt(114098544), principal, principal, big190, 3, false},
+		{"partial-safe margin", partialSafe, principal, partialMinimum, big190, 3, false},
+		{"full yield safe but partial unsafe", big.NewInt(114098544), principal, partialMinimum, big190, 3, true},
+		{"principal below minimum", principal, principal, new(big.Int).Add(principal, big.NewInt(1)), big190, 0, true},
+		{"one below floor", big.NewInt(114098543), principal, principal, big190, 3, true},
+		{"above max rate", big.NewInt(200000000), principal, principal, big190, 3, true},
+		{"at exactly max rate", big.NewInt(180155594), principal, principal, big190, 3, false},
+		{"nil expectedReturn", nil, principal, principal, big190, 3, true},
+		{"zero expectedReturn", big.NewInt(0), principal, principal, big190, 3, true},
+		{"zero expectedReturn, no floor no max", big.NewInt(0), principal, principal, big.NewInt(0), 0, true},
+		{"nil principal", big.NewInt(1), nil, nil, big190, 3, true},
+		{"zero principal", big.NewInt(1), big.NewInt(0), nil, big190, 3, true},
+		{"no floor, under max", big.NewInt(1), principal, big.NewInt(1), big.NewInt(0), 3, false},
+		{"no maxRate, full only", big.NewInt(114098544), principal, principal, big190, 0, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := ValidateYield(c.er, c.amount, c.minPpm, c.maxBps)
+			err := ValidateYield(c.er, c.amount, c.minPrincipal, c.minPpm, c.maxBps)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("ValidateYield = %v, wantErr=%v", err, c.wantErr)
 			}
@@ -147,8 +156,9 @@ func TestPartialSafeMinYieldReturnMainnetRegression(t *testing.T) {
 		t.Fatalf("floor-exact pricing pro-rated to %s >= required %s; the mainnet failure should reproduce", got, want)
 	}
 
-	safe := PartialSafeMinYieldReturn(principal, floor)
-	if want := int64(5_700_007 + 30_001); safe.Int64() != want { // margin = ceil(principal/1e6)
+	minimum := big.NewInt(1_000_000)
+	safe := PartialSafeMinYieldReturn(principal, minimum, floor)
+	if want := int64(5_700_007 + 30_001); safe.Int64() != want { // margin = ceil(principal/minimum)
 		t.Fatalf("PartialSafeMinYieldReturn = %s, want %d", safe, want)
 	}
 	if got, want := prorated(safe, principal, consumed), requiredYield(consumed, floor); got.Cmp(want) < 0 {
@@ -156,75 +166,66 @@ func TestPartialSafeMinYieldReturnMainnetRegression(t *testing.T) {
 	}
 }
 
-// TestPartialSafeMinYieldReturnAnyScaleAnyPpm proves the guarantee across token scales and floor values:
-// for margin k = max(2, ceil(principal/1e6)), every consumption pt >= ceil(principal/k) pro-rates to at
-// least ceil(pt*minYieldPpm/1e6). Sampled pt values include the guarantee threshold, the full amount,
-// and adversarial amounts whose required yield rounds up by a maximal fraction.
 func TestPartialSafeMinYieldReturnAnyScaleAnyPpm(t *testing.T) {
 	principals := []*big.Int{
-		big.NewInt(5),                              // dust: margin floor of 2 applies
-		big.NewInt(1_000_003),                      // just above the ppm quantum
-		big.NewInt(2_000_000),                      // margin switches from the 2-unit floor to 1 ppm
-		big.NewInt(30_000_035_000),                 // the mainnet incident scale (6-dp stablecoin)
-		new(big.Int).Add(exp10(22), big.NewInt(7)), // 18-dp token scale
+		big.NewInt(5),
+		big.NewInt(1_000_003),
+		big.NewInt(2_000_000),
+		big.NewInt(30_000_035_000),
+		new(big.Int).Add(chain.Exp10(22), big.NewInt(7)),
+	}
+	minimums := []*big.Int{
+		big.NewInt(1),
+		big.NewInt(1_000_000),
+		big.NewInt(1_000_000),
+		big.NewInt(1_000_000),
+		chain.Exp10(18),
 	}
 	ppms := []*big.Int{big.NewInt(1), big.NewInt(190), big.NewInt(999), big.NewInt(250_000)}
 
-	for _, principal := range principals {
+	for i, principal := range principals {
+		minimum := minimums[i]
+		if minimum.Cmp(principal) > 0 {
+			minimum = principal
+		}
 		for _, ppm := range ppms {
-			safe := PartialSafeMinYieldReturn(principal, ppm)
+			safe := PartialSafeMinYieldReturn(principal, minimum, ppm)
 			if safe.Sign() <= 0 {
-				t.Fatalf("P=%s ppm=%s: no priced return", principal, ppm)
+				t.Fatalf("P=%s min=%s ppm=%s: no priced return", principal, minimum, ppm)
 			}
-			// k = max(2, ceil(P/1e6)); guarantee holds for pt >= ceil(P/k).
-			k := new(big.Int).Add(principal, big.NewInt(yieldPpmScale-1))
-			k.Quo(k, big.NewInt(yieldPpmScale))
-			if k.Cmp(big.NewInt(2)) < 0 {
-				k.SetInt64(2)
-			}
-			threshold := new(big.Int).Add(principal, new(big.Int).Sub(k, big.NewInt(1)))
-			threshold.Quo(threshold, k)
-
 			samples := []*big.Int{
-				new(big.Int).Set(threshold),
-				new(big.Int).Add(threshold, big.NewInt(1)),
+				new(big.Int).Set(minimum),
+				new(big.Int).Add(minimum, big.NewInt(1)),
 				new(big.Int).Sub(principal, big.NewInt(1)),
 				new(big.Int).Set(principal),
 			}
-			// Adversarial pt: required yield rounds up by the largest achievable fraction. The smallest
-			// positive value of (pt*ppm) mod 1e6 is g = gcd(ppm, 1e6); solve pt*(ppm/g) ≡ 1 (mod 1e6/g)
-			// and take the first solutions at or above the threshold.
+			// Exercise consumptions where pt*ppm is barely above an integer multiple of the ppm scale,
+			// making the adapter's rounded-up requirement hardest to satisfy.
 			scale := big.NewInt(yieldPpmScale)
-			g := new(big.Int).GCD(nil, nil, ppm, scale)
-			reducedModulus := new(big.Int).Quo(scale, g)
-			if inverse := new(big.Int).ModInverse(new(big.Int).Quo(ppm, g), reducedModulus); inverse != nil {
-				first := new(big.Int).Mod(inverse, reducedModulus)
-				if first.Cmp(threshold) < 0 {
-					steps := new(big.Int).Sub(threshold, first)
-					steps.Add(steps, new(big.Int).Sub(reducedModulus, big.NewInt(1)))
-					steps.Quo(steps, reducedModulus) // ceil((threshold-first)/modulus)
-					first.Add(first, steps.Mul(steps, reducedModulus))
+			gcd := new(big.Int).GCD(nil, nil, ppm, scale)
+			modulus := new(big.Int).Quo(scale, gcd)
+			if inverse := new(big.Int).ModInverse(new(big.Int).Quo(ppm, gcd), modulus); inverse != nil {
+				first := new(big.Int).Mod(inverse, modulus)
+				if first.Cmp(minimum) < 0 {
+					steps := new(big.Int).Sub(minimum, first)
+					steps.Add(steps, new(big.Int).Sub(modulus, big.NewInt(1))).Quo(steps, modulus)
+					first.Add(first, new(big.Int).Mul(steps, modulus))
 				}
-				samples = append(samples, first, new(big.Int).Add(first, reducedModulus))
+				samples = append(samples, first, new(big.Int).Add(first, modulus))
 			}
-
 			for _, pt := range samples {
 				if pt.Sign() <= 0 || pt.Cmp(principal) > 0 {
 					continue
 				}
 				got, want := prorated(safe, principal, pt), requiredYield(pt, ppm)
 				if got.Cmp(want) < 0 {
-					t.Fatalf("P=%s ppm=%s pt=%s: pro-rated %s < required %s", principal, ppm, pt, got, want)
+					t.Fatalf("P=%s min=%s ppm=%s pt=%s: pro-rated %s < required %s", principal, minimum, ppm, pt, got, want)
 				}
 			}
 		}
 	}
 
-	if got := PartialSafeMinYieldReturn(big.NewInt(1_000_000), nil); got.Sign() != 0 {
+	if got := PartialSafeMinYieldReturn(big.NewInt(1_000_000), big.NewInt(1), nil); got.Sign() != 0 {
 		t.Fatalf("no-floor pricing = %s, want 0 (fall back to the auction max rate)", got)
 	}
-}
-
-func exp10(n int64) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil)
 }

@@ -158,6 +158,7 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 	const principal = 600518648976
 	a := testAdapter(1, principal)
 	a.MinYieldPpm = big.NewInt(190) // 1.9 bps floor
+	a.MinAssets = big.NewInt(1_000_000)
 
 	// maxRate exactly at the floor (1.9 bps): floor(principal*1.9/1e4) yields 189.9999… ppm < 190.
 	auction := testAuction(10, principal)
@@ -175,31 +176,26 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 		t.Fatalf("offers = %+v, want none: truncated expectedReturn is below the 190 ppm floor", got.Offers)
 	}
 
-	// A hair more headroom (1.91 bps) leaves room, so the offer is made. The floor plus the full
-	// partial-consumption margin (ceil(principal*190/1e6) + ceil(principal/1e6) = 114699063) would break
-	// the 1.91 bps cap, so the price clamps to the cap (floor(principal*191/1e6) = 114699061), keeping
-	// the margin that fits above the floor.
+	// A 1.91 bps cap clears the full-offer floor but removes two units from the margin required to
+	// protect every consumption at or above minAssetsPerRequest, so the pair must remain unoffered.
 	auction.MaxRateBps = 1.91
 	input.Auctions = []types.AuctionSnapshot{auction}
 	got, err = New().DecideOffers(t.Context(), input)
 	if err != nil {
 		t.Fatalf("DecideOffers: %v", err)
 	}
-	if len(got.Offers) != 1 {
-		t.Fatalf("offers = %+v, want 1: 1.91 bps leaves room above the 190 ppm floor", got.Offers)
-	}
-	if want := big.NewInt(114699061); got.Offers[0].ExpectedReturn.Cmp(want) != 0 {
-		t.Fatalf("expectedReturn = %s, want %s (margined, clamped to the auction max rate)", got.Offers[0].ExpectedReturn, want)
+	if len(got.Offers) != 0 {
+		t.Fatalf("offers = %+v, want none: maxRate clamp is unsafe for partial consumption", got.Offers)
 	}
 }
 
-// TestStrategyPricesPartialConsumeMarginAboveFloor covers the normal case: when the auction max rate
-// leaves room, the offer is priced one ppm of principal above the floor so a partial consume() cannot
-// pro-rate below it (mainnet tx 0xc637…8386 failed TooLowYield on a floor-exact offer).
+// TestStrategyPricesPartialConsumeMarginAboveFloor covers the mainnet regression: the offer margin
+// protects every partial consumption admitted by minAssetsPerRequest.
 func TestStrategyPricesPartialConsumeMarginAboveFloor(t *testing.T) {
 	const principal = 30_000_035_000
 	a := testAdapter(1, principal)
 	a.MinYieldPpm = big.NewInt(190)
+	a.MinAssets = big.NewInt(1_000_000)
 	auction := testAuction(10, principal)
 	auction.MaxRateBps = 200 // plenty of headroom above the 1.9 bps floor
 	input := types.OfferInput{

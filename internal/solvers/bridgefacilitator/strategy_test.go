@@ -78,7 +78,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
 	input := buildStrategyInput(
-		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
+		[]threef.AuctionDto{testAuctionDto(10, collateral)},
 		[]*adapterOffering{{
 			target: Target{
 				Adapter:    adapter,
@@ -144,9 +144,17 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}
 }
 
-func testAuctionDto(id int64, depositAsset common.Address, amountRequested string) threef.AuctionDto {
+func testAuctionDto(id int64, depositAsset common.Address) threef.AuctionDto {
+	amountRequested := "100"
 	maxRate := float32(200)
+	chainID := float32(11155111)
+	name, version := "Grunt", OfferDomainVersion
 	request := common.HexToAddress("0x0000000000000000000000000000000000000010")
+	domain := threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&name),
+		*threef.NewNullableString(&version),
+		*threef.NewNullableFloat32(&chainID),
+	)
 	return threef.AuctionDto{
 		Id:              float32(id),
 		RequestId:       request.Hex(),
@@ -156,5 +164,6 @@ func testAuctionDto(id int64, depositAsset common.Address, amountRequested strin
 		DepositAsset: *threef.NewNullableAuctionDepositAssetDto(
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),
 		),
+		Eip712Domain: *threef.NewNullableAuctionEip712DomainDto(domain),
 	}
 }

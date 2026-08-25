@@ -61,7 +61,9 @@ so offers are authorized by signature alone. Design, config,
 and roadmap: [`docs/3F-PLAN.md`](docs/3F-PLAN.md). When `adapters` is present, the solver operates only
 on that explicit list. Otherwise it discovers all entries of the configured on-chain `IAdapterFactory`,
 refreshing before each auction-discovery pass with a hard 2,000-entity safety limit; a larger reported
-count is an error. Either source is filtered to non-zero vault/asset targets that authorize this
+count is an error. Offers are skipped unless every partial consumption permitted by the adapter's
+`minAssetsPerRequest` clears its `minYieldPerRequest` within the auction rate cap. Either source is
+filtered to non-zero vault/asset targets that authorize this
 solver's signer (validated via the adapter's ERC-1271 `isValidSignature`). An empty factory is valid and
 is polled until eligible adapters appear. Example:
 [`config/3f.example.yaml`](config/3f.example.yaml).
@@ -384,7 +386,8 @@ that the receipt block belongs to that head by following hash-addressed parent h
 normal read fallback behavior. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. An unavailable
 or incoherent multi-read snapshot is retried on a later poll. An explicit write endpoint must report the same
-chain ID as the read endpoint.
+chain ID as the read endpoint. WebSocket endpoints are solver-specific; `chain.wsUrl` is not a supported
+key, and 3F uses polling.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
 from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA

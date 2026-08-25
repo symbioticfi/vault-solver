@@ -13,7 +13,6 @@ chain:
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
   # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest/pending nonce reads; defaults to rpcUrl
-  # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
 signer:

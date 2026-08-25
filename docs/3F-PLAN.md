@@ -166,7 +166,7 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 the chosen solver decodes it into its own typed struct.
 
 ```yaml
-chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, tipGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
 
@@ -273,25 +273,25 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
    each offer to the still-uncovered remainder, and track local adapter commitments across the pass. Each
-   offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
-   `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
-   the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
-   the floor check rounds up (mainnet tx `0xc637…8386`: 30,000.035 USDC at the 190 ppm floor consumed at
-   29,946.365238 delivered one base unit under the requirement). The margin guarantees any consumption of
-   at least half the offer — and, above 2e6 base units of principal, anything down to the 1e6-unit ppm
-   quantum — clears the floor for any ppm value and token scale. When the margin would exceed the
-   auction's max rate but the max rate itself clears the floor, the offer is priced at the max rate
-   (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
-   loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
-   before signing, so no path posts a sub-floor offer the fill would revert.
+   offer is priced at the adapter's `minYieldPerRequest` floor plus
+   `ceil(principal / max(1, minAssetsPerRequest))` base units. `Request.consume()` floors the pro-rata
+   return before the adapter checks yield; this margin contributes at least one whole return unit at the
+   smallest principal the adapter accepts, so every larger partial consumption also clears the floor.
+   A floor-exact offer lacks that guarantee (mainnet tx `0xc637…8386` failed one unit short). If the
+   auction's max rate cannot fit the required margin, the pair is skipped rather than clamped to an
+   unsafe full-offer yield. Consequently, a zero `minAssetsPerRequest` with a positive yield floor is
+   normally infeasible under realistic auction caps because the adapter permits a one-unit consume.
+   Before signing, the submission loop applies the same full and minimum-partial validation to default
+   and webhook outputs.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
    integers are decimal strings and unknown response fields are rejected.
-4. **Side effects** — the solver treats the strategy as trusted. It does not replay or revalidate the
-   returned execution offers against caps. It uses the `auctionId` to recover the raw auction EIP-712 domain,
-   signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
-   after a successful submit. Strategy output cannot set nonce or signature.
+4. **Side effects** — the solver treats the strategy as trusted and does not replay its allocation or
+   capacity decisions. It still rejects amounts below `minAssetsPerRequest` and yields that can fail at
+   either the full or minimum partial principal. It uses the `auctionId` to recover the raw auction
+   EIP-712 domain, signs the returned execution offer, submits `createOffer`, and records the live-offer
+   cache only after a successful submit. Strategy output cannot set nonce or signature.
 
 ---
 
@@ -375,14 +375,18 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   limit that errors above it. When `adapters` is present, only that explicit list is used. Either source
   is filtered to adapters whose non-zero vault/asset resolve and that authorize this solver's signer via
   the adapter's ERC-1271 `isValidSignature` (**not** an address match; EOA or contract signer).
-- **Custom offer pricing/scoring.** The default local strategy bids at the auction's current `maxRate`
-  and sizes by `getMaxAssets` headroom plus adapter per-request limits. Operators that need spread,
-  risk-adjusted target rate, time-in-auction, or competing-offer logic should replace it with a local
-  custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
-  return; the solver only signs and submits the returned offer.
+- **Custom offer pricing/scoring.** The default local strategy bids at the lowest partial-safe yield
+  permitted by the adapter floor and auction cap, and sizes by `getMaxAssets` headroom plus adapter
+  per-request limits. Operators that need spread, risk-adjusted target rate, time-in-auction, or
+  competing-offer logic should replace it with a local custom strategy or the built-in `webhook`
+  strategy. The strategy returns principal and expected return; the solver signs and submits it after
+  the minimum-partial yield backstop.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
-- **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
 **Testing:**
-- **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
-- **Solver-agnostic metrics seam.** `solver.Deps.Metrics` (the `Registerer()` extension point) is wired but no solver registers collectors yet; add bridge-facilitator metrics (offers sent/won, exposure, locked vs realized, redemptions) and they'll verify the seam.
+- **Integration coverage.** `bridgefacilitator` statement coverage is ~66%. API auction reads, exposure
+  snapshots, signed DTO construction, and redeemable-request scanning have httptest/RPC-backed tests.
+  The complete `discoverAndOffer` and redemption-transaction orchestration still need a simulated or
+  forked backend.
+- **Bridge-facilitator metrics.** RFQ, RedStone, and UniswapX already use the shared metrics registerer;
+  add 3F collectors for offers sent/won, exposure, locked vs realized assets, and redemptions.

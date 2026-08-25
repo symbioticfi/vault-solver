@@ -243,11 +243,9 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Error(err, "offer: strategy")
 		return
 	}
-	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
-	// not just the default strategy's pricing, against the adapter's exact on-chain minYieldPerRequest.
-	minYieldByAdapter := make(map[common.Address]*big.Int, len(offerings))
+	exposureByAdapter := make(map[common.Address]exposureState, len(offerings))
 	for _, o := range offerings {
-		minYieldByAdapter[o.target.Adapter] = o.st.minYieldPpm
+		exposureByAdapter[o.target.Adapter] = o.st
 	}
 
 	auctionByID := auctionViewsByID(auctions)
@@ -257,7 +255,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
 			continue
 		}
-		floor, known := minYieldByAdapter[offer.Maker]
+		exposure, known := exposureByAdapter[offer.Maker]
 		if !known {
 			s.log.Error(errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex()),
 				"offer: unknown maker; skipping", "auctionId", offer.AuctionID)
@@ -269,9 +267,13 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 				"offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
 			continue
 		}
-		// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
-		// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
-		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
+		if err := types.ValidateYield(
+			offer.ExpectedReturn,
+			offer.Principal,
+			exposure.minAssets,
+			exposure.minYieldPpm,
+			maxRate,
+		); err != nil {
 			s.log.Error(err, "offer: yield out of bounds; skipping",
 				"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
@@ -292,7 +294,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		}
 		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
-			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
+			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn,
+			"strategyReason", offer.Reason)
 	}
 }
 
@@ -331,11 +334,6 @@ func (s *Solver) reconcile(ctx context.Context) {
 		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
 			"openRequests", st.openCount, "fundable", st.fundable.String())
 	}
-}
-
-// nextNonce returns a strictly-increasing offer nonce.
-func (s *Solver) nextNonce() uint64 {
-	return s.nonceSeq.Add(1)
 }
 
 // refreshTargets builds and validates a complete adapter snapshot before installing it. A returned

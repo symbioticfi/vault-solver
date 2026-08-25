@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/api/threef"
 )
 
 // fakeSigner is a minimal signer.Signer test double that signs nothing meaningful (65 zero bytes).
@@ -28,6 +31,29 @@ func (fakeSigner) SignTx(
 	_ *big.Int,
 ) (*types.Transaction, error) {
 	return tx, nil
+}
+
+func TestAPIClientListAuctions(t *testing.T) {
+	want := testAuctionDto(7, common.Address{0xaa})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode([]threef.AuctionDto{want}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard())
+	got, err := client.listAuctions(t.Context())
+	if err != nil {
+		t.Fatalf("listAuctions: %v", err)
+	}
+	if len(got) != 1 || got[0].Id != want.Id || got[0].RequestId != want.RequestId {
+		t.Fatalf("auctions = %+v, want auction %v", got, want.Id)
+	}
 }
 
 func TestAPIClient_ListOffers_SignedPerAdapter(t *testing.T) {
