@@ -365,25 +365,28 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ./bin/vault-solver run --config config/3f.example.yaml --debug
 ```
 
-## Integration E2E
+## Local E2E
 
-`.github/workflows/integration-e2e.yml` checks out the Docker harness from
+`.github/workflows/integration-e2e.yml` checks out the local harness from
 [`symbioticfi/rfq-integration`](https://github.com/symbioticfi/rfq-integration), builds the current
-vault-solver checkout as a named Docker context, and runs one real Anvil smoke flow for each solver
-profile in parallel. The integration gitlink is never used as the solver under test. Set the repository
-variable `RFQ_INTEGRATION_REF` to an immutable integration commit; manual runs can override it.
-The read-only Actions secret `RFQ_INTEGRATION_READ_TOKEN` must grant `contents:read` access to the private
-`rfq-integration`, `rfq-backend`, and `rfq-indexer` repositories. Private-fixture jobs deliberately skip
-fork and Dependabot pull requests, where that secret is unavailable.
+vault-solver checkout as a named Docker context and runs the local profiles in one cache-reusing job.
+RFQ, LI.FI, and UniswapX each prove both direct-adapter settlement and a signed-discount settlement whose
+terms are published and resolved through the pinned production RFQ backend and indexer. The direct LI.FI and
+UniswapX cases run with that discount backend stopped. 3F and RedStone OEV
+prove their protocol outcome once. The gate excludes live APIs, browser frontends, forks, load, and recovery suites.
+Set `RFQ_INTEGRATION_REF` to an immutable integration commit.
+
+`RFQ_INTEGRATION_READ_TOKEN` needs `contents:read` for the private `rfq-integration`, `rfq-backend`, and
+`rfq-indexer` repositories. The private-checkout job skips fork and Dependabot pull requests, where Actions
+secrets are unavailable.
 
 To reproduce one job with sibling local checkouts:
 
 ```bash
-RFQ_INTEGRATION_DIR=../rfq-integration ./hack/integration-e2e.sh rfq smoke
+RFQ_INTEGRATION_DIR=../rfq-integration ./hack/integration-e2e.sh rfq
 ```
 
-Docker, Node/pnpm, and Foundry are required for this optional local gate. Failed CI jobs upload the
-Compose logs, generated configuration, deployment manifest, and container inspection.
+Docker and Git are required. Failed jobs upload Compose logs, generated configuration, and the deployment manifest.
 
 ## Configuration
 
