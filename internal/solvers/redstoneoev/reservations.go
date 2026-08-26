@@ -5,8 +5,6 @@ package redstoneoev
 import (
 	"slices"
 	"time"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 // reservedBid is one sent-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
@@ -16,7 +14,6 @@ type reservedBid struct {
 	nonce     uint64
 	at        time.Time
 	auctionID string
-	callback  common.Address
 	won       bool
 }
 
@@ -49,14 +46,13 @@ func (s *Solver) inFlightSnapshot() inFlightState {
 	return out
 }
 
-func (s *Solver) reserve(nonce uint64, now time.Time, callback common.Address, auctionID string) {
+func (s *Solver) reserve(nonce uint64, now time.Time, auctionID string) {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = append(s.res, reservedBid{
 		nonce:     nonce,
 		at:        now,
 		auctionID: auctionID,
-		callback:  callback,
 	})
 }
 

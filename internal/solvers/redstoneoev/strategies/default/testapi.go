@@ -39,7 +39,6 @@ func NewWithSnapshotForTest(
 		signer:        signer,
 		mon:           mon,
 		engine:        newBundleEngine(cfg, log),
-		maxAge:        cfg.MaxStateAge,
 		log:           log,
 	}
 }

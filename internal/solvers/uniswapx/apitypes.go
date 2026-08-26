@@ -30,31 +30,31 @@ type quoteResponse struct {
 }
 
 type orderPage struct {
-	Orders []orderEntry `json:"orders"`
-	Cursor string       `json:"cursor,omitempty"`
+	Orders []orderEntry
+	Cursor string
 }
 
 type orderEntry struct {
-	Type         string        `json:"type"`
-	EncodedOrder string        `json:"encodedOrder"`
-	Signature    string        `json:"signature"`
-	OrderHash    string        `json:"orderHash"`
-	OrderStatus  string        `json:"orderStatus"`
-	ChainID      int64         `json:"chainId"`
-	QuoteID      string        `json:"quoteId"`
-	Input        orderToken    `json:"input"`
-	Outputs      []orderOutput `json:"outputs"`
+	Type         string
+	EncodedOrder string
+	Signature    string
+	OrderHash    string
+	OrderStatus  string
+	ChainID      int64
+	QuoteID      string
+	Input        orderToken
+	Outputs      []orderOutput
 }
 
 type orderToken struct {
-	Token       string `json:"token"`
-	StartAmount string `json:"startAmount"`
-	EndAmount   string `json:"endAmount"`
+	Token       string
+	StartAmount string
+	EndAmount   string
 }
 
 type orderOutput struct {
-	Token       string `json:"token"`
-	StartAmount string `json:"startAmount"`
-	EndAmount   string `json:"endAmount"`
-	Recipient   string `json:"recipient"`
+	Token       string
+	StartAmount string
+	EndAmount   string
+	Recipient   string
 }

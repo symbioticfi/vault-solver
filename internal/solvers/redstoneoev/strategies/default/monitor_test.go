@@ -20,7 +20,7 @@ func TestCandidatePriceSource(t *testing.T) {
 
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
+			id: {Params: MarketParams{Oracle: oracle}, State: goldenMarket()},
 		},
 		prices: map[common.Hash]*big.Int{id: onchain},
 		quotes: map[common.Hash]AdapterQuote{
@@ -69,7 +69,7 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 	otherOracle := common.HexToAddress("0x00000000000000000000000000000000000000bb")
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
+			id: {Params: MarketParams{Oracle: oracle}, State: goldenMarket()},
 		},
 		quotes: map[common.Hash]AdapterQuote{
 			id: newQuote("1780000000000000000000", mustBig("100000000000")),
@@ -129,7 +129,7 @@ func TestMarketInfoFromAPI(t *testing.T) {
 	oracle := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	irm := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	lltv := mustBig("860000000000000000")
-	id, err := deriveMarketID(abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
+	id, err := deriveMarketID(MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
 	if err != nil {
 		t.Fatalf("deriveMarketID: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 	coll := common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78")
 	lltv := mustBig("860000000000000000")
 	mk := func(oracle common.Address, block, ts string) morphoMarket {
-		params := abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
+		params := MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
 		id, err := deriveMarketID(params)
 		if err != nil {
 			t.Fatalf("deriveMarketID: %v", err)

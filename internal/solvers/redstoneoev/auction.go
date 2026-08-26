@@ -110,14 +110,6 @@ func (s *Solver) handleBlacklisted(raw []byte) {
 	s.log.Error(errors.New("api key blacklisted"), "halting bidding", "msg", b.Data.Msg)
 }
 
-func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
-	a, start, ok := s.parseAuctionFrame(raw)
-	if !ok {
-		return
-	}
-	s.handleAuction(ctx, a, start)
-}
-
 func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool) {
 	start := time.Now()
 	var a AuctionMessage
@@ -172,7 +164,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 		s.log.Info("bid NOT sent (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
 		return
 	}
-	s.reserve(d.nonce, time.Now(), d.callback, a.ID)
+	s.reserve(d.nonce, time.Now(), a.ID)
 	s.metrics.bid()
 	s.log.Info("bid sent", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid)

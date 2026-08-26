@@ -43,7 +43,8 @@ type executable struct {
 	outputs      []backendOut
 }
 
-// executionService polls the backend for open orders and fills them via the Executor.
+// executionService polls the backend for open orders and fills them via the Executor. Its single
+// goroutine runs poll cycles and per-order work serially, including blocking transaction submission.
 type executionService struct {
 	chainID          int64
 	executor         common.Address
@@ -107,7 +108,7 @@ func (e *executionService) pollOpenOrders(ctx context.Context) error {
 	}
 	for i := range orders {
 		o := &orders[i]
-		e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID})
+		e.store.upsertQueued(queuedOrder{OrderID: o.OrderID})
 	}
 	if len(orders) > 0 {
 		e.log.V(1).Info("polled open orders", "count", len(orders))
@@ -116,24 +117,18 @@ func (e *executionService) pollOpenOrders(ctx context.Context) error {
 }
 
 func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
-	switch o.Status {
-	case statusQueued, statusSubmitting:
+	if o.Status == statusQueued || o.Status == statusSubmitting {
 		e.submitOrder(ctx, o.OrderID)
-	case statusSubmitted:
+	}
+	if o.Status == statusSubmitted {
 		e.reconcileTerminalStatus(ctx, o.OrderID)
-	case statusFilled, statusExpired, statusFailed:
-		// terminal — nothing to do
 	}
 }
 
 func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	e.store.markStatus(orderID, statusSubmitting, common.Hash{}, "")
-	local := e.store.order(orderID)
-	if local == nil {
-		return
-	}
 
-	exec, err := e.resolveExecutable(ctx, local)
+	exec, err := e.resolveExecutable(ctx, orderID)
 	if err != nil {
 		e.log.Error(err, "resolve executable order", "orderId", orderID)
 		return // transient; retried next cycle
@@ -215,8 +210,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
-func (e *executionService) resolveExecutable(ctx context.Context, local *orderRecord) (*executable, error) {
-	bo, err := e.backend.getExecutableOrder(ctx, local.OrderID, lowerAddr(e.executor))
+func (e *executionService) resolveExecutable(ctx context.Context, orderID string) (*executable, error) {
+	bo, err := e.backend.getExecutableOrder(ctx, orderID, lowerAddr(e.executor))
 	if err != nil {
 		return nil, err
 	}

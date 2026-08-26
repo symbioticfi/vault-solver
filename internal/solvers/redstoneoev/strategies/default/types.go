@@ -24,8 +24,6 @@ type MarketParams struct {
 	Lltv            *big.Int
 }
 
-type abiMarketParams = MarketParams
-
 // MarketInfo is a Morpho market's params plus its state snapshot.
 type MarketInfo struct {
 	Params MarketParams

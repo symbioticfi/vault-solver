@@ -253,7 +253,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	market := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	info := MarketInfo{
-		Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll, Lltv: mustBig("500000000000000000")},
+		Params: MarketParams{LoanToken: tokenA, CollateralToken: coll, Lltv: mustBig("500000000000000000")},
 		State: morpho.MarketState{
 			TotalSupplyAssets: mustBig("5000000000"),
 			TotalSupplyShares: mustBig("5000000000"),
@@ -336,7 +336,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 	if len(b.legs) != 1 || b.legs[0].Borrower[19] != 2 {
 		t.Fatalf("selected borrowers = %+v, want only lower-gross acquire leg", b.legs)
 	}
-	if got := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
+	if got := engine.bundleNetNativeForFeeds(b, morpho.Wad, laneState, big.NewInt(1), defaultPriceUpdateFeeds); got.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", got)
 	}
 
@@ -426,7 +426,7 @@ func TestSelectNetBundleSharesBaseGasAcrossLegs(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d legs, want 2", len(b.legs))
 	}
-	if got := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
+	if got := engine.bundleNetNativeForFeeds(b, morpho.Wad, laneState, big.NewInt(1), defaultPriceUpdateFeeds); got.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", got)
 	}
 }
@@ -460,7 +460,7 @@ func TestSelectNetBundleSearchesPastGreedyBudgetTrap(t *testing.T) {
 	if len(b.legs) != 2 || got[1] || !got[2] || !got[3] {
 		t.Fatalf("selected borrowers = %v (legs=%d), want {2,3}", got, len(b.legs))
 	}
-	if gotNet := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); gotNet.Cmp(big.NewInt(1)) < 0 {
+	if gotNet := engine.bundleNetNativeForFeeds(b, morpho.Wad, laneState, big.NewInt(1), defaultPriceUpdateFeeds); gotNet.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", gotNet)
 	}
 }

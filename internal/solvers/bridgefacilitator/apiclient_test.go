@@ -13,7 +13,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 )
@@ -46,7 +45,7 @@ func TestAPIClientListAuctions(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard())
+	client := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second)
 	got, err := client.listAuctions(t.Context())
 	if err != nil {
 		t.Fatalf("listAuctions: %v", err)
@@ -70,7 +69,7 @@ func TestAPIClient_ListOffers_SignedPerAdapter(t *testing.T) {
 	defer srv.Close()
 
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000042")
-	ac := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), 5*time.Second, logr.Discard())
+	ac := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), 5*time.Second)
 	if _, err := ac.listOffers(context.Background(), adapter); err != nil {
 		t.Fatalf("listOffers: %v", err)
 	}

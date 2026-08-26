@@ -14,8 +14,6 @@ import (
 
 const Name = "default"
 
-type Config struct{}
-
 type Strategy struct{}
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
@@ -24,8 +22,7 @@ func init() {
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
-	var cfg Config
-	if err := solver.DecodeStrict(raw, &cfg); err != nil {
+	if err := solver.DecodeStrict(raw, &struct{}{}); err != nil {
 		return nil, err
 	}
 	return New(), nil

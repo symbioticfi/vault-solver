@@ -80,7 +80,7 @@ func TestSizeLegAllowsFullBadDebtSeize(t *testing.T) {
 		Lltv: lltv, BorrowRatePerSec: big.NewInt(0), Fee: big.NewInt(0), LastUpdate: assignNowTs}
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 9},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: collateral},
 	}
 	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)
@@ -153,7 +153,7 @@ var assignMarketID = common.HexToHash("0x6209dbd022c20923c071d7183d7a9729a755961
 // tokenA), so the sizing tests can size real legs at a given adapter quote.
 func sizeFixture() (SizingParams, func(b byte) Candidate, *big.Int) {
 	sp := SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0}
-	info := MarketInfo{Params: abiMarketParams{LoanToken: tokenA}, State: goldenMarket()}
+	info := MarketInfo{Params: MarketParams{LoanToken: tokenA}, State: goldenMarket()}
 	cand := func(b byte) Candidate {
 		var addr common.Address
 		addr[19] = b
@@ -235,7 +235,7 @@ func TestSizeLegClampsSeizeToDebt(t *testing.T) {
 	coll18 := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 1},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: coll},
 	}
 	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)
@@ -284,7 +284,7 @@ func TestSizeLegSkipsDustPosition(t *testing.T) {
 	coll18 := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 3},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: coll},
 	}
 	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)

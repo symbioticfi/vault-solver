@@ -10,7 +10,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/signer"
@@ -27,10 +26,9 @@ type apiClient struct {
 	c       *threef.APIClient
 	sgnr    signer.Signer
 	chainID *big.Int // operating chain; the grunt-api signing domain and the listOffers chainId query
-	log     logr.Logger
 }
 
-func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration, log logr.Logger) *apiClient {
+func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration) *apiClient {
 	cfg := threef.NewConfiguration()
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
@@ -40,7 +38,6 @@ func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout 
 		c:       threef.NewAPIClient(cfg),
 		sgnr:    sgnr,
 		chainID: chainID,
-		log:     log,
 	}
 }
 

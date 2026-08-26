@@ -553,7 +553,7 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, a.ID)
+	s.reserve(d1.nonce, time.Unix(1781243340, 0), a.ID)
 
 	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
 		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
@@ -577,9 +577,9 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-8")
-	s.reserve(10, now, seedCallback, "auction-10")
-	s.reserve(12, now.Add(-time.Hour), seedCallback, "auction-old")
+	s.reserve(8, now, "auction-8")
+	s.reserve(10, now, "auction-10")
+	s.reserve(12, now.Add(-time.Hour), "auction-old")
 
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
@@ -588,7 +588,7 @@ func TestPruneReservations(t *testing.T) {
 		t.Fatalf("all reservations should be freed, got pending=%v", inFlight.pending)
 	}
 
-	s.reserve(11, now, seedCallback, "auction-11")
+	s.reserve(11, now, "auction-11")
 	s.pruneReservations(10, now)
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-11" {
 		t.Fatalf("a recent pending bid should be kept, got pending=%v", inFlight.pending)
@@ -604,7 +604,7 @@ func TestPruneReservations(t *testing.T) {
 func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-won")
+	s.reserve(8, now, "auction-won")
 	s.markReservationWon("auction-won")
 
 	s.pruneReservations(7, now.Add(2*time.Minute))
@@ -616,7 +616,7 @@ func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-lost")
+	s.reserve(8, now, "auction-lost")
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
@@ -627,7 +627,7 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 		t.Fatalf("lost auction must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-won")
+	s.reserve(9, now, "auction-won")
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-won",
@@ -641,7 +641,7 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-ours")
+	s.reserve(8, now, "auction-ours")
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
@@ -652,7 +652,7 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 		t.Fatalf("our liquidation result must release reservation, pending=%v", inFlight.pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-other")
+	s.reserve(9, now, "auction-other")
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-other",
@@ -683,7 +683,7 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	now := time.Unix(1781243340, 0)
 
 	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
-	s.reserve(8, now, seedCallback, "auction-8")
+	s.reserve(8, now, "auction-8")
 	s.nonces.reconcile(5)
 	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
 		t.Fatal("precondition: the reservation should be present")
@@ -872,6 +872,14 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 	}
 }
 
+func handleAuctionSynchronously(ctx context.Context, s *Solver, raw []byte) {
+	a, start, ok := s.parseAuctionFrame(raw)
+	if !ok {
+		return
+	}
+	s.handleAuction(ctx, a, start)
+}
+
 // TestDryRunSuppressesSend pins configured observe mode: a profitable auction is fully evaluated
 // (counted as a would-bid via metrics.bid()) but NO solve is sent on the wire — the operator can watch the
 // bot's decisions against a live feed without funding or competing.
@@ -891,7 +899,7 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	setAuctionPrice(&a, seedLiquidatablePrice)
 	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
 	setSnapshotBlockTime(t, s, a.Timestamp)
-	s.handleAuctionWithContext(t.Context(), marshal(a))
+	handleAuctionSynchronously(t.Context(), s, marshal(a))
 
 	if f := drainSend(s); f != nil {
 		t.Fatalf("dry-run must not send a solve, got %s", f)
@@ -949,7 +957,7 @@ func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	if f := drainSend(s); f != nil {
 		t.Fatalf("precondition: send channel should be empty, got %s", f)
 	}
-	s.handleAuctionWithContext(t.Context(), marshal(a))
+	handleAuctionSynchronously(t.Context(), s, marshal(a))
 	if f := drainSend(s); f != nil {
 		t.Fatalf("empty-id auction must be ignored, got solve %s", f)
 	}

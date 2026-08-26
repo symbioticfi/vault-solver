@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
@@ -21,6 +22,43 @@ func testAdapter(id byte, fundable int64) types.AdapterSnapshot {
 		MaxAssets:     big.NewInt(fundable),
 		MinAssets:     new(big.Int),
 		MaxConcurrent: 50,
+	}
+}
+
+func TestNewFromConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     yaml.Node
+		wantErr bool
+	}{
+		{name: "absent"},
+		{name: "empty", raw: yaml.Node{Kind: yaml.MappingNode}},
+		{
+			name: "unknown key",
+			raw: yaml.Node{
+				Kind: yaml.MappingNode,
+				Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Value: "unexpected"},
+					{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewFromConfig(tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("NewFromConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if _, ok := got.(*Strategy); !ok {
+				t.Fatalf("NewFromConfig() = %T, want *Strategy", got)
+			}
+		})
 	}
 }
 

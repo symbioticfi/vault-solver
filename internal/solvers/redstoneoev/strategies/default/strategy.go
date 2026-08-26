@@ -36,7 +36,6 @@ type Strategy struct {
 	engine        bundleEngine
 	state         decisionStateCache
 	reservations  decisionReservations
-	maxAge        time.Duration
 	log           logr.Logger
 }
 
@@ -127,7 +126,6 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		chainID:       big.NewInt(deps.ChainID),
 		mon:           mon,
 		engine:        newBundleEngine(cfg, deps.Log),
-		maxAge:        cfg.MaxStateAge,
 		log:           deps.Log,
 	}, nil
 }
@@ -190,11 +188,11 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return skipBid(skipNoLegs), nil
 	}
 	snap := s.mon.snapshot()
-	if snap == nil || (s.maxAge > 0 && input.Now.Sub(snap.updatedAt) > s.maxAge) {
+	if snap == nil || (s.cfg.MaxStateAge > 0 && input.Now.Sub(snap.updatedAt) > s.cfg.MaxStateAge) {
 		return skipBid(skipStaleState), nil
 	}
 	st, ok := s.state.load()
-	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
+	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.cfg.MaxStateAge) {
 		return skipBid(skipStaleState), nil
 	}
 	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {

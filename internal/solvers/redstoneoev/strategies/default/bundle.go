@@ -338,10 +338,6 @@ func (b chosenBundle) selectedLegs() []selectedLeg {
 	return out
 }
 
-func (e bundleEngine) bundleNetNative(b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int) *big.Int {
-	return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, defaultPriceUpdateFeeds)
-}
-
 func (e bundleEngine) bundleNetNativeForFeeds(b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, feedCount int) *big.Int {
 	grossNative := loanToNative(b.grossLoan, rate)
 	gasUnits := predictGasForFeeds(legHints(b.legs), laneState, feedCount).Units

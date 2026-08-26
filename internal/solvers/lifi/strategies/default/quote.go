@@ -47,20 +47,20 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		inventory := liquidgreedy.AllocateInventoryCapacity(
 			groups[key],
 			input.Reservations,
-			s.cfg.InventoryReserveBps,
+			s.inventoryReserveBps,
 		)
 		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 		for _, item := range inventory {
 			candidate := liquidgreedy.NewQuoteCandidate(
 				item,
-				liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
+				liquidgreedy.QuoteCapacity(item, s.priceBufferBps),
 			)
 			if candidate != nil {
 				candidates = append(candidates, *candidate)
 			}
 		}
 		pricing, err := liquidstrategies.NewGasPricing(
-			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.cfg.InventoryReserveBps,
+			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.inventoryReserveBps,
 			types.LiquidLaneGasEnvelope(),
 		)
 		if err != nil {

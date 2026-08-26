@@ -195,7 +195,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
@@ -248,7 +248,7 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 	if txm.lastReq.Data != nil {
 		t.Fatal("fill was admitted after its chain deadline elapsed")
 	}
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed ||
 		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
 		t.Fatalf("status = %+v, want deadline failure", rec)
@@ -284,7 +284,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 	if len(txm.lastReq.Data) != 0 {
@@ -299,7 +299,7 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 }
@@ -323,7 +323,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -372,7 +372,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -408,7 +408,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
@@ -425,7 +425,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if be.resolveCalls != 2 {
 		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
 	}
-	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec = testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -490,7 +490,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
 	if txm.lastReq.Data != nil {

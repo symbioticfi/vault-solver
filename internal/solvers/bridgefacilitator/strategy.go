@@ -16,11 +16,7 @@ import (
 )
 
 func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	name := spec.Name
-	if name == "" {
-		name = defaultStrategyName
-	}
-	return strategies.New(name, spec.Config)
+	return strategies.New(spec.Name, spec.Config)
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.

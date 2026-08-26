@@ -514,7 +514,7 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 		"orderId", order.OrderID,
 		"onChainOrderId", order.OnChainOrderID,
 		"quoteId", order.QuoteID,
-		"inputSettler", order.InputSettler.Hex(),
+		"inputSettler", s.cfg.InputSettler.Hex(),
 		"tokenIn", order.TokenIn.Hex(),
 		"tokenOut", order.TokenOut.Hex(),
 		"amountIn", bigString(order.AmountIn),

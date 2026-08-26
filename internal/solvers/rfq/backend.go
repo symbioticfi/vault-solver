@@ -18,24 +18,15 @@ import (
 // they are copied here only when present (nil ⇒ absent), preserving the executable-payload nil checks
 // in execution.go.
 type backendOrder struct {
-	Type              string
 	OrderID           string
 	OrderStatus       string
 	QuoteID           string
-	Swapper           string
 	TxHash            *string
-	Nonce             string
-	Input             backendToken
 	Outputs           []backendOut
 	EncodedOrder      *string
 	ProtocolSignature *string
 	Deadline          *int64
 	Filler            *string
-}
-
-type backendToken struct {
-	Token  string
-	Amount string
 }
 
 type backendOut struct {
@@ -131,16 +122,9 @@ func ordersFromResponse(resp *rfqbackend.OrdersResponse) []backendOrder {
 
 func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
 	bo := backendOrder{
-		Type:        o.GetType(),
 		OrderID:     o.GetOrderId(),
 		OrderStatus: o.GetOrderStatus(),
 		QuoteID:     o.GetQuoteId(),
-		Swapper:     o.GetSwapper(),
-		Nonce:       o.GetNonce(),
-		Input: backendToken{
-			Token:  o.Input.GetToken(),
-			Amount: o.Input.GetAmount(),
-		},
 	}
 	// txHash is a nullable string in the schema; copy through whatever the backend reported (including
 	// an explicit null) so reconcileTerminalStatus can validate it.

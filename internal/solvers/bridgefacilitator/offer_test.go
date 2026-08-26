@@ -19,7 +19,7 @@ func TestBuildSignedOffer(t *testing.T) {
 		cfg:  &Config{OfferExpiryBuffer: time.Hour},
 		deps: solver.Deps{Signer: fakeSigner{}},
 	}
-	s.nonceSeq.Store(41)
+	s.nonceSeq = 41
 
 	dto, err := s.buildSignedOffer(auction, strategytypes.OfferExecution{
 		AuctionID: 7, Request: request, Maker: maker,

@@ -33,11 +33,11 @@ type Config struct {
 }
 
 type Strategy struct {
-	cfg Config
-
-	minAmount       *big.Int
-	rangeCount      int
-	executionBuffer time.Duration
+	priceBufferBps      int
+	inventoryReserveBps int
+	minAmount           *big.Int
+	rangeCount          int
+	executionBuffer     time.Duration
 }
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
@@ -88,6 +88,10 @@ func New(cfg Config) (*Strategy, error) {
 		return nil, err
 	}
 	return &Strategy{
-		cfg: cfg, minAmount: minAmount, rangeCount: rangeCount, executionBuffer: executionBuffer,
+		priceBufferBps:      cfg.PriceBufferBps,
+		inventoryReserveBps: cfg.InventoryReserveBps,
+		minAmount:           minAmount,
+		rangeCount:          rangeCount,
+		executionBuffer:     executionBuffer,
 	}, nil
 }

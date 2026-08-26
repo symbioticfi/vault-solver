@@ -8,7 +8,6 @@ import (
 	"context"
 	"math/big"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -50,9 +49,9 @@ type Solver struct {
 	laneReady  func() bool    // shared txmanager lane state; safe for the single Run goroutine
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
 	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
-	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
-	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	nonceSeq   uint64         // wall-clock-seeded offer nonce; owned exclusively by the Run goroutine
+	offers     *offerTracker  // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets    []Target       // current resolved snapshot; owned exclusively by the Run goroutine
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -74,7 +73,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
-	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout, deps.Log.WithName(Name))
+	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout)
 	offerStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
@@ -98,7 +97,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		offers:     newOfferTracker(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
-	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
+	s.nonceSeq = uint64(time.Now().UnixNano())
 	return s, nil
 }
 
@@ -334,6 +333,12 @@ func (s *Solver) reconcile(ctx context.Context) {
 		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
 			"openRequests", st.openCount, "fundable", st.fundable.String())
 	}
+}
+
+// nextNonce returns a strictly-increasing offer nonce.
+func (s *Solver) nextNonce() uint64 {
+	s.nonceSeq++
+	return s.nonceSeq
 }
 
 // refreshTargets builds and validates a complete adapter snapshot before installing it. A returned

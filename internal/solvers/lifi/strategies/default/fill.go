@@ -56,7 +56,7 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		input.TokenOut,
 		input.GasPrices,
 		input.GasSnapshot,
-		s.cfg.InventoryReserveBps,
+		s.inventoryReserveBps,
 		types.LiquidLaneGasEnvelope(),
 	)
 	if err != nil {
@@ -65,8 +65,8 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	allocation, err := liquidgreedy.SolveFill(liquidgreedy.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
-		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
-		InventoryReserveBps: s.cfg.InventoryReserveBps,
+		MaxRoutes: maxRoutes, PriceBufferBps: s.priceBufferBps,
+		InventoryReserveBps: s.inventoryReserveBps,
 		GasPricing:          &gasPricing,
 		Trace:               input.Trace,
 	})

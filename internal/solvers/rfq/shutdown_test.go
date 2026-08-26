@@ -86,7 +86,7 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 		t.Fatal("Run did not return after the accepted transaction completed")
 	}
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusSubmitted || rec.TxHash != wantHash {
 		t.Fatalf("order after shutdown drain = %+v, want submitted with tx %s", rec, wantHash.Hex())
 	}
@@ -157,7 +157,7 @@ func TestRunReportsListenerFailureBeforeDrainingAcceptedExecution(t *testing.T) 
 		t.Fatal("Run did not return after accepted execution completed")
 	}
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusSubmitted || rec.TxHash != wantHash {
 		t.Fatalf("order after listener-failure drain = %+v, want submitted with tx %s", rec, wantHash.Hex())
 	}

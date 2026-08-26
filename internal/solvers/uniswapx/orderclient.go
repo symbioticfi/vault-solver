@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -28,7 +27,7 @@ const (
 type orderClient struct {
 	client *uniswapxservice.APIClient
 
-	requestMu   sync.Mutex
+	// Run calls the client during startup before handing sole ownership to orderLoop.
 	lastRequest time.Time
 	requestGap  time.Duration
 }
@@ -118,11 +117,6 @@ func (c *orderClient) ordersByHash(
 		end := min(start+maxOrderHashBatch, len(hashes))
 		if err := c.fetchOrderHashBatch(ctx, chainID, hashes[start:end], terminals); err != nil {
 			return nil, err
-		}
-	}
-	for hash := range requested {
-		if _, ok := terminals[hash]; !ok {
-			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
 		}
 	}
 	return terminals, nil
@@ -390,8 +384,6 @@ func (r *errorLimitReader) Read(data []byte) (int, error) {
 }
 
 func (c *orderClient) waitForRequestSlot(ctx context.Context) error {
-	c.requestMu.Lock()
-	defer c.requestMu.Unlock()
 	if c.requestGap <= 0 {
 		return nil
 	}

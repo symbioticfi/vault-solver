@@ -42,7 +42,7 @@ func (s *Solver) buildSignedOffer(
 		domainVersion = *v
 	}
 
-	nonce := new(big.Int).SetUint64(s.nonceSeq.Add(1))
+	nonce := new(big.Int).SetUint64(s.nextNonce())
 	expiration := offerExpiration(av, s.cfg.OfferExpiryBuffer, time.Now())
 
 	signedOffer := Offer{
