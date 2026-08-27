@@ -33,7 +33,8 @@
     },
     "duration": {
       "type": "string",
-      "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$"
+      "minLength": 2,
+      "description": "Go duration such as 450ms, 1.5s, or 1h30m"
     },
     "decimalInteger": {
       "type": "string",

@@ -43,6 +43,34 @@ solvers:
 	}
 }
 
+func TestValidateConfigFileDoesNotResolveWebhookSecretEnv(t *testing.T) {
+	t.Setenv("MISSING_WEBHOOK_SECRET", "")
+	path := writeConfigFile(t, `
+chain:
+  rpcUrl: https://rpc.example
+  chainId: 1
+signer:
+  keyEnv: TEST_PRIVATE_KEY
+txManager:
+  maxFeeGwei: 50
+solvers:
+  - name: 3f-bridge-facilitator
+    config:
+      apiBaseUrl: https://3f.example
+      adapterFactory: "0x1111111111111111111111111111111111111111"
+      strategy:
+        name: webhook
+        config:
+          url: https://strategy.example
+          headers:
+            Authorization:
+              env: MISSING_WEBHOOK_SECRET
+`)
+	if err := validateConfigFile(path); err != nil {
+		t.Fatalf("validateConfigFile() resolved a secret or rejected its env reference: %v", err)
+	}
+}
+
 func TestValidateConfigFileRejectsUnknownStrategy(t *testing.T) {
 	path := writeConfigFile(t, `
 chain:

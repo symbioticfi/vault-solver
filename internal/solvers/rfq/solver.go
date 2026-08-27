@@ -44,7 +44,7 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if _, err := newStrategy(cfg.Strategy); err != nil {
+	if err := validateStrategyConfig(cfg.Strategy); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil

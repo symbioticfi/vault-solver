@@ -19,6 +19,10 @@ func newStrategy(spec StrategyConfig) (types.Strategy, error) {
 	return strategies.New(spec.Name, spec.Config)
 }
 
+func validateStrategyConfig(spec StrategyConfig) error {
+	return strategies.Validate(spec.Name, spec.Config)
+}
+
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
 func buildStrategyInput(
 	auctions []threef.AuctionDto,

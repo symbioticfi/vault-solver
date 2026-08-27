@@ -36,7 +36,12 @@ type Strategy struct {
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, NewFromConfig)
+	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, ValidateConfig: ValidateConfig})
+}
+
+func ValidateConfig(raw yaml.Node) error {
+	_, err := NewFromConfig(raw)
+	return err
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {

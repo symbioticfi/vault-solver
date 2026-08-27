@@ -15,6 +15,10 @@ func newStrategy(spec StrategyConfig) (types.Strategy, error) {
 	return strategies.New(spec.Name, spec.Config)
 }
 
+func validateStrategyConfig(spec StrategyConfig) error {
+	return strategies.Validate(spec.Name, spec.Config)
+}
+
 // solverInventory is one LiquidLane candidate leg; RFQ maps backend adapter snapshots and fill-time
 // recovery reads into the shared LiquidLane inventory shape.
 type solverInventory = liquidlane.Inventory

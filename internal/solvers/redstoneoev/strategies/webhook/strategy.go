@@ -27,11 +27,7 @@ func init() {
 }
 
 func ValidateConfig(raw yaml.Node, _ strategies.ValidationDeps) error {
-	cfg, err := webhook.ParseConfig(raw)
-	if err != nil {
-		return err
-	}
-	_, err = webhook.NewClient(cfg)
+	_, err := webhook.ParseConfig(raw)
 	return err
 }
 

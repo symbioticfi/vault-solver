@@ -30,6 +30,8 @@ remains its symlink, as requested.
 ## Tripwires that paid off
 
 - Full example validation exposed non-parsing LI.FI zero-address and RFQ ellipsis placeholders.
+- Final review found that constructing webhook strategies during offline validation resolved env-backed secret
+  headers. Strategy registries now expose separate pure validators, pinned by a missing-secret regression test.
 - Repeating registry tests exposed package-global test state that survived `go test -count=10`; tests now
   isolate that state without changing assertions.
 - AST declaration comparisons proved all 24 LiquidLane, 21 LI.FI, 81 txmanager production, and 105 txmanager
