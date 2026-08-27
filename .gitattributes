@@ -1,0 +1,9 @@
+api/abi/** linguist-vendored=true
+api/bindings/** linguist-generated=true
+api/threef/** linguist-generated=true
+api/rfqbackend/** linguist-generated=true
+api/lifiorder/** linguist-generated=true
+api/uniswapxservice/** linguist-generated=true
+api/morphographql/generated.go linguist-generated=true
+api/morphographql/operations.json linguist-generated=true
+openapi/** linguist-vendored=true

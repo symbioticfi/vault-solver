@@ -896,11 +896,6 @@ still requires the redeploy in phase 0.
   therefore requires `meta.onChainOrderId` and relies on the full escrow order plus canonical on-chain
   `Deposited` status. We do not support gasless
   Compact or permit2/3009 opening.
-- **Wire schemas: RESOLVED** — the live order-server OpenAPI is valid 3.1, vendored at
-  `openapi/lifi-order.openapi.json`, and generates `api/lifiorder` directly without a normalization shim.
-  The WebSocket `user:vm-order-submit` event is outside the OpenAPI; the confirmed dev connection uses
-  `wss://order-dev.li.fi`, `x-api-key`, and application-level `ping`/`pong`. Its opened-order payload and
-  optional `quoteId` behavior are captured in §5.1.
 - **Full process-crash recovery** — startup/reconnect order discovery is recovered from `GET /orders`,
   but accepted transaction attempts and their capacity reservations are still process memory. Before
   claiming crash-safe operation, persist/reconcile the order-to-transaction identity and reservation
@@ -910,13 +905,6 @@ still requires the redeploy in phase 0.
 - **Adapter filler registration** — our executor must be granted filler rights on each LiquidLane
   adapter (`setFiller(executor, true)` / equivalent owner path), by the adapter's vault creator.
   Onboarding prereq.
-- **Sepolia testnet adapter — resolved (v1 dev route).** The redstone-oev testbed provides a usable
-  Sepolia LiquidLane adapter: `0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b` (vault
-  `0xb99F1FeA50f40Bb7C5E568c2De6D79dd0b61EB3A`), redeeming **TCOL** `0x17e892d4E802B01d7DA49Ca3542560f6851AA4D3`
-  (RWA) → **TLOAN** `0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d` (underlying). v1 same-chain route =
-  TCOL→TLOAN on Ethereum Sepolia. Confirm the exact `tokenToRedeem`/underlying and that direct redemption
-  (not only the OEV-seizure path) is permitted, via adapter reads. **Filler auth:** the testbed owner
-  `0x812492C36b003837C30cB0B63960b86eC9B27309` grants our executor `isFiller` on the adapter.
 - **v1 scope** — TCOL→TLOAN on Sepolia for dev; the mainnet RWA↔underlying adapter(s)/token(s)/chain(s)
   are a launch decision once the Sepolia loop is proven.
 - **Reputation thresholds** — the numeric fill-rate/speed cutoffs that gate exclusive orders are

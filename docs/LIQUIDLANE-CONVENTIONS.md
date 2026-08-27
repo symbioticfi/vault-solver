@@ -1,7 +1,7 @@
 # LiquidLane conventions
 
 LiquidLane is shared liquidity infrastructure, not a solver. This document is the compact standard for
-RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
+RFQ, LI.FI, OEV, UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
 
 ## Ownership
 

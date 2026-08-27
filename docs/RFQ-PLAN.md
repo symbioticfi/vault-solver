@@ -366,7 +366,9 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
   Keep it that way — don't add per-quote chain reads outside that one multicall.
 
-### Parity with the current TS filler
+---
+
+## 6. Reference parity and deliberate divergences
 
 **Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
 permissioned-scope single-route constraint described above.** The
@@ -444,7 +446,7 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
   is nothing to port; tracing is out of scope unless fleet-wide tracing is later required.
 
-### Backend OpenAPI spec (vendored)
+## 7. Backend OpenAPI contract
 
 The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generated at runtime). It is
 vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is

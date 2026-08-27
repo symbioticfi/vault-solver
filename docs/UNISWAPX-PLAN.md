@@ -771,30 +771,27 @@ in the owning repository and the integration harness pins the resulting revision
 
 Tracked operational and onboarding steps — **update as items start/finish/drop** (CLAUDE.md plan-sync).
 
+Confirmed onboarding facts are kept outside the live checklist: declines use HTTP 204; new integrations poll
+`GET /orders` rather than receive webhooks; Ethereum quote responses are limited to 500ms, expected quote
+traffic is about 1 RPS, and order polling is capped at 6 RPS; `uniswapx-tool` is public; and the upstream
+order-service 2.0.0 spec is vendored. The quote-parameterization schema and exact onboarding auth remain open.
+
 ### 10.1 Confirm with Uniswap (Henrique / Andrey) — blockers to going live
 - [ ] **Testnet posture:** the SDK maps a Sepolia Dutch V2 reactor (`0x0e22B6…BEBcd`, §3.2), while public
       quoter onboarding targets mainnet/Beta. Confirm whether Sepolia settlement remains supported and
       whether any testnet quote/order service exists.
 - [ ] **Quote-webhook auth scheme** — exact header/secret (no signed scheme in source; FAQ publishes fixed
       RFQ source IPs to whitelist: Beta `3.135.148.114`, Prod `3.138.88.28`).
-- [x] **Decline status code:** empty HTTP `204`, per the current Become a Quoter guide.
-- [x] **Order delivery:** RESOLVED — order webhooks are **deprecated for new integrations** (Filler FAQ);
-      delivery is **poll-only, `GET /orders` at ≤6 RPS**. Residual TODO: confirm poll auth + exact
-      rate-limit enforcement at onboarding.
+- [ ] **Order-poll authentication and exact rate-limit enforcement** for onboarding.
 - [ ] **Quote-webhook registration** — how we register our quote URL, filler addr, `chainIds`,
       exclusive-filler status (the `WebhookConfiguration` is S3/Uniswap-provisioned).
 - [ ] **Live chain matrix** for RFQ quoting and the order versions enabled for our onboarding account.
 - [ ] **Real order flow for our assets** — is there meaningful RFQ flow for *our* vault collaterals on
       mainnet? (Determines whether quoting is worth it before the secondary-DEX hop.)
-- [x] **Published limits:** quote response ≤500ms on Ethereum and ≤250ms on other chains; quote traffic is
-      expected at about 1 RPS on Ethereum; order polling is capped at 6 RPS.
-- [x] **`uniswapx-tool` source access:** the repository is public. Any separate reference quoter or private
-      onboarding artifact still needs to be requested explicitly.
 - [ ] **Captured real Beta quote-request payloads / a recording** to replay in CI (makes Layer-1 testing
       bit-for-bit faithful instead of schema-faithful).
-- [x] **Order-service spec** — upstream GitHub `swagger.json` version 2.0.0 is vendored and generates the
-      current typed Dutch V2 response. Confirm separately whether a spec exists for the
-      parameterization-api (quote) surface.
+- [ ] **Quote parameterization spec** — confirm whether a machine-readable contract exists for the quote
+      request/response surface.
 
 ### 10.2 Onboarding
 - [ ] Submit the quoter intake form: **https://developers.uniswap.org/quoter**.

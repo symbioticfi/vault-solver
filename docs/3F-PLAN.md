@@ -1,13 +1,11 @@
 # vault-solver — Implementation Plan (v0)
 
-> A Go service that monitors a configured selection of Symbiotic vaults and runs a
-> pluggable **solver** strategy against them. The first (and currently only) solver
-> implementation is the **3F Bridge Facilitator** off-chain bot. The repository is
-> structured so additional solver implementations can be added later without
-> touching the generic framework.
+> The **3F Bridge Facilitator** integration for the multi-solver `vault-solver` service.
+> It remains self-contained under `internal/solvers/bridgefacilitator` and shares only
+> the generic framework with other integrations.
 
-This document is the source of truth for the build. It captures the agreed scope,
-architecture, and decisions. See `3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
+This document is the source of truth for 3F scope, architecture, decisions, and open work. See
+`3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
 repo root) §4 for the functional blueprint of the 3F solver.
 
 ---
@@ -354,11 +352,8 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 - **Signed-payload API contract** — confirm with 3F the exact request shape for creating *and listing*
   offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
   and that 3F verifies offer creation via the adapter's EIP-1271 `isValidSignature`.
-- Filtering to adapters our key is authorized to sign for is settled: the adapter's ERC-1271
-  `isValidSignature` probe (§8), reused across factory-discovery ticks.
 - Mainnet `RequestWhitelist` address and prod API base URL — operational onboarding inputs supplied by
   3F; the bot discovers adapter instances from their factory and does not configure the whitelist itself.
-- Go module path (`github.com/symbioticfi/vault-solver` placeholder) — adjust to the real org.
 
 ---
 
@@ -367,14 +362,8 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
-- **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
-- **(done) Dynamic adapter discovery.** When `adapters` is omitted, every entry in the configured
-  `IAdapterFactory` is enumerated at startup and before each discovery pass, subject to a hard 2,000-entry
-  limit that errors above it. When `adapters` is present, only that explicit list is used. Either source
-  is filtered to adapters whose non-zero vault/asset resolve and that authorize this solver's signer via
-  the adapter's ERC-1271 `isValidSignature` (**not** an address match; EOA or contract signer).
 - **Custom offer pricing/scoring.** The default local strategy bids at the lowest partial-safe yield
   permitted by the adapter floor and auction cap, and sizes by `getMaxAssets` headroom plus adapter
   per-request limits. Operators that need spread, risk-adjusted target rate, time-in-auction, or

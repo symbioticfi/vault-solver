@@ -3,6 +3,17 @@
 This file is the source of truth for how code is written here. Read it before making changes.
 It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 
+## Agent quick start
+
+1. Run `git status --short --branch`; preserve unrelated work and never rewrite it to make the tree clean.
+2. Resolve the subsystem through [`docs/README.md`](docs/README.md) and read its linked contract before editing.
+3. Search `internal/`, `cmd/`, `config/`, and `docs/` first. Include `api/` only for generated-contract work.
+4. Never hand-edit generated Go. Change the vendored ABI/spec/schema and regenerate through `make`.
+5. Iterate with `make verify-fast TARGET=...` or `make verify-race TARGET=...`; finish with
+   `make format && make verify`.
+6. Update a plan for architecture, external-contract, or open-work changes; update README only for
+   operator-visible behavior or configuration.
+
 ## Purpose
 
 `vault-solver` is a Go service that monitors a configured selection of **Symbiotic vaults** and runs a
@@ -13,8 +24,8 @@ The first implementation was the **3F (Grunt) Bridge Facilitator**. The service 
 **RFQ, RedStone OEV, LI.FI, and UniswapX** without coupling those integrations to the generic framework.
 Keeping that boundary clean is the single most important design goal.
 
-See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`, `docs/OEV-PLAN.md`,
-`docs/LIFI-PLAN.md`, and `docs/UNISWAPX-PLAN.md`) for the architecture, decisions, and live TODO lists.
+Start at [`docs/README.md`](docs/README.md) for the package-to-plan map, focused verification commands,
+and the shared architecture contracts.
 
 ## The modularity rule (most important)
 
@@ -199,8 +210,9 @@ maintainer.
 - **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
   a changed data flow, a new/removed integration, an interface or external-contract change, a
   deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
-- **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
-  TODO list (§10 of the relevant solver plan)** so it always reflects reality.
+- **Whenever open work changes** — an item is started, finished, dropped, or added — **update the
+  relevant plan's live open-work section** so it always reflects reality. Move resolved background to a
+  decision/reference section or Git history instead of leaving it in the live list.
 - A code change that alters architecture/design but leaves a plan stale is **incomplete**.
 
 **README** (`README.md`) is the **external, user-facing** entry point — write for an operator or
@@ -221,6 +233,7 @@ reader or operator would be surprised to discover.
 ## Quick reference
 
 - Run gate: `make format && make verify` (`make verify` itself is read-only).
+- Change map: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
