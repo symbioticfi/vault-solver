@@ -87,21 +87,26 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 
 ## Testing, linting, formatting — required for every change
 
-Nothing merges red. Before considering a change done, all of these must pass:
+Nothing merges red. Install the pinned local tools once with `make tools`. During implementation run
+`make verify-fast TARGET=./internal/<package>` (or `make verify-race` for concurrency-sensitive work).
+Before considering a change done, run:
 
 ```
-GOTOOLCHAIN=go1.26.5 golangci-lint run --fix   # make format — formats + lints + autofixes
-GOTOOLCHAIN=go1.26.5 go build ./...
-GOTOOLCHAIN=go1.26.5 go test -race -cover ./...  # make test
-GOTOOLCHAIN=go1.26.5 golangci-lint run            # make lint — must report 0 issues
+make format   # mutating formatter/autofix step
+make verify   # read-only: format check, build all packages, uncached race+coverage tests, final lint
 ```
+
+The Makefile forces `GOTOOLCHAIN=go1.26.5` and invokes the pinned linter from `.tools/bin`, so local,
+agent, and CI commands cannot silently use a different Go or lint version. `make doctor` diagnoses a
+missing or mismatched toolchain.
 
 - **Unit-test all new logic.** Pure logic (pricing/sizing, EIP-712 digests, config parsing/validation)
   must have table-driven tests. EIP-712 signing has golden + `apitypes` parity tests — keep them green
   and extend them when you touch the digest. HTTP/on-chain paths should be tested against an
   `httptest` server / a simulated or forked chain backend.
-- Generated code (`api/bindings/**`, `api/threef`, `api/rfqbackend`) is committed for hermetic builds;
-  regenerate via the `make` targets, never hand-edit (see **Code generation** below).
+- Generated code (`api/bindings/**`, `api/{threef,rfqbackend,lifiorder,uniswapxservice,morphographql}`)
+  is committed for hermetic builds; regenerate via the `make` targets, never hand-edit (see
+  **Code generation** below).
 
 ## Code generation: vendor the source, then generate
 
@@ -129,7 +134,8 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
   hand-bound.
 - **API clients (OpenAPI spec → openapi-generator).** Vendor the spec under `openapi/` (`make
-  refresh-*-openapi` pulls it), then `make refresh-{3f,rfq}-client` runs the **Java openapi-generator**
+  refresh-*-openapi` pulls it), then `make refresh-{3f,rfq,lifi,uniswapx}-client` runs the
+  **Java openapi-generator**
   (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
   `api/<client>/`. `OPENAPI_GENERATOR_VERSION` is pinned and is the **floor**: it must ingest the spec
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
@@ -214,7 +220,7 @@ reader or operator would be surprised to discover.
 
 ## Quick reference
 
-- Run gate: `make format && make test && make lint && go build ./...`
+- Run gate: `make format && make verify` (`make verify` itself is read-only).
 - Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.

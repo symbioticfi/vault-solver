@@ -347,18 +347,20 @@ operator-controlled fallback.
 ## Requirements
 
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
-- For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
+- For development and codegen: `make tools` installs pinned `abigen` and `golangci-lint` under
+  `.tools/bin`; `make doctor` verifies the local toolchain. OpenAPI clients use
   the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
 - A reachable EVM RPC endpoint and a signing key (see Configuration).
 
 ## Quickstart
 
 ```bash
+make tools            # install pinned local development tools once
 make build            # build ./bin/vault-solver
 ./bin/vault-solver version
-make test             # go test -race -cover ./...
+make verify-fast TARGET=./internal/solver # focused tests + lint while iterating
+make verify           # complete read-only build/race/coverage/lint gate
 make test-txmanager-anvil # real pending replacement/cancellation against local Anvil
-make lint             # golangci-lint
 ./bin/vault-solver run --config config/3f.example.yaml
 ```
 
@@ -428,5 +430,5 @@ make generate                           # regenerate bindings + API client
 
 Engineering conventions — the modular framework/integration boundary, config-driven configuration,
 modern Go 1.26 style, the required test/lint/format gate, and secure-coding rules — are in
-[`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
-`make format && make test && make lint` green and unit-test new logic.
+[`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must run `make format &&
+make verify` and unit-test new logic.
