@@ -25,3 +25,7 @@ Use this index before opening the longer solver plans. `README.md` is the operat
 
 Plans contain maintained design decisions, protocol facts, deployment prerequisites, and open work. Completed
 implementation history belongs in Git history rather than the live open-work section.
+
+## Refactor summaries
+
+- [Solver repository agent-readability](developer/refactors/solver-agent-readability/SUMMARY.md)
