@@ -9,6 +9,21 @@ Exactly one signed nonce lifecycle may be unresolved at a time. A later request 
 lower nonce. All transaction-sending solvers in one process therefore share the same manager, signer, and write
 endpoint. One EOA must never be controlled by two processes.
 
+## Source map
+
+| File | Responsibility |
+|---|---|
+| `txmanager.go` | public contract, owned state, worker startup, and synchronous/async send entry points |
+| `admission.go` | lane demand, waiting, admission failures, and profitability fee query |
+| `lifecycle.go` | initial broadcast, pending polling, receipt outcome, and result delivery |
+| `replacement.go` | exact rebroadcast, fee-bumped replacement, cancellation, and active-lifecycle shutdown |
+| `fees.go` | fee history, gas estimation, signing, and write-RPC submission |
+| `nonce.go` | nonce initialization, conflict classification, exact-hash reconciliation, and readiness notification |
+| `confirmation.go` | stable-head receipt confirmation and canonical ancestry proof |
+| `helpers.go` | immutable request/fee copies and numeric/time helpers |
+
+Tests mirror these responsibilities; shared deterministic fakes live in `test_helpers_test.go`.
+
 ## Lifecycle
 
 ```text
