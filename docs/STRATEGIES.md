@@ -1,8 +1,10 @@
-# vault-solver — Solver-Local Strategy Architecture
+# Solver-local strategy contract
 
-The **strategy** is the decision-making core of a solver. This document records the *generic* strategy
-boundary shared by every solver. Concrete per-solver contracts (the actual input/output types) live in
-that solver's own plan under `docs/` and in its `strategies/types` package — never here.
+> **Role:** maintained shared contract for solver/strategy ownership, selection, and validation. Concrete
+> input/output types remain in each integration's plan and `strategies/types` package.
+
+The **strategy** is the decision-making core of a solver. This document records the generic boundary shared by
+every solver without creating one cross-solver strategy interface.
 
 ## Core principle
 
@@ -120,8 +122,8 @@ Two strategy kinds are conventional across solvers:
   This is the seam for running custom decision logic out-of-process without forking the solver.
 
 Both plug into the same decision boundary: the solver validates and executes their output the same
-way, so a solver is never coupled to which strategy is loaded. RFQ and LI.FI share `internal/tokenpolicy`
-for `tokensToQuote` admission. Both mark admitted inputs as single-route only in `permissioned` scope
+way, so a solver is never coupled to which strategy is loaded. RFQ, LI.FI, and UniswapX share
+`internal/tokenpolicy` for `tokensToQuote` admission. All three mark admitted inputs as single-route only in `permissioned` scope
 and reject strategy output that aggregates routes; route selection and economics remain strategy-owned.
 
 ## Adding your own strategy
@@ -212,7 +214,7 @@ provided by that solver's `strategies/types`).
 strategy:
   name: webhook
   config:
-    url: https://strategy.example.com/decide
+    url: https://strategy.example.com
     timeout: 500ms
     maxRequestBytes: 1048576
     maxResponseBytes: 1048576

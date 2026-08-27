@@ -1,18 +1,22 @@
 # CLAUDE.md — working agreement for this repo
 
 This file is the source of truth for how code is written here. Read it before making changes.
-It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
+It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file. The root `README.md`
+is operator-facing; [`docs/README.md`](docs/README.md) is the bounded-context development map.
 
 ## Agent quick start
 
 1. Run `git status --short --branch`; preserve unrelated work and never rewrite it to make the tree clean.
-2. Resolve the subsystem through [`docs/README.md`](docs/README.md) and read its linked contract before editing.
-3. Search `internal/`, `cmd/`, `config/`, and `docs/` first. Include `api/` only for generated-contract work.
-4. Never hand-edit generated Go. Change the vendored ABI/spec/schema and regenerate through `make`.
-5. Iterate with `make verify-fast TARGET=...` or `make verify-race TARGET=...`; finish with
-   `make format && make verify`.
-6. Update a plan for architecture, external-contract, or open-work changes; update README only for
-   operator-visible behavior or configuration.
+2. Classify the change through [`docs/README.md`](docs/README.md) and read only the linked contract, owning
+   package, local tests, and example config before widening scope.
+3. Search `internal/`, `cmd/`, `config/`, and `docs/` first. Include `api/` only to trace a generated type or
+   change its vendored ABI/spec/schema.
+4. Never hand-edit generated Go. Change the vendored external artifact and regenerate through `make`.
+5. Iterate with `make verify-fast TARGET=...` or `make verify-race TARGET=...`; add risk-specific tests for
+   concurrency, signing, wire contracts, or funds-moving logic.
+6. Update the canonical documentation owner from the matrix below; do not duplicate a detailed contract into
+   another overview.
+7. Finish with `make format && make verify`, then inspect the complete diff and report any check not run.
 
 ## Purpose
 
@@ -24,8 +28,8 @@ The first implementation was the **3F (Grunt) Bridge Facilitator**. The service 
 **RFQ, RedStone OEV, LI.FI, and UniswapX** without coupling those integrations to the generic framework.
 Keeping that boundary clean is the single most important design goal.
 
-Start at [`docs/README.md`](docs/README.md) for the package-to-plan map, focused verification commands,
-and the shared architecture contracts.
+Start at [`docs/README.md`](docs/README.md) for bounded task routes, the package-to-plan map, and shared
+architecture contracts; focused commands live in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## The modularity rule (most important)
 
@@ -33,7 +37,7 @@ Two layers, and code lives in exactly one:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
   `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
-  Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
+  Nothing here may know about 3F, RFQ, RedStone, or any specific protocol.
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/` — currently
   `bridgefacilitator/`, `rfq/`, `redstoneoev/`, `lifi/`, and `uniswapx/`. All protocol-specific logic,
   types, ABIs usage, pricing, and config live here.
@@ -42,8 +46,8 @@ Two layers, and code lives in exactly one:
 Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/morphographql`, or neutral
 contract bindings like `api/bindings/liquidlane/adapter` / `api/bindings/erc4626` (shared by redstone-oev +
 rfq). Hand-written domain adapters stay inside the solver that owns the workflow unless a second solver
-actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
-helper package — `internal/parse`.
+actually reuses them. Neutral, protocol-agnostic helpers live in small focused packages such as `internal/parse`,
+`internal/tokenpolicy`, `internal/webhook`, and `internal/tenderly`.
 
 To add a new integration:
 1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
@@ -203,44 +207,34 @@ Commit titles follow [Conventional Commits](https://www.conventionalcommits.org)
 - Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
 - Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
 
-## Keep the docs in sync — required
+## Documentation ownership (required)
 
-Two audiences, two docs, kept current **in the same change** as the code:
+Keep documentation current, scoped, and non-duplicative. The canonical ownership map is
+[`docs/README.md`](docs/README.md#sources-of-truth); apply these update rules in the same change as the
+implementation:
 
-**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md`) are the source of truth
-for **internal architecture, design decisions, and the live TODO list** — write for a future
-maintainer.
+- A user-observable capability, CLI/config field, default, requirement, or safety behavior updates `README.md`
+  and the affected example/schema as applicable.
+- A shared dependency boundary, lifecycle, or invariant updates its shared contract. An integration-specific
+  design or external-protocol decision updates only that integration's plan.
+- Starting, finishing, dropping, or discovering durable open work updates the owning plan's live section.
+  Preserve resolved work only when it is durable design rationale, verified protocol evidence, or current
+  implementation status; transient execution history belongs in Git.
+- Adding, renaming, or removing a durable document updates `docs/README.md`; command changes update
+  `docs/DEVELOPMENT.md`.
+- Overview documents summarize and link. Do not copy detailed protocol, transaction, or strategy contracts
+  into multiple files.
 
-- **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
-  a changed data flow, a new/removed integration, an interface or external-contract change, a
-  deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
-- **Whenever open work changes** — an item is started, finished, dropped, or added — **update the
-  relevant plan's live open-work section** so it always reflects reality. Move resolved background to a
-  decision/reference section or Git history instead of leaving it in the live list.
-- A code change that alters architecture/design but leaves a plan stale is **incomplete**.
-
-**README** (`README.md`) is the **external, user-facing** entry point — write for an operator or
-integrator running the bot, not a maintainer of it. Keep internal design out of it; keep runtime and
-integration surface in it.
-
-- **Whenever you change something a user observes or configures** — a new or renamed CLI flag or
-  subcommand, a config knob or its default, a new/removed solver or a change to what a solver does, a
-  new strategy or integration surface, quickstart/build/run steps, or requirements — **update the
-  README in the same change.**
-- A user-facing change (flag, config field, solver capability) that lands without a README update is
-  **incomplete**.
-
-If a change is purely internal (a bug fix or refactor with no design impact and nothing a user
-observes), neither doc needs an update — use judgement, but err toward recording anything a future
-reader or operator would be surprised to discover.
+Do not add task journals, generated refactor summaries, agent handoff artifacts, or a `docs/developer/`
+hierarchy. Those are transient execution history and belong in commits or pull requests. A purely internal
+bug fix or refactor needs no docs change unless it changes a documented invariant or operator-visible behavior.
 
 ## Quick reference
 
 - Run gate: `make format && make verify` (`make verify` itself is read-only).
-- Change map: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+- Context map: [`docs/README.md`](docs/README.md); commands and checks: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 - Add an integration: new `internal/solvers/<name>/` + `solver.Registration` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
-  user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
+- Keep the canonical documentation owner current in the same change; use the map in `docs/README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

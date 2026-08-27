@@ -39,7 +39,7 @@ observability:
 solvers:
   - name: rfq-filler
     config:
-      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md
+      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/STRATEGIES.md
         name: default                  #   "default" (in-process pricing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 

@@ -1,4 +1,9 @@
-# vault-solver — LI.FI / Catalyst same-chain intent filler (plan)
+# LI.FI same-chain intent filler
+
+> **Role:** maintained integration contract for `lifi-samechain`: protocol scope, design decisions,
+> deployment prerequisites, and live open work.
+>
+> **Code/config:** `internal/solvers/lifi` · [`config/lifi.example.yaml`](../config/lifi.example.yaml)
 
 The **`lifi-samechain`** solver fills **same-chain on-chain** LI.FI Intents (Open Intents Framework /
 Catalyst). The executor contract is the registered LI.FI solver identity. Its owner
@@ -8,7 +13,7 @@ receives the claimed input RWA in the callback, redeems it through a Symbiotic
 **LiquidLane adapter**, then fills and attests the output in one transaction.
 Follows the framework boundary and
 conventions in [`../CLAUDE.md`](../CLAUDE.md); the strategy layer follows
-[`strategy-plan.md`](strategy-plan.md).
+[`STRATEGIES.md`](STRATEGIES.md).
 
 > **Status:** the on-chain-order path is implemented and has settled a real Sepolia order end to end.
 > The solver admits matched escrow orders from the live WebSocket feed plus a startup/reconnect REST
@@ -66,11 +71,11 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 - **Signer/caller** — the framework EOA is the tx sender and must be authorized through
   `executor.setCallers(...)`. The registered LI.FI solver address is the executor contract itself.
 - **Config, secrets** — order-server URL + `apiKeyEnv`, settler/executor/adapter addresses via
-  `solver.config`; the LI.FI API key via `*Env` indirection. `solverMode` mirrors RFQ: `external` is
+  `solvers[].config`; the LI.FI API key via `*Env` indirection. `solverMode` mirrors RFQ: `external` is
   direct-only, while `internal` enables the shared private-discounts backend.
 - **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
   (`DecideQuotes` + `DecideFill`; `default` in-process or `webhook` external), per
-  [`strategy-plan.md`](strategy-plan.md). See §5.2.
+  [`STRATEGIES.md`](STRATEGIES.md). See §5.2.
 - **Shared LiquidLane decision boundary** — direct/physical inventory, fill quotes, and optional gas state come
   from the common snapshot reader. Default allocation and external webhook plans converge on the same
   canonical fill routes, capacity reservations, configured gas floor, and fail-closed route validation before the
@@ -218,13 +223,9 @@ the LI.FI opened-order direct finalise path with the current `block.timestamp`; 
 destination are the executor itself, and it constructs the callback `FillCall` internally. Gasless
 `openForAndFinalise` is not supported.
 
-**Deployed addresses** (LI.FI-owned; integrate against these — do **not** deploy):
-- `InputSettlerEscrowLIFI` / opened-order input settler: `0x000025c3226C00B2Cdc200005a1600509f4e00C0`
-- OutputSettler (LIFI): `0x0000000000eC36B683C2E6AC89e9A75989C22a2e`
-- (bare OIF reference set: `InputSettlerEscrow 0x1CC9260E285C2C8AC8D2E7102F3978056Ec1d0a8`,
-  `OutputSettlerSimple 0x52602D7cc3D833F5d28ee6D01C7F82C9b2322e10` — deployed at identical addresses on
-  Sepolia-family testnets + mainnets via CREATE2. Use the LI.FI addresses for order-server integration;
-  confirm the exact settler the order server routes for our chain in P1.)
+The bot does **not** deploy LI.FI's input/output settlers. Resolve the supported contracts for the target chain
+from the order server, pin them in the YAML profile, and verify the exact identities and zero governance fee at
+deployment time. The annotated example carries the current test profile, not a universal address registry.
 
 ---
 
@@ -347,7 +348,7 @@ not require a gasless permit/3009 signature or backend `sponsorSignature`.
 
 ### 5.2 The strategy — owns both decisions
 
-All pricing lives in a pluggable strategy (per [`strategy-plan.md`](strategy-plan.md)): the solver
+All pricing lives in a pluggable strategy (per [`STRATEGIES.md`](STRATEGIES.md)): the solver
 maps adapter reads into typed LiquidLane facts and **executes** (publish quotes, send the tx); the strategy is
 the brain for **both** decision points — the standing-quote curve *and* the fill decision — mirroring
 rfq's `DecideQuote`/`BuildFillPlan`. LiquidLane route/inventory/fill-quote terminology follows
@@ -450,9 +451,11 @@ type Strategy interface {
   in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
   `FillPlan{Routes}`.
 
-The `orderWorker` state machine in `order_worker.go` owns pending fills, retry queues, the recovery
-barrier, and the deposit-retry timer on one goroutine; event-specific transitions keep that mutable
-lifecycle out of the feed/recovery orchestration in `execution.go`. It reserves each direct route's
+The `orderWorker` state machine in `order_worker.go` owns pending fills, reservation retries, and the
+deposit-retry timer on one goroutine. `order_inbox.go` owns bounded intake, deduplication, and the recovery
+barrier; `order_recovery.go` owns REST catch-up retries; `execution.go` owns WebSocket feed parsing and fill
+completion handoff. This partition keeps mutable lifecycle state out of transport and recovery code. The worker
+reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
 and releases it only when the shared tx manager returns after the globally configured confirmation depth.
@@ -510,26 +513,18 @@ An admitted order first verifies `governanceFee() == 0`, then derives the canoni
 `orderStatus == Deposited` before expensive route reads. It selects only configured routes matching both
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
-time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
-cap; without it, the request cap is nil and txmanager prices dynamically under global `maxFeeGwei`. Before
-signing, txmanager recomputes current fees and rejects a capped fill if base fee plus the selected priority fee
-cannot fit while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
-Pending calls are bumped within the applicable request/global cap. `CancelAt` is the earliest non-zero order expiry, fill
-deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
-chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
-cannot extend validity; it also bounds a wait behind another active lifecycle. With no deadline, the global
-pending timeout remains the bound. At either bound, txmanager replaces the call with a same-nonce self-transfer;
-cancellation may exceed the profitability cap but not the operator's global `txManager.maxFeeGwei`. LI.FI
-releases the reservation on the terminal txmanager result. A receipted fill,
-revert, or cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast
-failure does not.
+time before each strategy decision. With `gas:` configured, the decision-time fee ceiling becomes the request's
+profitability cap; without it, only the manager's global cap applies. The request rechecks `Deposited` before
+submission and sets `CancelAt` to the earliest order, fill, signer, or protocol-signature deadline, translated
+from observed chain time without extending validity. LI.FI keeps capacity reserved through the manager's
+terminal result. Generic fee, replacement, cancellation, confirmation, and nonce rules live in
+[Transaction manager](TXMANAGER.md).
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.
 There is no solver-level pending plan or future-auction scheduling. Apart from the bounded status-`None`
 propagation queue, reservation-blocked built-in decisions have only the bounded completion-driven FIFO retry
-described above. The txmanager
-may replace the same pending nonce as described above; that is fee management for one submission, not order
+described above. Transaction replacement remains fee management for one accepted submission, not an order
 retry.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
 LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
@@ -540,45 +535,13 @@ then commits the fresh signed terms and both signatures inside a separate `Disco
 mismatched resolution aborts before submission. Those two signatures authorize the private LiquidLane route
 and are unrelated to LI.FI account or fill authorization.
 
-### 5.4 Config block (sketch)
+### 5.4 Configuration
 
-```yaml
-solvers:
-  - name: lifi-samechain
-    config:
-      strategy:
-        name: default
-        config:
-          priceBufferBps: 20
-          inventoryReserveBps: 500
-          minAmount: "1000000"          # operator tokenIn floor; ranges may start higher
-          rangeCount: 8                 # geometric ranges per pair; hard max is 16
-          executionDeadlineBuffer: 12s
-      gas:                                  # optional; omit to disable economic gas accounting
-        nativeUsdFeed: "0x…"
-        nativeMaxAge: 1h                     # native/USD feed heartbeat
-        tokenUsdFeeds:
-          - token: "0x…"                # every resolved adapter tokenOut
-            feed: "0x…"                 # token/USD Chainlink feed
-            maxAge: 24h                 # this token/USD feed's heartbeat
-      orderServer:
-        baseUrl: https://order-dev.li.fi          # order.li.fi in prod
-        wsUrl:   wss://order-dev.li.fi
-        apiKeyEnv: LIFI_SOLVER_API_KEY
-      solverMode: internal
-      privateDiscountsUrl: ${RFQ_BACKEND_URL}
-      inputSettler:  "0x000025c3226C00B2Cdc200005a1600509f4e00C0"
-      outputSettler: "0x0000000000eC36B683C2E6AC89e9A75989C22a2e"
-      executor:      "0x…"                          # registered EIP-1271 LiquidLaneLifiExecutor
-      adapters:                                      # LiquidLane adapters (RWA→underlying); vault+asset resolved on-chain
-        - "0x…"
-      tokensToQuote: permissioned                    # all (default) | permissioned | permissionless
-      permissionedTokens:                            # membership set; single-route only in permissioned scope
-        - "0x…"
-      quoteIntervalMs: 1000                          # block poll interval; default is 1000ms
-      quoteTtl: 36s                                  # rolling expiry, about three Ethereum blocks
-      quoteRefreshMode: block                       # block (default) | interval
-```
+The exact fields, defaults, and secret indirection live in
+[`config/lifi.example.yaml`](../config/lifi.example.yaml). This plan owns only the cross-field contracts:
+`external` mode uses direct authorization, `internal` additionally requires `privateDiscountsUrl`, `gas` is
+optional, every deployment requires at least one adapter, and `quoteTtl` must cover at least two refresh
+intervals.
 
 ---
 
@@ -816,55 +779,21 @@ order-server mock + a simulated/forked chain backend.
 - **Per chain we deploy** `LiquidLaneLifiExecutor` (+ register the executor as a filler on each target
   LiquidLane adapter), register that executor with LI.FI through EIP-1271, fund its runtime caller, and run
   the bot — the same steps as §8.2 but against
-  `order.li.fi`. LI.FI is live on Ethereum, Base, Optimism, Arbitrum, Polygon, BSC, Katana, MegaETH,
-  etc. (`order.li.fi/chains/supported` authoritative); v1 targets the chain(s) hosting the LiquidLane
-  RWA adapters we serve.
+  `order.li.fi`. Treat `order.li.fi/chains/supported` as authoritative at deployment time; target only chains
+  that also host the LiquidLane adapters being served.
 - No official solver SDK — integrate against the order-server OpenAPI (`/docs`) + WS feed (+ the MCP
   server for scripted testing).
 
 ---
 
-## 9. Build phases
+## 9. Implementation status
 
-Testnet-first: the executor is developed from P0 so every later phase integrates against the live
-`order-dev.li.fi` + real settlers + real adapter (§8.2). The opened-order callback flow was proven through
-a settled Sepolia order using the previous deployed executor; the latest split direct/discount route ABI
-still requires the redeploy in phase 0.
-
-0. **Done locally; Sepolia redeploy required** — `LiquidLaneLifiExecutor` implements domain-separated ERC-1271
-   registration through its caller set and caller-gated runtime authorization in §3. Its Foundry unit suite
-   and the real-settler Sepolia fork test pass. Deploy to Ethereum
-   Sepolia, register it with LI.FI through EIP-1271, and register it as an adapter filler.
-   The vendored ABI and Go binding are generated from the contract artifact at
-   RFQ `main` commit `8b970bd`, including the split direct/discount route interface.
-1. **Done locally** Order-server client — generated HTTP client plus a thin hand-written WS client wired
-   to `order-dev.li.fi`, with a fenced active-order catch-up before quote readiness. Recovery is covered by
-   `httptest`; the existing HTTP/WS connection was validated live, but restart catch-up still needs a live exercise.
-2. **Done locally; previous ABI live Sepolia happy path proven** Pricing + decision + tx build — `default` strategy
-   (direct executable getMaxRate for quotes; getAmountOut/minDiscount/getMaxAssets for fills;
-   optional Chainlink gas conversion snapshots, code-owned settlement/private gas constants, pair-level route
-   ladders, all live direct/private alternatives per route, shared capacity and shared LI.FI/UniswapX
-   LiquidLane fill planning,
-   asset match, immediate OutputSettlerSimple context resolution
-   for limit and exclusive-limit outputs, with Dutch contexts rejected at order-feed admission);
-   executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
-   early/final `orderStatus == Deposited` checks; latest-state snapshots; optional txmanager profitability-ceiling fee
-   input; dynamic ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
-   pending-capacity-aware bounded FIFO retry, terminal-result reservation release (receipted outcomes wait for
-   configured confirmations), fresh state for every attempt, and execution-time contract validation.
-   The ladder is quote-only: an awarded order is greedily replanned from current amount-specific quotes,
-   and output above the resolved order amount remains in the executor; the current ABI has no sweep entrypoint.
-   Unit-tested through the solver-level submit path and validated end-to-end on Sepolia with a
-   WebSocket-delivered on-chain order matched to our exclusive quote: open tx
-   `0xd3f619048a745fb896c2f6c8b4e3b42a65b104eb3035b2bb9c20cf9593623480`, fill tx
-   `0x338aef70060093f6341538cd633fd4b5cfecc2fe2a10d77458946bf0e84fe960`, backend status `Settled`.
-   The new executor asks direct adapters for the buffered `amountOut`, executes private routes from signed
-   terms, and delegates context resolution and output sufficiency to the OutputSettler. If the order is not
-   executable at decision time, it is dropped.
-3. **Harden** — staleness/skip edge cases, revert handling, metrics on the shared observability server;
-   a repeatable green E2E on Sepolia (`order-dev`).
-4. **Mainnet** — deploy the executor per target chain, point config at `order.li.fi`, register each
-   executor account through EIP-1271, and run.
+The generated order client, resilient feed/recovery path, quote/fill strategies, split direct/private route
+calldata, status checks, reservations, retries, and transaction submission are implemented and covered by Go
+and contract tests. The previous executor ABI settled a real Sepolia order (open
+`0xd3f619048a745fb896c2f6c8b4e3b42a65b104eb3035b2bb9c20cf9593623480`, fill
+`0x338aef70060093f6341538cd633fd4b5cfecc2fe2a10d77458946bf0e84fe960`). The current split-route executor
+still requires redeployment, registration, and a repeat E2E; all live gates are tracked in §10.
 
 ---
 
@@ -877,7 +806,7 @@ still requires the redeploy in phase 0.
   The first acquire-route budgets are 550k direct and 625k private from
   `250k fixed + LiquidLane route units (+75k private)`. Multi-route callback behavior was also exercised.
   Compare the first Sepolia receipts against these constants before mainnet rollout.
-- **Executor redeploy** — deploy the split-route implementation recorded in phase 0 plus transparent proxy,
+- **Executor redeploy** — deploy the split-route implementation described in §3 behind a transparent proxy,
   initialize the runtime signer as a caller, register the proxy address with LI.FI, update config, and grant
   the proxy adapter filler authorization before E2E. Confirm the canonical InputSettler reports
   `governanceFee() == 0`; startup fails closed otherwise, and every admitted order rechecks it.

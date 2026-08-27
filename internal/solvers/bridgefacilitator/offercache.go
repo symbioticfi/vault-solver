@@ -45,9 +45,8 @@ func (t *offerTracker) liveEntries(now time.Time) []offerKey {
 	return keys
 }
 
-// reconcileAdapter replaces all of this adapter's cached offers with the API's current live set. The
-// 1-2 minute poll is authoritative — it always reflects our own just-submitted offers as well as any
-// made out of band — so anything not in `live` is gone and dropped.
+// reconcileAdapter replaces this adapter's cache from the authoritative API response, including
+// offers submitted by this or another process.
 func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]offerState) {
 	for k := range t.offers {
 		if k.adapter == adapter {

@@ -1,21 +1,21 @@
-# vault-solver — Implementation Plan (v0)
+# 3F Bridge Facilitator
 
-> The **3F Bridge Facilitator** integration for the multi-solver `vault-solver` service.
-> It remains self-contained under `internal/solvers/bridgefacilitator` and shares only
-> the generic framework with other integrations.
+> **Role:** maintained integration contract for `3f-bridge-facilitator`: protocol scope, design decisions,
+> deployment prerequisites, and live open work. Runtime behavior is summarized in the root README; shared
+> boundaries live in [Architecture](ARCHITECTURE.md).
+>
+> **Code/config:** `internal/solvers/bridgefacilitator` · [`config/3f.example.yaml`](../config/3f.example.yaml)
 
-This document is the source of truth for 3F scope, architecture, decisions, and open work. See
-`3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
-repo root) §4 for the functional blueprint of the 3F solver.
+The integration remains self-contained and shares only the generic framework with other solvers.
 
 ---
 
 ## 1. Scope
 
-- **In scope:** the off-chain Go bot, serving **multiple `BridgeFacilitatorAdapter`s** — auction
+- **In scope:** the off-chain Go bot, serving **multiple `ThreeFAdapter`s** — auction
   discovery, **per-auction multi-adapter coverage**, offer pricing/sizing/signing (signed payloads),
   on-chain reads for liquidity, position reconciliation, and redemption.
-- **Out of scope:** the on-chain `BridgeFacilitatorAdapter` (Solidity, consumed via generated ABI
+- **Out of scope:** the on-chain `ThreeFAdapter` (Solidity, consumed via generated ABI
   bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
   **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
   **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
@@ -27,12 +27,6 @@ repo root) §4 for the functional blueprint of the 3F solver.
 
 | Topic | Decision |
 |---|---|
-| Language / toolchain | **Go 1.26** (module declares `go 1.26`; toolchain auto-fetch) |
-| Logging | **`logr.Logger`** interface throughout, backed by **zap** via `zapr`; only `main` wires the backend |
-| Metrics | Prometheus (`/metrics`); `logr` keeps the logging dependency swappable |
-| License | _TBD — not yet added_ |
-| Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
-| API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
 | Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
@@ -49,7 +43,7 @@ Everything the bot needs is reachable from view functions + the 3F API:
 | Open request count | `adapter.requestsLength()` (single read) | on-chain view |
 | Open request set | `adapter.requests(i)` enumerated `0..requestsLength()-1` | on-chain view |
 | Per-request valuation | folded into `adapter.totalAssets()` (values each request's PT/YT live) | on-chain view |
-| Funding headroom | `adapter.getMaxAssets()` (min(limitOf − totalAssets, withdrawable), 0 if sweep pending) | on-chain view |
+| Funding headroom | `adapter.getMaxAssets()` by default, or the configured liquidity lens's cross-adapter estimate | on-chain view |
 | Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across the enumerated `requests(i)` | on-chain view |
 | Offer won / consumed | next `requests(i)` resync | on-chain view |
 | Auction discovery + offer status | `GET /v1/auction`, `GET /v1/offer` | 3F API (off-chain) |
@@ -62,130 +56,42 @@ No historical event indexer, no DB.
 
 ---
 
-## 4. Repository layout
+## 4. Source map
 
-```
-vault-solver/
-├── cmd/vault-solver/                # bootstrap: config → chain → signer → solvers → txmanager init → run
-├── internal/
-│   ├── config/                    # env + YAML loader; per-instance VAULT SELECTION; two-stage solver decode
-│   ├── chain/                     # GENERIC eth client primitives (Dial, ChainID). Solver-specific
-│   │   │                          # reads (e.g. vault/adapter liquidity) live in the owning solver.
-│   ├── signer/                    # Signer interface + local (env/file key) impl  ← pluggable
-│   ├── txmanager/                 # SHARED nonce-serialized tx sender  ← shared infra
-│   ├── solver/                    # generic Solver interface + registry + engine (solver-agnostic)
-│   ├── solvers/bridgefacilitator/ # ALL 3F-specific logic, encapsulated
-│   │   ├── solver.go  config.go  apiclient.go  auctionview.go  offercache.go
-│   │   ├── offer.go   eip712.go  chainreader.go  redeemer.go  strategy.go
-│   │   ├── strategies/            # pluggable decision layer:
-│   │   │   ├── registry.go        #   package strategies — registry/factory
-│   │   │   ├── types/             #   OfferInput/OfferOutput + Strategy interface
-│   │   │   ├── default/           #   in-process default strategy (owns sizing/selection)
-│   │   │   └── webhook/           #   external-decider adapter
-│   ├── observability/             # logr+zap setup, prometheus, /healthz /readyz
-│   └── version/
-├── api/
-│   ├── abi/                       # vendored *.abi.json (copied from forge build)
-│   ├── bindings/                  # abigen output (committed), grouped per integration:
-│   │   ├── 3f/{adapter,request,vaultcontroller,whitelist}/  # 3F-specific
-│   │   ├── adapterfactory/         # shared IAdapterFactory registry surface
-│   │   └── vaultv2/                # shared Symbiotic core, reused by every integration
-│   └── threef/                    # openapi-generator (Java) output (committed)
-├── openapi/3f-bf.openapi.json     # vendored OpenAPI snapshot
-├── config/{3f,rfq,redstone-oev}.example.yaml   # one annotated example per solver
-├── deploy/{Dockerfile,docker-compose.yml}
-├── .github/workflows/ci.yml
-├── .golangci.yml  Makefile  go.mod  README.md  .gitignore
-```
+| Area | Owner |
+|---|---|
+| Runtime, config parsing, API adapter, reconciliation, signing, and redemption | `internal/solvers/bridgefacilitator` |
+| Solver-local strategy contract and built-ins | `internal/solvers/bridgefacilitator/strategies` |
+| 3F contract bindings | `api/bindings/3f/...` |
+| Adapter-factory binding | `api/bindings/adapterfactory` |
+| Generated 3F HTTP client | `api/threef` |
+| External contracts of record | `api/abi/*.json`, `openapi/3f-bf.openapi.json` |
+| Exact runtime configuration | [`config/3f.example.yaml`](../config/3f.example.yaml) |
 
 ---
 
-## 5. Shared infrastructure
+## 5. Framework integration
 
-### 5.1 `txmanager` — nonce-serialized sender
+The package self-registers its runtime factory and pure config validator, then the command blank-imports it.
+Generic registration and startup rules live in [Architecture](ARCHITECTURE.md); nonce, fee, replacement, and
+shutdown behavior live in [Transaction manager](TXMANAGER.md).
 
-A single service owns the on-chain sending EOA. Before readiness it requires the latest and pending
-nonces from one non-fallback write endpoint to agree, then admits one signed lifecycle at a time. The
-worker signs, broadcasts, replaces or cancels that nonce, and tracks every exact signed hash through a
-terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from the minimum
-gas-weighted p25 reward in the latest five blocks, aligned with the observed behavior of Etherscan Gas
-Tracker's Fast tier. Normal replacements respect both request and global fee caps, while cancellation may
-leave the request's profitability cap but never the global cap. During replacement, a fresh-fee timeout
-falls back to bumping the last signed fees. A transport-ambiguous attempt receives one exact-byte rebroadcast
-before fee escalation; cancellation deadlines and shutdown bypass that grace retry.
-Solvers **never** send directly — they build
-calldata (packed via the abigen ABI, e.g.
-`adapter.PackMulticall(finalizeRequest…)`) and receive a `txmanager.Result`. Serializing the complete
-lifecycle eliminates parallel-nonce races and prevents later calldata from being signed behind a
-missing lower nonce. Shutdown joins a healthy active replacement/cancellation drain before the RPC
-clients are closed. At `shutdownTimeoutMs`, it instead returns a terminal deadline result and lets
-process teardown close RPC without waiting on a stuck dependency.
+3F-specific integration rules are:
 
-An occupied transaction lane or unresolved nonce-ownership conflict pauses new 3F commitments: offer
-discovery exits before chain/API planning, and lane readiness is checked again immediately before each
-`createOffer`. Existing offer tracking, auction reconciliation, and redemption continue so contention does
-not block recovery work.
-
-> The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
-> current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
-
-### 5.2 `solver` — generic interface + registry
-
-```go
-type Deps struct {
-    Chain     *chain.Client
-    TxManager *txmanager.Manager
-    Signer    signer.Signer
-    Log       logr.Logger
-    Metrics   *observability.Metrics
-    ReportFatal func(error)
-}
-
-type Solver interface {
-    Name() string
-    Run(ctx context.Context) error
-}
-
-type Registration struct {
-    Factory             Factory
-    ValidateConfig      ConfigValidator
-    ExternallySubmitted bool
-}
-```
-
-A `registry` maps each name to its runtime factory, pure offline config validator, and submission mode. The
-3F package self-registers in `init()`; `main` blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the
-only line referencing 3F. Adding a future solver is a registration + config switch, no engine edit.
-Transaction submission defaults to the shared txmanager; an integration whose auctioneer settles externally
-marks that capability in registration, so an external-only process does not initialize the nonce lane.
+- offer signing and transaction sending are distinct protocol roles, currently backed by the same framework
+  signer/EOA;
+- redemptions submit generated calldata through the shared transaction manager rather than sending directly;
+- an occupied or conflicted transaction lane pauses new offers before planning and again before submission;
+- offer reconciliation and redemption continue while new commitments are paused.
 
 ---
 
 ## 6. Configuration & per-offer adapter selection
 
-Two-stage decode keeps solver config encapsulated. The generic layer reads only
-`solver.name` to pick the impl and keeps `solver.config` as a deferred `yaml.Node`;
-the chosen solver decodes it into its own typed struct.
-
-```yaml
-chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? }
-signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs }
-
-solvers:
-  - name: 3f-bridge-facilitator             # ← registry key: selects the impl
-    config:                                  # ← opaque to framework; typed by the 3F package
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz
-      strategy:
-        name: default                        # default local strategy, or webhook
-        config: {}
-      adapterFactory: "0x…factory"             # used when adapters is omitted; max 2,000 entities
-      # adapters:                               # optional exclusive override; factory is not queried
-      #   - "0x…adapterA"
-      redeemBatchSize: 10                     # optional (default 10)
-      httpTimeout: 30s                        # optional
-      intervals: { discover: 5m, redeemPoll: 5m, reconcile: 15m }
-```
+The framework selects the integration by `solvers[].name` and passes `solvers[].config` through for strict,
+integration-owned decoding. The exact fields and defaults live only in the annotated
+[`config/3f.example.yaml`](../config/3f.example.yaml); the semantics below explain the non-obvious adapter
+selection and offer rules.
 
 `apiKeyEnv` and the single `adapter`/`vault`/`exposure` keys are **gone**: there is no API key, and each
 adapter's **vault + collateral are resolved on-chain** (`adapter.vault()` / `vault.asset()`) and its
@@ -202,11 +108,10 @@ RPC failure preserves the last-known-good snapshot; a successful refresh replace
 remove and can later re-add an adapter. Before every offer pass the solver reconciles its live-offer
 cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
 adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
-instance, or a server-side cancellation — and it never double-offers an auction it already covers. The
-1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
-the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
-`getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and
-any pending sweep), so the bot reads no separate sleeve cap. Concurrency is the contract's
+instance, or a server-side cancellation — and it never double-offers an auction it already covers. Each successful listing is authoritative and includes our just-submitted offers, so any pair absent from the
+fresh response is dropped (no local record is retained between passes). Funding headroom comes from the adapter's `getMaxAssets()` by default; when `liquidityLens` is configured,
+the lens supplies the stricter cross-adapter deallocation-cascade estimate. Both paths remain on-chain facts,
+not strategy guesses. Concurrency is the contract's
 `MAX_REQUESTS` constant (50), mirrored as a bot const. A signed offer's `expiration` is anchored to the
 auction's `solve_start_time` plus a configurable `offerExpiryBuffer` (default 2h), never earlier than
 `now + buffer`, so the offer stays valid across the whole solve window regardless of when it is signed
@@ -244,7 +149,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
        Adapter       address
        Vault         address
        Collateral    address
-       Fundable      uint256 // getMaxAssets()
+       Fundable      uint256 // selected adapter/lens funding headroom
        OpenCount     int     // requestsLength()
        MaxAssets     uint256 // maxAssetsPerRequest, 0 = reject-all
        MinAssets     uint256 // minAssetsPerRequest, 0 = disabled
@@ -285,7 +190,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    normally infeasible under realistic auction caps because the adapter permits a one-unit consume.
    Before signing, the submission loop applies the same full and minimum-partial validation to default
    and webhook outputs.
-   Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
+   Capacity is `min(maxAssetsPerRequest, fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
    integers are decimal strings and unknown response fields are rejected.
@@ -297,61 +202,25 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 
 ---
 
-## 7. Make-driven codegen
+## 7. External contracts
 
-| Target | Action |
-|---|---|
-| `make tools` | install pinned `abigen`, `golangci-lint` (OpenAPI uses the Java openapi-generator, downloaded on demand) |
-| `make refresh-abi` | copy ABIs from `FORGE_OUT=` (jq-extract `.abi` from `out/*.json`) into `api/abi/` — manual |
-| `make refresh-openapi` | curl the live spec → `openapi/` — manual |
-| `make bindings` | `abigen` over `api/abi/*.json` → `api/bindings/*.go` |
-| `make openapi-client` | Java openapi-generator over the vendored spec → `api/threef/` |
-| `make generate` | bindings + openapi-client |
-| `make lint` / `test` / `build` / `docker` | golangci-lint; `go test -race -cover ./...`; build; image |
-
-Generated code is committed (hermetic build); refresh targets regenerate from upstream
-on demand. ABIs required: `ThreeFAdapter` and `IAdapterFactory` (from core-mirror),
-`IRequest`/`IVaultController`, `IWhitelist`, `IVaultV2`.
+The vendored OpenAPI specification and ABIs are the external contracts of record. This integration consumes
+`ThreeFAdapter`, `IAdapterFactory`, `IRequest`, `IVaultController`, `IWhitelist`, and `IVaultV2`; generated Go
+remains committed. Use the canonical refresh/generate commands in
+[Development](DEVELOPMENT.md#code-generation), then inspect and test the 3F consumers.
 
 ---
 
-## 8. Build phases
+## 8. Implementation status
 
-Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contracts/adapters/ThreeFAdapter.sol`, ABI vendored here from the core-mirror Foundry build. This is what the bot binds against (it replaced rfq's `BridgeFacilitatorAdapter`).
-
-0. **(done)** Scaffold + tooling — module, layout, Makefile, `.golangci.yml`, CI, README, version pkg. (LICENSE not yet added.)
-1. **(done)** Codegen pipeline — ABIs vendored from `../rfq/out`; OpenAPI snapshot; `bindings` (one pkg/contract) + `openapi-client`; committed.
-2. **(done)** Core infra (solver-agnostic) — config (two-stage decode), chain primitives, signer, **txmanager (+5 tests)**, solver interface/registry/engine, observability, bounded graceful shutdown.
-3. **(done)** 3F solver (encapsulated) — signed-payload API client, offer sizing (now owned by the strategy layer: `getMaxAssets` headroom + per-request caps; Request authorization is the on-chain 3F whitelist), EIP-712 offer signing **+ golden-hash + apitypes parity test**, reconcile + redeemer (poll `canWithdraw` over `requests(0..requestsLength()-1)` → `multicall(finalizeRequest…)` → txmanager), exposure / no-over-commit guards. Deltas tracked in §10.
-4. **(done)** Packaging + verification — README/config docs; Sepolia-dev e2e (offers won + redeemed live); multi-stage non-root distroless Dockerfile + compose (`deploy/`, ~20 MB static CGO-free image).
-5. **(done) Adapter-as-facilitator + signed payloads + multi-adapter.** The new model (§1, §2, §6),
-   implemented across the `bridgefacilitator` package:
-   - **Dropped the API key + offer-address.** `listOffers` is now a per-adapter **signed** query (EIP-712
-     `GetOffers` in an `Authorization: Bearer` header); `createOffer` sends no `x-api-key`. Removed the
-     key-gen, `apiKeyEnv`, and the `ensureOfferAddress`/`setOfferAddress` onboarding. Onboarding (deploy
-     adapter → register with 3F → set this signer as EIP-1271 signer) is the vault creator's job.
-   - **Dynamic adapter sources + ERC-1271 offer-signer check.** When `adapters[]` is present it is the
-     exclusive source; otherwise `adapterFactory` is enumerated at startup and each discovery tick, with
-     a hard 2,000-entity limit that returns an error for a larger reported count. Every candidate's
-     vault/collateral is re-resolved, and offer-signer authorization is validated via the adapter's own
-     ERC-1271 `isValidSignature` (**not** an address match): a one-time payload is signed with the solver
-     key at startup and validated against each adapter, so an adapter is kept iff its `offerSigner`
-     authorizes our key — our EOA *or* an EIP-1271 contract signer; the probe is reusable across ticks.
-     Successful snapshots replace the active set, whole-refresh failures retain the last-known-good set,
-     and a factory-backed deployment may validly idle with zero eligible adapters. Explicit-list startup
-     retains its fail-closed behavior. The live-offer cache is reconciled against the API before every
-     offer pass, so out-of-band offers (manual re-offer, another instance, server-side cancellation)
-     count toward coverage and are never double-offered.
-   - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
-     more single-adapter offers through the configured trusted strategy; uncovered remainder retries
-     next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
-   - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, `reconcileAdapter` wholesale replace (API-authoritative), signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
-     Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
-     and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
+The signed-payload, dynamic/static multi-adapter, strategy, reconciliation, and redemption paths are
+implemented and covered by unit, HTTP, RPC-decoder, EIP-712 parity, and opt-in live tests. A Sepolia offer and
+redemption flow has been exercised. Durable gaps and external confirmations remain in §9–§10; completed phase
+history belongs in Git.
 
 ---
 
-## 9. Open items to confirm during implementation
+## 9. External confirmations
 
 - **Signed-payload API contract** — confirm with 3F the exact request shape for creating *and listing*
   offers without an API key: how a list request is authenticated/scoped to an adapter (the signed payload),
@@ -361,7 +230,7 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
 
 ---
 
-## 10. Pending / deferred items (post-Phase-3)
+## 10. Deferred work
 
 Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
@@ -369,7 +238,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **Custom offer pricing/scoring.** The default local strategy bids at the lowest partial-safe yield
-  permitted by the adapter floor and auction cap, and sizes by `getMaxAssets` headroom plus adapter
+  permitted by the adapter floor and auction cap, and sizes by selected adapter/lens headroom plus adapter
   per-request limits. Operators that need spread, risk-adjusted target rate, time-in-auction, or
   competing-offer logic should replace it with a local custom strategy or the built-in `webhook`
   strategy. The strategy returns principal and expected return; the solver signs and submits it after

@@ -84,7 +84,7 @@ func TestDirectSwaps_SkipsDiscountLegs(t *testing.T) {
 	h := common.HexToHash("0x01")
 	selected := &fillPlan{Legs: []fillLeg{
 		{Adapter: vlt, AmountIn: big.NewInt(1), AmountOut: big.NewInt(2)},
-		{Adapter: vlt, AmountIn: big.NewInt(3), AmountOut: big.NewInt(4), DiscountID: &h}, // discount leg → skipped (P3)
+		{Adapter: vlt, AmountIn: big.NewInt(3), AmountOut: big.NewInt(4), DiscountID: &h},
 	}}
 	swaps := directSwaps(selected, tIn, common.HexToAddress("0x0000000000000000000000000000000000000010"))
 	if len(swaps) != 1 || swaps[0].Swap.AmountIn.Cmp(big.NewInt(1)) != 0 || swaps[0].Adapter != vlt {

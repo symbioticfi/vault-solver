@@ -30,8 +30,8 @@ CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
 # Live 3F OpenAPI spec (Sepolia dev).
 OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
-# NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
-# rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
+# The configured deployment may lag backend source. Inspect adapter/protocolSignature fields before
+# accepting a refresh, or regenerate from a backend checkout at the intended revision.
 RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
 # LI.FI order-server OpenAPI spec (testnet/dev). The NestJS app serves a Scalar UI at /docs with NO raw
 # JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and

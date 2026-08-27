@@ -5,35 +5,29 @@ pluggable solver integrations. Each integration owns its protocol API, pricing, 
 settlement logic; the framework supplies shared chain access, signer, observability, lifecycle orchestration,
 and a nonce-serialized transaction manager.
 
-> **Status:** early build. Operator configuration examples live under [`config/`](config); architecture,
-> protocol plans, and contributor navigation start at [`docs/README.md`](docs/README.md). Engineering rules
-> are in [`CLAUDE.md`](CLAUDE.md), with `AGENTS.md` symlinked to it.
+> **Status:** early build. This README describes the operator-visible runtime. Annotated configuration
+> examples live under [`config/`](config). Contributors and coding agents start with
+> [`CLAUDE.md`](CLAUDE.md), then use the bounded context map in [`docs/README.md`](docs/README.md).
 
-## Architecture
+## Runtime model
 
-- `cmd/vault-solver` — CLI and process composition.
-- `internal/solver` — solver interface, registry, and run wrapper.
-- `internal/solvers/<name>` — self-contained protocol integrations.
-- `internal/{config,chain,signer,txmanager,observability}` — integration-agnostic infrastructure.
-- `internal/liquidlane` — shared LiquidLane protocol facts and planning primitives.
-- `api/` — committed generated contract bindings and external API clients.
-
-The service keeps no database. It rebuilds operational state from chain views and protocol APIs. See
-[Architecture](docs/ARCHITECTURE.md) for dependency direction and package ownership.
+One process runs every configured integration against a shared chain client and signer. Integrations that send
+transactions also share one nonce-serialized transaction manager; externally settled integrations do not start
+it unless another configured solver needs it. The service keeps no database and rebuilds operational state from
+chain views and protocol APIs.
 
 ## Solvers
 
-Config contains one or more `solvers` entries, at most one per runtime name. All entries share the chain client
-and signer. Transaction-sending integrations also share one transaction manager so a single EOA never races on
-nonces; externally settled OEV does not start it.
+Config contains one or more `solvers` entries, at most one per runtime name. Each integration strictly decodes
+and validates its own `config` block.
 
-| `solver.name` | Integration | Package | Plan | Example config |
-|---|---|---|---|---|
-| `3f-bridge-facilitator` | 3F bridge-loan auctions | `internal/solvers/bridgefacilitator` | [3F](docs/3F-PLAN.md) | [YAML](config/3f.example.yaml) |
-| `rfq-filler` | Symbiotic RFQ quoting and filling | `internal/solvers/rfq` | [RFQ](docs/RFQ-PLAN.md) | [YAML](config/rfq.example.yaml) |
-| `redstone-oev` | RedStone OEV liquidations | `internal/solvers/redstoneoev` | [OEV](docs/OEV-PLAN.md) | [YAML](config/redstone-oev.example.yaml) |
-| `lifi-samechain` | LI.FI same-chain intents | `internal/solvers/lifi` | [LI.FI](docs/LIFI-PLAN.md) | [YAML](config/lifi.example.yaml) |
-| `uniswapx-filler` | UniswapX V2 RFQ and public filling | `internal/solvers/uniswapx` | [UniswapX](docs/UNISWAPX-PLAN.md) | [YAML](config/uniswapx.example.yaml) |
+| Runtime name (`solvers[].name`) | Integration | Plan | Example config |
+|---|---|---|---|
+| `3f-bridge-facilitator` | 3F bridge-loan auctions | [3F](docs/3F-PLAN.md) | [YAML](config/3f.example.yaml) |
+| `rfq-filler` | Symbiotic RFQ quoting and filling | [RFQ](docs/RFQ-PLAN.md) | [YAML](config/rfq.example.yaml) |
+| `redstone-oev` | RedStone OEV liquidations | [RedStone OEV](docs/OEV-PLAN.md) | [YAML](config/redstone-oev.example.yaml) |
+| `lifi-samechain` | LI.FI same-chain intents | [LI.FI](docs/LIFI-PLAN.md) | [YAML](config/lifi.example.yaml) |
+| `uniswapx-filler` | UniswapX V2 RFQ and public filling | [UniswapX](docs/UNISWAPX-PLAN.md) | [YAML](config/uniswapx.example.yaml) |
 
 ### 3F Bridge Facilitator
 
@@ -81,32 +75,25 @@ Each solver selects a local strategy in its own config:
   can move.
 
 Protocol transport, signatures, deadlines, fresh reads, calldata, and settlement remain solver-owned. See
-[Strategy architecture](docs/strategy-plan.md) for the trust boundary.
+[Strategy contract](docs/STRATEGIES.md) for the trust boundary.
 
 ## Requirements
 
-- Go toolchain pinned by [`go.mod`](go.mod).
+- Go toolchain pinned by [`go.mod`](go.mod) when building from source.
 - Reachable EVM RPC and a signer key referenced indirectly through config.
-- `make tools` for pinned local `golangci-lint` and `abigen` under `.tools/bin`.
-- Java only when regenerating OpenAPI clients; Docker/Anvil only for their respective integration tests.
+- Integration-specific API access, contract deployment, and authorization described by the linked plan and
+  example config.
 
 ## Quickstart
 
+Set the environment variables referenced by the selected example (the signer secret is needed only to run),
+then:
+
 ```bash
-make tools
-make doctor
 make build
 ./bin/vault-solver version
 ./bin/vault-solver config validate --config config/3f.example.yaml
 ./bin/vault-solver run --config config/3f.example.yaml
-```
-
-Development checks:
-
-```bash
-make verify-fast TARGET=./internal/solver
-make format
-make verify
 ```
 
 Debug logging is disabled by default. Enable it through `observability.debug: true` or explicit `--debug`:
@@ -153,29 +140,3 @@ lane pauses new external commitments while accepted work and exact-hash reconcil
 The manager owns fee selection, gas estimation, replacement, same-nonce cancellation, canonical receipt
 confirmation, and bounded shutdown. See [Transaction manager lifecycle](docs/TXMANAGER.md) before changing or
 operating this path.
-
-## Code generation
-
-Generated code is committed for hermetic builds. Refresh the vendored contract first, then regenerate:
-
-```bash
-make refresh-abi FORGE_OUT=../rfq/out
-make refresh-openapi
-make refresh-rfq-openapi
-make refresh-lifi-openapi
-make refresh-uniswapx-openapi
-make refresh-morpho-graphql-schema
-make generate
-```
-
-The complete artifact-to-command map is in [Development](docs/DEVELOPMENT.md). Never hand-edit generated Go.
-
-## Contributing
-
-Read [`CLAUDE.md`](CLAUDE.md), inspect the focused change map in
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), unit-test new logic, and finish with:
-
-```bash
-make format
-make verify
-```

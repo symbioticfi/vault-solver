@@ -48,7 +48,8 @@ chain IDs, rates, intervals, limits, and secret references belong in YAML or an 
 - `internal/liquidlane` is shared protocol infrastructure, not generic framework. Its consumers are RFQ,
   LI.FI, OEV, and UniswapX; 3F must not be forced through it.
 - `internal/morpho` contains protocol math reused independently of one solver's orchestration.
-- `internal/parse`, `internal/tokenpolicy`, and `internal/webhook` are small neutral helpers.
+- `internal/parse`, `internal/tokenpolicy`, and `internal/webhook` are small neutral helpers;
+  `internal/tenderly` provides transaction-simulation links without owning protocol behavior.
 - `api/` contains generated external contracts and clients. Hand-written adapters project generated wire
   types into solver-owned domain types.
 
@@ -58,7 +59,8 @@ chain IDs, rates, intervals, limits, and secret references belong in YAML or an 
 2. Register its factory and pure validator through `solver.Registration`; mark externally submitted settlement
    explicitly, then blank-import it from `cmd/vault-solver/root.go`.
 3. Add generated external contracts under `api/` through the vendored-artifact Make targets.
-4. Add an annotated example config, plan, README catalog row, and focused tests.
-5. Run the architecture and repository gates documented in [Development](DEVELOPMENT.md).
+4. Add the schema variant, annotated example config, root README catalog row, integration plan, docs-index row,
+   and focused tests.
+5. Run the architecture, catalog, and repository gates documented in [Development](DEVELOPMENT.md).
 
 The composition-root import is expected; adding protocol branches or fields to generic packages is not.

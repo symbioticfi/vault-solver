@@ -1,6 +1,12 @@
-# vault-solver — RedStone OEV solver (plan)
+# RedStone OEV
 
-The **`redstone-oev`** solver: an off-chain bidder for RedStone Atom OEV auctions. The built-in
+> **Role:** maintained integration contract for `redstone-oev`: protocol ground truth, design decisions,
+> deployment prerequisites, and live open work.
+>
+> **Code/config:** `internal/solvers/redstoneoev` ·
+> [`config/redstone-oev.example.yaml`](../config/redstone-oev.example.yaml)
+
+The **`redstone-oev`** solver is an off-chain bidder for RedStone Atom OEV auctions. The built-in
 `default` strategy captures price-driven liquidations on **Morpho Blue** and exits the seized RWA
 collateral through **one** Symbiotic LiquidLane adapter (one vault) in the same atomic transaction. The
 solver boundary itself is generic: the solver owns the callback address, a strategy returns bid amount
@@ -154,8 +160,11 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 
 | File | Responsibility |
 |---|---|
-| `solver.go` | `Register`, factory, `Run` (loops + join), `handleAuction` → `buildBid`, ops loop, the head-stable Executor cache (`cachedState`/`stateCache`), Executor deposit floor, and outer EXECUTOR_V6 signing |
-| `strategy.go` | OEV strategy factory/construction, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
+| `solver.go` | registration, solver-owned dependencies/state, and runtime name |
+| `factory.go` | pure config validation, dependency construction, and WebSocket topic selection |
+| `runtime.go` | `Run`, ops refresh loop, head-stable Executor/adapter cache, and state publication |
+| `auction.go` | wire-message routing, auction deadline/staleness gates, `handleAuction` → `buildBid`, deposit/bid-cap checks, and outer EXECUTOR_V6 solve response |
+| `strategy.go` | lean `BidInput` construction (including solver-owned callback + adapter snapshot) and generic `BidOutput` validation |
 | `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register with policy metadata (for example, whether a solver bid cap is required), and custom strategies can register by name |
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
@@ -442,7 +451,7 @@ The payBid native pool is owner-funded (`receive`) and owner-withdrawable (`with
 `minBundleProfit` gate; otherwise (gate failed, or no matching authorized liquidation) it emits
 `PayBidResult(..., false)` and pays nothing — which the Executor records as `BidUnderpaid`, an event
 RedStone counts toward deposit slashing / blacklisting. A skipped leg in a multi-leg bundle can therefore
-convert a profitable settlement into a `BidUnderpaid` strike (see §10).
+convert a profitable settlement into a `BidUnderpaid` strike (see §8).
 
 Settlement events emitted on-chain (`LegResult` and `PayBidResult`; the Executor's
 `LiquidationFailed(solver indexed, nonce)`) document settlement and post-mortem reasons. The generic solver
@@ -452,6 +461,9 @@ is still fed by the WS `liquidation-result` push (§2).
 ---
 
 ## 6. Verified ground truth
+
+This section preserves implementation evidence and captured protocol behavior, not a live deployment registry.
+Revalidate mutable addresses, API access, and operational limits with RedStone before deployment.
 
 Primary sources: the RedStone OEV docs; `redstone-finance/redstone-evm-examples/oev`; the **verified
 Executor source** (Blockscout Sepolia, impl behind proxy `0xfdFB1862…EBd`); Morpho Blue
@@ -634,34 +646,6 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `intervals.opsPollMs` | solver Executor-state refresh cadence |
 | `intervals.executorStateMaxAgeMs` | max age of solver Executor cache before `executor_state_stale` (§3.3) |
 
-Hard cutovers already applied:
-
-- `OEV_DRY_RUN`, `OEV_TEST_MONITOR`, `OEV_TEST_MARKETS`, and `OEV_TEST_POSITIONS` are removed as
-  direct runtime inputs. Use `dryRun` and `strategy.config.testMonitor.{markets,positions}` in YAML;
-  non-secret env expansion remains available inside the file.
-- OEV strategy fields moved under `strategy.config`: `morphoApiUrl`, discovery/monitor settings, `bid`,
-  and `sizing`. Solver-owned `maxTxGasPriceWei` is top-level. The old unified
-  `intervals.maxStateAgeMs` split into `intervals.executorStateMaxAgeMs` for solver state and
-  `strategy.config.maxStateAgeMs` for default-strategy state. Unknown legacy keys fail strict decoding.
-- Static `bid.loanPerEth`, `bid.minBundleProfitLoan`, and `sizing.minLegProfitLoan` are removed. The former
-  `strategy.config.loanEthFeed` moved to the optional common `gas:` block; when enabled, the strategy converts
-  predicted gas, bid, and margin into signed loan-denominated profit floors before bidding. The old key is
-  rejected: map `ethUsd`/`maxAgeMs` to `gas.nativeUsdFeed`/duration-valued `gas.nativeMaxAge`, and map
-  `loanUsd` to a `gas.tokenUsdFeeds[]` entry for the adapter's actual loan asset with its own `maxAge`.
-- configurable `bid.gasBase` / `bid.gasPerLeg` is removed. Gas is route-aware from code constants plus
-  cached adapter/vault state.
-- configurable `bid.maxLegsPerBid` is removed. Bundle depth is derived from the cached latest header gas
-  limit, the observed RedStone settlement cap, and the route-aware gas prediction.
-- `sizing.maxSeizeFractionBps` is removed. Use `strategy.config.sizing.allowFullLiquidation`.
-
-Operational controls remain file-driven:
-
-| YAML field | Meaning |
-|---|---|
-| `dryRun: true` | sign and log would-bids, never send solves |
-| `strategy.config.testMonitor.markets[]` | fixed Sepolia harness Morpho market ids |
-| `strategy.config.testMonitor.positions[]` | fixed Sepolia harness borrower addresses |
-
 Production sets `dryRun` according to the approved rollout, omits `strategy.config.testMonitor`, and
 requires `strategy.config.morphoApiUrl` for the default strategy. Non-secret `${VAR}` expansion may be
 used inside the YAML; environment variables are not read as a separate operational-config channel.
@@ -687,7 +671,7 @@ conservative fallback because no cached route state means the solver cannot pric
 
 ---
 
-## 10. TODO / refinements
+## 8. Open work
 
 - **Keep calibrating predictor constants from real settlements.** The default strategy logs predicted
   route/gas; tune constants above worst observed successful settlements.
