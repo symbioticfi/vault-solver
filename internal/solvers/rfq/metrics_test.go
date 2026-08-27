@@ -30,12 +30,12 @@ func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
-	got := metricstest.HistogramCount(t, m.duration.With(prometheus.Labels{
-		"method": "POST", "route": "/quote", "status": "204",
-	}))
+	labels := prometheus.Labels{"method": "POST", "route": "/quote", "status": "204"}
+	got := metricstest.HistogramCount(t, m.duration.With(labels))
 	if got != 1 {
 		t.Fatalf("rfq_filler_http_request_duration_seconds_count{POST,/quote,204} = %d, want 1", got)
 	}
+	metricstest.RequireValue(t, m.requests.With(labels), 1)
 }
 
 func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
@@ -122,6 +122,26 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQuoteDecisionMetricsClassifyBadRequestSeparately(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, err := newRFQMetrics(reg, newStore(time.Now), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.now = func() time.Time { return time.Unix(123, 0) }
+	srv := testServer()
+	srv.metrics = metrics
+	body := validQuoteBody()
+	body.Type = "unsupported"
+
+	output, err := srv.handleQuote(t.Context(), &quoteInput{Secret: testSecret, Body: body})
+	if output != nil || err == nil {
+		t.Fatalf("bad request result = (%v, %v), want nil/error", output, err)
+	}
+	metricstest.RequireWorkflowEvent(t, reg, Name, "quote", string(quoteDecisionBadRequest), 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "quote", string(quoteDecisionError), 0, 0)
 }
 
 func TestQuoteDecisionMetricsIgnoreUnauthenticatedRequests(t *testing.T) {

@@ -24,7 +24,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Single-instance 3F offer, API-view, backlog, and redeem execution dashboard. This deployment is scoped to the opportunity execution lane and its independent signer/RPC/txmanager. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, kubernetes_pod, job, and instance. Requires vault-solver metrics commit d5f5385e or a descendant.",
+  "description": "Single-instance 3F offer, API-view, backlog, and redeem execution dashboard. This deployment is scoped to the opportunity execution lane and its independent signer/RPC/txmanager. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, pod, job, and instance. Requires the metric families documented in the repository README.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -50,7 +50,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (solver_bot_workflow_last_observation_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}), 0) * ((solver_bot_workflow_last_observation_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}) > bool 0)",
+                      "expr": "clamp_min(time() - (solver_bot_workflow_last_observation_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}), 0) * ((solver_bot_workflow_last_observation_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}) > bool 0)",
                       "instant": true,
                       "legendFormat": "{{view}}",
                       "range": false
@@ -134,7 +134,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) > bool 0)",
+                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) > bool 0)",
                       "instant": true,
                       "legendFormat": "last redeem",
                       "range": false
@@ -156,7 +156,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"active_requests\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"active_requests\"}) > bool 0)",
+                      "expr": "clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"active_requests\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"active_requests\"}) > bool 0)",
                       "instant": true,
                       "legendFormat": "active backlog",
                       "range": false
@@ -178,7 +178,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"redeemable\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"redeemable\"}) > bool 0)",
+                      "expr": "clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"redeemable\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",view=\"redeemable\"}) > bool 0)",
                       "instant": true,
                       "legendFormat": "redeem backlog",
                       "range": false
@@ -354,7 +354,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]))",
+                      "expr": "sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "{{outcome}}",
                       "range": false
@@ -438,7 +438,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(((sum by (asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]))) > 0), \"token_display\", \"\u200b$1\", \"asset\", \"(.*)\")",
+                      "expr": "label_replace(((sum by (asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]))) > 0), \"token_display\", \"\u200b$1\", \"asset\", \"(.*)\")",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -559,7 +559,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(solver_bot_external_operation_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(solver_bot_external_operation_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}[$__rate_interval])))",
                       "legendFormat": "{{operation}}",
                       "range": true
                     }
@@ -671,7 +671,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_workflow_observed_items{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"}",
+                      "expr": "solver_bot_workflow_observed_items{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"}",
                       "legendFormat": "{{view}}",
                       "range": true
                     }
@@ -765,7 +765,7 @@
       "spec": {
         "id": 18,
         "title": "Redeem transaction outcomes",
-        "description": "Exact terminal txmanager outcomes over the selected range.",
+        "description": "Transaction outcomes only. Request-count workflow events are shown separately and are not added to transaction counts.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -783,7 +783,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (((sum by (job, instance, outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range]))) > 0) or label_replace(increase(solver_bot_workflow_events_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]), \"outcome\", \"confirmed\", \"job\", \".*\"))) > 0",
+                      "expr": "sum by (outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range]))",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -889,7 +889,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]))",
+                      "expr": "sum(increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "included tx",
                       "range": false
@@ -911,7 +911,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_gas_used_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range]))",
+                      "expr": "sum(increase(solver_bot_txmanager_gas_used_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "gas used",
                       "range": false
@@ -933,7 +933,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range])) / 1e18",
+                      "expr": "sum(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"redeem\"}[$__range])) / 1e18",
                       "instant": true,
                       "legendFormat": "fee paid",
                       "range": false
@@ -1064,7 +1064,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_service_ready{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": true,
                       "legendFormat": "service",
                       "range": false
@@ -1149,7 +1149,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]))",
+                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "selected range",
                       "range": false
@@ -1231,7 +1231,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]))",
+                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "selected range",
                       "range": false
@@ -1313,7 +1313,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_workflow_observed_items{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"}",
+                      "expr": "solver_bot_workflow_observed_items{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"}",
                       "instant": true,
                       "legendFormat": "current",
                       "range": false
@@ -1395,7 +1395,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_workflow_observed_items{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"}",
+                      "expr": "solver_bot_workflow_observed_items{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"}",
                       "instant": true,
                       "legendFormat": "current",
                       "range": false
@@ -1477,7 +1477,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range])) > bool 0)",
+                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range])) > bool 0)",
                       "instant": true,
                       "legendFormat": "activity",
                       "range": false
@@ -1570,7 +1570,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_workflow_observed_items{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}",
+                      "expr": "solver_bot_workflow_observed_items{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"3f-bridge-facilitator\"}",
                       "instant": true,
                       "legendFormat": "{{view}}",
                       "range": false
@@ -1945,10 +1945,6 @@
         "pluginId": "prometheus",
         "refresh": "onDashboardLoad",
         "regex": "",
-        "current": {
-          "text": "Prometheus",
-          "value": "prometheus"
-        },
         "options": [],
         "multi": false,
         "includeAll": false,
@@ -1959,39 +1955,79 @@
       }
     },
     {
-      "kind": "CustomVariable",
+      "kind": "QueryVariable",
       "spec": {
         "name": "namespace",
-        "query": "mainnet : symbiotic-fi,sepolia : sepolia-symbiotic-fi,any : .*",
-        "current": {
-          "text": "mainnet",
-          "value": "symbiotic-fi"
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
         "label": "Namespace",
         "hide": "dontHide",
+        "refresh": "onDashboardLoad",
         "skipUrlSync": false,
-        "allowCustomValue": true
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{solver=\"3f-bridge-facilitator\"}, namespace)",
+            "refId": "PrometheusVariableQueryEditor-namespace"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{solver=\"3f-bridge-facilitator\"}, namespace)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
       }
     },
     {
-      "kind": "CustomVariable",
+      "kind": "QueryVariable",
       "spec": {
         "name": "pod_regex",
-        "query": "3F : vault-solver-3f.*,LI.FI : vault-solver-lifi.*,RFQ : vault-solver-rfq.*,UniswapX : vault-solver-uniswapx.*,OEV : vault-solver-(oev|redstone-oev).*,all vault solvers : vault-solver-.*,any target : .*",
-        "current": {
-          "text": "all vault solvers",
-          "value": "vault-solver-.*"
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "label": "Solver pods",
+        "label": "Pods",
         "hide": "dontHide",
+        "refresh": "onDashboardLoad",
         "skipUrlSync": false,
-        "allowCustomValue": true
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=~\"${namespace:regex}\"}, pod)",
+            "refId": "PrometheusVariableQueryEditor-pod"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=~\"${namespace:regex}\"}, pod)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
       }
     },
     {
@@ -2010,13 +2046,13 @@
             "name": "${datasource}"
           },
           "spec": {
-            "query": "label_values(solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",solver=\"3f-bridge-facilitator\"}, job)",
+            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"3f-bridge-facilitator\"}, job)",
             "refId": "PrometheusVariableQueryEditor-job"
           }
         },
         "regex": "",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",solver=\"3f-bridge-facilitator\"}, job)",
+        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"3f-bridge-facilitator\"}, job)",
         "options": [],
         "multi": false,
         "includeAll": false,
@@ -2043,13 +2079,13 @@
             "name": "${datasource}"
           },
           "spec": {
-            "query": "label_values(solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",solver=\"3f-bridge-facilitator\",job=~\"${job:regex}\"}, instance)",
+            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"3f-bridge-facilitator\",job=~\"${job:regex}\"}, instance)",
             "refId": "PrometheusVariableQueryEditor-instance"
           }
         },
         "regex": "",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",solver=\"3f-bridge-facilitator\",job=~\"${job:regex}\"}, instance)",
+        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"3f-bridge-facilitator\",job=~\"${job:regex}\"}, instance)",
         "options": [],
         "multi": false,
         "includeAll": false,
@@ -2060,5 +2096,6 @@
         }
       }
     }
-  ]
+  ],
+  "uid": "vault-solver-threef"
 }

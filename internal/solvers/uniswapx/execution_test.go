@@ -17,6 +17,7 @@ import (
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -689,6 +690,8 @@ func TestFillLoopDefersQueuedOrderWhileNonceLaneUnavailable(t *testing.T) {
 func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	fixture.order.Source = orderSourcePublicV2
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+	fixture.solver.metrics = metrics
 	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
 	fixture.solver.inFlight[fixture.order.Hash] = true
 	fixture.solver.setPendingReservations(
@@ -713,6 +716,36 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 		fixture.solver.localBlockUntil.Load() != 0 {
 		t.Fatal("not-admitted fill counted toward retry or fade breaker failures")
 	}
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "fill", liquidlane.FillOutcomeNotAdmitted, 1,
+	)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+}
+
+func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	fixture.order.Source = orderSourcePublicV2
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 2, Window: time.Minute}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+	fixture.solver.metrics = metrics
+	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.setPendingReservations(
+		fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+	)
+
+	fixture.solver.completePendingFill(uniswapFillCompletion{
+		fill: &pendingUniswapFill{order: fixture.order},
+		result: txmanager.Result{
+			Outcome: txmanager.OutcomeReverted,
+			Err:     errors.New("fill reverted"),
+		},
+	})
+
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 1)
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "fill", liquidlane.FillOutcomeNotAdmitted, 0,
+	)
 }
 
 func waitForExecutionCondition(t *testing.T, condition func() bool) {

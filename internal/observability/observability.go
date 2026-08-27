@@ -5,6 +5,7 @@ package observability
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -143,6 +144,43 @@ func (o *OperationObserver) Observe(outcome ExternalOperationOutcome, duration t
 		outcome = ExternalOperationError
 	}
 	o.observers[outcome].Observe(duration.Seconds())
+}
+
+// OperationTimer records one operation exactly once. Cancellation changes only an unresolved error
+// outcome to skipped, so a completed operation is never relabeled by a later context cancellation.
+type OperationTimer struct {
+	observer  *OperationObserver
+	startedAt time.Time
+	once      sync.Once
+}
+
+// StartOperation starts a timer for an already-bound operation observer.
+func StartOperation(observer *OperationObserver) *OperationTimer {
+	return &OperationTimer{observer: observer, startedAt: time.Now()}
+}
+
+// Finish records the terminal outcome and elapsed time. Repeated calls are ignored.
+func (t *OperationTimer) Finish(ctx context.Context, outcome ExternalOperationOutcome) {
+	if t == nil {
+		return
+	}
+	t.once.Do(func() {
+		ObserveOperation(ctx, t.observer, outcome, time.Since(t.startedAt))
+	})
+}
+
+// ObserveOperation records a measured operation duration with the shared cancellation rule. It is
+// useful when one operation's measured I/O phases are separated by work that must stay outside its timer.
+func ObserveOperation(
+	ctx context.Context,
+	observer *OperationObserver,
+	outcome ExternalOperationOutcome,
+	duration time.Duration,
+) {
+	if ctx != nil && ctx.Err() != nil && outcome == ExternalOperationError {
+		outcome = ExternalOperationSkipped
+	}
+	observer.Observe(outcome, duration)
 }
 
 // Health tracks process liveness and readiness for the HTTP probes.

@@ -487,8 +487,9 @@ generation; a full queue deterministically logs and drops the newest retry and r
 `queue_drop/capacity_retry`. That reservation queue has no timer. A separate
 worker-owned deposit-propagation timer handles only OIF status `None` as described in §4; it does not re-run
 reservation-blocked decisions or accepted transactions. Each retained status-`None` attempt is classified as
-workflow event `order_processing/deposit_deferred`; bounded-queue overflow records
-`queue_drop/deposit_retry`.
+workflow event `order_processing/deposit_deferred`. Queue overflow and terminal key/deadline/retry-window
+expiry record `queue_drop/deposit_retry`; expiry is also `order_processing/not_actionable` whether detected
+while scheduling or when the timer pops the order.
 The feed loop registers the bounded inbox and its separate REST-recovery retry hold; the worker registers
 the capacity and deposit retry queues. The LI.FI metrics collector exposes
 `lifi_order_backlog{stage}` and `lifi_order_nearest_deadline_timestamp{stage}` without adding order IDs or

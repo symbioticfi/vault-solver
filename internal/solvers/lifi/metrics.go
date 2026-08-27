@@ -311,6 +311,13 @@ func (s *Solver) observeQuoteRefresh(state *quoteState) {
 	}
 }
 
+func (s *Solver) operationObservers() lifiOperationObservers {
+	if s == nil || s.metrics == nil {
+		return lifiOperationObservers{}
+	}
+	return s.metrics.operations
+}
+
 func (m *lifiMetrics) observeOrderProcessing(outcome orderProcessingOutcome) {
 	if m != nil {
 		m.workflow.ObserveEvent("order_processing", string(boundedOrderProcessingOutcome(outcome)))
@@ -327,20 +334,23 @@ func boundedOrderProcessingOutcome(outcome orderProcessingOutcome) orderProcessi
 }
 
 func (m *lifiMetrics) observeOrderQueueDrop(queue orderQueue, err error) {
-	if m == nil || !orderQueueIsFull(queue, err) {
+	if m == nil || !orderQueueWasDropped(queue, err) {
 		return
 	}
 	m.workflow.ObserveEvent("queue_drop", string(queue))
 }
 
-func orderQueueIsFull(queue orderQueue, err error) bool {
+func orderQueueWasDropped(queue orderQueue, err error) bool {
 	switch queue {
 	case orderQueueInbox:
 		return errors.Is(err, errOrderInboxFull)
 	case orderQueueCapacityRetry:
 		return errors.Is(err, errOrderRetryFull)
 	case orderQueueDepositRetry:
-		return errors.Is(err, errOrderDepositRetryFull)
+		return errors.Is(err, errOrderDepositRetryFull) ||
+			errors.Is(err, errOrderDepositRetryKey) ||
+			errors.Is(err, errOrderDepositRetryExpired) ||
+			errors.Is(err, errOrderDepositRetryWindow)
 	case orderQueueRecoveryRetry:
 		return false
 	default:

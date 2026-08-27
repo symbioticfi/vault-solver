@@ -53,7 +53,6 @@ type Solver struct {
 	quoteRefresh chan struct{}
 	discounts    discounts.Provider
 	metrics      *lifiMetrics
-	operations   lifiOperationObservers
 }
 
 type chainReader interface {
@@ -105,16 +104,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey, log)
-	var (
-		metrics    *lifiMetrics
-		operations lifiOperationObservers
-	)
+	var metrics *lifiMetrics
 	if deps.Metrics != nil {
 		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
 		if err != nil {
 			return nil, err
 		}
-		operations = metrics.operations
 	}
 	result := &Solver{
 		cfg:          cfg,
@@ -131,7 +126,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		wallNow:      time.Now,
 		txLaneState:  deps.TxManager,
 		metrics:      metrics,
-		operations:   operations,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)

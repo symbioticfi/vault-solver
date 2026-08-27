@@ -379,7 +379,8 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ## Observability
 
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
-config is required for the collectors below.
+config is required for the collectors below. During graceful shutdown readiness drops first, while
+liveness and metrics remain available until the shared transaction manager finishes its bounded drain.
 
 ### Metrics
 
@@ -393,7 +394,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate admits work, otherwise `0`. This is process/nonce-lane readiness, not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
-| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP, rate-limit, decode, context, and JSON-RPC errors separated. |
+| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
 | RPC | `solver_bot_rpc_inflight` | `role` | Calls whose response bodies have not completed; a sustained value exposes a hung endpoint or consumer. |
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
@@ -409,17 +410,19 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
 | Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
-| Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. |
+| Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. A distinct write endpoint is tried first, then the fallback-capable read client if the submission endpoint does not serve balance reads. |
 | Txmanager | `solver_bot_txmanager_account_latest_nonce` | — | Mined nonce from the same complete snapshot; absent until the first successful refresh. |
 | Txmanager | `solver_bot_txmanager_account_pending_nonce` | — | Pending nonce from the same complete snapshot; compare with latest nonce to detect unknown pending work. It is absent until the first successful refresh. |
 | Txmanager | `solver_bot_txmanager_account_refreshes_total` | `outcome` | Complete periodic account snapshots classified as `success` or `error`; failed reads retain the previous scrape-consistent snapshot. |
 | Txmanager | `solver_bot_txmanager_account_last_successful_refresh_timestamp` | — | Freshness of the retained balance and nonce snapshot; absent until the first successful refresh. |
 | Workflow | `solver_bot_workflow_events_total` | `solver`, `strategy`, `event`, `outcome` | Bounded solver events. Event/outcome pairs are fixed at construction; request data and errors cannot create labels. |
+| Workflow | `solver_bot_workflow_dropped_observations_total` | `solver`, `strategy`, `reason` | Observations rejected because code used an undeclared event/outcome, amount kind, or state view. Any increase is an instrumentation contract drift signal; reasons are bounded. |
 | Workflow | `solver_bot_workflow_last_event_timestamp` | `solver`, `strategy`, `event`, `outcome` | Last occurrence of the matching bounded event, including successful fills, quotes, wins, settlements, and refreshes. |
 | Workflow | `solver_bot_workflow_amount_atomic_units_total` | `solver`, `strategy`, `event`, `asset`, `kind` | Event amounts in asset atomic units. Never aggregate unlike `asset` values; `planned_surplus` is gross planning output, not realized PnL. |
 | Workflow | `solver_bot_workflow_observed_items` | `solver`, `strategy`, `view` | Last complete authoritative item count for a bounded state view. |
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
+| RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
 | RFQ | `rfq_active_orders` | — | Current queued, submitting, or submitted obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
@@ -442,6 +445,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | OEV | `oev_oldest_won_inflight_age_seconds` | `strategy` | Age since the oldest still-inflight win was locally observed; `0` when no locally won reservation remains. |
 | OEV | `oev_hotpath_seconds` | `strategy` | End-to-end handling latency for parsed auction frames against the auction's short decision budget. |
 | OEV | `oev_deposit_wei` | `strategy` | Executor deposit from the last complete state refresh; use it to monitor settlement runway. |
+| OEV | `oev_deposit_below_floor` | `strategy` | `1` when the Executor deposit is below the settlement floor, without requiring dashboards or alerts to duplicate the contract threshold. |
 | OEV | `oev_feed_connected` | `strategy` | `1` only after the WebSocket is connected and every configured subscription frame has been sent; `0` before dial, during backoff, and from teardown onward. |
 | 3F | `threef_backlog_nonempty_since_timestamp` | `view` | Process-local timestamp when complete authoritative snapshots first began continuously reporting a non-empty `active_requests` or `redeemable` backlog. `0` also means no authoritative non-empty observation has occurred yet, so pair it with view freshness. It resets on restart and is deliberately not presented as an individual request age. |
 
@@ -451,8 +455,8 @@ Bounded workflow dimensions:
 |---|---|---|
 | RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/success` | `quote/{input,output}` and `fill/{input,output,planned_surplus}` by asset |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
-| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/success` | Quote and fill amounts by asset and kind |
-| OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage |
+| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the current route snapshot |
+| OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
 | 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Offer `principal` and `expected_yield` by deposit asset |
 
 Event timestamps reset to `0` on restart; use `max_over_time(...[$__range])` when a dashboard should
@@ -469,15 +473,18 @@ Txmanager `label` values are stable operation names (`redeem`, `rfq-fill`, `lifi
 `uniswapx-fill`). Terminal outcomes are `confirmed`, `included_unconfirmed`, `reverted`, `cancelled`,
 `submission_error`, and `tracking_stopped`. LiquidLane counters include successful receipts reported as
 `included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
-different token labels must not be added without price/decimal normalization.
+different token labels must not be added without price/decimal normalization. An inclusion observed only
+during shutdown can still be reorged after process exit, so it may overcount a success and, for UniswapX,
+clear the local fill-failure breaker; accounting systems must use canonical on-chain data instead.
 
 ### Grafana dashboards
 
 Six native Grafana Dashboard Schema v2 templates are committed under
 [`dashboards/`](dashboards/): a fleet-safe Runtime dashboard and single-instance dashboards for 3F,
-RFQ, LI.FI, UniswapX, and OEV. Each JSON file is a bare `DashboardSpec` using a selectable
-`${datasource}` and Kubernetes target labels `namespace`, `kubernetes_pod`, `job`, and `instance`.
-Deployment resources and provisioning remain separate from these templates.
+RFQ, LI.FI, UniswapX, and OEV. Each JSON file is a bare `DashboardSpec` with a stable `uid`, a
+selectable `${datasource}`, and query-driven namespace/pod selectors over the standard Kubernetes target
+labels `namespace`, `pod`, `job`, and `instance`. No cluster namespace, pod-name pattern, or datasource UID
+is embedded in the templates. Deployment resources and provisioning remain separate.
 
 ## Configuration
 
@@ -490,7 +497,8 @@ inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
+endpoints. Sender-balance telemetry prefers that endpoint but falls back to the ordinary read client when a
+submission-only relay rejects `eth_getBalance`. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
 that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
 normal read fallback behavior. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable

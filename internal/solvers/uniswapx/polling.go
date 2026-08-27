@@ -29,7 +29,7 @@ func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error
 func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) error {
 	var pollErrs []error
 	if s.cfg.OrderServer.Sources.ExclusiveV2 {
-		startedAt := time.Now()
+		timer := observability.StartOperation(s.operations.exclusiveOrderPoll)
 		outcome := observability.ExternalOperationError
 		now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
 		if err != nil {
@@ -48,13 +48,10 @@ func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) erro
 			s.recordExclusivePollSuccess(time.Now())
 			s.observePoll(string(orderSourceExclusiveV2), "ok")
 		}
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		}
-		s.operations.exclusiveOrderPoll.Observe(outcome, time.Since(startedAt))
+		timer.Finish(ctx, outcome)
 	}
 	if s.cfg.OrderServer.Sources.PublicV2 {
-		startedAt := time.Now()
+		timer := observability.StartOperation(s.operations.publicOrderPoll)
 		outcome := observability.ExternalOperationError
 		now, err := s.pollSource(ctx, orderSourcePublicV2, nil, out)
 		if err != nil {
@@ -67,10 +64,7 @@ func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) erro
 			outcome = observability.ExternalOperationSuccess
 			s.observePoll(string(orderSourcePublicV2), "ok")
 		}
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		}
-		s.operations.publicOrderPoll.Observe(outcome, time.Since(startedAt))
+		timer.Finish(ctx, outcome)
 	}
 	return errors.Join(pollErrs...)
 }

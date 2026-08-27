@@ -96,11 +96,14 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		return nil, huma.Error403Forbidden("forbidden")
 	}
 	decision, err := s.quotes.quote(ctx, &in.Body)
+	var bad *badRequestError
+	if errors.As(err, &bad) {
+		decision.outcome = quoteDecisionBadRequest
+	}
 	s.metrics.observeQuoteDecision(decision.outcome)
 	s.metrics.observeQuotedAmounts(decision.observation)
 	if err != nil {
-		var bad *badRequestError
-		if errors.As(err, &bad) {
+		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
 		s.log.Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))

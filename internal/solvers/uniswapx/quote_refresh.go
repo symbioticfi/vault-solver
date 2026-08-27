@@ -43,14 +43,9 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 }
 
 func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Route) error {
-	startedAt := time.Now()
+	timer := observability.StartOperation(s.operations.quoteRefresh)
 	outcome := observability.ExternalOperationError
-	defer func() {
-		if ctx.Err() != nil && outcome == observability.ExternalOperationError {
-			outcome = observability.ExternalOperationSkipped
-		}
-		s.operations.quoteRefresh.Observe(outcome, time.Since(startedAt))
-	}()
+	defer func() { timer.Finish(ctx, outcome) }()
 
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()

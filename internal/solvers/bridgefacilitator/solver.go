@@ -235,9 +235,9 @@ type adapterOffering struct {
 // discoverAndOffer lists open auctions, snapshots adapter liquidity/exposure once, delegates offer
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
-	refreshStarted := time.Now()
+	timer := observability.StartOperation(s.operations.offerRefresh)
 	observeRefresh := func(outcome observability.ExternalOperationOutcome) {
-		s.operations.offerRefresh.Observe(outcome, time.Since(refreshStarted))
+		timer.Finish(ctx, outcome)
 	}
 	if !s.canCreateOffer() {
 		observeRefresh(observability.ExternalOperationSkipped)
@@ -246,9 +246,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 	if len(s.targets) == 0 {
 		outcome := observability.ExternalOperationSuccess
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		} else if !s.targetsAuthoritative {
+		if !s.targetsAuthoritative {
 			outcome = observability.ExternalOperationDegraded
 		}
 		observeRefresh(outcome)
@@ -257,11 +255,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 	auctions, err := s.api.listAuctions(ctx)
 	if err != nil {
-		outcome := observability.ExternalOperationError
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		}
-		observeRefresh(outcome)
+		observeRefresh(observability.ExternalOperationError)
 		s.log.Error(err, "discover: list auctions")
 		return
 	}
@@ -290,8 +284,6 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	s.observeTargetDerivedState(threeFStateOffers, len(s.offers.liveEntries(now)), offersComplete)
 	refreshOutcome := observability.ExternalOperationSuccess
 	switch {
-	case ctx.Err() != nil:
-		refreshOutcome = observability.ExternalOperationSkipped
 	case len(offerings) == 0 && len(s.targets) != 0:
 		refreshOutcome = observability.ExternalOperationError
 	case !s.targetsAuthoritative || !offersComplete || liquidityReadsFailed != 0:
@@ -384,7 +376,7 @@ func (s *Solver) submitOfferIfLaneReady(ctx context.Context, dto threef.CreateOf
 
 // reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
-	refreshStarted := time.Now()
+	timer := observability.StartOperation(s.operations.activeRequestRefresh)
 	totalOpen := 0
 	complete := true
 	successfulReads := 0
@@ -403,14 +395,12 @@ func (s *Solver) reconcile(ctx context.Context) {
 	s.observeTargetDerivedState(threeFStateActiveRequests, totalOpen, complete)
 	outcome := observability.ExternalOperationSuccess
 	switch {
-	case ctx.Err() != nil:
-		outcome = observability.ExternalOperationSkipped
 	case len(s.targets) != 0 && successfulReads == 0:
 		outcome = observability.ExternalOperationError
 	case !s.targetsAuthoritative || !complete:
 		outcome = observability.ExternalOperationDegraded
 	}
-	s.operations.activeRequestRefresh.Observe(outcome, time.Since(refreshStarted))
+	timer.Finish(ctx, outcome)
 }
 
 // nextNonce returns a strictly-increasing offer nonce.
@@ -430,14 +420,9 @@ func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
 }
 
 func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
-	refreshStarted := time.Now()
+	timer := observability.StartOperation(s.operations.targetRefresh)
 	refreshOutcome := observability.ExternalOperationError
-	defer func() {
-		if ctx.Err() != nil {
-			refreshOutcome = observability.ExternalOperationSkipped
-		}
-		s.operations.targetRefresh.Observe(refreshOutcome, time.Since(refreshStarted))
-	}()
+	defer func() { timer.Finish(ctx, refreshOutcome) }()
 	// Until this pass proves otherwise, derived observations cannot claim complete target coverage.
 	// Whole-batch failures retain the safe runtime snapshot but must also retain metric freshness.
 	s.targetsAuthoritative = false

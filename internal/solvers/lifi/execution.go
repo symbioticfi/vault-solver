@@ -453,14 +453,9 @@ func (s *Solver) recoverOrdersUntilSuccess(
 	ctx context.Context,
 	inbox *orderInbox,
 ) bool {
-	startedAt := time.Now()
+	timer := observability.StartOperation(s.operationObservers().orderRecovery)
 	outcome := observability.ExternalOperationError
-	defer func() {
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		}
-		s.operations.orderRecovery.Observe(outcome, time.Since(startedAt))
-	}()
+	defer func() { timer.Finish(ctx, outcome) }()
 
 	backoff := initialOrderRecoveryBackoff
 	recovered := make(map[string]bool)
@@ -773,6 +768,8 @@ func (s *Solver) runOrderWorker(
 		case <-depositRetryC:
 			order, err := depositRetries.popReady(retryNow())
 			if err != nil {
+				s.metrics.observeOrderProcessing(orderProcessingNotActionable)
+				s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
 				s.log.Info("order skipped: deposit did not become visible within retry bounds",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,

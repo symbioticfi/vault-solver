@@ -2,6 +2,8 @@
 package metricstest
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -26,7 +28,7 @@ func RequireValue(tb testing.TB, collector prometheus.Collector, want float64) {
 	}
 }
 
-// RequireFamilyValue checks one counter or gauge selected by an exact label subset.
+// RequireFamilyValue checks the unique counter or gauge selected by a label subset.
 func RequireFamilyValue(
 	tb testing.TB,
 	gatherer prometheus.Gatherer,
@@ -40,7 +42,8 @@ func RequireFamilyValue(
 	}
 }
 
-// FamilyValue returns one counter or gauge selected by an exact label subset.
+// FamilyValue returns the unique counter or gauge selected by a label subset. It fails when the
+// subset is ambiguous, so an assertion cannot accidentally validate an arbitrary strategy or series.
 func FamilyValue(
 	tb testing.TB,
 	gatherer prometheus.Gatherer,
@@ -52,6 +55,10 @@ func FamilyValue(
 	if err != nil {
 		tb.Fatalf("gather metrics: %v", err)
 	}
+	var (
+		value float64
+		found bool
+	)
 	for _, family := range families {
 		if family.GetName() != familyName {
 			continue
@@ -60,19 +67,25 @@ func FamilyValue(
 			if !hasLabels(metric, labels) {
 				continue
 			}
+			if found {
+				tb.Fatalf("ambiguous metric %s%v; add distinguishing labels", familyName, labels)
+			}
 			switch family.GetType() {
 			case dto.MetricType_COUNTER:
-				return metric.GetCounter().GetValue()
+				value = metric.GetCounter().GetValue()
 			case dto.MetricType_GAUGE:
-				return metric.GetGauge().GetValue()
+				value = metric.GetGauge().GetValue()
 			case dto.MetricType_SUMMARY, dto.MetricType_UNTYPED, dto.MetricType_HISTOGRAM,
 				dto.MetricType_GAUGE_HISTOGRAM:
 				tb.Fatalf("metric family %s has unsupported type %s", familyName, family.GetType())
 			}
+			found = true
 		}
 	}
-	tb.Fatalf("missing metric %s%v", familyName, labels)
-	return 0
+	if !found {
+		tb.Fatalf("missing metric %s%v", familyName, labels)
+	}
+	return value
 }
 
 // HistogramCount returns the sample count exposed by a histogram observer.
@@ -88,7 +101,7 @@ func RequireHistogram(tb testing.TB, observer prometheus.Observer, wantCount uin
 	if got := value.GetSampleCount(); got != wantCount {
 		tb.Fatalf("histogram count = %d, want %d", got, wantCount)
 	}
-	if got := value.GetSampleSum(); got != wantSum {
+	if got := value.GetSampleSum(); math.Abs(got-wantSum) > 1e-12*max(1, math.Abs(got), math.Abs(wantSum)) {
 		tb.Fatalf("histogram sum = %v, want %v", got, wantSum)
 	}
 }
@@ -151,7 +164,7 @@ func RequireWorkflowAmount(
 ) {
 	tb.Helper()
 	RequireFamilyValue(tb, gatherer, workflowAmountsFamily, map[string]string{
-		"solver": solver, "event": event, "asset": asset, "kind": kind,
+		"solver": solver, "event": event, "asset": strings.ToLower(asset), "kind": kind,
 	}, want)
 }
 
@@ -180,6 +193,7 @@ func RequireExternalOperationCount(
 	if err != nil {
 		tb.Fatalf("gather metrics: %v", err)
 	}
+	var matched *dto.Metric
 	for _, family := range families {
 		if family.GetName() != externalOperationFamily {
 			continue
@@ -190,11 +204,16 @@ func RequireExternalOperationCount(
 			}) {
 				continue
 			}
-			if got := metric.GetHistogram().GetSampleCount(); got != want {
-				tb.Fatalf("%s/%s/%s count = %d, want %d", solver, operation, outcome, got, want)
+			if matched != nil {
+				tb.Fatalf("ambiguous external operation series %s/%s/%s", solver, operation, outcome)
 			}
-			return
+			matched = metric
 		}
 	}
-	tb.Fatalf("missing external operation series %s/%s/%s", solver, operation, outcome)
+	if matched == nil {
+		tb.Fatalf("missing external operation series %s/%s/%s", solver, operation, outcome)
+	}
+	if got := matched.GetHistogram().GetSampleCount(); got != want {
+		tb.Fatalf("%s/%s/%s count = %d, want %d", solver, operation, outcome, got, want)
+	}
 }

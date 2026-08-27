@@ -665,6 +665,70 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 	}
 }
 
+func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatalf("New strategy: %v", err)
+	}
+	solver := newProcessTestSolver(
+		fixture.cfg,
+		fixture.caller,
+		&fakeLifiTxSender{},
+		strategy,
+		fixture.tokenIn,
+		fixture.tokenOut,
+		fixture.adapter,
+		lifiOrderStatusNone,
+	)
+	reg := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(reg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver.metrics = metrics
+	expired := make(chan struct{}, 1)
+	solver.log = funcr.NewJSON(func(entry string) {
+		if strings.Contains(entry, "deposit did not become visible within retry bounds") {
+			select {
+			case expired <- struct{}{}:
+			default:
+			}
+		}
+	}, funcr.Options{})
+	base := time.Now()
+	var wallCalls atomic.Int32
+	solver.wallNow = func() time.Time {
+		if wallCalls.Add(1) == 1 {
+			return base
+		}
+		return base.Add(maximumOrderDepositRetryWindow + time.Second)
+	}
+	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	order.Order.Expires = uint32(base.Add(time.Hour).Unix())
+	order.Order.FillDeadline = uint32(base.Add(time.Hour).Unix())
+	orders := make(chan *submittedOrder, 1)
+	orders <- order
+	done := make(chan error, 1)
+	go func() { done <- solver.runOrderWorker(t.Context(), nil, orders, nil, nil) }()
+	select {
+	case <-expired:
+	case <-time.After(time.Second):
+		t.Fatal("deposit retry did not expire from the timer path")
+	}
+	close(orders)
+	if err := <-done; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
+	}
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "order_processing", string(orderProcessingDepositDeferred), 1,
+	)
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "order_processing", string(orderProcessingNotActionable), 1,
+	)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "queue_drop", string(orderQueueDepositRetry), 1)
+}
+
 func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
@@ -989,7 +1053,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	solver.operations = operationMetrics.operations
+	solver.metrics = operationMetrics
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	inbox := newOrderInbox(2)

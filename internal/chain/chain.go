@@ -25,8 +25,9 @@ var multicallB = multicall3.NewMulticall3()
 
 // Client is an ethclient.Client plus the chain id and the Multicall3 address, cached at dial time.
 // When a separate write RPC is configured, writeClient carries transaction broadcasts and account
-// nonce reads so startup observes one coherent nonce lane. All other reads stay on the
-// embedded (primary) client. Broadcasts never use cross-endpoint fallback: an ambiguous first send
+// nonce reads so startup observes one coherent nonce lane. Sender balance telemetry tries that endpoint
+// first and falls back to the read client when the write endpoint does not support balance reads. All
+// other reads stay on the embedded (primary) client. Broadcasts never use cross-endpoint fallback: an ambiguous first send
 // must remain visible to txmanager instead of being masked by a later endpoint's response.
 type Client struct {
 	*ethclient.Client
@@ -147,14 +148,28 @@ func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (ui
 	return c.writeClient.PendingNonceAt(ctx, account)
 }
 
-// TransactionSenderBalanceAt reads the sender balance through the write endpoint. It is intentionally
-// separate from promoted BalanceAt, which remains a fallback-capable ordinary read for solvers.
+// TransactionSenderBalanceAt prefers the write endpoint for sender telemetry, then falls back to the
+// ordinary read client when a distinct submission endpoint rejects or cannot serve eth_getBalance.
 func (c *Client) TransactionSenderBalanceAt(
 	ctx context.Context,
 	account common.Address,
 	blockNumber *big.Int,
 ) (*big.Int, error) {
-	return c.writeClient.BalanceAt(ctx, account, blockNumber)
+	balance, writeErr := c.writeClient.BalanceAt(ctx, account, blockNumber)
+	if writeErr == nil || c.writeClient == c.Client {
+		return balance, writeErr
+	}
+	balance, readErr := c.BalanceAt(ctx, account, blockNumber)
+	if readErr == nil {
+		return balance, nil
+	}
+	return nil, errors.Errorf(
+		"chain: transaction sender balance: %w",
+		errors.Join(
+			errors.Errorf("write endpoint: %w", writeErr),
+			errors.Errorf("read endpoints: %w", readErr),
+		),
+	)
 }
 
 // Close closes the primary client and, when a separate write client was dialed, that one too. It
@@ -187,13 +202,16 @@ func dialClient(
 		return nil, err
 	}
 	rpcMetrics.bindTransport(role, len(endpoints))
-	httpClient := &http.Client{Transport: &fallbackTransport{
-		endpoints: endpoints,
-		base:      http.DefaultTransport,
-		metrics:   rpcMetrics,
-		role:      role,
-		log:       log,
-	}}
+	httpClient := &http.Client{
+		Transport: &fallbackTransport{
+			endpoints: endpoints,
+			base:      http.DefaultTransport,
+			metrics:   rpcMetrics,
+			role:      role,
+			log:       log,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	rc, err := rpc.DialOptions(ctx, rpcURLs[0], rpc.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, errors.Errorf("chain: dial (fallback): %w", err)

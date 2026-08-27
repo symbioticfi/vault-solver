@@ -68,6 +68,9 @@ func newUniswapXMetrics(
 	strategyName string,
 ) (*uniswapXMetrics, error) {
 	spec := liquidlane.FillWorkflowSpec()
+	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
+		Event: "fill", Outcomes: []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted},
+	})
 	spec.Strategy = strategyName
 	spec.Operations = []string{
 		quoteRefreshOperation, exclusiveOrderPollOperation, publicOrderPollOperation,
@@ -163,6 +166,12 @@ func newUniswapXMetrics(
 	return m, nil
 }
 
+func (s *Solver) observeFillOutcome(outcome string) {
+	if s.metrics != nil {
+		s.metrics.fillAmounts.ObserveOutcome(outcome)
+	}
+}
+
 func (s *Solver) observeQuote(outcome quoteMetricOutcome) {
 	if s.metrics != nil {
 		s.metrics.workflow.ObserveEventAt("quote", string(outcome), 1, s.metrics.now())
@@ -177,13 +186,31 @@ func (s *Solver) observeQuotedAmounts(response quoteResponse) {
 	if s.metrics == nil || !common.IsHexAddress(response.TokenIn) || !common.IsHexAddress(response.TokenOut) {
 		return
 	}
+	tokenIn := common.HexToAddress(response.TokenIn)
+	tokenOut := common.HexToAddress(response.TokenOut)
+	if !s.quotedPairIsBounded(tokenIn, tokenOut) {
+		return
+	}
 	amountIn, inputOK := new(big.Int).SetString(response.AmountIn, 10)
 	amountOut, outputOK := new(big.Int).SetString(response.AmountOut, 10)
 	if !inputOK || !outputOK || amountIn.Sign() <= 0 || amountOut.Sign() <= 0 {
 		return
 	}
-	s.metrics.addQuotedAmount(common.HexToAddress(response.TokenIn), "input", amountIn)
-	s.metrics.addQuotedAmount(common.HexToAddress(response.TokenOut), "output", amountOut)
+	s.metrics.addQuotedAmount(tokenIn, "input", amountIn)
+	s.metrics.addQuotedAmount(tokenOut, "output", amountOut)
+}
+
+func (s *Solver) quotedPairIsBounded(tokenIn, tokenOut common.Address) bool {
+	state := s.quoteState.Load()
+	if state == nil {
+		return false
+	}
+	for _, inventory := range state.inventory {
+		if inventory.TokenIn == tokenIn && inventory.TokenOut == tokenOut {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *uniswapXMetrics) addQuotedAmount(token common.Address, side string, amount *big.Int) {

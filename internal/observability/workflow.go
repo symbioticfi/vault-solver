@@ -12,6 +12,12 @@ import (
 
 const unspecifiedWorkflowStrategy = "unspecified"
 
+const (
+	workflowDropUnknownEvent  = "unknown_event"
+	workflowDropUnknownAmount = "unknown_amount"
+	workflowDropUnknownState  = "unknown_state"
+)
+
 type workflowEventKey struct {
 	event   string
 	outcome string
@@ -63,6 +69,7 @@ type WorkflowMetrics struct {
 	events     map[workflowEventKey]workflowEventMetrics
 	amounts    map[workflowAmountKey]*prometheus.CounterVec
 	states     map[string]workflowStateMetrics
+	dropped    map[string]prometheus.Counter
 }
 
 // NewWorkflowMetrics registers one solver's bounded workflow metric surface.
@@ -118,7 +125,14 @@ func NewWorkflowMetrics(
 		Help:      "External operation duration by solver, allowlisted operation, and bounded outcome.",
 		Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
 	}, []string{"operation", "outcome"})
-	for _, collector := range []prometheus.Collector{events, lastEvents, amounts, states, lastStates, operations} {
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "solver_bot",
+		Name:      "workflow_dropped_observations_total",
+		Help:      "Workflow observations rejected because their event, amount, or state dimension was not declared.",
+	}, []string{"reason"})
+	for _, collector := range []prometheus.Collector{
+		events, lastEvents, amounts, states, lastStates, operations, dropped,
+	} {
 		if err := wrapped.Register(collector); err != nil {
 			return nil, errors.Errorf("observability: register workflow metric: %w", err)
 		}
@@ -129,6 +143,11 @@ func NewWorkflowMetrics(
 		events:     make(map[workflowEventKey]workflowEventMetrics),
 		amounts:    make(map[workflowAmountKey]*prometheus.CounterVec),
 		states:     make(map[string]workflowStateMetrics),
+		dropped: map[string]prometheus.Counter{
+			workflowDropUnknownEvent:  dropped.WithLabelValues(workflowDropUnknownEvent),
+			workflowDropUnknownAmount: dropped.WithLabelValues(workflowDropUnknownAmount),
+			workflowDropUnknownState:  dropped.WithLabelValues(workflowDropUnknownState),
+		},
 	}
 	for _, operation := range spec.Operations {
 		observer := &OperationObserver{}
@@ -227,13 +246,14 @@ func (m *WorkflowMetrics) Operation(name string) *OperationObserver {
 }
 
 // ObserveEventAt adds a positive event count and updates its timestamp. Unknown event/outcome pairs
-// are ignored rather than creating runtime-derived labels.
+// increment a bounded drop counter rather than creating runtime-derived labels.
 func (m *WorkflowMetrics) ObserveEventAt(event, outcome string, count float64, at time.Time) {
 	if m == nil || count <= 0 {
 		return
 	}
 	metric, ok := m.events[workflowEventKey{event: event, outcome: outcome}]
 	if !ok {
+		m.dropped[workflowDropUnknownEvent].Inc()
 		return
 	}
 	metric.count.Add(count)
@@ -245,14 +265,15 @@ func (m *WorkflowMetrics) ObserveEvent(event, outcome string) {
 	m.ObserveEventAt(event, outcome, 1, time.Now())
 }
 
-// AddAmount adds a positive atomic-unit amount to a pre-bound event/kind pair. Empty assets and
-// unknown pairs are ignored, and asset labels are normalized to lowercase.
+// AddAmount adds a positive atomic-unit amount to a pre-bound event/kind pair. Empty assets are
+// ignored, unknown pairs increment a bounded drop counter, and asset labels are normalized to lowercase.
 func (m *WorkflowMetrics) AddAmount(event, asset, kind string, amount *big.Int) {
 	if m == nil || asset == "" || amount == nil || amount.Sign() <= 0 {
 		return
 	}
 	metric, ok := m.amounts[workflowAmountKey{event: event, kind: kind}]
 	if !ok {
+		m.dropped[workflowDropUnknownAmount].Inc()
 		return
 	}
 	value, _ := new(big.Float).SetInt(amount).Float64()
@@ -260,13 +281,14 @@ func (m *WorkflowMetrics) AddAmount(event, asset, kind string, amount *big.Int) 
 }
 
 // ObserveStateAt publishes one complete state count and its observation timestamp. Unknown views
-// are ignored rather than creating runtime-derived labels.
+// increment a bounded drop counter rather than creating runtime-derived labels.
 func (m *WorkflowMetrics) ObserveStateAt(view string, count int, at time.Time) {
 	if m == nil {
 		return
 	}
 	metric, ok := m.states[view]
 	if !ok {
+		m.dropped[workflowDropUnknownState].Inc()
 		return
 	}
 	metric.value.Set(float64(count))

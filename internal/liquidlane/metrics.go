@@ -15,14 +15,17 @@ const (
 	FillAmountOutput         = "output"
 	FillAmountPlannedSurplus = "planned_surplus"
 	fillWorkflowEvent        = "fill"
-	fillWorkflowOutcome      = "success"
+
+	FillOutcomeSuccess     = "success"
+	FillOutcomeFailure     = "failure"
+	FillOutcomeNotAdmitted = "not_admitted"
 )
 
 // FillWorkflowSpec declares the shared successful-fill signals used by LiquidLane solvers.
 func FillWorkflowSpec() observability.WorkflowSpec {
 	return observability.WorkflowSpec{
 		Events: []observability.WorkflowEventSpec{{
-			Event: fillWorkflowEvent, Outcomes: []string{fillWorkflowOutcome},
+			Event: fillWorkflowEvent, Outcomes: []string{FillOutcomeSuccess},
 		}},
 		Amounts: []observability.WorkflowAmountSpec{{
 			Event: fillWorkflowEvent,
@@ -54,10 +57,17 @@ func (m *FillMetrics) Observe(
 	if m == nil || receipt == nil || receipt.Status != types.ReceiptStatusSuccessful {
 		return
 	}
-	m.workflow.ObserveEventAt(fillWorkflowEvent, fillWorkflowOutcome, 1, m.now())
+	m.ObserveOutcome(FillOutcomeSuccess)
 	m.add(tokenIn, FillAmountInput, amountIn)
 	m.add(tokenOut, FillAmountOutput, amountOut)
 	m.add(tokenOut, FillAmountPlannedSurplus, plannedSurplus)
+}
+
+// ObserveOutcome records one bounded fill outcome without adding successful receipt amounts.
+func (m *FillMetrics) ObserveOutcome(outcome string) {
+	if m != nil {
+		m.workflow.ObserveEventAt(fillWorkflowEvent, outcome, 1, m.now())
+	}
 }
 
 func (m *FillMetrics) add(token common.Address, kind string, amount *big.Int) {

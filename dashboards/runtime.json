@@ -24,7 +24,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Fleet-safe runtime view designed for many Kubernetes pods. Fixed-card summaries do not multiply by instance; instance, signer, solver, and RPC topology is row-based and scrolls at constant text size. Every RPC and txmanager aggregation retains pod and instance. Endpoint is a pod-local ordinal; URLs and key material are never exported. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, kubernetes_pod, job, and instance. Requires vault-solver metrics commit d5f5385e or a descendant.",
+  "description": "Fleet-safe runtime view designed for many Kubernetes pods. Fixed-card summaries do not multiply by instance; instance, signer, solver, and RPC topology is row-based and scrolls at constant text size. Every RPC and txmanager aggregation retains pod and instance. Endpoint is a pod-local ordinal; URLs and key material are never exported. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, pod, job, and instance. Requires the metric families documented in the repository README.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -50,9 +50,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "rate(process_cpu_seconds_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])",
+                      "expr": "rate(process_cpu_seconds_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}}",
+                      "legendFormat": "{{pod}}",
                       "range": true
                     }
                   },
@@ -161,9 +161,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "process_resident_memory_bytes{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "process_resident_memory_bytes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 resident",
+                      "legendFormat": "{{pod}} \u00b7 resident",
                       "range": true
                     }
                   },
@@ -183,9 +183,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "go_memstats_heap_alloc_bytes{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "go_memstats_heap_alloc_bytes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 heap allocated",
+                      "legendFormat": "{{pod}} \u00b7 heap allocated",
                       "range": true
                     }
                   },
@@ -294,9 +294,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "go_goroutines{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "go_goroutines{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 goroutines",
+                      "legendFormat": "{{pod}} \u00b7 goroutines",
                       "range": true
                     }
                   },
@@ -316,9 +316,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "process_open_fds{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "process_open_fds{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 open FDs",
+                      "legendFormat": "{{pod}} \u00b7 open FDs",
                       "range": true
                     }
                   },
@@ -427,9 +427,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, instance, kubernetes_pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
+                      "expr": "(sum by (namespace, instance, pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -510,9 +510,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, instance, kubernetes_pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",outcome!=\"success\"}[$__range]))) > 0",
+                      "expr": "(sum by (namespace, instance, pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",outcome!=\"success\"}[$__range]))) > 0",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -588,9 +588,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, instance, kubernetes_pod, role, endpoint, outcome) (increase(solver_bot_rpc_attempts_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
+                      "expr": "(sum by (namespace, instance, pod, role, endpoint, outcome) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{role}}[{{endpoint}}] \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{role}}[{{endpoint}}] \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -671,9 +671,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.50, sum by (namespace, le, instance, kubernetes_pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.50, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 p50 \u00b7 {{role}}",
+                      "legendFormat": "{{pod}} \u00b7 p50 \u00b7 {{role}}",
                       "range": true
                     }
                   },
@@ -693,9 +693,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (namespace, le, instance, kubernetes_pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.95, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 p95 \u00b7 {{role}}",
+                      "legendFormat": "{{pod}} \u00b7 p95 \u00b7 {{role}}",
                       "range": true
                     }
                   },
@@ -715,9 +715,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.99, sum by (namespace, le, instance, kubernetes_pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.99, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 p99 \u00b7 {{role}}",
+                      "legendFormat": "{{pod}} \u00b7 p99 \u00b7 {{role}}",
                       "range": true
                     }
                   },
@@ -826,9 +826,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_rpc_inflight{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "solver_bot_rpc_inflight{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{role}}",
+                      "legendFormat": "{{pod}} \u00b7 {{role}}",
                       "range": false
                     }
                   },
@@ -905,9 +905,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - solver_bot_rpc_last_successful_request_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_rpc_last_successful_request_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)",
+                      "expr": "clamp_min(time() - solver_bot_rpc_last_successful_request_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_rpc_last_successful_request_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{role}}",
+                      "legendFormat": "{{pod}} \u00b7 {{role}}",
                       "range": false
                     }
                   },
@@ -988,7 +988,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "count(max by (namespace, job, kubernetes_pod, instance) (solver_bot_build_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
+                      "expr": "count(max by (namespace, job, pod, instance) (solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false
@@ -1072,9 +1072,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, instance, kubernetes_pod) (increase(solver_bot_rpc_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "expr": "sum by (namespace, instance, pod) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 logical calls",
+                      "legendFormat": "{{pod}} \u00b7 logical calls",
                       "range": false
                     }
                   },
@@ -1094,9 +1094,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, instance, kubernetes_pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "expr": "sum by (namespace, instance, pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 endpoint attempts",
+                      "legendFormat": "{{pod}} \u00b7 endpoint attempts",
                       "range": false
                     }
                   },
@@ -1116,9 +1116,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(sum by (namespace, instance, kubernetes_pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) - sum by (namespace, instance, kubernetes_pod) (increase(solver_bot_rpc_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])), 0)",
+                      "expr": "clamp_min(sum by (namespace, instance, pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) - sum by (namespace, instance, pod) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])), 0)",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 extra attempts",
+                      "legendFormat": "{{pod}} \u00b7 extra attempts",
                       "range": false
                     }
                   },
@@ -1195,9 +1195,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, label, outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -1273,9 +1273,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, job, instance, kubernetes_pod, label) (solver_bot_txmanager_inflight{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(sum by (namespace, job, instance, pod, label) (solver_bot_txmanager_inflight{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 inflight \u00b7 {{label}}",
+                      "legendFormat": "{{pod}} \u00b7 inflight \u00b7 {{label}}",
                       "range": false
                     }
                   },
@@ -1295,9 +1295,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, label, reason) (increase(solver_bot_txmanager_admission_rejections_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, label, reason) (increase(solver_bot_txmanager_admission_rejections_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 rejected \u00b7 {{label}} \u00b7 {{reason}}",
+                      "legendFormat": "{{pod}} \u00b7 rejected \u00b7 {{label}} \u00b7 {{reason}}",
                       "range": false
                     }
                   },
@@ -1378,9 +1378,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(histogram_quantile(0.50, sum by (namespace, le, job, instance, kubernetes_pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(histogram_quantile(0.50, sum by (namespace, le, job, instance, pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 p50 \u00b7 {{label}}",
+                      "legendFormat": "{{pod}} \u00b7 p50 \u00b7 {{label}}",
                       "range": true
                     }
                   },
@@ -1400,9 +1400,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, kubernetes_pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 p95 \u00b7 {{label}}",
+                      "legendFormat": "{{pod}} \u00b7 p95 \u00b7 {{label}}",
                       "range": true
                     }
                   },
@@ -1511,9 +1511,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, kubernetes_pod, label, phase) (rate(solver_bot_txmanager_phase_duration_seconds_bucket{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label, phase) (rate(solver_bot_txmanager_phase_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{label}} \u00b7 {{phase}}",
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{phase}}",
                       "range": true
                     }
                   },
@@ -1622,9 +1622,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, label, outcome) (increase(solver_bot_txmanager_gas_used_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_gas_used_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -1705,9 +1705,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, label, outcome) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / 1e18) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / 1e18) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -1783,9 +1783,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, label, kind) (increase(solver_bot_txmanager_replacements_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, label, kind) (increase(solver_bot_txmanager_replacements_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 {{label}} \u00b7 {{kind}}",
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{kind}}",
                       "range": false
                     }
                   },
@@ -1866,9 +1866,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(solver_bot_txmanager_account_balance_wei{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(solver_bot_txmanager_account_balance_wei{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}}",
+                      "legendFormat": "{{pod}}",
                       "range": true
                     }
                   },
@@ -1978,7 +1978,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "count(max by (namespace, job, kubernetes_pod, instance) (solver_bot_service_ready{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) - sum(max by (namespace, job, kubernetes_pod, instance) (solver_bot_service_ready{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
+                      "expr": "count(max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) - sum(max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false
@@ -2066,9 +2066,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(solver_bot_txmanager_account_latest_nonce{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(solver_bot_txmanager_account_latest_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 mined",
+                      "legendFormat": "{{pod}} \u00b7 mined",
                       "range": true
                     }
                   },
@@ -2088,9 +2088,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(solver_bot_txmanager_account_pending_nonce{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(solver_bot_txmanager_account_pending_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": false,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 pending",
+                      "legendFormat": "{{pod}} \u00b7 pending",
                       "range": true
                     }
                   },
@@ -2199,9 +2199,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum by (namespace, job, instance, kubernetes_pod, outcome) (increase(solver_bot_txmanager_account_refreshes_total{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "((sum by (namespace, job, instance, pod, outcome) (increase(solver_bot_txmanager_account_refreshes_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 refresh \u00b7 {{outcome}}",
+                      "legendFormat": "{{pod}} \u00b7 refresh \u00b7 {{outcome}}",
                       "range": false
                     }
                   },
@@ -2221,9 +2221,9 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(clamp_min(time() - solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)) * on (job, instance, kubernetes_pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "(clamp_min(time() - solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
-                      "legendFormat": "{{kubernetes_pod}} \u00b7 snapshot age",
+                      "legendFormat": "{{pod}} \u00b7 snapshot age",
                       "range": false
                     }
                   },
@@ -2304,7 +2304,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -2331,12 +2331,12 @@
                     },
                     "indexByName": {
                       "instance": 1,
-                      "kubernetes_pod": 0,
+                      "pod": 0,
                       "solver": 2
                     },
                     "renameByName": {
                       "instance": "Instance",
-                      "kubernetes_pod": "Pod",
+                      "pod": "Pod",
                       "solver": "Solver"
                     }
                   }
@@ -2452,7 +2452,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > 0), 0) or ((solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} == 0) - 1)",
+                      "expr": "clamp_min(time() - (solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > 0), 0) or ((solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} == 0) - 1)",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -2479,14 +2479,14 @@
                       "Value": 4,
                       "endpoint": 3,
                       "instance": 1,
-                      "kubernetes_pod": 0,
+                      "pod": 0,
                       "role": 2
                     },
                     "renameByName": {
                       "Value": "Last success age",
                       "endpoint": "Endpoint",
                       "instance": "Instance",
-                      "kubernetes_pod": "Pod",
+                      "pod": "Pod",
                       "role": "Role"
                     }
                   }
@@ -2641,7 +2641,7 @@
       "spec": {
         "id": 6,
         "title": "Fleet instance status",
-        "description": "One row per selected execution pod/process. Rows remain fixed-size as the fleet grows; the table scrolls instead of shrinking values.",
+        "description": "One row per selected execution pod/process. Rows remain fixed-size as the fleet grows; the table scrolls instead of shrinking values. Metric drops expose code/spec drift in bounded workflow instrumentation.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2659,7 +2659,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, job, kubernetes_pod, instance) (solver_bot_service_ready{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "Ready",
@@ -2682,7 +2682,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, job, kubernetes_pod, instance) (time() - process_start_time_seconds{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "max by (namespace, job, pod, instance) (time() - process_start_time_seconds{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "Uptime",
@@ -2705,7 +2705,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, job, kubernetes_pod, instance) (solver_bot_txmanager_account_balance_wei{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18)",
+                      "expr": "max by (namespace, job, pod, instance) (solver_bot_txmanager_account_balance_wei{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18)",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "Balance",
@@ -2728,7 +2728,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, job, kubernetes_pod, instance) (clamp_min(solver_bot_txmanager_account_pending_nonce{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} - solver_bot_txmanager_account_latest_nonce{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0))",
+                      "expr": "max by (namespace, job, pod, instance) (clamp_min(solver_bot_txmanager_account_pending_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} - solver_bot_txmanager_account_latest_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0))",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "Nonce gap",
@@ -2751,7 +2751,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, job, kubernetes_pod, instance, address) (solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "max by (namespace, job, pod, instance, address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "Signer",
@@ -2759,6 +2759,29 @@
                     }
                   },
                   "refId": "E",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, job, pod, instance) (increase(solver_bot_workflow_dropped_observations_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Metric drops",
+                      "range": false
+                    }
+                  },
+                  "refId": "F",
                   "hidden": false
                 }
               }
@@ -2788,7 +2811,8 @@
                       "Value #D": 6,
                       "address": 2,
                       "instance": 1,
-                      "kubernetes_pod": 0
+                      "pod": 0,
+                      "Value #F": 7
                     },
                     "renameByName": {
                       "Value #A": "Ready",
@@ -2797,7 +2821,8 @@
                       "Value #D": "Nonce gap",
                       "address": "Signer",
                       "instance": "Instance",
-                      "kubernetes_pod": "Pod"
+                      "pod": "Pod",
+                      "Value #F": "Metric drops"
                     }
                   }
                 }
@@ -3029,7 +3054,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "count(solver_bot_solver_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "count(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
                       "legendFormat": "",
                       "range": false
@@ -3113,7 +3138,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "count(solver_bot_txmanager_account_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "expr": "count(solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
                       "instant": true,
                       "legendFormat": "",
                       "range": false
@@ -3166,6 +3191,117 @@
                 },
                 "color": {
                   "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-34": {
+      "kind": "Panel",
+      "spec": {
+        "id": 34,
+        "title": "Admission wait p95",
+        "description": "Leading indicator for nonce-lane saturation, split by request label and terminal admission outcome.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label, outcome) (rate(solver_bot_txmanager_admission_wait_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 {{outcome}} \u00b7 {{label}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
                 }
               },
               "overrides": []
@@ -3456,7 +3592,7 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 12,
+                      "width": 8,
                       "height": 8,
                       "element": {
                         "kind": "ElementReference",
@@ -3467,9 +3603,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 12,
+                      "x": 8,
                       "y": 0,
-                      "width": 12,
+                      "width": 8,
                       "height": 8,
                       "element": {
                         "kind": "ElementReference",
@@ -3580,6 +3716,19 @@
                         "name": "panel-31"
                       }
                     }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-34"
+                      }
+                    }
                   }
                 ]
               }
@@ -3645,10 +3794,6 @@
         "pluginId": "prometheus",
         "refresh": "onDashboardLoad",
         "regex": "",
-        "current": {
-          "text": "Prometheus",
-          "value": "prometheus"
-        },
         "options": [],
         "multi": false,
         "includeAll": false,
@@ -3659,39 +3804,79 @@
       }
     },
     {
-      "kind": "CustomVariable",
+      "kind": "QueryVariable",
       "spec": {
         "name": "namespace",
-        "query": "mainnet : symbiotic-fi,sepolia : sepolia-symbiotic-fi,any : .*",
-        "current": {
-          "text": "mainnet",
-          "value": "symbiotic-fi"
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
         "label": "Namespace",
         "hide": "dontHide",
+        "refresh": "onDashboardLoad",
         "skipUrlSync": false,
-        "allowCustomValue": true
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info, namespace)",
+            "refId": "PrometheusVariableQueryEditor-namespace"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info, namespace)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
       }
     },
     {
-      "kind": "CustomVariable",
+      "kind": "QueryVariable",
       "spec": {
         "name": "pod_regex",
-        "query": "3F : vault-solver-3f.*,LI.FI : vault-solver-lifi.*,RFQ : vault-solver-rfq.*,UniswapX : vault-solver-uniswapx.*,OEV : vault-solver-(oev|redstone-oev).*,all vault solvers : vault-solver-.*,any target : .*",
-        "current": {
-          "text": "all vault solvers",
-          "value": "vault-solver-.*"
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "label": "Solver pods",
+        "label": "Pods",
         "hide": "dontHide",
+        "refresh": "onDashboardLoad",
         "skipUrlSync": false,
-        "allowCustomValue": true
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\"}, pod)",
+            "refId": "PrometheusVariableQueryEditor-pod"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\"}, pod)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
       }
     },
     {
@@ -3710,13 +3895,13 @@
             "name": "${datasource}"
           },
           "spec": {
-            "query": "label_values(solver_bot_build_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\"}, job)",
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\"}, job)",
             "refId": "PrometheusVariableQueryEditor-job"
           }
         },
         "regex": "",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_build_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\"}, job)",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\"}, job)",
         "options": [],
         "multi": true,
         "includeAll": true,
@@ -3748,13 +3933,13 @@
             "name": "${datasource}"
           },
           "spec": {
-            "query": "label_values(solver_bot_build_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\"}, instance)",
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\"}, instance)",
             "refId": "PrometheusVariableQueryEditor-instance"
           }
         },
         "regex": "",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_build_info{namespace=~\"$namespace\",kubernetes_pod=~\"$pod_regex\",job=~\"${job:regex}\"}, instance)",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\"}, instance)",
         "options": [],
         "multi": true,
         "includeAll": true,
@@ -3770,5 +3955,6 @@
         "allValue": ".*"
       }
     }
-  ]
+  ],
+  "uid": "vault-solver-runtime"
 }

@@ -67,7 +67,6 @@ func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
 		wallNow:     func() time.Time { return time.Unix(1_700_000_001, 0) },
 		txLaneState: alwaysReadyTransactionLane(),
 		metrics:     metrics,
-		operations:  metrics.operations,
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			feeReads++
 			return big.NewInt(7), nil

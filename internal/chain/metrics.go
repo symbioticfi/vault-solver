@@ -14,6 +14,7 @@ type rpcOutcome string
 const (
 	rpcOutcomeSuccess          rpcOutcome = "success"
 	rpcOutcomeRPCError         rpcOutcome = "rpc_error"
+	rpcOutcomeHTTP3xx          rpcOutcome = "http_3xx"
 	rpcOutcomeHTTP4xx          rpcOutcome = "http_4xx"
 	rpcOutcomeHTTP5xx          rpcOutcome = "http_5xx"
 	rpcOutcomeRateLimited      rpcOutcome = "rate_limited"

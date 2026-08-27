@@ -612,7 +612,7 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		if m == rpcMethodGetTransactionCount {
 			return `"0x2"`
 		}
-		if m == "eth_getBalance" {
+		if m == rpcMethodGetBalance {
 			return `"0x3"`
 		}
 		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
@@ -670,7 +670,7 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	if !slices.Contains(writeMethods, rpcMethodGetTransactionCount) {
 		t.Fatalf("write endpoint did not receive startup nonce reads, saw: %v", writeMethods)
 	}
-	if !slices.Contains(writeMethods, "eth_getBalance") {
+	if !slices.Contains(writeMethods, rpcMethodGetBalance) {
 		t.Fatalf("write endpoint did not receive the sender balance read, saw: %v", writeMethods)
 	}
 	if !slices.Contains(writeMethods, "eth_chainId") {
@@ -681,18 +681,102 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	}
 	if slices.Contains(readMethods, rpcMethodSendRawTransaction) ||
 		slices.Contains(readMethods, rpcMethodGetTransactionCount) ||
-		slices.Contains(readMethods, "eth_getBalance") {
+		slices.Contains(readMethods, rpcMethodGetBalance) {
 		t.Fatalf("write-side operation leaked onto the read endpoint: %v", readMethods)
 	}
 	if !slices.Contains(readMethods, "eth_blockNumber") {
 		t.Fatalf("read endpoint did not receive the read, saw: %v", readMethods)
 	}
 	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
-		rpcRoleWrite, "eth_getBalance", string(rpcOutcomeSuccess),
+		rpcRoleWrite, rpcMethodGetBalance, string(rpcOutcomeSuccess),
 	), 1)
 	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
 		rpcRoleRead, "eth_blockNumber", string(rpcOutcomeSuccess),
 	), 1)
+}
+
+func TestDialDoesNotFollowRPCRedirects(t *testing.T) {
+	targetHits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x7a69"}`))
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	reg := prometheus.NewRegistry()
+	metrics, err := NewRPCMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	client, err := DialWithMetrics(
+		t.Context(), []string{redirect.URL}, "", multicall, metrics, logr.Discard(),
+	)
+	if client != nil || err == nil {
+		t.Fatalf("redirecting Dial = (%v, %v), want nil/error", client, err)
+	}
+	if targetHits != 0 {
+		t.Fatalf("redirect target hits = %d, want 0", targetHits)
+	}
+	metricstest.RequireValue(t, metrics.requests.WithLabelValues(
+		rpcRoleShared, rpcMethodChainID, string(rpcOutcomeHTTP3xx),
+	), 1)
+}
+
+func TestTransactionSenderBalanceFallsBackWhenWriteRPCRejectsRead(t *testing.T) {
+	var readMethods, writeMethods []string
+	read := rpcRecorder(&readMethods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"0x7a69"`
+		}
+		if method == rpcMethodGetBalance {
+			return `"0x4"`
+		}
+		return `"0x0"`
+	})
+	defer read.Close()
+	write := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode write request: %v", err)
+			return
+		}
+		writeMethods = append(writeMethods, request.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if request.Method == "eth_chainId" {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(request.ID) + `,"result":"0x7a69"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(request.ID) + `,"error":{"code":-32601,"message":"method not supported"}}`))
+	}))
+	defer write.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer client.Close()
+
+	balance, err := client.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil)
+	if err != nil {
+		t.Fatalf("TransactionSenderBalanceAt: %v", err)
+	}
+	if balance.Cmp(big.NewInt(4)) != 0 {
+		t.Fatalf("TransactionSenderBalanceAt = %s, want 4", balance)
+	}
+	if countMethod(writeMethods, rpcMethodGetBalance) != 1 || countMethod(readMethods, rpcMethodGetBalance) != 1 {
+		t.Fatalf("balance attempts = write %v, read %v; want one on each", writeMethods, readMethods)
+	}
 }
 
 func TestDial_RejectsMismatchedWriteRPCChainID(t *testing.T) {

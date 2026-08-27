@@ -55,9 +55,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   collectors on the shared registry** via `deps.Metrics.Registerer()` in the factory: a Huma/HTTP
   middleware records `rfq_filler_http_request_duration_seconds{method,route,status}` (route is
   allowlisted and method is normalized to `GET` / `POST` / `other` to bound cardinality, and the
-  histogram's `_count` is the transport request counter). After authentication, the quote service
-  returns a typed terminal decision alongside its optional response, and records exactly one bounded
-  workflow `quote/<outcome>` event. Responses selected for writing additionally record input/output
+  histogram's `_count` is the canonical transport request counter). The deprecated
+  `rfq_filler_http_requests_total` remains for one compatibility release so existing alerts can migrate.
+  After authentication, the quote service returns a typed terminal decision alongside its optional
+  response and records exactly one bounded workflow `quote/<outcome>` event; malformed client input is
+  `bad_request`, distinct from dependency/strategy `error`. Responses selected for writing additionally record input/output
   atomic-unit volume by asset; neither signal claims a win or fill. Workflow `order_poll/success`
   freshness advances only after a complete successful `listOpenOrders` result has been processed,
   including an empty list; failures retain the previous value. The same backend call is timed by the

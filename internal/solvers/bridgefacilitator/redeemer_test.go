@@ -19,7 +19,7 @@ func (f transactionSenderFunc) Send(ctx context.Context, req txmanager.Request) 
 	return f(ctx, req)
 }
 
-func TestRedeemAllPublishesSnapshotAndRevalidatesBeforeSubmission(t *testing.T) {
+func TestRedeemAllScansOncePerAdapterBeforeItsSend(t *testing.T) {
 	t.Parallel()
 
 	adapter0 := common.HexToAddress("0x00000000000000000000000000000000000000a0")
@@ -33,13 +33,6 @@ func TestRedeemAllPublishesSnapshotAndRevalidatesBeforeSubmission(t *testing.T) 
 		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
 		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request1)),
 		abiEncodeAggregate3Results(t, abiEncodeBool(t, true)),
-		// Observation results never become calldata without a fresh per-adapter scan.
-		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request0)),
-		abiEncodeAggregate3Results(t, abiEncodeBool(t, true)),
-		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request1)),
-		abiEncodeAggregate3Results(t, abiEncodeBool(t, false)),
 	)
 	defer stop()
 
@@ -53,15 +46,14 @@ func TestRedeemAllPublishesSnapshotAndRevalidatesBeforeSubmission(t *testing.T) 
 		targets:              []Target{{Adapter: adapter0}, {Adapter: adapter1}},
 		targetsAuthoritative: true,
 	}
+	wantAdapters := []common.Address{adapter0, adapter1}
 	s.txManager = transactionSenderFunc(func(_ context.Context, req txmanager.Request) txmanager.Result {
+		wantAdapter := wantAdapters[sent]
 		sent++
 		metricstest.RequireFamilyValue(t, reg, "solver_bot_workflow_observed_items", map[string]string{
 			"solver": Name, "view": threeFStateRedeemable,
-		}, 2)
-		if got := threeFObservationTimestamp(t, reg, threeFStateRedeemable); got <= 0 {
-			t.Fatalf("freshness at Send = %v, want published timestamp", got)
-		}
-		if req.To != adapter0 || req.Label != "redeem" || len(req.Data) == 0 {
+		}, 0)
+		if req.To != wantAdapter || req.Label != "redeem" || len(req.Data) == 0 {
 			t.Fatalf("unexpected redeem request: to=%s label=%q dataLen=%d", req.To.Hex(), req.Label, len(req.Data))
 		}
 		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed}
@@ -69,10 +61,16 @@ func TestRedeemAllPublishesSnapshotAndRevalidatesBeforeSubmission(t *testing.T) 
 
 	s.redeemAll(t.Context())
 
-	if sent != 1 {
-		t.Fatalf("sent transactions = %d, want 1 after revalidation", sent)
+	if sent != 2 {
+		t.Fatalf("sent transactions = %d, want one per ready adapter", sent)
 	}
-	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 1)
+	metricstest.RequireFamilyValue(t, reg, "solver_bot_workflow_observed_items", map[string]string{
+		"solver": Name, "view": threeFStateRedeemable,
+	}, 2)
+	if got := threeFObservationTimestamp(t, reg, threeFStateRedeemable); got <= 0 {
+		t.Fatalf("redeemable freshness = %v, want completed-pass timestamp", got)
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 2)
 }
 
 func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *testing.T) {
@@ -88,9 +86,6 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 			{Success: true, ReturnData: []byte{0x01}},
 			{Success: true, ReturnData: abiEncodeBool(t, true)},
 		}),
-		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 2)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request0), abiEncodeAddress(t, request1)),
-		abiEncodeAggregate3Results(t, abiEncodeBool(t, false), abiEncodeBool(t, true)),
 	)
 	defer stop()
 

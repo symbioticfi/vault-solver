@@ -50,8 +50,10 @@ type Solver struct {
 	// resMu guards enqueued-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
 	// below the on-chain nonce (enqueued -> settled or reverted; the fresh read reflects it) or it aged past
 	// reservationTTL as a last-resort cleanup for missed result frames.
-	resMu sync.Mutex
-	res   []reservedBid
+	resMu             sync.Mutex
+	res               []reservedBid
+	bidLifecycle      map[string]*bidLifecycleRecord
+	bidLifecycleOrder []string
 
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.

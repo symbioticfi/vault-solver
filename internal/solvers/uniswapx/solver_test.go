@@ -365,7 +365,13 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 				t.Fatalf("startup-recovered miss was logged as an error: %s", logged)
 			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", "won", 0)
-			metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, 0)
+			wantMissed := float64(0)
+			if !tc.startup {
+				wantMissed = 1
+			}
+			metricstest.RequireWorkflowEventCount(
+				t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, wantMissed,
+			)
 
 			initialLogCount := strings.Count(logged, "historical exclusive obligation missed")
 			solver.exclusiveStateUnknown.Store(true)

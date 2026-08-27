@@ -249,6 +249,62 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	requireOEVEvent(t, reg, "breaker", "failure", 1, 123)
 }
 
+func TestLifecycleMetricsSurviveNoncePruneAndRestart(t *testing.T) {
+	t.Run("nonce prune retains local bid metadata", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
+		s.metrics = m
+		m.now = func() time.Time { return time.Unix(123, 0) }
+		bidWei := big.NewInt(321)
+		s.reserve(8, time.Now(), "pruned", bidWei)
+		s.pruneReservations(8, time.Now())
+
+		s.handleMessage(t.Context(), marshal(AuctionResult{
+			Op: "auction-result", ID: "pruned",
+			Data: AuctionResultData{Liquidator: seedCallback.Hex()},
+		}))
+		s.handleMessage(t.Context(), marshal(LiquidationResult{
+			Op: "liquidation-result", ID: "pruned",
+			Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
+		}))
+
+		requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
+		requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
+		requireOEVBidAmount(t, reg, oevBidWon, 321)
+		requireOEVBidAmount(t, reg, oevBidSettledSuccess, 321)
+	})
+
+	t.Run("post-restart result still counts lifecycle", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
+		s.metrics = m
+		m.now = func() time.Time { return time.Unix(123, 0) }
+		result := marshal(LiquidationResult{
+			Op: "liquidation-result", ID: "restarted",
+			Data: LiquidationResultData{Success: false, Liquidator: seedCallback.Hex()},
+		})
+		s.handleMessage(t.Context(), result)
+		s.handleMessage(t.Context(), result)
+
+		requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
+		requireOEVEvent(t, reg, "bid", oevBidSettledFailed, 1, 123)
+		requireOEVBidAmount(t, reg, oevBidWon, 0)
+		requireOEVBidAmount(t, reg, oevBidSettledFailed, 0)
+	})
+}
+
+func TestDepositFloorGaugeTracksLatestCompleteState(t *testing.T) {
+	s, _ := seededSolver(t)
+	m, _ := newOEVTestMetrics(t, s.wonReservationMetrics)
+	s.metrics = m
+	now := time.Now()
+
+	s.applyExecutorState(ExecutorState{Nonce: big.NewInt(7), Deposit: new(big.Int).Sub(minDeposit, big.NewInt(1))}, now)
+	metricstest.RequireValue(t, m.depositBelowFloor, 1)
+	s.applyExecutorState(ExecutorState{Nonce: big.NewInt(7), Deposit: new(big.Int).Set(minDeposit)}, now)
+	metricstest.RequireValue(t, m.depositBelowFloor, 0)
+}
+
 func TestOldestWonInflightAgeTracksFirstObservedWin(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1_781_243_340, 0)
@@ -359,7 +415,10 @@ func TestWonReservationTimeoutIsVisible(t *testing.T) {
 	}
 
 	s.pruneReservations(7, now)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidUnresolved, 0)
+	metricstest.RequireValue(t, m.wonInflight, 1)
 
+	s.pruneReservations(7, now.Add(reservationTTL+time.Second))
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidUnresolved, 1)
 	metricstest.RequireValue(t, m.wonInflight, 0)
 }
@@ -407,8 +466,9 @@ func TestAuctionDecisionCountsEveryParsedTerminalPathOnce(t *testing.T) {
 	if err := m.hotPath.Write(metric); err != nil {
 		t.Fatal(err)
 	}
-	if got := metric.GetHistogram().GetSampleCount(); got != uint64(len(outcomes)) {
-		t.Fatalf("hot-path samples = %d, want %d", got, len(outcomes))
+	const hotPathOutcomes = 2 // context_canceled and too_late reached the serialized bid decision path.
+	if got := metric.GetHistogram().GetSampleCount(); got != hotPathOutcomes {
+		t.Fatalf("hot-path samples = %d, want %d", got, hotPathOutcomes)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
 	orderPollObserver *observability.OperationObserver
+	requests          *prometheus.CounterVec
 	duration          *prometheus.HistogramVec
 	activeOrders      prometheus.GaugeFunc
 	oldestActive      prometheus.GaugeFunc
@@ -50,6 +51,10 @@ func newRFQMetrics(
 	m := &rfqMetrics{
 		workflow:          workflow,
 		orderPollObserver: workflow.Operation(orderPollOperation),
+		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "rfq_filler_http_requests_total",
+			Help: "Deprecated compatibility counter for total RFQ filler HTTP requests; use rfq_filler_http_request_duration_seconds_count.",
+		}, []string{"method", "route", "status"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "rfq_filler_http_request_duration_seconds",
 			Help:    "RFQ filler HTTP request count and duration in seconds.",
@@ -72,7 +77,7 @@ func newRFQMetrics(
 		fillAmounts: liquidlane.NewFillMetrics(workflow),
 		now:         time.Now,
 	}
-	for _, collector := range []prometheus.Collector{m.duration, m.activeOrders, m.oldestActive} {
+	for _, collector := range []prometheus.Collector{m.requests, m.duration, m.activeOrders, m.oldestActive} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("rfq: register metric: %w", err)
 		}
@@ -136,6 +141,7 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 			"route":  routeLabel(r.URL.Path),
 			"status": strconv.Itoa(rec.status),
 		}
+		m.requests.With(labels).Inc()
 		m.duration.With(labels).Observe(time.Since(start).Seconds())
 	})
 }

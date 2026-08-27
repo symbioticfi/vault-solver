@@ -13,11 +13,23 @@ import (
 // strategy and release reservations by nonce/result frames.
 type reservedBid struct {
 	nonce     uint64
-	at        time.Time // reservation creation time; prune TTL remains anchored here
+	at        time.Time
 	auctionID string
 	bidWei    *big.Int
 	won       bool
 	wonAt     time.Time // first matched local win transition; never advanced by replayed results
+}
+
+type bidLifecycleRecord struct {
+	bidWei  *big.Int
+	won     bool
+	settled bool
+}
+
+type bidSettlementTransition struct {
+	bidWei  *big.Int
+	won     bool
+	settled bool
 }
 
 // reservationTTL is only a fallback for missed auction/liquidation result frames. Normal release is
@@ -63,23 +75,16 @@ func (s *Solver) reserve(
 		auctionID: auctionID,
 		bidWei:    cloneBig(bidWei),
 	})
+	s.ensureBidLifecycleLocked(auctionID, bidWei)
 }
 
-func (s *Solver) releaseReservationByAuction(id string) (reservation reservedBid, released bool) {
+func (s *Solver) releaseReservationByAuction(id string) {
 	if id == "" {
-		return reservedBid{}, false
+		return
 	}
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
-	s.res = slices.DeleteFunc(s.res, func(r reservedBid) bool {
-		if r.auctionID != id {
-			return false
-		}
-		reservation = r
-		released = true
-		return true
-	})
-	return reservation, released
+	s.res = slices.DeleteFunc(s.res, func(r reservedBid) bool { return r.auctionID == id })
 }
 
 func (s *Solver) markReservationWon(id string, wonAt time.Time) (*big.Int, bool) {
@@ -88,14 +93,77 @@ func (s *Solver) markReservationWon(id string, wonAt time.Time) (*big.Int, bool)
 	}
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
+	var bidWei *big.Int
 	for i := range s.res {
-		if s.res[i].auctionID == id && !s.res[i].won {
+		if s.res[i].auctionID != id {
+			continue
+		}
+		bidWei = s.res[i].bidWei
+		if !s.res[i].won {
 			s.res[i].won = true
 			s.res[i].wonAt = wonAt
-			return cloneBig(s.res[i].bidWei), true
+		}
+		break
+	}
+	record := s.ensureBidLifecycleLocked(id, bidWei)
+	if record == nil || record.won {
+		return cloneBig(bidWei), false
+	}
+	record.won = true
+	return cloneBig(record.bidWei), true
+}
+
+func (s *Solver) settleReservationByAuction(id, lifecycleKey string) bidSettlementTransition {
+	s.resMu.Lock()
+	defer s.resMu.Unlock()
+	var reservation reservedBid
+	s.res = slices.DeleteFunc(s.res, func(candidate reservedBid) bool {
+		if id == "" || candidate.auctionID != id {
+			return false
+		}
+		reservation = candidate
+		return true
+	})
+	if lifecycleKey == "" {
+		return bidSettlementTransition{
+			bidWei: cloneBig(reservation.bidWei), won: true, settled: true,
 		}
 	}
-	return nil, false
+	record := s.ensureBidLifecycleLocked(lifecycleKey, reservation.bidWei)
+	transition := bidSettlementTransition{bidWei: cloneBig(record.bidWei)}
+	if !record.won {
+		record.won = true
+		transition.won = true
+	}
+	if !record.settled {
+		record.settled = true
+		transition.settled = true
+	}
+	return transition
+}
+
+func (s *Solver) ensureBidLifecycleLocked(id string, bidWei *big.Int) *bidLifecycleRecord {
+	if id == "" {
+		return nil
+	}
+	if s.bidLifecycle == nil {
+		s.bidLifecycle = make(map[string]*bidLifecycleRecord)
+	}
+	if record := s.bidLifecycle[id]; record != nil {
+		if record.bidWei == nil && bidWei != nil {
+			record.bidWei = cloneBig(bidWei)
+		}
+		return record
+	}
+	if len(s.bidLifecycleOrder) >= maxSeenAuctions {
+		oldest := s.bidLifecycleOrder[0]
+		delete(s.bidLifecycle, oldest)
+		s.bidLifecycleOrder = s.bidLifecycleOrder[1:]
+	}
+	record := &bidLifecycleRecord{bidWei: cloneBig(bidWei)}
+	s.bidLifecycle[id] = record
+	s.bidLifecycleOrder = append(s.bidLifecycleOrder, id)
+	return record
 }
 
 func (s *Solver) wonReservationMetrics() (int, time.Duration) {
@@ -120,6 +188,7 @@ func (s *Solver) wonReservationMetricsAt(now time.Time) (int, time.Duration) {
 // pruneReservations frees a reservation once its bid resolves: when nonce <= the on-chain nonce (the bid
 // won and settled — a pending bid is signed with nonce = on-chain + 1, so settlement sets the on-chain nonce
 // to exactly the consumed bid's, and `<=` releases precisely then), or once it has aged past reservationTTL.
+// A won reservation's fallback TTL starts at its observed win so a late win cannot expire immediately.
 // Still-pending bids stay pinned.
 func (s *Solver) pruneReservations(onChainNonce uint64, now time.Time) {
 	s.resMu.Lock()
@@ -128,7 +197,11 @@ func (s *Solver) pruneReservations(onChainNonce uint64, now time.Time) {
 		if r.nonce <= onChainNonce {
 			return true
 		}
-		expired := now.Sub(r.at) > reservationTTL
+		anchor := r.at
+		if r.won && !r.wonAt.IsZero() {
+			anchor = r.wonAt
+		}
+		expired := now.Sub(anchor) > reservationTTL
 		if expired && r.won {
 			unresolvedWins++
 		}

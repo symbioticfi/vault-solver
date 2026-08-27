@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
@@ -43,6 +45,9 @@ func TestQuoteMetricsRecordAmountsAndFreshness(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	solver := &Solver{}
+	solver.quoteState.Store(&quoteState{inventory: []liquidlane.Inventory{{
+		Route: liquidlane.Route{TokenIn: tokenIn, TokenOut: tokenOut},
+	}}})
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
 	solver.metrics = metrics
 	solver.metrics.now = func() time.Time { return time.Unix(123, 0) }
@@ -54,6 +59,27 @@ func TestQuoteMetricsRecordAmountsAndFreshness(t *testing.T) {
 	metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tokenIn.Hex(), "input", 100)
 	metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tokenOut.Hex(), "output", 90)
 	metricstest.RequireWorkflowEvent(t, reg, Name, "quote", string(quoteOutcomeQuoted), 1, 123)
+
+	unbounded := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	solver.observeQuotedAmounts(quoteResponse{
+		TokenIn: tokenIn.Hex(), AmountIn: "100", TokenOut: unbounded.Hex(), AmountOut: "90",
+	})
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "solver_bot_workflow_amount_atomic_units_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "asset" && label.GetValue() == strings.ToLower(unbounded.Hex()) {
+					t.Fatal("request-controlled token created an amount series")
+				}
+			}
+		}
+	}
 }
 
 func TestQuoteDeclineMetricsUseBoundedOutcomes(t *testing.T) {

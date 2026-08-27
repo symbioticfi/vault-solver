@@ -127,10 +127,12 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   callback balance, configured bundle profitability, and the adapter's `isFiller` gate. The default strategy computes the bid **off-chain** from the
   configured `strategy.config.bid.bidEth` floor and optional `strategy.config.bid.totalBundleProfitBps` (spec Â§8); optional solver-owned `maxBidWei`
   caps the final signed bid for every strategy. The contract carries no on-chain bid cap.
-- **Metrics** on the shared registry (`deps.Metrics.Registerer()`, nil-safe): bounded workflow events
-  classify every `auction/<outcome>` and the `bid/{enqueued,won,settled_success,settled_failed,unresolved}`
-  lifecycle; native bid amounts use the same stage as `kind`. A full parsed-frame latency histogram covers
-  the decision budget. Deposit and matched-win backlog/age remain dedicated scrape-time signals. Breaker
+- **Metrics** register on the shared registry after the factory guards a nil `deps.Metrics`: bounded
+  workflow events classify every `auction/<outcome>` and the
+  `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}` lifecycle; native bid amounts use
+  the same stage as `kind`, including dry-run would-bids. The hot-path histogram covers only frames that
+  reach the serialized bid decision and excludes feed, duplicate, and empty-ID ingress skips. Deposit,
+  below-settlement-floor state, and matched-win backlog/age remain dedicated scrape-time signals. Breaker
   failures and state refreshes are bounded workflow events. The reservation stores the local win-transition timestamp, so the oldest still-inflight win
   age measures settlement pressure without auction IDs in Prometheus and returns zero when none remain.
   WebSocket connectivity becomes ready only after all topic subscriptions are written. State freshness
@@ -142,11 +144,12 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   and other failures as `error`. Queue acceptance is deliberately called `enqueued`, not sent or
   server-accepted.
   Per-event workflow timestamps make an idle pipeline distinguishable from a stuck one without
-  introducing auction identifiers. Win/settlement lifecycle events intentionally include only frames
-  matched while their local bid reservation is active; late
-  frames after nonce/TTL reconciliation are excluded from those metrics,
-  while breaker failures still include late failed frames for our callback; identifiable replays are
-  deduplicated by frame ID or transaction hash. The breaker
+  introducing auction identifiers. A bounded process-local lifecycle tracker retains known bid amounts
+  after nonce/TTL reservation release and deduplicates win/settlement frames. Late and post-restart frames
+  for our callback still advance lifecycle counts; amount series advance only when this process retained
+  the original bid amount. A won reservation's fallback TTL starts at the observed win rather than enqueue
+  time, so a just-won bid cannot be classified unresolved immediately. Breaker failures include late failed
+  frames for our callback and use frame ID or transaction hash for replay deduplication. The breaker
   halts bidding after N failed liquidations in a rolling window, and immediately on a `blacklisted`
   frame. Exact names and labels are in the
   [README metrics table](../README.md#metrics).

@@ -181,7 +181,9 @@ func TestLIFIMetricsRecordOnlyBoundedOrderSignals(t *testing.T) {
 	metrics.observeOrderQueueDrop(orderQueueInbox, errOrderInboxClosed)
 	metrics.observeOrderQueueDrop(orderQueueCapacityRetry, errOrderRetryFull)
 	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryFull)
+	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryKey)
 	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryExpired)
+	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryWindow)
 	metrics.observeOrderQueueDrop(orderQueue("request-derived-value"), errOrderInboxFull)
 
 	for outcome, want := range map[string]float64{
@@ -191,7 +193,11 @@ func TestLIFIMetricsRecordOnlyBoundedOrderSignals(t *testing.T) {
 		metricstest.RequireWorkflowEventCount(t, reg, Name, "order_processing", outcome, want)
 	}
 	for _, queue := range orderDropQueues {
-		metricstest.RequireWorkflowEventCount(t, reg, Name, "queue_drop", string(queue), 1)
+		want := float64(1)
+		if queue == orderQueueDepositRetry {
+			want = 4
+		}
+		metricstest.RequireWorkflowEventCount(t, reg, Name, "queue_drop", string(queue), want)
 	}
 
 	var nilMetrics *lifiMetrics

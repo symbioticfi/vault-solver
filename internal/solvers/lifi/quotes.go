@@ -141,14 +141,9 @@ func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
-	startedAt := time.Now()
+	timer := observability.StartOperation(s.operationObservers().quoteSuspend)
 	outcome := observability.ExternalOperationError
-	defer func() {
-		if ctx.Err() != nil && outcome == observability.ExternalOperationError {
-			outcome = observability.ExternalOperationSkipped
-		}
-		s.operations.quoteSuspend.Observe(outcome, time.Since(startedAt))
-	}()
+	defer func() { timer.Finish(ctx, outcome) }()
 
 	backoff := initialQuoteSuspensionBackoff
 	for {
@@ -190,22 +185,9 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
-	startedAt := time.Now()
+	timer := observability.StartOperation(s.operationObservers().quoteRefresh)
 	outcome := observability.ExternalOperationError
-	observed := false
-	observe := func() {
-		if observed {
-			return
-		}
-		s.operations.quoteRefresh.Observe(outcome, time.Since(startedAt))
-		observed = true
-	}
-	defer func() {
-		if ctx.Err() != nil && outcome == observability.ExternalOperationError {
-			outcome = observability.ExternalOperationSkipped
-		}
-		observe()
-	}()
+	defer func() { timer.Finish(ctx, outcome) }()
 
 	if !s.transactionLaneReady() {
 		outcome = observability.ExternalOperationSkipped
@@ -214,7 +196,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
-		observe()
+		timer.Finish(ctx, outcome)
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -287,7 +269,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
 		)
-		observe()
+		timer.Finish(ctx, outcome)
 		s.suspendQuotes(ctx, state)
 		return
 	}

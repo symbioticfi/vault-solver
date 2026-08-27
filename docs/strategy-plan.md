@@ -190,12 +190,15 @@ Public strategy interfaces, webhook DTOs, caches, protocol lifecycle, and callda
 All integrations bind their static event/outcome, amount-kind, state-view, and external-operation labels
 through the generic workflow metric families. Solver packages still own those protocol-specific enums and
 unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and UniswapX share the same
-`fill/success` event and token-native amount kinds. Gas, fee, failure, and transaction lifecycle accounting
-remains in txmanager.
+`fill/success` event and token-native amount kinds; UniswapX additionally classifies `failure` and
+`not_admitted`. Unknown event/outcome, amount-kind, or state-view observations increment one bounded
+contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
+accounting remains in txmanager.
 The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels. An active
-`txmanager` periodically installs one complete sender balance/latest-nonce/pending-nonce telemetry snapshot
-through the write endpoint, retaining the previous snapshot on failure. One locked collector emits the account
+`txmanager` periodically installs one complete sender balance/latest-nonce/pending-nonce telemetry snapshot.
+Nonce reads stay pinned to the write endpoint; balance tries it first and falls back to the ordinary read client
+for submission-only relays. The previous complete snapshot is retained on failure. One locked collector emits the account
 identity, refresh counters, values, and freshness from a single scrape-consistent state; processes whose solvers
 do not start `txmanager` emit no txmanager account series. `solver_bot_solver_info{solver}` exposes bounded
 config-time membership for fleet joins.
@@ -203,7 +206,8 @@ config-time membership for fleet joins.
 A process is one execution lane: one chain client (primary/fallback read set plus optional private write
 endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
-(or deployment-supplied `lane`) target labels. Application metrics do not carry URLs or deployment names.
+(or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
+label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
 The same EOA must not appear in two lanes because independent txmanagers cannot coordinate its nonce.
 
 The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and

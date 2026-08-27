@@ -15,7 +15,11 @@ import (
 
 func TestFillMetricsObserve(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	workflow, err := observability.NewWorkflowMetrics(reg, "rfq", FillWorkflowSpec())
+	spec := FillWorkflowSpec()
+	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
+		Event: "fill", Outcomes: []string{FillOutcomeFailure, FillOutcomeNotAdmitted},
+	})
+	workflow, err := observability.NewWorkflowMetrics(reg, "rfq", spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +34,9 @@ func TestFillMetricsObserve(t *testing.T) {
 		&types.Receipt{Status: types.ReceiptStatusSuccessful},
 		tokenIn, big.NewInt(100), tokenOut, big.NewInt(90), big.NewInt(5),
 	)
-	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", "success", 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeSuccess, 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeFailure, 0, 0)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeNotAdmitted, 0, 0)
 	metricstest.RequireWorkflowAmount(t, reg, "rfq", "fill", tokenIn.Hex(), FillAmountInput, 100)
 	metricstest.RequireWorkflowAmount(t, reg, "rfq", "fill", tokenOut.Hex(), FillAmountPlannedSurplus, 5)
 
@@ -38,7 +44,12 @@ func TestFillMetricsObserve(t *testing.T) {
 		&types.Receipt{Status: types.ReceiptStatusFailed},
 		tokenIn, big.NewInt(100), tokenOut, big.NewInt(90), big.NewInt(5),
 	)
-	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", "success", 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeSuccess, 1, 123)
+
+	rfq.ObserveOutcome(FillOutcomeFailure)
+	rfq.ObserveOutcome(FillOutcomeNotAdmitted)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeFailure, 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeNotAdmitted, 1, 123)
 }
 
 func TestPlannedSurplus(t *testing.T) {

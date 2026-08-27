@@ -55,6 +55,7 @@ const (
 	quoteDecisionBelowMinimum     quoteDecisionOutcome = "below_minimum"
 	quoteDecisionNoCandidates     quoteDecisionOutcome = "no_candidates"
 	quoteDecisionStrategyDeclined quoteDecisionOutcome = "strategy_declined"
+	quoteDecisionBadRequest       quoteDecisionOutcome = "bad_request"
 	quoteDecisionError            quoteDecisionOutcome = "error"
 )
 
@@ -65,6 +66,7 @@ var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
 	quoteDecisionBelowMinimum,
 	quoteDecisionNoCandidates,
 	quoteDecisionStrategyDeclined,
+	quoteDecisionBadRequest,
 	quoteDecisionError,
 }
 

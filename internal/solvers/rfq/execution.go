@@ -109,15 +109,13 @@ func (e *executionService) syncOnce(ctx context.Context) {
 }
 
 func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
-	started := time.Now()
+	timer := observability.StartOperation(e.orderPollObserver)
 	defer func() {
 		outcome := observability.ExternalOperationSuccess
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		} else if err != nil {
+		if err != nil {
 			outcome = observability.ExternalOperationError
 		}
-		e.orderPollObserver.Observe(outcome, time.Since(started))
+		timer.Finish(ctx, outcome)
 	}()
 	orders, err := e.backend.listOpenOrders(ctx, lowerAddr(e.executor), e.orderLimit)
 	if err != nil {

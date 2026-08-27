@@ -70,7 +70,16 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	metrics.SetBuildInfo(version.Version, version.Commit)
 	metrics.SetSolvers(solverNames)
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics)
-	go observability.ServeUntil(ctx, httpSrv, log)
+	observabilityCtx, stopObservability := context.WithCancel(context.WithoutCancel(ctx))
+	observabilityDone := make(chan struct{})
+	go func() {
+		defer close(observabilityDone)
+		observability.ServeUntil(observabilityCtx, httpSrv, log)
+	}()
+	defer func() {
+		stopObservability()
+		<-observabilityDone
+	}()
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.

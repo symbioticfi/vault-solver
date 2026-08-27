@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -78,7 +79,27 @@ func TestExternalOperationObserversUseOnlyPreboundSeries(t *testing.T) {
 	}
 }
 
-func TestWorkflowMetricsBindAndIgnoreOnlyDeclaredLabels(t *testing.T) {
+func TestOperationTimerPreservesCompletedOutcomeAcrossCancellation(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, err := NewWorkflowMetrics(reg, "solver", WorkflowSpec{Operations: []string{"poll"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	timer := StartOperation(metrics.Operation("poll"))
+	timer.Finish(ctx, ExternalOperationSuccess)
+	cancel()
+	timer.Finish(ctx, ExternalOperationError)
+
+	cancelledTimer := StartOperation(metrics.Operation("poll"))
+	cancelledTimer.Finish(ctx, ExternalOperationError)
+
+	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "success", 1)
+	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "skipped", 1)
+	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "error", 0)
+}
+
+func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	spec := WorkflowSpec{
 		Strategy:   "webhook",
@@ -121,6 +142,15 @@ func TestWorkflowMetricsBindAndIgnoreOnlyDeclaredLabels(t *testing.T) {
 		event: "quote", outcome: "error",
 	}].count); got != 1 {
 		t.Fatalf("pre-bound error series = %d, want 1", got)
+	}
+	for reason, want := range map[string]float64{
+		workflowDropUnknownEvent:  1,
+		workflowDropUnknownAmount: 1,
+		workflowDropUnknownState:  1,
+	} {
+		metricstest.RequireFamilyValue(t, reg, "solver_bot_workflow_dropped_observations_total", map[string]string{
+			"solver": "solver-a", "reason": reason,
+		}, want)
 	}
 }
 

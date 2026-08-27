@@ -424,6 +424,7 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
 	if completion.result.NotAdmitted {
+		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
 		s.log.V(1).Info(
 			"order fill was not admitted",
@@ -440,6 +441,7 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
+		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
 		s.log.Error(

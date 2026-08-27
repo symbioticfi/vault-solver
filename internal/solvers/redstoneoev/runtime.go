@@ -101,18 +101,14 @@ func (s *Solver) requestStateRefresh() {
 // refreshState reads solver-owned Executor and adapter state into the cache. Strategy-owned
 // callback/funding state is read inside strategies.
 func (s *Solver) refreshState(ctx context.Context) error {
-	startedAt := time.Now()
+	timer := observability.StartOperation(s.stateRefreshObserver)
 	_, hadLastKnownGood := s.state.load()
 	outcome := observability.ExternalOperationError
-	defer func() {
-		s.stateRefreshObserver.Observe(outcome, time.Since(startedAt))
-	}()
+	defer func() { timer.Finish(ctx, outcome) }()
 
 	snapshot, err := s.stateSource.Snapshot(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			outcome = observability.ExternalOperationSkipped
-		} else if hadLastKnownGood && errors.Is(err, errStateRefreshBlockBoundary) {
+		if hadLastKnownGood && errors.Is(err, errStateRefreshBlockBoundary) {
 			outcome = observability.ExternalOperationDegraded
 		}
 		return err
@@ -226,6 +222,7 @@ func (s *Solver) applyExecutorState(st ExecutorState, now time.Time) {
 	s.metrics.depositWei(weiFloat(st.Deposit))
 
 	belowFloor := st.Deposit.Cmp(minDeposit) < 0
+	s.metrics.depositFloorState(belowFloor)
 	if belowFloor {
 		s.log.Error(errors.New("executor deposit below MIN_DEPOSIT"),
 			"bidding will skip until the operator refuels the Executor deposit",

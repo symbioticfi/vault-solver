@@ -177,6 +177,30 @@ func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecoveredMissRecordsMetricAndOpensBreaker(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	hash := common.HexToHash("0x5678")
+	solver := &Solver{
+		cfg: &Config{Breaker: BreakerConfig{Window: time.Minute}}, log: logr.Discard(),
+		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
+			hash: {Status: orderStatusExpired},
+		}},
+	}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
+	solver.trackExclusiveObligation(exclusiveObligation{
+		hash: hash, deadline: now.Add(time.Second),
+	}, "", now)
+
+	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if solver.exclusiveBlockUntil.Load() == 0 {
+		t.Fatal("runtime-recovered miss did not open exclusive breaker")
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, 1)
+}
+
 func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	deadline := now.Add(time.Second)

@@ -15,23 +15,16 @@ type transactionSender interface {
 	Send(ctx context.Context, req txmanager.Request) txmanager.Result
 }
 
-type redemptionScan struct {
-	target Target
-	ready  []common.Address
-}
-
-// redeemAll scans every adapter before submitting any transaction. An aggregate snapshot is published
-// before the first blocking Send only when both the target source and every scan are complete; otherwise
-// the last-known-good metric is retained. The observation identifies candidate adapters, but each one is
-// scanned again immediately before building calldata so metrics collection never supplies stale action data.
+// redeemAll consumes each adapter scan before moving on; aggregate freshness advances only after full coverage.
 func (s *Solver) redeemAll(ctx context.Context) {
-	refreshStarted := time.Now()
-	scans := make([]redemptionScan, 0, len(s.targets))
+	var scanDuration time.Duration
 	totalReady := 0
 	complete := true
 	successfulReads := 0
 	for _, target := range s.targets {
+		scanStarted := time.Now()
 		ready, scanComplete, err := s.reader.readyToRedeem(ctx, target.Adapter)
+		scanDuration += time.Since(scanStarted)
 		if err != nil {
 			complete = false
 			s.log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
@@ -45,31 +38,17 @@ func (s *Solver) redeemAll(ctx context.Context) {
 		}
 		totalReady += len(ready)
 		s.log.V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
-		if len(ready) != 0 {
-			scans = append(scans, redemptionScan{target: target, ready: ready})
-		}
+		s.redeemReady(ctx, target, ready)
 	}
 	s.observeTargetDerivedState(threeFStateRedeemable, totalReady, complete)
 	outcome := observability.ExternalOperationSuccess
 	switch {
-	case ctx.Err() != nil:
-		outcome = observability.ExternalOperationSkipped
 	case len(s.targets) != 0 && successfulReads == 0:
 		outcome = observability.ExternalOperationError
 	case !s.targetsAuthoritative || !complete:
 		outcome = observability.ExternalOperationDegraded
 	}
-	s.operations.redeemableRefresh.Observe(outcome, time.Since(refreshStarted))
-	for _, scan := range scans {
-		ready, _, err := s.reader.readyToRedeem(ctx, scan.target.Adapter)
-		if err != nil {
-			s.log.Error(err, "redeem: revalidate ready requests", "adapter", scan.target.Adapter.Hex())
-			continue
-		}
-		s.log.V(1).Info("redeem revalidation", "adapter", scan.target.Adapter.Hex(),
-			"observedReady", len(scan.ready), "ready", len(ready))
-		s.redeemReady(ctx, scan.target, ready)
-	}
+	observability.ObserveOperation(ctx, s.operations.redeemableRefresh, outcome, scanDuration)
 }
 
 // redeemReady finalizes one scan's ready Requests in a single bounded

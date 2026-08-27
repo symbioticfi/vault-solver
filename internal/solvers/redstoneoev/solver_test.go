@@ -878,6 +878,8 @@ func TestDryRunSuppressesSend(t *testing.T) {
 		t.Fatalf("dry-run must not enqueue a solve, got %s", f)
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "auction", auctionOutcomeWouldBid, 1)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidWouldBid, 1)
+	requireOEVBidAmount(t, reg, oevBidWouldBid, weiFloat(seedBidWei))
 	requireOEVBidAmount(t, reg, oevBidEnqueued, 0)
 }
 

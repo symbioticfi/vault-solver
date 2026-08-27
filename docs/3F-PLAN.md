@@ -399,9 +399,11 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   per-adapter read still installs the safe resolved runtime subset, but retains the previous target
   count and freshness; while that parent snapshot is non-authoritative, the derived `offers`,
   `active_requests`, and `redeemable` views also retain their last-known-good counts and freshness.
-  Whole-batch discovery/read failures retain both runtime and metrics. Each redeem pass publishes only
-  a complete all-adapter observation, then rescans each candidate immediately before building calldata.
-  Malformed sub-call data withholds freshness while valid ready requests are still redeemed best-effort.
+  Whole-batch discovery/read failures retain both runtime and metrics. Each redeem pass scans every
+  adapter once and immediately reuses that adapter's bounded ready set for calldata, so the first send
+  does not wait for unrelated scans and no Multicall reads are doubled. Only a complete all-adapter pass
+  advances the aggregate observation after the sends. Malformed sub-call data withholds
+  freshness while valid ready requests are still redeemed best-effort.
   Malformed live-offer status, expiration, or amount likewise withholds
   offer-view freshness. The generic external-operation histogram times the fixed
   `target_refresh`, `offer_refresh`, `active_request_refresh`, and `redeemable_refresh` read phases.

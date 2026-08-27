@@ -134,9 +134,12 @@ assertion because the PR19 ABI has no getter.
   scrape-time readiness/breaker, pending-capacity, and exclusive-obligation collectors via
   `deps.Metrics.Registerer()`. Fill results come from the shared txmanager rather than a coarser duplicate.
   Quote declines use typed internal reasons mapped into workflow `quote/<outcome>`, rather than a
-  request-derived label. Quote responses selected for writing record input/output atomic-unit volume.
-  Successful fill receipts publish `fill/success`, freshness, and token-native amounts; txmanager remains
-  authoritative for failures, gas, fees, and lifecycle state.
+  request-derived label. Quote responses selected for writing record input/output atomic-unit volume only
+  when the pair belongs to the current bounded route snapshot, so a permissive webhook cannot turn the
+  unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
+  `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
+  `fill/failure` and `fill/not_admitted`, while txmanager remains authoritative for detailed outcomes, gas,
+  fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
   `exclusive_order_poll`, and `public_order_poll` boundaries. Partial pagination or a safe, incomplete
   discount fallback is `degraded`; exclusive reconciliation failures are `error` because they invalidate
@@ -144,8 +147,9 @@ assertion because the PR19 ABI has no getter.
   submission are outside these source timers.
   Live polling records `exclusive_obligation/won`; outstanding count, nearest deadline, and terminal
   workflow outcomes make won-but-not-delivered obligations visible. A timely terminal delivery may be by another
-  filler. Startup and runtime recovery restore safety state without replaying counters; only startup-only
-  terminal misses are informational and do not open the breaker. Exact names and labels are in the
+  filler. Startup recovery restores safety state without replaying historical counters or opening the breaker;
+  later runtime recovery records each terminal outcome so a breaker-opening miss always has a matching metric.
+  Exact names and labels are in the
   [README metrics table](../README.md#metrics).
 - **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). It keeps
   at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process

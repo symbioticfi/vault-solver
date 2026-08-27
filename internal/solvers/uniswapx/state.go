@@ -286,7 +286,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	s.stateMu.Unlock()
 
 	for _, decision := range settled {
-		if decision.liveObserved {
+		if !decision.recoveredAtStart {
 			s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)
 		}
 		s.log.Info(
@@ -323,7 +323,7 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 	}
 	s.invalidateQuotes()
 	for _, decision := range missed {
-		if decision.liveObserved {
+		if !decision.recoveredAtStart {
 			s.observeExclusiveOutcome(exclusiveOutcomeMissed)
 		}
 		fields := []any{

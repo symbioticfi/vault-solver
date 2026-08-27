@@ -15,6 +15,7 @@ const (
 	oevBidWon            = "won"
 	oevBidSettledSuccess = "settled_success"
 	oevBidSettledFailed  = "settled_failed"
+	oevBidWouldBid       = "would_bid"
 	oevBidUnresolved     = "unresolved"
 )
 
@@ -25,7 +26,9 @@ var (
 		"would_bid", "bid_cap", "deposit_low", "empty_auction_id", "executor_state_stale",
 		"no_legs", "gas_unprofitable", "stale_epoch", "stale_state", "in_flight", "callback_balance", "strategy_skip",
 	}
-	bidLifecycleStages = [...]string{oevBidEnqueued, oevBidWon, oevBidSettledSuccess, oevBidSettledFailed}
+	bidLifecycleStages = [...]string{
+		oevBidEnqueued, oevBidWon, oevBidSettledSuccess, oevBidSettledFailed, oevBidWouldBid,
+	}
 )
 
 // metrics are the OEV solver's collectors, registered on the shared Prometheus registry (served at
@@ -37,6 +40,7 @@ type metrics struct {
 	oldestWonInflight prometheus.GaugeFunc
 	hotPath           prometheus.Histogram
 	deposit           prometheus.Gauge
+	depositBelowFloor prometheus.Gauge
 	feedConnected     prometheus.Gauge
 	now               func() time.Time
 }
@@ -92,6 +96,10 @@ func newMetrics(
 		deposit: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei).",
 		}),
+		depositBelowFloor: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "oev_deposit_below_floor",
+			Help: "1 when the signer's Executor deposit is below the on-chain settlement floor; 0 otherwise.",
+		}),
 		feedConnected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "oev_feed_connected",
 			Help: "Whether the OEV WebSocket is connected with all configured topic subscriptions sent (1 or 0).",
@@ -99,7 +107,7 @@ func newMetrics(
 		now: time.Now,
 	}
 	for _, collector := range []prometheus.Collector{
-		m.wonInflight, m.oldestWonInflight, m.hotPath, m.deposit, m.feedConnected,
+		m.wonInflight, m.oldestWonInflight, m.hotPath, m.deposit, m.depositBelowFloor, m.feedConnected,
 	} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
@@ -113,18 +121,29 @@ func (m *metrics) auctionDecision(outcome string, elapsed time.Duration) {
 		return
 	}
 	m.workflow.ObserveEventAt("auction", outcome, 1, m.now())
-	m.hotPath.Observe(elapsed.Seconds())
+	switch outcome {
+	case auctionOutcomeFeedIgnored, auctionOutcomeDuplicate, skipEmptyAuctionID:
+		return
+	default:
+		m.hotPath.Observe(elapsed.Seconds())
+	}
 }
 
 func (m *metrics) enqueuedBid(amount *big.Int) {
 	if m != nil {
-		m.observeBid(oevBidEnqueued, 1, amount)
+		m.observeBid(oevBidEnqueued, amount)
 	}
 }
 
 func (m *metrics) won(amount *big.Int) {
 	if m != nil {
-		m.observeBid(oevBidWon, 1, amount)
+		m.observeBid(oevBidWon, amount)
+	}
+}
+
+func (m *metrics) wouldBid(amount *big.Int) {
+	if m != nil {
+		m.observeBid(oevBidWouldBid, amount)
 	}
 }
 
@@ -140,12 +159,12 @@ func (m *metrics) settlement(success bool, amount *big.Int) {
 		outcome = oevBidSettledSuccess
 	}
 	if m != nil {
-		m.observeBid(outcome, 1, amount)
+		m.observeBid(outcome, amount)
 	}
 }
 
-func (m *metrics) observeBid(outcome string, count float64, amount *big.Int) {
-	m.workflow.ObserveEventAt("bid", outcome, count, m.now())
+func (m *metrics) observeBid(outcome string, amount *big.Int) {
+	m.workflow.ObserveEventAt("bid", outcome, 1, m.now())
 	m.workflow.AddAmount("bid", "native", outcome, amount)
 }
 
@@ -159,6 +178,17 @@ func (m *metrics) depositWei(depositWei float64) {
 	if m != nil {
 		m.deposit.Set(depositWei)
 	}
+}
+
+func (m *metrics) depositFloorState(below bool) {
+	if m == nil {
+		return
+	}
+	value := float64(0)
+	if below {
+		value = 1
+	}
+	m.depositBelowFloor.Set(value)
 }
 
 func (m *metrics) setFeedConnected(connected bool) {

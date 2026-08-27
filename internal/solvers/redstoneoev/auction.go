@@ -104,11 +104,16 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 		return
 	}
 	s.requestStateRefresh()
-	if reservation, released := s.releaseReservationByAuction(r.ID); released {
-		if !reservation.won {
-			s.metrics.won(reservation.bidWei)
-		}
-		s.metrics.settlement(r.Data.Success, reservation.bidWei)
+	lifecycleKey := strings.TrimSpace(r.ID)
+	if lifecycleKey == "" {
+		lifecycleKey = liquidationResultIdentity(r)
+	}
+	transition := s.settleReservationByAuction(r.ID, lifecycleKey)
+	if transition.won {
+		s.metrics.won(transition.bidWei)
+	}
+	if transition.settled {
+		s.metrics.settlement(r.Data.Success, transition.bidWei)
 	}
 	if !r.Data.Success {
 		now := time.Now()
@@ -197,6 +202,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	}
 	if s.dryRun {
 		outcome = auctionOutcomeWouldBid
+		s.metrics.wouldBid(d.bidWei)
 		s.log.Info("DRY-RUN would bid", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 			"bidEth", d.solve.Data.Bid)
 		return
