@@ -2298,6 +2298,10 @@
         "pluginId": "prometheus",
         "refresh": "onDashboardLoad",
         "regex": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
         "options": [],
         "multi": false,
         "includeAll": false,

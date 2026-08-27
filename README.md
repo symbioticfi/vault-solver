@@ -481,10 +481,12 @@ clear the local fill-failure breaker; accounting systems must use canonical on-c
 
 Six native Grafana Dashboard Schema v2 templates are committed under
 [`dashboards/`](dashboards/): a fleet-safe Runtime dashboard and single-instance dashboards for 3F,
-RFQ, LI.FI, UniswapX, and OEV. Each JSON file is a bare `DashboardSpec` with a stable `uid`, a
-selectable `${datasource}`, and query-driven namespace/pod selectors over the standard Kubernetes target
-labels `namespace`, `pod`, `job`, and `instance`. No cluster namespace, pod-name pattern, or datasource UID
-is embedded in the templates. Deployment resources and provisioning remain separate.
+RFQ, LI.FI, UniswapX, and OEV. Each JSON file carries a repository-level `uid`; a Schema v2 provisioner
+must copy it to the Dashboard resource's `metadata.name` and omit it from `spec`, because Grafana derives
+the stable dashboard URL from resource metadata rather than a `DashboardSpec` field. The selectable
+`${datasource}` has a schema-required empty current value that Grafana resolves on load, so no datasource
+UID is embedded. Namespace/pod selectors are query-driven over the standard Kubernetes target labels
+`namespace`, `pod`, `job`, and `instance`; no cluster namespace or pod-name pattern is embedded.
 
 ## Configuration
 
