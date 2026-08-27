@@ -65,39 +65,47 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 
 		resp, err := t.base.RoundTrip(attempt)
-		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectErr := hasNullRPCResult(resp, nullFallbackID)
-				if inspectErr != nil || unavailable {
-					cancel()
-					_ = resp.Body.Close()
-					if inspectErr != nil {
-						lastErr = inspectErr
-					} else {
-						lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
-					}
-					t.log.V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
-					continue
-				}
+		hasFallback := i < len(t.endpoints)-1
+		if err != nil || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			cancel()
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = errors.Errorf("status %d", resp.StatusCode)
+				_ = resp.Body.Close()
 			}
-			// Success: keep the attempt context alive until the rpc layer finishes reading the body.
-			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-			return resp, nil
+			if hasFallback {
+				t.log.V(1).Info("rpc endpoint failed; trying fallback",
+					"endpoint", ep.Redacted(), "err", lastErr.Error())
+			}
+			continue
 		}
+
+		inspectNull := nullFallback && hasFallback && resp.StatusCode >= 200 && resp.StatusCode < 300
+		if !inspectNull {
+			return responseWithCancel(resp, cancel), nil
+		}
+		unavailable, inspectErr := hasNullRPCResult(resp, nullFallbackID)
+		if inspectErr == nil && !unavailable {
+			return responseWithCancel(resp, cancel), nil
+		}
+
 		cancel()
-		if err != nil {
-			lastErr = err
+		_ = resp.Body.Close()
+		if inspectErr != nil {
+			lastErr = inspectErr
 		} else {
-			lastErr = errors.Errorf("status %d", resp.StatusCode)
-			_ = resp.Body.Close()
+			lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
 		}
-		if i < len(t.endpoints)-1 {
-			t.log.V(1).Info("rpc endpoint failed; trying fallback",
-				"endpoint", ep.Redacted(), "err", lastErr.Error())
-		}
+		t.log.V(1).Info("rpc result unavailable; trying fallback",
+			"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
 	}
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
+}
+
+func responseWithCancel(resp *http.Response, cancel context.CancelFunc) *http.Response {
+	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp
 }
 
 // nullResultFallbackRequest identifies the narrow read methods for which a JSON-RPC null result can

@@ -222,31 +222,7 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
 	feedCount := auctionFeedCount(input.Auction)
-	var (
-		b      chosenBundle
-		priced pricedBundle
-		skip   string
-	)
-	if s.gasAccounting {
-		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
-		if rate == nil {
-			s.log.Info("bid skipped: loan/native gas rate unavailable",
-				"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
-			return skipBid(skipGasUnprofitable), nil
-		}
-		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
-			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
-				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
-		}
-	} else {
-		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
-		}
-	}
+	priced, skip := s.selectAndPriceBundle(input, scored, laneState, gasPrice, feedCount)
 	if skip != "" {
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
@@ -277,6 +253,40 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	}
 	s.reservations.reserve(input.Auction.ID, priced)
 	return out, nil
+}
+
+func (s *Strategy) selectAndPriceBundle(
+	input types.BidInput,
+	scored []scoredLeg,
+	laneState *liquidLaneState,
+	gasPrice *big.Int,
+	feedCount int,
+) (pricedBundle, string) {
+	if !s.gasAccounting {
+		bundle, skip := s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
+		if skip != "" {
+			return pricedBundle{}, skip
+		}
+		return s.engine.priceBundleWithoutGasAccounting(bundle, laneState, gasPrice, feedCount), ""
+	}
+
+	rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
+	if rate == nil {
+		s.log.Info("bid skipped: loan/native gas rate unavailable",
+			"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
+		return pricedBundle{}, skipGasUnprofitable
+	}
+	bundle, skip := s.engine.selectNetBundle(
+		scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount,
+	)
+	if skip == "" {
+		return s.engine.priceBundle(bundle, rate, laneState, gasPrice, feedCount), ""
+	}
+	if skip == skipGasUnprofitable && len(bundle.legs) > 0 {
+		s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
+			bundle, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
+	}
+	return pricedBundle{}, skip
 }
 
 func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {

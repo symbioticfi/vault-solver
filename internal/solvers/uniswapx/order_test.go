@@ -1,6 +1,7 @@
 package uniswapx
 
 import (
+	"crypto/ecdsa"
 	"math/big"
 	"strings"
 	"testing"
@@ -14,6 +15,16 @@ import (
 )
 
 const goldenV2OrderHash = "0x4bd12c75e25c9601d854988baadbdd0ad1a147b3cb55b0899e143f8db9f3be6e"
+
+type v2OrderTestFixture struct {
+	order       v2Order
+	entry       orderEntry
+	cfg         *Config
+	hash        common.Hash
+	cosignerKey *ecdsa.PrivateKey
+	tokenOut    common.Address
+	recipient   common.Address
+}
 
 func TestV2OrderHashMatchesApitypesAndGolden(t *testing.T) {
 	order := v2Order{
@@ -145,6 +156,10 @@ func TestParseAndResolveOrder(t *testing.T) {
 		Input:   orderToken{Token: tokenIn.Hex(), StartAmount: "100", EndAmount: "100"},
 		Outputs: []orderOutput{{Token: tokenOut.Hex(), StartAmount: "220", EndAmount: "200", Recipient: recipient.Hex()}},
 	}
+	fixture := v2OrderTestFixture{
+		order: order, entry: entry, cfg: cfg, hash: hash, cosignerKey: cosignerKey,
+		tokenOut: tokenOut, recipient: recipient,
+	}
 	resolved, err := parseAndResolveV2Order(entry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0))
 	if err != nil {
 		t.Fatalf("parseAndResolveOrder: %v", err)
@@ -192,43 +207,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("public V2 applies active exclusivity override with ceil rounding", func(t *testing.T) {
-		publicOrder := order
-		publicOrder.CosignerData.ExclusiveFiller = recipient
-		publicOrder.CosignerData.ExclusivityOverrideBps = big.NewInt(100)
-		publicCosignerData, packErr := v2CosignerDataArguments.Pack(publicOrder.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		publicOrder.Cosignature, packErr = crypto.Sign(crypto.Keccak256(hash.Bytes(), publicCosignerData), cosignerKey)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		publicOrder.Cosignature[64] += 27
-		body, packErr := v2OrderArguments.Pack(publicOrder)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		publicEntry := entry
-		publicEntry.EncodedOrder = hexutil.Encode(body)
-		public, parseErr := parseAndResolveV2Order(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0))
-		if parseErr != nil {
-			t.Fatal(parseErr)
-		}
-		if public.AmountOut.Cmp(big.NewInt(223)) != 0 {
-			t.Fatalf("override amount = %s, want 223", public.AmountOut)
-		}
-
-		publicOrder.CosignerData.ExclusivityOverrideBps = big.NewInt(0)
-		publicCosignerData, _ = v2CosignerDataArguments.Pack(publicOrder.CosignerData)
-		publicOrder.Cosignature, _ = crypto.Sign(crypto.Keccak256(hash.Bytes(), publicCosignerData), cosignerKey)
-		publicOrder.Cosignature[64] += 27
-		body, _ = v2OrderArguments.Pack(publicOrder)
-		publicEntry.EncodedOrder = hexutil.Encode(body)
-		if _, parseErr = parseAndResolveV2Order(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0)); parseErr == nil {
-			t.Fatal("expected active strict exclusivity rejection")
-		}
-	})
+	t.Run("public V2 applies active exclusivity override with ceil rounding", fixture.testPublicOverride)
 
 	t.Run("rejects envelope mismatch", func(t *testing.T) {
 		tampered := entry
@@ -239,148 +218,11 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts exact-output input decay and cosigner override", func(t *testing.T) {
-		inputDecay := order
-		inputDecay.BaseInput.EndAmount = big.NewInt(140)
-		inputDecay.BaseOutputs = []v2Output{{
-			Token: tokenOut, StartAmount: big.NewInt(200), EndAmount: big.NewInt(200), Recipient: recipient,
-		}}
-		inputDecay.CosignerData.InputOverride = big.NewInt(80)
-		inputHash, hashErr := v2OrderHash(inputDecay)
-		if hashErr != nil {
-			t.Fatal(hashErr)
-		}
-		encodedCosignerData, packErr := v2CosignerDataArguments.Pack(inputDecay.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		inputDecay.Cosignature, packErr = crypto.Sign(
-			crypto.Keccak256(inputHash.Bytes(), encodedCosignerData),
-			cosignerKey,
-		)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		inputDecay.Cosignature[64] += 27
-		body, packErr := v2OrderArguments.Pack(inputDecay)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		decayingEntry := entry
-		decayingEntry.Outputs = append([]orderOutput(nil), entry.Outputs...)
-		decayingEntry.EncodedOrder = hexutil.Encode(body)
-		decayingEntry.OrderHash = inputHash.Hex()
-		decayingEntry.Input.EndAmount = "140"
-		decayingEntry.Outputs[0].StartAmount = "200"
-		resolvedExactOutput, parseErr := parseAndResolveV2Order(
-			decayingEntry,
-			orderSourceExclusiveV2,
-			cfg,
-			1,
-			time.Unix(1_050, 0),
-		)
-		if parseErr != nil {
-			t.Fatalf("exact-output order rejected: %v", parseErr)
-		}
-		if resolvedExactOutput.AmountIn.Cmp(big.NewInt(110)) != 0 ||
-			resolvedExactOutput.AmountOut.Cmp(big.NewInt(200)) != 0 {
-			t.Fatalf("resolved exact-output amounts = %s/%s, want 110/200",
-				resolvedExactOutput.AmountIn, resolvedExactOutput.AmountOut)
-		}
-	})
+	t.Run("accepts exact-output input decay and cosigner override", fixture.testExactOutput)
 
-	t.Run("rejects cosigner overrides outside signed base bounds", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			mutate  func(*v2Order)
-			wantErr string
-		}{
-			{
-				name: "input above base start",
-				mutate: func(candidate *v2Order) {
-					candidate.CosignerData.InputOverride = big.NewInt(101)
-				},
-				wantErr: "input override exceeds base start",
-			},
-			{
-				name: "output below base start",
-				mutate: func(candidate *v2Order) {
-					candidate.CosignerData.OutputOverrides = []*big.Int{big.NewInt(219)}
-				},
-				wantErr: "output override 0 is below base start",
-			},
-		}
-		for _, test := range tests {
-			t.Run(test.name, func(t *testing.T) {
-				candidate := order
-				test.mutate(&candidate)
-				encodedCosignerData, packErr := v2CosignerDataArguments.Pack(candidate.CosignerData)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
-				candidate.Cosignature, packErr = crypto.Sign(
-					crypto.Keccak256(hash.Bytes(), encodedCosignerData), cosignerKey,
-				)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
-				candidate.Cosignature[64] += 27
-				body, packErr := v2OrderArguments.Pack(candidate)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
-				candidateEntry := entry
-				candidateEntry.EncodedOrder = hexutil.Encode(body)
-				if _, parseErr := parseAndResolveV2Order(
-					candidateEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
-				); parseErr == nil || !strings.Contains(parseErr.Error(), test.wantErr) {
-					t.Fatalf("err = %v, want %q", parseErr, test.wantErr)
-				}
-			})
-		}
-	})
+	t.Run("rejects cosigner overrides outside signed base bounds", fixture.testOverrideBounds)
 
-	t.Run("accepts same-token fee outputs and sums their resolved amounts", func(t *testing.T) {
-		multi := order
-		multi.BaseOutputs = append(append([]v2Output(nil), order.BaseOutputs...), v2Output{
-			Token: tokenOut, StartAmount: big.NewInt(20), EndAmount: big.NewInt(10), Recipient: recipient,
-		})
-		multi.CosignerData.OutputOverrides = append(
-			append([]*big.Int(nil), order.CosignerData.OutputOverrides...), big.NewInt(0),
-		)
-		multiHash, hashErr := v2OrderHash(multi)
-		if hashErr != nil {
-			t.Fatal(hashErr)
-		}
-		encodedCosignerData, packErr := v2CosignerDataArguments.Pack(multi.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		multi.Cosignature, packErr = crypto.Sign(crypto.Keccak256(multiHash.Bytes(), encodedCosignerData), cosignerKey)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		multi.Cosignature[64] += 27
-		body, packErr := v2OrderArguments.Pack(multi)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
-		multiEntry := entry
-		multiEntry.EncodedOrder = hexutil.Encode(body)
-		multiEntry.OrderHash = multiHash.Hex()
-		multiEntry.Outputs = append(append([]orderOutput(nil), entry.Outputs...), orderOutput{
-			Token: tokenOut.Hex(), StartAmount: "20", EndAmount: "10", Recipient: recipient.Hex(),
-		})
-		resolvedMulti, parseErr := parseAndResolveV2Order(
-			multiEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
-		)
-		if parseErr != nil {
-			t.Fatalf("multi-output order rejected: %v", parseErr)
-		}
-		if resolvedMulti.AmountOut.Cmp(big.NewInt(225)) != 0 {
-			t.Fatalf("multi-output amount = %s, want 225", resolvedMulti.AmountOut)
-		}
-	})
+	t.Run("accepts same-token fee outputs and sums their resolved amounts", fixture.testMultiOutput)
 
 	t.Run("rejects another filler", func(t *testing.T) {
 		tamperedOrder := order
@@ -434,6 +276,197 @@ func TestParseAndResolveOrder(t *testing.T) {
 			t.Fatal("expected cosignature mismatch")
 		}
 	})
+}
+
+func (f v2OrderTestFixture) testPublicOverride(t *testing.T) {
+	publicOrder := f.order
+	publicOrder.CosignerData.ExclusiveFiller = f.recipient
+	publicOrder.CosignerData.ExclusivityOverrideBps = big.NewInt(100)
+	publicCosignerData, err := v2CosignerDataArguments.Pack(publicOrder.CosignerData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicOrder.Cosignature, err = crypto.Sign(
+		crypto.Keccak256(f.hash.Bytes(), publicCosignerData),
+		f.cosignerKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicOrder.Cosignature[64] += 27
+	body, err := v2OrderArguments.Pack(publicOrder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicEntry := f.entry
+	publicEntry.EncodedOrder = hexutil.Encode(body)
+	public, err := parseAndResolveV2Order(publicEntry, orderSourcePublicV2, f.cfg, 1, time.Unix(1_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public.AmountOut.Cmp(big.NewInt(223)) != 0 {
+		t.Fatalf("override amount = %s, want 223", public.AmountOut)
+	}
+
+	publicOrder.CosignerData.ExclusivityOverrideBps = big.NewInt(0)
+	publicCosignerData, _ = v2CosignerDataArguments.Pack(publicOrder.CosignerData)
+	publicOrder.Cosignature, _ = crypto.Sign(
+		crypto.Keccak256(f.hash.Bytes(), publicCosignerData),
+		f.cosignerKey,
+	)
+	publicOrder.Cosignature[64] += 27
+	body, _ = v2OrderArguments.Pack(publicOrder)
+	publicEntry.EncodedOrder = hexutil.Encode(body)
+	if _, err = parseAndResolveV2Order(
+		publicEntry, orderSourcePublicV2, f.cfg, 1, time.Unix(1_000, 0),
+	); err == nil {
+		t.Fatal("expected active strict exclusivity rejection")
+	}
+}
+
+func (f v2OrderTestFixture) testExactOutput(t *testing.T) {
+	inputDecay := f.order
+	inputDecay.BaseInput.EndAmount = big.NewInt(140)
+	inputDecay.BaseOutputs = []v2Output{{
+		Token: f.tokenOut, StartAmount: big.NewInt(200), EndAmount: big.NewInt(200), Recipient: f.recipient,
+	}}
+	inputDecay.CosignerData.InputOverride = big.NewInt(80)
+	inputHash, err := v2OrderHash(inputDecay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedCosignerData, err := v2CosignerDataArguments.Pack(inputDecay.CosignerData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputDecay.Cosignature, err = crypto.Sign(
+		crypto.Keccak256(inputHash.Bytes(), encodedCosignerData),
+		f.cosignerKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputDecay.Cosignature[64] += 27
+	body, err := v2OrderArguments.Pack(inputDecay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decayingEntry := f.entry
+	decayingEntry.Outputs = append([]orderOutput(nil), f.entry.Outputs...)
+	decayingEntry.EncodedOrder = hexutil.Encode(body)
+	decayingEntry.OrderHash = inputHash.Hex()
+	decayingEntry.Input.EndAmount = "140"
+	decayingEntry.Outputs[0].StartAmount = "200"
+	resolved, err := parseAndResolveV2Order(
+		decayingEntry,
+		orderSourceExclusiveV2,
+		f.cfg,
+		1,
+		time.Unix(1_050, 0),
+	)
+	if err != nil {
+		t.Fatalf("exact-output order rejected: %v", err)
+	}
+	if resolved.AmountIn.Cmp(big.NewInt(110)) != 0 || resolved.AmountOut.Cmp(big.NewInt(200)) != 0 {
+		t.Fatalf("resolved exact-output amounts = %s/%s, want 110/200", resolved.AmountIn, resolved.AmountOut)
+	}
+}
+
+func (f v2OrderTestFixture) testOverrideBounds(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*v2Order)
+		wantErr string
+	}{
+		{
+			name: "input above base start",
+			mutate: func(candidate *v2Order) {
+				candidate.CosignerData.InputOverride = big.NewInt(101)
+			},
+			wantErr: "input override exceeds base start",
+		},
+		{
+			name: "output below base start",
+			mutate: func(candidate *v2Order) {
+				candidate.CosignerData.OutputOverrides = []*big.Int{big.NewInt(219)}
+			},
+			wantErr: "output override 0 is below base start",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := f.order
+			test.mutate(&candidate)
+			encodedCosignerData, err := v2CosignerDataArguments.Pack(candidate.CosignerData)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate.Cosignature, err = crypto.Sign(
+				crypto.Keccak256(f.hash.Bytes(), encodedCosignerData),
+				f.cosignerKey,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate.Cosignature[64] += 27
+			body, err := v2OrderArguments.Pack(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateEntry := f.entry
+			candidateEntry.EncodedOrder = hexutil.Encode(body)
+			if _, err := parseAndResolveV2Order(
+				candidateEntry, orderSourceExclusiveV2, f.cfg, 1, time.Unix(1_050, 0),
+			); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("err = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func (f v2OrderTestFixture) testMultiOutput(t *testing.T) {
+	multi := f.order
+	multi.BaseOutputs = append(append([]v2Output(nil), f.order.BaseOutputs...), v2Output{
+		Token: f.tokenOut, StartAmount: big.NewInt(20), EndAmount: big.NewInt(10), Recipient: f.recipient,
+	})
+	multi.CosignerData.OutputOverrides = append(
+		append([]*big.Int(nil), f.order.CosignerData.OutputOverrides...), big.NewInt(0),
+	)
+	multiHash, err := v2OrderHash(multi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedCosignerData, err := v2CosignerDataArguments.Pack(multi.CosignerData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi.Cosignature, err = crypto.Sign(
+		crypto.Keccak256(multiHash.Bytes(), encodedCosignerData),
+		f.cosignerKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multi.Cosignature[64] += 27
+	body, err := v2OrderArguments.Pack(multi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiEntry := f.entry
+	multiEntry.EncodedOrder = hexutil.Encode(body)
+	multiEntry.OrderHash = multiHash.Hex()
+	multiEntry.Outputs = append(append([]orderOutput(nil), f.entry.Outputs...), orderOutput{
+		Token: f.tokenOut.Hex(), StartAmount: "20", EndAmount: "10", Recipient: f.recipient.Hex(),
+	})
+	resolved, err := parseAndResolveV2Order(
+		multiEntry, orderSourceExclusiveV2, f.cfg, 1, time.Unix(1_050, 0),
+	)
+	if err != nil {
+		t.Fatalf("multi-output order rejected: %v", err)
+	}
+	if resolved.AmountOut.Cmp(big.NewInt(225)) != 0 {
+		t.Fatalf("multi-output amount = %s, want 225", resolved.AmountOut)
+	}
 }
 
 func TestDecayMatchesDutchLinearRounding(t *testing.T) {

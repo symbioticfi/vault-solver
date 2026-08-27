@@ -104,32 +104,11 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	if cfg.Sizing.SwapHaircutBps < 0 || cfg.Sizing.SwapHaircutBps >= 10_000 {
 		return Config{}, errors.Errorf("strategy.config.sizing.swapHaircutBps must be in [0, 10000), got %d", cfg.Sizing.SwapHaircutBps)
 	}
-	if raw.TestMonitor != nil {
-		if len(raw.TestMonitor.Markets) == 0 {
-			return Config{}, errors.New("strategy.config.testMonitor.markets must not be empty")
-		}
-		if len(raw.TestMonitor.Positions) == 0 {
-			return Config{}, errors.New("strategy.config.testMonitor.positions must not be empty")
-		}
-		cfg.TestMonitor = &TestMonitorConfig{
-			Markets:   make([]common.Hash, len(raw.TestMonitor.Markets)),
-			Positions: make([]common.Address, len(raw.TestMonitor.Positions)),
-		}
-		for i, value := range raw.TestMonitor.Markets {
-			market, parseErr := parse.Hash(value, "strategy.config.testMonitor.markets["+strconv.Itoa(i)+"]")
-			if parseErr != nil {
-				return Config{}, parseErr
-			}
-			cfg.TestMonitor.Markets[i] = market
-		}
-		for i, value := range raw.TestMonitor.Positions {
-			position, parseErr := parse.Address(value, "strategy.config.testMonitor.positions["+strconv.Itoa(i)+"]")
-			if parseErr != nil {
-				return Config{}, parseErr
-			}
-			cfg.TestMonitor.Positions[i] = position
-		}
+	testMonitor, err := parseTestMonitor(raw.TestMonitor)
+	if err != nil {
+		return Config{}, err
 	}
+	cfg.TestMonitor = testMonitor
 	if raw.MorphoAPIURL != "" {
 		u, perr := url.Parse(raw.MorphoAPIURL)
 		if perr != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -161,6 +140,37 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	cfg.MaxStateAge = maxAge
 	if cfg.MonitorPoll >= cfg.MaxStateAge {
 		return Config{}, errors.Errorf("strategy.config.monitorPollMs (%s) must be < strategy.config.maxStateAgeMs (%s)", cfg.MonitorPoll, cfg.MaxStateAge)
+	}
+	return cfg, nil
+}
+
+func parseTestMonitor(raw *rawTestMonitor) (*TestMonitorConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if len(raw.Markets) == 0 {
+		return nil, errors.New("strategy.config.testMonitor.markets must not be empty")
+	}
+	if len(raw.Positions) == 0 {
+		return nil, errors.New("strategy.config.testMonitor.positions must not be empty")
+	}
+	cfg := &TestMonitorConfig{
+		Markets:   make([]common.Hash, len(raw.Markets)),
+		Positions: make([]common.Address, len(raw.Positions)),
+	}
+	for i, value := range raw.Markets {
+		market, err := parse.Hash(value, "strategy.config.testMonitor.markets["+strconv.Itoa(i)+"]")
+		if err != nil {
+			return nil, err
+		}
+		cfg.Markets[i] = market
+	}
+	for i, value := range raw.Positions {
+		position, err := parse.Address(value, "strategy.config.testMonitor.positions["+strconv.Itoa(i)+"]")
+		if err != nil {
+			return nil, err
+		}
+		cfg.Positions[i] = position
 	}
 	return cfg, nil
 }

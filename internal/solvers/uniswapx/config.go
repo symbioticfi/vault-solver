@@ -200,33 +200,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			quoteTTL,
 		)
 	}
-	pollInterval, err := parse.Duration(raw.OrderServer.PollInterval, defaultPollInterval, "orderServer.pollInterval")
+	orderServer, err := parseOrderServerConfig(raw.OrderServer)
 	if err != nil {
 		return nil, err
-	}
-	if pollInterval < 167*time.Millisecond {
-		return nil, errors.New("orderServer.pollInterval must be at least 167ms")
-	}
-	orderHTTPTimeout, err := parse.Duration(raw.OrderServer.HTTPTimeout, 5*time.Second, "orderServer.httpTimeout")
-	if err != nil {
-		return nil, err
-	}
-	if raw.OrderServer.APIKeyEnv == "" {
-		return nil, errors.New("orderServer.apiKeyEnv is required")
-	}
-	if raw.OrderServer.BaseURL == "" {
-		return nil, errors.New("orderServer.baseUrl is required")
-	}
-	if err := validateServiceURL(raw.OrderServer.BaseURL, "orderServer.baseUrl"); err != nil {
-		return nil, err
-	}
-	exclusiveV2 := true
-	if raw.OrderServer.Sources.ExclusiveV2 != nil {
-		exclusiveV2 = *raw.OrderServer.Sources.ExclusiveV2
-	}
-	sources := OrderSourcesConfig{ExclusiveV2: exclusiveV2, PublicV2: raw.OrderServer.Sources.PublicV2}
-	if !sources.ExclusiveV2 {
-		return nil, errors.New("orderServer.sources.exclusiveV2 must be enabled while quote server is enabled")
 	}
 	if solverMode == solverModeInternal && raw.Discounts == nil {
 		return nil, errors.New("discounts is required in internal solverMode")
@@ -258,14 +234,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			HTTPTimeout:     quoteHTTPTimeout,
 			RefreshInterval: refreshInterval, QuoteTTL: quoteTTL,
 		},
-		OrderServer: OrderServerConfig{
-			BaseURL: raw.OrderServer.BaseURL, APIKeyEnv: raw.OrderServer.APIKeyEnv,
-			PollInterval: pollInterval, HTTPTimeout: orderHTTPTimeout, Beta: raw.OrderServer.Beta, Sources: sources,
-		},
-		Discounts: discountConfig,
-		Gas:       gas,
-		Breaker:   breaker,
-		Strategy:  StrategyConfig{Name: parse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config},
+		OrderServer: orderServer,
+		Discounts:   discountConfig,
+		Gas:         gas,
+		Breaker:     breaker,
+		Strategy:    StrategyConfig{Name: parse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config},
 	}, nil
 }
 
@@ -277,6 +250,41 @@ func (c *Config) restrictsToAdapters() bool {
 
 func (c *Config) quoteScopesToAdapters() bool {
 	return len(c.Adapters) > 0
+}
+
+func parseOrderServerConfig(raw rawOrderServerConfig) (OrderServerConfig, error) {
+	pollInterval, err := parse.Duration(raw.PollInterval, defaultPollInterval, "orderServer.pollInterval")
+	if err != nil {
+		return OrderServerConfig{}, err
+	}
+	if pollInterval < 167*time.Millisecond {
+		return OrderServerConfig{}, errors.New("orderServer.pollInterval must be at least 167ms")
+	}
+	httpTimeout, err := parse.Duration(raw.HTTPTimeout, 5*time.Second, "orderServer.httpTimeout")
+	if err != nil {
+		return OrderServerConfig{}, err
+	}
+	if raw.APIKeyEnv == "" {
+		return OrderServerConfig{}, errors.New("orderServer.apiKeyEnv is required")
+	}
+	if raw.BaseURL == "" {
+		return OrderServerConfig{}, errors.New("orderServer.baseUrl is required")
+	}
+	if err := validateServiceURL(raw.BaseURL, "orderServer.baseUrl"); err != nil {
+		return OrderServerConfig{}, err
+	}
+	exclusiveV2 := true
+	if raw.Sources.ExclusiveV2 != nil {
+		exclusiveV2 = *raw.Sources.ExclusiveV2
+	}
+	sources := OrderSourcesConfig{ExclusiveV2: exclusiveV2, PublicV2: raw.Sources.PublicV2}
+	if !sources.ExclusiveV2 {
+		return OrderServerConfig{}, errors.New("orderServer.sources.exclusiveV2 must be enabled while quote server is enabled")
+	}
+	return OrderServerConfig{
+		BaseURL: raw.BaseURL, APIKeyEnv: raw.APIKeyEnv,
+		PollInterval: pollInterval, HTTPTimeout: httpTimeout, Beta: raw.Beta, Sources: sources,
+	}, nil
 }
 
 func parseDiscountConfig(raw *rawDiscountConfig) (*DiscountConfig, error) {

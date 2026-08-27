@@ -11,6 +11,17 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
+type gasRouteGroup struct {
+	adapter common.Address
+	vault   common.Address
+	routes  []Route
+}
+
+type gasAcquireRead struct {
+	adapter common.Address
+	token   common.Address
+}
+
 // ReadGasSnapshot returns the latest adapter-local acquire balances and shared vault liquidity needed
 // to predict LiquidLane swap gas. Partially unread state remains absent and is priced as RouteUnknown.
 func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidlanegas.Snapshot, error) {
@@ -18,44 +29,8 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	if len(routes) == 0 {
 		return nil, nil
 	}
-	type adapterRoutes struct {
-		adapter common.Address
-		vault   common.Address
-		routes  []Route
-	}
-	byAdapter := make(map[common.Address]*adapterRoutes, len(routes))
-	ordered := make([]*adapterRoutes, 0, len(routes))
-	for _, route := range routes {
-		entry := byAdapter[route.Adapter]
-		if entry == nil {
-			entry = &adapterRoutes{adapter: route.Adapter, vault: route.Vault}
-			byAdapter[route.Adapter] = entry
-			ordered = append(ordered, entry)
-		}
-		entry.routes = append(entry.routes, route)
-	}
-
-	headCalls := make([]chain.Call, 0, len(ordered)*2)
-	for _, entry := range ordered {
-		headCalls = append(headCalls,
-			chain.Call{Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
-			chain.Call{Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
-		)
-	}
-	vaults := make([]common.Address, 0, len(ordered))
-	seenVaults := make(map[common.Address]bool, len(ordered))
-	for _, entry := range ordered {
-		if !seenVaults[entry.vault] {
-			seenVaults[entry.vault] = true
-			vaults = append(vaults, entry.vault)
-		}
-	}
-	for _, vault := range vaults {
-		headCalls = append(headCalls,
-			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackFreeAssets()},
-			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackWithdrawable()},
-		)
-	}
+	groups, vaults := groupGasRoutes(routes)
+	headCalls := gasHeadCalls(groups, vaults)
 	headResults, err := r.chain.Multicall(ctx, headCalls)
 	if err != nil {
 		return nil, err
@@ -63,74 +38,8 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	if len(headResults) != len(headCalls) {
 		return nil, errors.Errorf("liquidlane: gas state head multicall: got %d results, want %d", len(headResults), len(headCalls))
 	}
-
-	states := make(map[common.Address]*gasAdapterState, len(ordered))
-	for i, entry := range ordered {
-		base := i * 2
-		ownerRes, makerRes := headResults[base], headResults[base+1]
-		if !ownerRes.Success || !makerRes.Success {
-			continue
-		}
-		owner, ownerErr := llAdapter.UnpackOwner(ownerRes.ReturnData)
-		marketMaker, makerErr := llAdapter.UnpackMarketMaker(makerRes.ReturnData)
-		if ownerErr != nil || makerErr != nil {
-			continue
-		}
-		states[entry.adapter] = &gasAdapterState{
-			owner: owner, marketMaker: marketMaker,
-			state: &liquidlanegas.AdapterState{
-				Vault: entry.vault, Acquire: make(map[common.Address]*big.Int, len(entry.routes)),
-			},
-		}
-	}
-	vaultStates := make(map[common.Address]*liquidlanegas.VaultState, len(vaults))
-	vaultBase := len(ordered) * 2
-	for i, vault := range vaults {
-		base := vaultBase + i*2
-		freeRes, withdrawableRes := headResults[base], headResults[base+1]
-		if !freeRes.Success || !withdrawableRes.Success {
-			continue
-		}
-		freeAssets, freeErr := vaultV2b.UnpackFreeAssets(freeRes.ReturnData)
-		withdrawable, withdrawableErr := vaultV2b.UnpackWithdrawable(withdrawableRes.ReturnData)
-		if freeErr != nil || withdrawableErr != nil || freeAssets == nil || withdrawable == nil {
-			continue
-		}
-		vaultStates[vault] = &liquidlanegas.VaultState{
-			FreeAssets: new(big.Int).Set(freeAssets), Withdrawable: new(big.Int).Set(withdrawable),
-		}
-	}
-
-	type acquireRead struct {
-		adapter common.Address
-		token   common.Address
-		holder  common.Address
-	}
-	acquireCalls := make([]chain.Call, 0, len(routes)*2)
-	reads := make([]acquireRead, 0, len(routes)*2)
-	for _, entry := range ordered {
-		state := states[entry.adapter]
-		if state == nil {
-			continue
-		}
-		for _, route := range entry.routes {
-			acquireCalls = append(acquireCalls, chain.Call{
-				Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackAcquireBalance(route.TokenIn, state.owner),
-			})
-			reads = append(reads, acquireRead{adapter: entry.adapter, token: route.TokenIn, holder: state.owner})
-			if state.marketMaker != state.owner {
-				acquireCalls = append(acquireCalls, chain.Call{
-					Target: entry.adapter, AllowFailure: true,
-					Data: llAdapter.PackAcquireBalance(route.TokenIn, state.marketMaker),
-				})
-				reads = append(reads, acquireRead{
-					adapter: entry.adapter,
-					token:   route.TokenIn,
-					holder:  state.marketMaker,
-				})
-			}
-		}
-	}
+	states, vaultStates := decodeGasHeadResults(groups, vaults, headResults)
+	acquireCalls, reads := gasAcquireCalls(groups, states)
 	if len(acquireCalls) == 0 {
 		return gasSnapshot(states, vaultStates), nil
 	}
@@ -141,25 +50,147 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	if len(acquireResults) != len(acquireCalls) {
 		return nil, errors.Errorf("liquidlane: gas state acquire multicall: got %d results, want %d", len(acquireResults), len(acquireCalls))
 	}
+	if err := applyGasAcquireResults(states, reads, acquireResults); err != nil {
+		return nil, err
+	}
+	return gasSnapshot(states, vaultStates), nil
+}
+
+func groupGasRoutes(routes []Route) ([]*gasRouteGroup, []common.Address) {
+	byAdapter := make(map[common.Address]*gasRouteGroup, len(routes))
+	groups := make([]*gasRouteGroup, 0, len(routes))
+	for _, route := range routes {
+		group := byAdapter[route.Adapter]
+		if group == nil {
+			group = &gasRouteGroup{adapter: route.Adapter, vault: route.Vault}
+			byAdapter[route.Adapter] = group
+			groups = append(groups, group)
+		}
+		group.routes = append(group.routes, route)
+	}
+	vaults := make([]common.Address, 0, len(groups))
+	seenVaults := make(map[common.Address]bool, len(groups))
+	for _, group := range groups {
+		if !seenVaults[group.vault] {
+			seenVaults[group.vault] = true
+			vaults = append(vaults, group.vault)
+		}
+	}
+	return groups, vaults
+}
+
+func gasHeadCalls(groups []*gasRouteGroup, vaults []common.Address) []chain.Call {
+	calls := make([]chain.Call, 0, len(groups)*2+len(vaults)*2)
+	for _, group := range groups {
+		calls = append(calls,
+			chain.Call{Target: group.adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
+			chain.Call{Target: group.adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
+		)
+	}
+	for _, vault := range vaults {
+		calls = append(calls,
+			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackFreeAssets()},
+			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackWithdrawable()},
+		)
+	}
+	return calls
+}
+
+func decodeGasHeadResults(
+	groups []*gasRouteGroup,
+	vaults []common.Address,
+	results []chain.CallResult,
+) (map[common.Address]*gasAdapterState, map[common.Address]*liquidlanegas.VaultState) {
+	states := make(map[common.Address]*gasAdapterState, len(groups))
+	for i, group := range groups {
+		ownerResult, makerResult := results[i*2], results[i*2+1]
+		if !ownerResult.Success || !makerResult.Success {
+			continue
+		}
+		owner, ownerErr := llAdapter.UnpackOwner(ownerResult.ReturnData)
+		marketMaker, makerErr := llAdapter.UnpackMarketMaker(makerResult.ReturnData)
+		if ownerErr != nil || makerErr != nil {
+			continue
+		}
+		states[group.adapter] = &gasAdapterState{
+			owner: owner, marketMaker: marketMaker,
+			state: &liquidlanegas.AdapterState{
+				Vault: group.vault, Acquire: make(map[common.Address]*big.Int, len(group.routes)),
+			},
+		}
+	}
+	vaultStates := make(map[common.Address]*liquidlanegas.VaultState, len(vaults))
+	base := len(groups) * 2
+	for i, vault := range vaults {
+		freeResult, withdrawableResult := results[base+i*2], results[base+i*2+1]
+		if !freeResult.Success || !withdrawableResult.Success {
+			continue
+		}
+		freeAssets, freeErr := vaultV2b.UnpackFreeAssets(freeResult.ReturnData)
+		withdrawable, withdrawableErr := vaultV2b.UnpackWithdrawable(withdrawableResult.ReturnData)
+		if freeErr != nil || withdrawableErr != nil || freeAssets == nil || withdrawable == nil {
+			continue
+		}
+		vaultStates[vault] = &liquidlanegas.VaultState{
+			FreeAssets: new(big.Int).Set(freeAssets), Withdrawable: new(big.Int).Set(withdrawable),
+		}
+	}
+	return states, vaultStates
+}
+
+func gasAcquireCalls(
+	groups []*gasRouteGroup,
+	states map[common.Address]*gasAdapterState,
+) ([]chain.Call, []gasAcquireRead) {
+	calls := make([]chain.Call, 0, len(groups)*2)
+	reads := make([]gasAcquireRead, 0, len(groups)*2)
+	for _, group := range groups {
+		state := states[group.adapter]
+		if state == nil {
+			continue
+		}
+		for _, route := range group.routes {
+			calls = append(calls, chain.Call{
+				Target: group.adapter, AllowFailure: true,
+				Data: llAdapter.PackAcquireBalance(route.TokenIn, state.owner),
+			})
+			reads = append(reads, gasAcquireRead{adapter: group.adapter, token: route.TokenIn})
+			if state.marketMaker != state.owner {
+				calls = append(calls, chain.Call{
+					Target: group.adapter, AllowFailure: true,
+					Data: llAdapter.PackAcquireBalance(route.TokenIn, state.marketMaker),
+				})
+				reads = append(reads, gasAcquireRead{adapter: group.adapter, token: route.TokenIn})
+			}
+		}
+	}
+	return calls, reads
+}
+
+func applyGasAcquireResults(
+	states map[common.Address]*gasAdapterState,
+	reads []gasAcquireRead,
+	results []chain.CallResult,
+) error {
 	for i, read := range reads {
-		result := acquireResults[i]
+		result := results[i]
 		if !result.Success {
 			continue
 		}
-		amount, unpackErr := llAdapter.UnpackAcquireBalance(result.ReturnData)
-		if unpackErr != nil || amount == nil || amount.Sign() < 0 {
+		amount, err := llAdapter.UnpackAcquireBalance(result.ReturnData)
+		if err != nil || amount == nil || amount.Sign() < 0 {
 			continue
 		}
 		state := states[read.adapter]
 		if state == nil {
-			return nil, errors.Errorf("liquidlane: missing gas state for adapter %s", read.adapter.Hex())
+			return errors.Errorf("liquidlane: missing gas state for adapter %s", read.adapter.Hex())
 		}
 		if state.state.Acquire[read.token] == nil {
 			state.state.Acquire[read.token] = new(big.Int)
 		}
 		state.state.Acquire[read.token].Add(state.state.Acquire[read.token], amount)
 	}
-	return gasSnapshot(states, vaultStates), nil
+	return nil
 }
 
 func gasSnapshot(

@@ -29,6 +29,18 @@ func AllocateInventoryCapacity(
 	reservations liquidlane.CapacityReservations,
 	reserveBps int,
 ) []liquidlane.Inventory {
+	groups := groupInventoryByCapacity(inventory)
+	out := make([]liquidlane.Inventory, 0, len(inventory))
+	for _, capacityID := range sortedCapacityIDs(groups) {
+		allocated := allocateCapacityGroup(groups[capacityID], reservations[capacityID], reserveBps)
+		out = append(out, allocated...)
+	}
+	return out
+}
+
+func groupInventoryByCapacity(
+	inventory []liquidlane.Inventory,
+) map[liquidlane.CapacityID]map[liquidlane.RouteID][]liquidlane.Inventory {
 	groups := make(map[liquidlane.CapacityID]map[liquidlane.RouteID][]liquidlane.Inventory)
 	for _, item := range inventory {
 		if item.MaxAssets == nil || item.MaxAssets.Sign() <= 0 {
@@ -40,71 +52,114 @@ func AllocateInventoryCapacity(
 		}
 		groups[capacityID][item.ID] = append(groups[capacityID][item.ID], item)
 	}
+	return groups
+}
 
+func sortedCapacityIDs(
+	groups map[liquidlane.CapacityID]map[liquidlane.RouteID][]liquidlane.Inventory,
+) []liquidlane.CapacityID {
 	capacityIDs := make([]liquidlane.CapacityID, 0, len(groups))
 	for capacityID := range groups {
 		capacityIDs = append(capacityIDs, capacityID)
 	}
 	slices.Sort(capacityIDs)
+	return capacityIDs
+}
 
-	out := make([]liquidlane.Inventory, 0, len(inventory))
-	for _, capacityID := range capacityIDs {
-		routes := groups[capacityID]
-		routeIDs := make([]liquidlane.RouteID, 0, len(routes))
-		for routeID := range routes {
-			routeIDs = append(routeIDs, routeID)
-		}
-		slices.Sort(routeIDs)
-		domainMax := new(big.Int)
-		for _, items := range routes {
-			for _, item := range items {
-				if item.MaxAssets.Cmp(domainMax) > 0 {
-					domainMax.Set(item.MaxAssets)
-				}
-			}
-		}
-		remaining := AvailableCapacity(domainMax, reserveBps)
-		if reserved := reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
-			remaining.Sub(remaining, reserved)
-		}
-		if remaining.Sign() <= 0 {
+func allocateCapacityGroup(
+	routes map[liquidlane.RouteID][]liquidlane.Inventory,
+	reserved *big.Int,
+	reserveBps int,
+) []liquidlane.Inventory {
+	routeIDs := sortedRouteIDs(routes)
+	remaining := groupAvailableCapacity(routes, reserved, reserveBps)
+	if remaining.Sign() <= 0 {
+		return nil
+	}
+
+	out := make([]liquidlane.Inventory, 0, len(routes))
+	for index, routeID := range routeIDs {
+		items := routes[routeID]
+		share := routeCapacityShare(remaining, items, len(routeIDs)-index, reserveBps)
+		if share.Sign() <= 0 {
 			continue
 		}
+		out = append(out, capRouteInventory(items, share, reserveBps)...)
+		remaining.Sub(remaining, share)
+		if remaining.Sign() <= 0 {
+			break
+		}
+	}
+	return out
+}
 
-		for index, routeID := range routeIDs {
-			items := routes[routeID]
-			share := liquidlane.MulDivUp(remaining, big.NewInt(1), big.NewInt(int64(len(routeIDs)-index)))
-			routeCap := new(big.Int)
-			for _, item := range items {
-				itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
-				if itemCap.Cmp(routeCap) > 0 {
-					routeCap.Set(itemCap)
-				}
-			}
-			if share.Cmp(routeCap) > 0 {
-				share.Set(routeCap)
-			}
-			if share.Sign() <= 0 {
-				continue
-			}
-			for _, item := range items {
-				itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
-				if itemCap.Cmp(share) > 0 {
-					itemCap.Set(share)
-				}
-				if itemCap.Sign() <= 0 {
-					continue
-				}
-				item.MaxAssets = itemCap
-				item.MaxRate = liquidlane.CloneBig(item.MaxRate)
-				item.DiscountID = liquidlane.CloneHash(item.DiscountID)
-				out = append(out, item)
-			}
-			remaining.Sub(remaining, share)
-			if remaining.Sign() <= 0 {
-				break
+func sortedRouteIDs(routes map[liquidlane.RouteID][]liquidlane.Inventory) []liquidlane.RouteID {
+	routeIDs := make([]liquidlane.RouteID, 0, len(routes))
+	for routeID := range routes {
+		routeIDs = append(routeIDs, routeID)
+	}
+	slices.Sort(routeIDs)
+	return routeIDs
+}
+
+func groupAvailableCapacity(
+	routes map[liquidlane.RouteID][]liquidlane.Inventory,
+	reserved *big.Int,
+	reserveBps int,
+) *big.Int {
+	domainMax := new(big.Int)
+	for _, items := range routes {
+		for _, item := range items {
+			if item.MaxAssets.Cmp(domainMax) > 0 {
+				domainMax.Set(item.MaxAssets)
 			}
 		}
+	}
+	remaining := AvailableCapacity(domainMax, reserveBps)
+	if reserved != nil && reserved.Sign() > 0 {
+		remaining.Sub(remaining, reserved)
+	}
+	return remaining
+}
+
+func routeCapacityShare(
+	remaining *big.Int,
+	items []liquidlane.Inventory,
+	routesLeft int,
+	reserveBps int,
+) *big.Int {
+	share := liquidlane.MulDivUp(remaining, big.NewInt(1), big.NewInt(int64(routesLeft)))
+	routeCap := new(big.Int)
+	for _, item := range items {
+		itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
+		if itemCap.Cmp(routeCap) > 0 {
+			routeCap.Set(itemCap)
+		}
+	}
+	if share.Cmp(routeCap) > 0 {
+		share.Set(routeCap)
+	}
+	return share
+}
+
+func capRouteInventory(
+	items []liquidlane.Inventory,
+	share *big.Int,
+	reserveBps int,
+) []liquidlane.Inventory {
+	out := make([]liquidlane.Inventory, 0, len(items))
+	for _, item := range items {
+		itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
+		if itemCap.Cmp(share) > 0 {
+			itemCap.Set(share)
+		}
+		if itemCap.Sign() <= 0 {
+			continue
+		}
+		item.MaxAssets = itemCap
+		item.MaxRate = liquidlane.CloneBig(item.MaxRate)
+		item.DiscountID = liquidlane.CloneHash(item.DiscountID)
+		out = append(out, item)
 	}
 	return out
 }

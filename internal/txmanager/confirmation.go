@@ -26,37 +26,13 @@ func (m *Manager) waitForConfirmations(
 	defer ticker.Stop()
 
 	for {
-		headBefore, headErr := m.confirmationHead(ctx)
-		if headErr != nil {
-			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
-		}
-		refreshed, err := m.confirmationReceipt(ctx, hash)
+		refreshed, confirmed, err := m.checkConfirmation(ctx, hash, receipt, confirmations)
+		receipt = refreshed
 		if err != nil {
-			if errors.Is(err, errReceiptReorged) {
-				return receipt, err
-			}
-			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
-		} else {
-			receipt = refreshed
-			if headErr == nil {
-				head := headBefore.Number.Uint64()
-				included := receipt.BlockNumber.Uint64()
-				if head >= included && head-included >= confirmations {
-					if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
-						if errors.Is(err, errReceiptReorged) {
-							return receipt, err
-						}
-						m.log.Error(err, "receipt ancestry check unavailable", "hash", hash.Hex())
-					} else {
-						headAfter, afterErr := m.confirmationHead(ctx)
-						if afterErr != nil {
-							m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
-						} else if headBefore.Hash() == headAfter.Hash() {
-							return receipt, nil
-						}
-					}
-				}
-			}
+			return receipt, err
+		}
+		if confirmed {
+			return receipt, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -64,6 +40,54 @@ func (m *Manager) waitForConfirmations(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (m *Manager) checkConfirmation(
+	ctx context.Context,
+	hash common.Hash,
+	receipt *types.Receipt,
+	confirmations uint64,
+) (*types.Receipt, bool, error) {
+	headBefore, headAvailable := m.availableConfirmationHead(ctx, hash)
+	refreshed, err := m.confirmationReceipt(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errReceiptReorged) {
+			return receipt, false, err
+		}
+		m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
+		return receipt, false, nil
+	}
+	receipt = refreshed
+	if !headAvailable {
+		return receipt, false, nil
+	}
+
+	head := headBefore.Number.Uint64()
+	included := receipt.BlockNumber.Uint64()
+	if head < included || head-included < confirmations {
+		return receipt, false, nil
+	}
+	if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
+		if errors.Is(err, errReceiptReorged) {
+			return receipt, false, err
+		}
+		m.log.Error(err, "receipt ancestry check unavailable", "hash", hash.Hex())
+		return receipt, false, nil
+	}
+	headAfter, available := m.availableConfirmationHead(ctx, hash)
+	if !available {
+		return receipt, false, nil
+	}
+	return receipt, headBefore.Hash() == headAfter.Hash(), nil
+}
+
+func (m *Manager) availableConfirmationHead(ctx context.Context, hash common.Hash) (*types.Header, bool) {
+	head, err := m.confirmationHead(ctx)
+	if err != nil {
+		m.log.Error(err, "confirmation head unavailable", "hash", hash.Hex())
+		return nil, false
+	}
+	return head, true
 }
 
 func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {

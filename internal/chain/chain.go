@@ -62,43 +62,53 @@ func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr stri
 		return nil, errors.Errorf("chain: get chain id: %w", err)
 	}
 
-	// A distinct write endpoint (e.g. a private/MEV-protected relay) carries transaction broadcasts
-	// and nonce reads; all other reads stay on the primary. Even without writeRpcUrl, isolate
-	// writes from a multi-endpoint read client: replaying eth_sendRawTransaction across endpoints can
-	// hide an ambiguous acceptance behind a later nonce-too-low response.
-	writeClient := ec
+	writeClient, err := dialWriteClient(ctx, rpcURLs, writeRPCURL, ec, id, log)
+	if err != nil {
+		ec.Close()
+		return nil, err
+	}
+	return &Client{Client: ec, writeClient: writeClient, chainID: id, multicall: common.HexToAddress(multicallAddr)}, nil
+}
+
+func dialWriteClient(
+	ctx context.Context,
+	rpcURLs []string,
+	writeRPCURL string,
+	readClient *ethclient.Client,
+	readChainID *big.Int,
+	log logr.Logger,
+) (*ethclient.Client, error) {
 	writeEndpoint := writeRPCURL
 	if writeEndpoint == "" && len(rpcURLs) > 1 {
 		writeEndpoint = rpcURLs[0]
 	}
-	if writeEndpoint != "" {
-		wc, wcErr := dialClient(ctx, []string{writeEndpoint}, log)
-		if wcErr != nil {
-			ec.Close()
-			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
-		}
-		// An explicitly configured endpoint is an independent trust boundary and must prove it
-		// belongs to the read chain. Probing the implicit primary here would break read-only solvers
-		// that are running through a fallback while that primary is unavailable.
-		if writeRPCURL != "" {
-			writeID, writeIDErr := wc.ChainID(ctx)
-			if writeIDErr != nil {
-				wc.Close()
-				ec.Close()
-				return nil, errors.Errorf("chain: get write rpc chain id: %w", writeIDErr)
-			}
-			if writeID.Cmp(id) != 0 {
-				wc.Close()
-				ec.Close()
-				return nil, errors.Errorf(
-					"chain: write rpc chain id mismatch: read %s, write %s", id, writeID,
-				)
-			}
-		}
-		writeClient = wc
+	if writeEndpoint == "" {
+		return readClient, nil
 	}
 
-	return &Client{Client: ec, writeClient: writeClient, chainID: id, multicall: common.HexToAddress(multicallAddr)}, nil
+	writeClient, err := dialClient(ctx, []string{writeEndpoint}, log)
+	if err != nil {
+		return nil, errors.Errorf("chain: dial write rpc: %w", err)
+	}
+	if writeRPCURL == "" {
+		return writeClient, nil
+	}
+
+	// An explicitly configured endpoint is an independent trust boundary and must prove it
+	// belongs to the read chain. Probing the implicit primary here would break read-only solvers
+	// that are running through a fallback while that primary is unavailable.
+	writeChainID, err := writeClient.ChainID(ctx)
+	if err != nil {
+		writeClient.Close()
+		return nil, errors.Errorf("chain: get write rpc chain id: %w", err)
+	}
+	if writeChainID.Cmp(readChainID) != 0 {
+		writeClient.Close()
+		return nil, errors.Errorf(
+			"chain: write rpc chain id mismatch: read %s, write %s", readChainID, writeChainID,
+		)
+	}
+	return writeClient, nil
 }
 
 // SendTransaction broadcasts a signed transaction through the write client. It overrides the

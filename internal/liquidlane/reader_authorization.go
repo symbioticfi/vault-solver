@@ -110,34 +110,8 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 		}
 	}
 
-	if len(delegatedChecks) > 0 {
-		delegationCalls := make([]chain.Call, len(delegatedChecks))
-		for j, i := range delegatedChecks {
-			// Delegation is keyed by the adapter's exact current marketMaker value; zero is valid.
-			delegationCalls[j] = chain.Call{
-				Target: adapters[i], AllowFailure: true,
-				Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler),
-			}
-		}
-		delegationResults, err := r.chain.Multicall(ctx, delegationCalls)
-		if err != nil {
-			return nil, err
-		}
-		if len(delegationResults) != len(delegationCalls) {
-			return nil, errors.Errorf(
-				"liquidlane: filler authorization multicall: got %d results, want %d",
-				len(delegationResults),
-				len(delegationCalls),
-			)
-		}
-		for j, i := range delegatedChecks {
-			if delegationResults[j].Success {
-				if ok, derr := llAdapter.UnpackIsFiller(delegationResults[j].ReturnData); derr == nil {
-					auths[i].IsFiller = ok
-					auths[i].Authorized = ok
-				}
-			}
-		}
+	if err := r.resolveDelegatedAuth(ctx, adapters, filler, auths, delegatedChecks); err != nil {
+		return nil, err
 	}
 
 	out := make([]Auth, 0, len(auths))
@@ -147,4 +121,47 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 		}
 	}
 	return out, nil
+}
+
+func (r *Reader) resolveDelegatedAuth(
+	ctx context.Context,
+	adapters []common.Address,
+	filler common.Address,
+	auths []Auth,
+	checks []int,
+) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	calls := make([]chain.Call, len(checks))
+	for j, i := range checks {
+		// Delegation is keyed by the adapter's exact current marketMaker value; zero is valid.
+		calls[j] = chain.Call{
+			Target: adapters[i], AllowFailure: true,
+			Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler),
+		}
+	}
+	results, err := r.chain.Multicall(ctx, calls)
+	if err != nil {
+		return err
+	}
+	if len(results) != len(calls) {
+		return errors.Errorf(
+			"liquidlane: filler authorization multicall: got %d results, want %d",
+			len(results),
+			len(calls),
+		)
+	}
+	for j, i := range checks {
+		if !results[j].Success {
+			continue
+		}
+		ok, err := llAdapter.UnpackIsFiller(results[j].ReturnData)
+		if err != nil {
+			continue
+		}
+		auths[i].IsFiller = ok
+		auths[i].Authorized = ok
+	}
+	return nil
 }

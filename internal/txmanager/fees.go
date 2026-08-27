@@ -28,28 +28,9 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 	baseFee := new(big.Int).Set(head.BaseFee)
 
 	tipFloor := gweiToWei(m.cfg.TipGwei)
-	var tip *big.Int
-	if tipFloor.Sign() == 0 {
-		history, historyErr := m.backend.FeeHistory(
-			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
-		)
-		if historyErr != nil {
-			return feeQuote{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
-		}
-		var valid bool
-		tip, valid = feeHistoryTip(history)
-		if !valid {
-			return feeQuote{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
-		}
-	} else {
-		suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
-		if tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
-			tip = maxBigCopy(suggestedTip, tipFloor)
-		} else if ctx.Err() != nil {
-			return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
-		} else {
-			tip = tipFloor
-		}
+	tip, err := m.currentTip(feeCtx, ctx, tipFloor)
+	if err != nil {
+		return feeQuote{}, err
 	}
 
 	// 2*baseFee + tip leaves headroom for one base-fee doubling between now and inclusion.
@@ -75,6 +56,31 @@ func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, er
 		tip.Set(maxTip)
 	}
 	return feeQuote{baseFee: baseFee, tip: tip, maxFee: maxFee}, nil
+}
+
+func (m *Manager) currentTip(feeCtx, parentCtx context.Context, tipFloor *big.Int) (*big.Int, error) {
+	if tipFloor.Sign() == 0 {
+		history, err := m.backend.FeeHistory(
+			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
+		)
+		if err != nil {
+			return nil, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, err)
+		}
+		tip, valid := feeHistoryTip(history)
+		if !valid {
+			return nil, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
+		}
+		return tip, nil
+	}
+
+	suggestedTip, err := m.backend.SuggestGasTipCap(feeCtx)
+	if err == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
+		return maxBigCopy(suggestedTip, tipFloor), nil
+	}
+	if parentErr := parentCtx.Err(); parentErr != nil {
+		return nil, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, parentErr)
+	}
+	return tipFloor, nil
 }
 
 func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {

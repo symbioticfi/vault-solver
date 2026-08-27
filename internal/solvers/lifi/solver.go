@@ -55,20 +55,32 @@ type Solver struct {
 }
 
 type chainReader interface {
+	routeReader
+	settlementReader
+	chainHeadReader
+}
+
+type routeReader interface {
 	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error)
+	ValidateGasTokens(routes []route) error
+	Quote(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
+	Fill(
+		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
+	) (fillSnapshotSet, error)
+}
+
+type settlementReader interface {
 	validateExecutor(
 		ctx context.Context,
 		executor, inputSettler, outputSettler, caller common.Address,
 	) error
 	validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []route) error
-	ValidateGasTokens(routes []route) error
-	Quote(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
-	Fill(
-		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
-	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
 	orderStatus(ctx context.Context, inputSettler common.Address, orderID common.Hash) (uint8, error)
+}
+
+type chainHeadReader interface {
 	latestBlockNumber(ctx context.Context) (uint64, error)
 	latestBlockTime(ctx context.Context) (time.Time, error)
 }
