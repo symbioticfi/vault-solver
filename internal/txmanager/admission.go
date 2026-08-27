@@ -7,7 +7,7 @@ import (
 	"github.com/go-errors/errors"
 )
 
-func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
+func (m *Manager) sendAsync(ctx context.Context, req Request) (<-chan Result, bool) {
 	m.addAdmissionDemand()
 	releaseDemandOnReturn := true
 	defer func() {
@@ -30,34 +30,19 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 		return admissionFailure(ctx, req, errManagerStopped)
 	default:
 	}
-	if try {
-		if m.nonceConflictError() != nil {
-			return nil, false
-		}
-		select {
-		case m.lifecycleSlot <- struct{}{}:
-		default:
-			return nil, false
-		}
-		if m.nonceConflictError() != nil {
-			<-m.lifecycleSlot
-			return nil, false
-		}
-	} else {
-		if err := m.waitForNonceLane(admissionCtx); err != nil {
-			return admissionFailure(ctx, req, err)
-		}
-		select {
-		case m.lifecycleSlot <- struct{}{}:
-		case <-admissionCtx.Done():
-			return admissionFailure(ctx, req, admissionCtx.Err())
-		case <-m.stopping:
-			return admissionFailure(ctx, req, errManagerStopped)
-		}
-		if err := m.waitForNonceLane(admissionCtx); err != nil {
-			<-m.lifecycleSlot
-			return admissionFailure(ctx, req, err)
-		}
+	if err := m.waitForNonceLane(admissionCtx); err != nil {
+		return admissionFailure(ctx, req, err)
+	}
+	select {
+	case m.lifecycleSlot <- struct{}{}:
+	case <-admissionCtx.Done():
+		return admissionFailure(ctx, req, admissionCtx.Err())
+	case <-m.stopping:
+		return admissionFailure(ctx, req, errManagerStopped)
+	}
+	if err := m.waitForNonceLane(admissionCtx); err != nil {
+		<-m.lifecycleSlot
+		return admissionFailure(ctx, req, err)
 	}
 	res := make(chan Result, 1)
 	select {

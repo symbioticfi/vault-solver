@@ -1,7 +1,7 @@
 // Package txmanager owns the on-chain sending account. One worker serializes admission, fee
 // selection, signing, nonce assignment, and broadcasts so solvers cannot race on the account nonce.
 // Only one signed lifecycle may be unresolved at a time; solvers build calldata and hand it over via
-// Send, TrySend, or SendAsync, but never sign or broadcast directly.
+// Send or SendAsync, but never sign or broadcast directly.
 package txmanager
 
 import (
@@ -348,20 +348,11 @@ func (m *Manager) Start(ctx context.Context) {
 // "not sent". The worker owns fee replacement and same-nonce cancellation until it can deliver the
 // real terminal receipt. Manager shutdown requests same-nonce cancellation instead of abandoning it.
 func (m *Manager) Send(ctx context.Context, req Request) Result {
-	result, accepted := m.sendAsync(ctx, req, false)
+	result, accepted := m.sendAsync(ctx, req)
 	if !accepted {
 		return notAdmittedResult(ctx.Err())
 	}
 	return <-result
-}
-
-// TrySend submits only when the nonce lane is available and no signed lifecycle is active.
-func (m *Manager) TrySend(ctx context.Context, req Request) (Result, bool) {
-	result, accepted := m.sendAsync(ctx, req, true)
-	if !accepted {
-		return Result{}, false
-	}
-	return <-result, true
 }
 
 // SendAsync waits without accepting or signing while another lifecycle is unresolved, then enqueues
@@ -369,5 +360,5 @@ func (m *Manager) TrySend(ctx context.Context, req Request) (Result, bool) {
 // a deadline or manager stop returns a terminal pre-admission error without signing. Once enqueued,
 // the manager owns the broadcast and receipt lifecycle.
 func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bool) {
-	return m.sendAsync(ctx, req, false)
+	return m.sendAsync(ctx, req)
 }

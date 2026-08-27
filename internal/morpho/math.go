@@ -53,20 +53,6 @@ type LiquidationReplay struct {
 	BadDebtShares *big.Int
 }
 
-// AccruedTotalBorrowAssets returns totalBorrowAssets grown to `nowTs` using the Taylor-compounded
-// borrow rate — the off-chain replica of Morpho `_accrueInterest` (borrow shares are unchanged by
-// accrual; only the assets side grows). Returns the original value when elapsed is 0 or the rate is 0.
-func AccruedTotalBorrowAssets(m MarketState, nowTs uint64) *big.Int {
-	tba := new(big.Int).Set(m.TotalBorrowAssets)
-	if m.BorrowRatePerSec == nil || m.BorrowRatePerSec.Sign() == 0 || nowTs <= m.LastUpdate {
-		return tba
-	}
-	elapsed := new(big.Int).SetUint64(nowTs - m.LastUpdate)
-	growth := WTaylorCompounded(m.BorrowRatePerSec, elapsed)
-	interest := WMulDown(tba, growth)
-	return tba.Add(tba, interest)
-}
-
 // AccruedMarketState returns Morpho's market accounting after `_accrueInterest`, including the supply side
 // needed for bad-debt replay. Borrow shares never change on accrual.
 func AccruedMarketState(m MarketState, nowTs uint64) MarketState {
@@ -111,14 +97,6 @@ func IsLiquidatableAt(p PositionState, collateralPrice, lltv, accruedTotal, tota
 		return false
 	}
 	return MaxBorrow(p.Collateral, collateralPrice, lltv).Cmp(borrowed) < 0
-}
-
-// LiquidationProximity returns the two quantities whose ratio is the position's distance to liquidation:
-// borrowed = BorrowedAssetsAt(p, …) and maxBorrow = MaxBorrow(p.Collateral, …). Higher borrowed/maxBorrow
-// ⇒ closer to (or past) liquidation; borrowed >= maxBorrow is exactly the IsLiquidatableAt boundary. A
-// caller ranks without dividing by cross-multiplying the two pairs (no float, no division).
-func LiquidationProximity(p PositionState, collateralPrice, lltv, accruedTotal, totalShares *big.Int) (borrowed, maxBorrow *big.Int) {
-	return BorrowedAssetsAt(p, accruedTotal, totalShares), MaxBorrow(p.Collateral, collateralPrice, lltv)
 }
 
 // LiquidationIncentiveFactor = min(M, 1 / (1 - cursor*(1 - lltv))) in wad, matching liquidate().
@@ -199,24 +177,6 @@ func MaxSeizeForFullDebt(borrowShares, collateralPrice, lif, accruedTotal, total
 	}
 	debtAssets := ToAssetsDown(borrowShares, accruedTotal, totalShares)
 	return MulDivDown(WMulDown(debtAssets, lif), oraclePriceScale, collateralPrice)
-}
-
-/* ───────── whole-market convenience forms (accrue once, then forward) ───────── */
-
-// BorrowedAssets accrues the market to nowTs, then forwards to BorrowedAssetsAt. The hot path accrues once
-// and calls the *At forms directly; these whole-market forms are for callers (and tests) holding a raw state.
-func BorrowedAssets(m MarketState, p PositionState, nowTs uint64) *big.Int {
-	return BorrowedAssetsAt(p, AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
-}
-
-// IsLiquidatable accrues the market to nowTs, then forwards to IsLiquidatableAt.
-func IsLiquidatable(m MarketState, p PositionState, collateralPrice *big.Int, nowTs uint64) bool {
-	return IsLiquidatableAt(p, collateralPrice, m.Lltv, AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
-}
-
-// RepaidAssetsForSeize accrues the market to nowTs, then forwards to RepaidAssetsForSeizeAt.
-func RepaidAssetsForSeize(m MarketState, seizedAssets, collateralPrice, lltv *big.Int, nowTs uint64) *big.Int {
-	return RepaidAssetsForSeizeAt(seizedAssets, collateralPrice, LiquidationIncentiveFactor(lltv), AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
 }
 
 /* ───────── SharesMathLib (virtual shares/assets) ───────── */

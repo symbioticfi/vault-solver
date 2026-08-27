@@ -12,9 +12,6 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// sharedSecretHeader authenticates the backend peer on /quote.
-const sharedSecretHeader = "x-rfq-shared-secret" //nolint:gosec // header NAME, not a credential.
-
 // badRequestError marks a client (4xx) error so the HTTP layer can distinguish it from an upstream
 // (5xx) failure without string-matching.
 type badRequestError struct{ err error }

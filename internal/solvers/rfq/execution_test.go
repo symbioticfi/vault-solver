@@ -12,6 +12,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -309,7 +310,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
@@ -347,7 +348,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discounts.ListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
@@ -355,7 +356,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}}}
 	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
@@ -393,7 +394,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
 			TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -437,7 +438,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	listedID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
 	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discounts.ListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
@@ -466,7 +467,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,

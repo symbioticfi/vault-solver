@@ -428,33 +428,3 @@ func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
 	default:
 	}
 }
-
-func TestTrySendRejectsWhileTransactionIsActive(t *testing.T) {
-	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
-	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
-	startTestManager(t, m)
-
-	type tryResult struct {
-		result   Result
-		accepted bool
-	}
-	first := make(chan tryResult, 1)
-	go func() {
-		result, accepted := m.TrySend(
-			context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "first"},
-		)
-		first <- tryResult{result: result, accepted: accepted}
-	}()
-
-	<-bb.entered
-	if result, accepted := m.TrySend(
-		context.Background(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "second"},
-	); accepted || result.Err != nil {
-		t.Fatalf("busy TrySend = (%+v, %v), want not accepted", result, accepted)
-	}
-	close(bb.release)
-	got := <-first
-	if !got.accepted || got.result.Err != nil {
-		t.Fatalf("first TrySend = (%+v, %v)", got.result, got.accepted)
-	}
-}

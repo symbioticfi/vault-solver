@@ -37,7 +37,7 @@ files; inspect its diff before considering the change complete.
 
 | Change | Required context | Focused check |
 |---|---|---|
-| Common config, schema, solver registry, or catalog | [Architecture](ARCHITECTURE.md), affected examples | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
+| Common config, schema, solver registry, or example | [Architecture](ARCHITECTURE.md), affected examples | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
 | CLI composition or process lifecycle | [Architecture](ARCHITECTURE.md) | `make verify-race TARGET=./cmd/vault-solver` |
 | Chain reads or fallback transport | owning integration plan and reader call sites | `make verify-race TARGET=./internal/chain/...` |
 | Signer implementation | `CLAUDE.md` security rules and call sites | `make verify-fast TARGET=./internal/signer` |
@@ -75,8 +75,7 @@ upstream mismatch.
 
 `config/vault-solver.schema.json` provides structural editor completion. `vault-solver config validate` is the
 semantic offline authority and exercises the generic config plus each integration-owned parser and selected
-strategy parser. Every committed `*.example.yaml` must declare the schema and pass validation. The catalog test
-enforces one-to-one agreement between registrations, examples, the schema, and the root README solver table.
+strategy parser. Every committed `*.example.yaml` must declare the schema and pass the offline validation test.
 
 A config change is complete only when the typed parser, pure validator, schema, annotated example, tests, and
 operator overview agree. Secret-bearing fields must remain `*Env` references; validation must not read the

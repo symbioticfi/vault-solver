@@ -221,48 +221,15 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 	}
 }
 
-func TestWebhookClientGetJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s, want GET", r.Method)
-		}
-		if r.URL.Path != "/strategy/callbacks" {
-			t.Fatalf("path = %q, want /strategy/callbacks", r.URL.Path)
-		}
-		if got := r.Header.Get("Content-Type"); got != "" {
-			t.Fatalf("content-type = %q, want unset", got)
-		}
-		if got := r.Header.Get("Accept"); got != "application/json" {
-			t.Fatalf("accept = %q, want application/json", got)
-		}
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
-	defer srv.Close()
-
-	client, err := NewClient(Config{URL: srv.URL + "/strategy", Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	var resp struct {
-		Status string `json:"status"`
-	}
-	if err := client.GetJSON(t.Context(), "callbacks", &resp); err != nil {
-		t.Fatalf("GetJSON: %v", err)
-	}
-	if resp.Status != "ok" {
-		t.Fatalf("status = %q, want ok", resp.Status)
-	}
-}
-
 func TestWebhookClientRejectsAbsoluteRoute(t *testing.T) {
 	client, err := NewClient(Config{URL: "https://strategy.example/base", Timeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	var resp struct{}
-	err = client.GetJSON(t.Context(), "https://other.example/callbacks", &resp)
+	err = client.DoJSON(t.Context(), http.MethodPost, "https://other.example/callbacks", struct{}{}, &resp)
 	if err == nil || !strings.Contains(err.Error(), "route must be relative") {
-		t.Fatalf("GetJSON error = %v, want route must be relative", err)
+		t.Fatalf("DoJSON error = %v, want route must be relative", err)
 	}
 }
 
@@ -368,8 +335,8 @@ func TestWebhookClientRejectsNilResponseTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	err = client.GetJSON(t.Context(), "", nil)
+	err = client.PostJSON(t.Context(), struct{}{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "response target is nil") {
-		t.Fatalf("GetJSON error = %v, want response target is nil", err)
+		t.Fatalf("PostJSON error = %v, want response target is nil", err)
 	}
 }

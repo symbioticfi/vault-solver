@@ -87,7 +87,7 @@ manager shutdown timeout.
 
 ## Integration checklist
 
-- Use `Send`/`SendAsync` for accepted obligations and `TrySend` only for deliberately non-blocking admission.
+- Use `Send`/`SendAsync` for accepted obligations; admission waits without signing while the nonce lane is unavailable.
 - Set `CancelAt` from the protocol deadline rather than a local convenience timeout.
 - Keep `Obsolete` read-only, context-aware, and non-authoritative on errors.
 - Use stable low-cardinality request labels.

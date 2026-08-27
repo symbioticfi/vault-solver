@@ -258,7 +258,7 @@ divergences remain below.
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
-- **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
+- **Per-environment inputs needed to run**: backend base URL, the `Executor` address, the
   LiquidLane adapter address list (`adapters`; adapter whitelist + fill planning — each adapter's vault and
   collateral are resolved on-chain at startup; with the whitelist enabled an empty list declines every
   quote), the backend shared secret, and the caller key (last two via env). Hoodi addresses are known

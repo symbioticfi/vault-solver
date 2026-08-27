@@ -81,28 +81,22 @@ func boolWord(v bool) []byte {
 	return w
 }
 
-// grunt-api EIP-712 domain (no verifyingContract). chainId is per-flow: the (test-only) API-key
-// generation domain uses 1; the GetOffers listing domain uses the bot's operating chain.
+// grunt-api EIP-712 domain (no verifyingContract). GetOffers uses the bot's operating chain.
 const (
-	apiKeyDomainName    = "grunt-api"
-	apiKeyDomainVersion = "1"
-	apiKeyDomainChainID = 1
+	gruntAPIDomainName    = "grunt-api"
+	gruntAPIDomainVersion = "1"
 )
 
-var (
-	apiKeyTypeHash = crypto.Keccak256Hash(
-		[]byte("GenerateFacilitatorApiKey(address facilitator,uint256 deadline)"))
-	apiKeyDomainTypeHash = crypto.Keccak256Hash(
-		[]byte("EIP712Domain(string name,string version,uint256 chainId)"))
-)
+var gruntAPIDomainTypeHash = crypto.Keccak256Hash(
+	[]byte("EIP712Domain(string name,string version,uint256 chainId)"))
 
 // gruntAPIDomainSeparator builds the grunt-api domain separator (name/version, no verifyingContract)
 // for chainID; the 3F server rebuilds it from the request's chainId query param to verify the signature.
 func gruntAPIDomainSeparator(chainID *big.Int) common.Hash {
 	return crypto.Keccak256Hash(
-		apiKeyDomainTypeHash.Bytes(),
-		crypto.Keccak256([]byte(apiKeyDomainName)),
-		crypto.Keccak256([]byte(apiKeyDomainVersion)),
+		gruntAPIDomainTypeHash.Bytes(),
+		crypto.Keccak256([]byte(gruntAPIDomainName)),
+		crypto.Keccak256([]byte(gruntAPIDomainVersion)),
 		word(chainID.Bytes()),
 	)
 }
@@ -116,21 +110,4 @@ var getOffersTypeHash = crypto.Keccak256Hash([]byte("GetOffers(address maker,uin
 func GetOffersDigest(maker common.Address, deadline, chainID *big.Int) common.Hash {
 	sh := crypto.Keccak256Hash(getOffersTypeHash.Bytes(), word(maker.Bytes()), word(deadline.Bytes()))
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
-}
-
-// cancelOfferTypeHash is the EIP-712 type the maker signs to cancel an unaccepted offer via
-// POST /v1/offer/cancel; the field set is checked against the live 3F API in the CancelOffer golden test.
-var cancelOfferTypeHash = crypto.Keccak256Hash([]byte("CancelOffer(address maker,uint256 offerId,uint256 deadline)"))
-
-// CancelOfferDigest computes the EIP-712 digest a maker signs to cancel offerID over the grunt-api
-// domain at chainID (the bot's operating chain, matching GetOffersDigest).
-func CancelOfferDigest(maker common.Address, offerID, deadline, chainID *big.Int) common.Hash {
-	sh := crypto.Keccak256Hash(cancelOfferTypeHash.Bytes(), word(maker.Bytes()), word(offerID.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
-}
-
-// APIKeyDigest computes the EIP-712 digest a facilitator signs to generate a 3F API key (chainId 1).
-func APIKeyDigest(facilitator common.Address, deadline *big.Int) common.Hash {
-	sh := crypto.Keccak256Hash(apiKeyTypeHash.Bytes(), word(facilitator.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(big.NewInt(apiKeyDomainChainID)).Bytes(), sh.Bytes())
 }

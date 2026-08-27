@@ -368,12 +368,6 @@ func TestSendAsyncWaitsForNonceConflictToClear(t *testing.T) {
 		t.Fatalf("request completed admission while nonce lane was paused: %+v", got)
 	case <-time.After(20 * time.Millisecond):
 	}
-	if result, accepted := m.TrySend(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "try while paused",
-	}); accepted || result.Err != nil {
-		t.Fatalf("paused TrySend = (%+v, %v), want not accepted", result, accepted)
-	}
-
 	m.clearNonceConflict(7)
 	var got submission
 	select {

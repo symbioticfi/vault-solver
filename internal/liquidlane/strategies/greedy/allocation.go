@@ -33,13 +33,6 @@ func newAllocator(candidates []liquidlane.QuoteCandidate) allocator {
 	return allocator{sources: buildSources(candidates)}
 }
 
-// allocateExactInput greedily allocates amountIn to the best route candidates.
-// maxRoutes must be positive. Direct and private candidates for the same route
-// are alternatives: the best one that can cover the selected leg wins.
-func (a allocator) allocateExactInput(amountIn *big.Int, maxRoutes int) allocationResult {
-	return a.allocateExactInputWithPolicy(amountIn, maxRoutes, false)
-}
-
 func (a allocator) allocateExactInputWithPolicy(
 	amountIn *big.Int,
 	maxRoutes int,

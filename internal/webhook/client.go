@@ -286,11 +286,6 @@ func (c *Client) PostJSON(ctx context.Context, req, resp any) error {
 	return c.DoJSON(ctx, http.MethodPost, "", req, resp)
 }
 
-// GetJSON sends a GET request and decodes a strict JSON response into resp.
-func (c *Client) GetJSON(ctx context.Context, route string, resp any) error {
-	return c.DoJSON(ctx, http.MethodGet, route, nil, resp)
-}
-
 func (c *Client) endpoint(route string) (string, error) {
 	if route == "" {
 		return c.baseURL.String(), nil

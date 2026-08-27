@@ -218,7 +218,6 @@
         "backendSharedSecretEnv": { "$ref": "#/$defs/nonEmptyString" },
         "listenAddr": { "type": "string" },
         "executor": { "$ref": "#/$defs/address" },
-        "reactor": { "$ref": "#/$defs/address" },
         "liquidityLens": { "$ref": "#/$defs/address" },
         "pollIntervalMs": { "type": "integer", "minimum": 1 },
         "orderLimit": { "type": "integer", "minimum": 1 },

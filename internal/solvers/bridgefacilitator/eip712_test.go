@@ -17,8 +17,39 @@ import (
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 )
 
-// The canonical Offer typehash, pinned from grunt v1.1.0 OfferReceiver.sol.
-const goldenOfferTypeHash = "0x3ded0c963332962cf2d273c8fb4f3e69f4ef33407ca72484fcebb56263ad0664"
+const (
+	// The canonical Offer typehash, pinned from grunt v1.1.0 OfferReceiver.sol.
+	goldenOfferTypeHash = "0x3ded0c963332962cf2d273c8fb4f3e69f4ef33407ca72484fcebb56263ad0664"
+	apiKeyDomainName    = gruntAPIDomainName
+	apiKeyDomainVersion = gruntAPIDomainVersion
+	apiKeyDomainChainID = 1
+)
+
+var (
+	apiKeyTypeHash = crypto.Keccak256Hash(
+		[]byte("GenerateFacilitatorApiKey(address facilitator,uint256 deadline)"))
+	cancelOfferTypeHash = crypto.Keccak256Hash(
+		[]byte("CancelOffer(address maker,uint256 offerId,uint256 deadline)"))
+)
+
+func apiKeyDigest(facilitator common.Address, deadline *big.Int) common.Hash {
+	sh := crypto.Keccak256Hash(apiKeyTypeHash.Bytes(), word(facilitator.Bytes()), word(deadline.Bytes()))
+	return crypto.Keccak256Hash(
+		[]byte{0x19, 0x01},
+		gruntAPIDomainSeparator(big.NewInt(apiKeyDomainChainID)).Bytes(),
+		sh.Bytes(),
+	)
+}
+
+func cancelOfferDigest(maker common.Address, offerID, deadline, chainID *big.Int) common.Hash {
+	sh := crypto.Keccak256Hash(
+		cancelOfferTypeHash.Bytes(),
+		word(maker.Bytes()),
+		word(offerID.Bytes()),
+		word(deadline.Bytes()),
+	)
+	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
+}
 
 func TestOfferTypeHash_MatchesGolden(t *testing.T) {
 	if got := offerTypeHash.Hex(); got != goldenOfferTypeHash {
@@ -104,7 +135,7 @@ func TestAPIKeyDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 	facilitator := common.HexToAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cfFFb92266")
 	deadline := big.NewInt(4_102_444_800)
 
-	sig, err := crypto.Sign(APIKeyDigest(facilitator, deadline).Bytes(), key)
+	sig, err := crypto.Sign(apiKeyDigest(facilitator, deadline).Bytes(), key)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -142,7 +173,7 @@ func TestCancelOfferDigest_MatchesApitypes(t *testing.T) {
 	offerID := big.NewInt(192)
 	deadline := big.NewInt(4102444800)
 
-	got := CancelOfferDigest(maker, offerID, deadline, big.NewInt(apiKeyDomainChainID))
+	got := cancelOfferDigest(maker, offerID, deadline, big.NewInt(apiKeyDomainChainID))
 
 	typed := apitypes.TypedData{
 		Types: apitypes.Types{
@@ -186,7 +217,7 @@ func TestCancelOfferDigest_MatchesApitypes(t *testing.T) {
 
 // TestGetOffersDigest_MatchesApitypes cross-checks our hand-rolled GetOffers digest against
 // go-ethereum's independent EIP-712 implementation. The grunt-api domain has no verifyingContract
-// (name/version/chainId=1 only), matching the same domain as APIKeyDigest.
+// (name/version/chainId=1 only), matching the API-key signature domain.
 func TestGetOffersDigest_MatchesApitypes(t *testing.T) {
 	maker := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	deadline := big.NewInt(4102444800)

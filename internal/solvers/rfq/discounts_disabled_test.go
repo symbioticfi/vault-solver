@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store → forces recovery
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", MaxAssets: "10000000", MaxRate: "1000000000000000000",

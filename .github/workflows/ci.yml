@@ -1,10 +1,8 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
-  workflow_call: # reusable entrypoint: an external deploy/infra workflow can gate on build/test/lint
+  workflow_call: # reusable entrypoint for the deploy workflow's build/test/lint gate
 
 permissions:
   contents: read

@@ -59,8 +59,8 @@ chain IDs, rates, intervals, limits, and secret references belong in YAML or an 
 2. Register its factory and pure validator through `solver.Registration`; mark externally submitted settlement
    explicitly, then blank-import it from `cmd/vault-solver/root.go`.
 3. Add generated external contracts under `api/` through the vendored-artifact Make targets.
-4. Add the schema variant, annotated example config, root README catalog row, integration plan, docs-index row,
+4. Add the schema variant, annotated example config, root README solver-table row, integration plan, docs-index row,
    and focused tests.
-5. Run the architecture, catalog, and repository gates documented in [Development](DEVELOPMENT.md).
+5. Run the focused and repository gates documented in [Development](DEVELOPMENT.md).
 
 The composition-root import is expected; adding protocol branches or fields to generic packages is not.

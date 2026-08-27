@@ -28,14 +28,6 @@ func goldenBorrower() PositionState {
 func TestAccrualMatchesOnChain(t *testing.T) {
 	m := goldenMarket()
 	// elapsed = 1781246580 - 1780059204 = 1187376s -> interest 1024624 (verified §6.7).
-	got := AccruedTotalBorrowAssets(m, 1781246580)
-	if want := big.NewInt(4731024692); got.Cmp(want) != 0 {
-		t.Fatalf("AccruedTotalBorrowAssets = %s, want %s", got, want)
-	}
-	// No accrual at lastUpdate.
-	if atLU := AccruedTotalBorrowAssets(m, m.LastUpdate); atLU.Cmp(m.TotalBorrowAssets) != 0 {
-		t.Fatalf("accrual at lastUpdate = %s, want %s", atLU, m.TotalBorrowAssets)
-	}
 	full := AccruedMarketState(m, 1781246580)
 	if want := big.NewInt(4731024692); full.TotalBorrowAssets.Cmp(want) != 0 {
 		t.Fatalf("AccruedMarketState borrow = %s, want %s", full.TotalBorrowAssets, want)
@@ -46,12 +38,16 @@ func TestAccrualMatchesOnChain(t *testing.T) {
 	if full.LastUpdate != 1781246580 {
 		t.Fatalf("AccruedMarketState lastUpdate = %d, want 1781246580", full.LastUpdate)
 	}
+	if atLastUpdate := AccruedMarketState(m, m.LastUpdate); atLastUpdate.TotalBorrowAssets.Cmp(m.TotalBorrowAssets) != 0 {
+		t.Fatalf("accrual at lastUpdate = %s, want %s", atLastUpdate.TotalBorrowAssets, m.TotalBorrowAssets)
+	}
 }
 
 func TestBorrowedAssetsUnaccrued(t *testing.T) {
 	// toAssetsUp at lastUpdate equals RedStone's pushed borrow_assets (1685600048) within 1-wei
 	// rounding (§6.7): our ToAssetsUp rounds up -> 1685600049.
-	got := BorrowedAssets(goldenMarket(), goldenBorrower(), goldenMarket().LastUpdate)
+	m := goldenMarket()
+	got := BorrowedAssetsAt(goldenBorrower(), AccruedMarketState(m, m.LastUpdate).TotalBorrowAssets, m.TotalBorrowShares)
 	if want := big.NewInt(1685600049); got.Cmp(want) != 0 {
 		t.Fatalf("unaccrued borrowed = %s, want %s", got, want)
 	}
@@ -104,6 +100,7 @@ func TestMaxSeizeForFullDebt(t *testing.T) {
 func TestIsLiquidatableAcrossPrices(t *testing.T) {
 	m := goldenMarket()
 	ts := uint64(1781246580)
+	accrued := AccruedMarketState(m, ts).TotalBorrowAssets
 	cases := []struct {
 		name  string
 		pos   PositionState
@@ -119,18 +116,16 @@ func TestIsLiquidatableAcrossPrices(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := IsLiquidatable(m, c.pos, mustBig(c.price), ts); got != c.want {
-				t.Fatalf("IsLiquidatable(%s) = %v, want %v", c.price, got, c.want)
+			if got := IsLiquidatableAt(c.pos, mustBig(c.price), m.Lltv, accrued, m.TotalBorrowShares); got != c.want {
+				t.Fatalf("IsLiquidatableAt(%s) = %v, want %v", c.price, got, c.want)
 			}
 		})
 	}
 }
 
-// TestLiquidationProximity pins the proximity pair against BorrowedAssetsAt / MaxBorrow and checks that
-// the borrowed >= maxBorrow boundary tracks IsLiquidatableAt.
-func TestLiquidationProximity(t *testing.T) {
+func TestLiquidationBoundary(t *testing.T) {
 	m := goldenMarket()
-	accrued := AccruedTotalBorrowAssets(m, m.LastUpdate)
+	accrued := AccruedMarketState(m, m.LastUpdate).TotalBorrowAssets
 	cases := []struct {
 		name        string
 		pos         PositionState
@@ -145,15 +140,8 @@ func TestLiquidationProximity(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			price := mustBig(c.price)
-			borrowed, maxBorrow := LiquidationProximity(c.pos, price, m.Lltv, accrued, m.TotalBorrowShares)
-			// The pair must equal the underlying helpers exactly.
-			if want := BorrowedAssetsAt(c.pos, accrued, m.TotalBorrowShares); borrowed.Cmp(want) != 0 {
-				t.Fatalf("borrowed = %s, want %s", borrowed, want)
-			}
-			if want := MaxBorrow(c.pos.Collateral, price, m.Lltv); maxBorrow.Cmp(want) != 0 {
-				t.Fatalf("maxBorrow = %s, want %s", maxBorrow, want)
-			}
-			// borrowed >= maxBorrow (with borrowed > 0) is the IsLiquidatableAt boundary.
+			borrowed := BorrowedAssetsAt(c.pos, accrued, m.TotalBorrowShares)
+			maxBorrow := MaxBorrow(c.pos.Collateral, price, m.Lltv)
 			boundary := borrowed.Sign() > 0 && borrowed.Cmp(maxBorrow) >= 0
 			if boundary != c.wantLiqable {
 				t.Fatalf("borrowed>=maxBorrow = %v (borrowed=%s maxBorrow=%s), want %v", boundary, borrowed, maxBorrow, c.wantLiqable)
@@ -169,8 +157,13 @@ func TestRepaidAssetsForSeizeMatchesLiveLiquidation(t *testing.T) {
 	// The real successful liquidation (§6.6) seized 0.5 TCOL at $1550 and repaid ~742.45 TLOAN
 	// (swapAmountOut 760 - profit 17.55). Assert RepaidAssetsForSeize lands in that band.
 	m := goldenMarket()
-	got := RepaidAssetsForSeize(m, mustBig("500000000000000000"), mustBig("1550000000000000000000000000"),
-		m.Lltv, m.LastUpdate)
+	got := RepaidAssetsForSeizeAt(
+		mustBig("500000000000000000"),
+		mustBig("1550000000000000000000000000"),
+		LiquidationIncentiveFactor(m.Lltv),
+		AccruedMarketState(m, m.LastUpdate).TotalBorrowAssets,
+		m.TotalBorrowShares,
+	)
 	lo, hi := big.NewInt(742_000_000), big.NewInt(743_000_000)
 	if got.Cmp(lo) < 0 || got.Cmp(hi) > 0 {
 		t.Fatalf("RepaidAssetsForSeize = %s, want in [%s, %s]", got, lo, hi)

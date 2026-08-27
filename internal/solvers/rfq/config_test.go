@@ -150,8 +150,15 @@ func TestParseConfig_QuoteScopesToAdapters(t *testing.T) {
 }
 
 func TestParseConfig_UnknownKeyRejected(t *testing.T) {
-	if _, err := parseCfg(t, minimalConfig+"pollIntervalMs: 100\nordreLimit: 5\n"); err == nil {
-		t.Fatal("expected a typo'd key to be rejected")
+	for name, field := range map[string]string{
+		"typo":           "ordreLimit: 5\n",
+		"unused reactor": `reactor: "0x0000000000000000000000000000000000000030"` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseCfg(t, minimalConfig+field); err == nil {
+				t.Fatalf("expected %q to be rejected", field)
+			}
+		})
 	}
 }
 
@@ -160,7 +167,6 @@ func TestParseConfig_Overrides(t *testing.T) {
 listenAddr: ":9000"
 pollIntervalMs: 1500
 orderLimit: 5
-reactor: "0x0000000000000000000000000000000000000030"
 `+oneAdapter)
 	if err != nil {
 		t.Fatalf("parseConfig: %v", err)
@@ -168,9 +174,6 @@ reactor: "0x0000000000000000000000000000000000000030"
 	if cfg.ListenAddr != ":9000" ||
 		cfg.PollInterval != 1500*time.Millisecond || cfg.OrderLimit != 5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
-	}
-	if cfg.Reactor == [20]byte{} {
-		t.Fatalf("reactor not parsed")
 	}
 }
 

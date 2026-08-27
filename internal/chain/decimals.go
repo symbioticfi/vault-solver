@@ -2,7 +2,6 @@ package chain
 
 import (
 	"context"
-	"slices"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -51,48 +50,6 @@ func (d *Decimals) Get(ctx context.Context, token common.Address) (int, error) {
 	}
 	d.store(token, v)
 	return v, nil
-}
-
-// GetMany returns decimals for several tokens, reading every uncached one in a SINGLE multicall (so
-// resolving N new tokens costs one round-trip, not N). Cached tokens are served without any call. It
-// is lenient per token: a token whose decimals() reverts is simply omitted from the result (the caller
-// fails that item closed) rather than failing the whole batch — only a transport error is returned.
-func (d *Decimals) GetMany(ctx context.Context, tokens []common.Address) (map[common.Address]int, error) {
-	out := make(map[common.Address]int, len(tokens))
-	var miss []common.Address
-	d.mu.Lock()
-	for _, t := range tokens {
-		if v, ok := d.cache[t]; ok {
-			out[t] = v
-		} else if !slices.Contains(miss, t) {
-			miss = append(miss, t)
-		}
-	}
-	d.mu.Unlock()
-	if len(miss) == 0 {
-		return out, nil
-	}
-
-	calls := make([]Call, len(miss))
-	for i, t := range miss {
-		calls[i] = Call{Target: t, AllowFailure: true, Data: erc20B.PackDecimals()}
-	}
-	res, err := d.chain.Multicall(ctx, calls)
-	if err != nil {
-		return nil, err
-	}
-	for i, t := range miss {
-		if i >= len(res) || !res[i].Success {
-			continue // token's decimals() reverted — omit; caller skips that market (fail closed)
-		}
-		v, derr := decodeDecimals(res[i].ReturnData)
-		if derr != nil {
-			continue
-		}
-		d.store(t, v)
-		out[t] = v
-	}
-	return out, nil
 }
 
 func (d *Decimals) store(token common.Address, v int) {
