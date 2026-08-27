@@ -146,14 +146,18 @@ type Solver interface {
     Run(ctx context.Context) error
 }
 
-type Factory func(raw yaml.Node, deps Deps) (Solver, error)
+type Registration struct {
+    Factory             Factory
+    ValidateConfig      ConfigValidator
+    ExternallySubmitted bool
+}
 ```
 
-A `registry` maps name→`Factory`. The 3F package self-registers in `init()`; `main`
-blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the only line referencing 3F.
-Adding a future solver is a register + config switch, no framework edit. Solvers require txmanager by
-default; an externally submitted integration can implement `RequiresTxManager() bool` and return false,
-so an external-only process does not initialize or start the nonce lane.
+A `registry` maps each name to its runtime factory, pure offline config validator, and submission mode. The
+3F package self-registers in `init()`; `main` blank-imports it (`_ ".../solvers/bridgefacilitator"`) — the
+only line referencing 3F. Adding a future solver is a registration + config switch, no engine edit.
+Transaction submission defaults to the shared txmanager; an integration whose auctioneer settles externally
+marks that capability in registration, so an external-only process does not initialize the nonce lane.
 
 ---
 

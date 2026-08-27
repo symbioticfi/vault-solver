@@ -12,6 +12,19 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
+func validateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config, strategies.ValidationDeps{
+		GasAccounting: cfg.Gas != nil,
+	}); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
+}
+
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {

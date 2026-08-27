@@ -27,8 +27,15 @@ type Deps struct {
 
 type Factory func(raw yaml.Node, deps Deps) (types.Strategy, error)
 
+type ValidationDeps struct {
+	GasAccounting bool
+}
+
+type Validator func(raw yaml.Node, deps ValidationDeps) error
+
 type Registration struct {
 	Factory        Factory
+	ValidateConfig Validator
 	RequiresBidCap bool
 }
 
@@ -46,6 +53,9 @@ func Register(name string, registration Registration) {
 	if registration.Factory == nil {
 		panic("OEV strategy: Register called with nil factory for " + name)
 	}
+	if registration.ValidateConfig == nil {
+		panic("OEV strategy: Register called with nil config validator for " + name)
+	}
 	if _, dup := registry[name]; dup {
 		panic("OEV strategy: duplicate registration for " + name)
 	}
@@ -60,6 +70,16 @@ func New(name string, raw yaml.Node, deps Deps) (types.Strategy, error) {
 		return nil, errors.Errorf("unknown OEV strategy %q (registered: %v)", name, Registered())
 	}
 	return registration.Factory(raw, deps)
+}
+
+func Validate(name string, raw yaml.Node, deps ValidationDeps) error {
+	mu.RLock()
+	registration, ok := registry[name]
+	mu.RUnlock()
+	if !ok {
+		return errors.Errorf("unknown OEV strategy %q (registered: %v)", name, Registered())
+	}
+	return registration.ValidateConfig(raw, deps)
 }
 
 func RequiresBidCap(name string) bool {

@@ -119,7 +119,11 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			return err
 		}
 		solvers = append(solvers, slv)
-		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+		solverRequiresTxManager, err := solver.RequiresTxManager(sc.Name)
+		if err != nil {
+			return err
+		}
+		requiresTxManager = requiresTxManager || solverRequiresTxManager
 	}
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {

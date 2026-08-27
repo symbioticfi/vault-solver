@@ -29,7 +29,7 @@ final linter. The Makefile forces the repository's exact Go toolchain.
 
 | Change | Read first | Focused check |
 |---|---|---|
-| Generic config or registry | [Architecture](ARCHITECTURE.md) | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
+| Generic config, schema, or registry | [Architecture](ARCHITECTURE.md) | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
 | Chain reads/fallback | relevant package comments and solver plan | `make verify-race TARGET=./internal/chain/...` |
 | Transaction lifecycle | [Transaction manager](TXMANAGER.md) | `make verify-race TARGET=./internal/txmanager` |
 | Shared LiquidLane facts/economics | [LiquidLane conventions](LIQUIDLANE-CONVENTIONS.md) | `make verify-race TARGET=./internal/liquidlane/...` |
@@ -52,3 +52,10 @@ Generated files are committed; the vendored artifact is the contract of record.
 
 Never patch generated Go to compensate for an upstream mismatch. Update the artifact and regenerate in the same
 change so call-site breakage remains reviewable.
+
+## Configuration contract
+
+`config/vault-solver.schema.json` provides structural editor completion. `vault-solver config validate` is the
+semantic, offline check and exercises each integration-owned parser plus selected strategy parser. Every committed
+`*.example.yaml` must declare the schema and pass that validator; the command/package catalog test enforces the
+one-to-one registry, README, schema, and example sets.

@@ -20,8 +20,12 @@ func (f fakeSolver) Run(ctx context.Context) error {
 }
 
 func TestRegisterAndNew(t *testing.T) {
-	Register("test-fake", func(yaml.Node, Deps) (Solver, error) {
-		return fakeSolver{name: "test-fake"}, nil
+	isolateRegistry(t)
+	Register("test-fake", Registration{
+		Factory: func(yaml.Node, Deps) (Solver, error) {
+			return fakeSolver{name: "test-fake"}, nil
+		},
+		ValidateConfig: func(yaml.Node) error { return nil },
 	})
 
 	s, err := New("test-fake", yaml.Node{}, Deps{})
@@ -38,13 +42,18 @@ func TestRegisterAndNew(t *testing.T) {
 }
 
 func TestRegisterDuplicatePanics(t *testing.T) {
-	Register("dup", func(yaml.Node, Deps) (Solver, error) { return fakeSolver{name: "dup"}, nil })
+	isolateRegistry(t)
+	registration := Registration{
+		Factory:        func(yaml.Node, Deps) (Solver, error) { return fakeSolver{name: "dup"}, nil },
+		ValidateConfig: func(yaml.Node) error { return nil },
+	}
+	Register("dup", registration)
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected panic on duplicate registration")
 		}
 	}()
-	Register("dup", func(yaml.Node, Deps) (Solver, error) { return fakeSolver{name: "dup"}, nil })
+	Register("dup", registration)
 }
 
 func TestDecodeStrict(t *testing.T) {
@@ -74,17 +83,45 @@ func TestDecodeStrict(t *testing.T) {
 	}
 }
 
-type txManagerIndependentSolver struct{ fakeSolver }
-
-func (txManagerIndependentSolver) RequiresTxManager() bool { return false }
-
-func TestRequiresTxManagerDefaultsToSafe(t *testing.T) {
-	if !RequiresTxManager(fakeSolver{name: "default"}) {
-		t.Fatal("solver without an explicit capability must require txManager")
+func TestRegistrationMetadata(t *testing.T) {
+	isolateRegistry(t)
+	validated := false
+	Register("metadata", Registration{
+		Factory: func(yaml.Node, Deps) (Solver, error) {
+			return fakeSolver{name: "metadata"}, nil
+		},
+		ValidateConfig: func(yaml.Node) error {
+			validated = true
+			return nil
+		},
+		ExternallySubmitted: true,
+	})
+	if err := ValidateConfig("metadata", yaml.Node{}); err != nil {
+		t.Fatalf("ValidateConfig: %v", err)
 	}
-	if RequiresTxManager(txManagerIndependentSolver{fakeSolver{name: "external"}}) {
+	if !validated {
+		t.Fatal("config validator was not called")
+	}
+	requires, err := RequiresTxManager("metadata")
+	if err != nil {
+		t.Fatalf("RequiresTxManager: %v", err)
+	}
+	if requires {
 		t.Fatal("externally submitted solver must not require txManager")
 	}
+}
+
+func isolateRegistry(t *testing.T) {
+	t.Helper()
+	mu.Lock()
+	previous := registry
+	registry = make(map[string]Registration)
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		registry = previous
+		mu.Unlock()
+	})
 }
 
 func TestRunTreatsCancellationAsClean(t *testing.T) {

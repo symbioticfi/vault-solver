@@ -30,7 +30,9 @@ const Name = "uniswapx-filler"
 const orderQueueCapacity = 256
 
 //nolint:gochecknoinits // solver registration follows the framework plugin convention.
-func init() { solver.Register(Name, factory) }
+func init() {
+	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
+}
 
 type Solver struct {
 	cfg           *Config
@@ -128,6 +130,17 @@ type transactionManager interface {
 
 type contractCaller interface {
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+}
+
+func validateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if _, err := newStrategy(cfg.Strategy); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — 3F Bridge Facilitator (`3f-bridge-facilitator`), annotated example.
 #
 # Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic BridgeFacilitatorAdapters,

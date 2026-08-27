@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — RFQ Filler (`rfq-filler`), annotated example.
 #
 # A quote server + order-filling poller for Symbiotic RFQ, on top of per-vault LiquidLaneAdapters.
@@ -81,4 +82,4 @@ solvers:
       # these scope quoting/filling and are required; the Executor must additionally be an authorized
       # filler on each adapter (its marketMaker or owner, or a delegated isFiller).
       adapters:
-        - "0x..."   # TODO: concrete adapter instance(s) emitted by factory 0x9b5dbB434269e39e41b1E331C2AcE09e05A899B5
+        - "0x1111111111111111111111111111111111111111" # replace with an adapter emitted by factory 0x9b5dbB434269e39e41b1E331C2AcE09e05A899B5

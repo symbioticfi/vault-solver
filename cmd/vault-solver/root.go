@@ -20,6 +20,6 @@ func newRootCmd() *cobra.Command {
 			"solver integrations against them.",
 		SilenceUsage: true, // don't print usage on RunE errors (only on flag/arg misuse)
 	}
-	root.AddCommand(newRunCmd(), newVersionCmd())
+	root.AddCommand(newConfigCmd(), newRunCmd(), newVersionCmd())
 	return root
 }

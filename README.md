@@ -97,6 +97,7 @@ make tools
 make doctor
 make build
 ./bin/vault-solver version
+./bin/vault-solver config validate --config config/3f.example.yaml
 ./bin/vault-solver run --config config/3f.example.yaml
 ```
 
@@ -118,7 +119,16 @@ Debug logging is disabled by default. Enable it through `observability.debug: tr
 
 The framework strictly decodes common blocks and passes each opaque `solvers[].config` node to its integration
 for a second strict decode. Unknown keys fail fast. Every integration has an annotated example linked from the
-solver table.
+solver table and associated with [`config/vault-solver.schema.json`](config/vault-solver.schema.json) for editor
+completion. The schema is structural; the offline CLI is the semantic authority:
+
+```bash
+vault-solver config validate --config config.yaml
+```
+
+Validation expands non-secret environment references and checks common fields, integration config, selected
+strategy config, and whether a transaction-sending process has a fee cap. It does not dial RPC/API endpoints or
+read the secret values named by `*Env` fields.
 
 Common blocks:
 

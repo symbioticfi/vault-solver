@@ -32,7 +32,7 @@ const (
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
-	solver.Register(Name, factory)
+	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
 }
 
 type Solver struct {
@@ -80,6 +80,17 @@ type txSender interface {
 type transactionLaneState interface {
 	LaneReady() bool
 	SubscribeLaneState() (<-chan struct{}, func())
+}
+
+func validateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if _, err := newStrategy(cfg.Strategy); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {

@@ -20,7 +20,9 @@ const Name = "redstone-oev"
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
-	solver.Register(Name, factory)
+	solver.Register(Name, solver.Registration{
+		Factory: factory, ValidateConfig: validateConfig, ExternallySubmitted: true,
+	})
 }
 
 // Solver is the RedStone OEV solver runtime.
@@ -56,6 +58,3 @@ type Solver struct {
 
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
-
-// RequiresTxManager is false because RedStone's auctioneer submits settlement transactions.
-func (*Solver) RequiresTxManager() bool { return false }

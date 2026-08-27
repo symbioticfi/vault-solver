@@ -48,7 +48,9 @@ helper package — `internal/parse`.
 To add a new integration:
 1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
    `factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error)`.
-2. Self-register in `init()` via `solver.Register(Name, factory)`; blank-import the package from `main`.
+2. Self-register in `init()` with `solver.Registration{Factory, ValidateConfig}`; set
+   `ExternallySubmitted` only when an upstream auctioneer submits settlement, then blank-import the package
+   from `main`.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).
 4. Decode your own config from the deferred `solvers[].config` YAML node — no framework edits.
@@ -64,7 +66,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - Config lists solvers under `solvers:` (one or more, at most one per type). The generic layer decodes
   only `chain`, `signer`, `txManager`, `observability`, and each `solvers[].name`, and keeps each
   `solvers[].config` as an opaque `yaml.Node` (two-stage decode); each solver decodes that node into
-  its own typed, **validated** struct in `parseConfig`. All solvers run in one process and share the
+  its own typed, **validated** struct in `parseConfig`. Each registration also exposes a pure validator so
+  `vault-solver config validate` checks the same integration and strategy semantics without network I/O. All
+  solvers run in one process and share the
   chain client, signer, and the single nonce-serialized `txManager` — which is why multiple solvers on
   one EOA never race on nonces.
 - **Prefer values from the upstream source over constants.** When the 3F API (or any integration's
@@ -234,7 +238,7 @@ reader or operator would be surprised to discover.
 
 - Run gate: `make format && make verify` (`make verify` itself is read-only).
 - Change map: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
-- Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
+- Add an integration: new `internal/solvers/<name>/` + `solver.Registration` in `init()` + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
 - Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;

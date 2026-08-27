@@ -35,7 +35,7 @@ const Name = "3f-bridge-facilitator"
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
 func init() {
-	solver.Register(Name, factory)
+	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
 }
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
@@ -65,6 +65,17 @@ func deduplicateAdapters(adapters []common.Address) []common.Address {
 		unique = append(unique, adapter)
 	}
 	return unique
+}
+
+func validateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if _, err := newStrategy(cfg.Strategy); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {

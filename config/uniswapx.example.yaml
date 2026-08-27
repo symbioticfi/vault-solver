@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # UniswapX V2 quoter + filler for Ethereum mainnet.
 # Uniswap must allowlist the public quote endpoint and executor before beta traffic reaches this solver.
 # Secrets are referenced by env-var name; ${VAR} values are expanded when the config is loaded.

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — RedStone OEV solver (`redstone-oev`), annotated example.
 #
 # An off-chain bidder for RedStone Atom OEV auctions: when a price update makes a Morpho Blue position

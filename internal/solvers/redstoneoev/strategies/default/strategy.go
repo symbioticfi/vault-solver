@@ -65,7 +65,15 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig})
+	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, ValidateConfig: ValidateConfig})
+}
+
+func ValidateConfig(raw yaml.Node, deps strategies.ValidationDeps) error {
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return err
+	}
+	return validateConfig(cfg, deps.GasAccounting)
 }
 
 func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
@@ -95,11 +103,8 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 	if deps.LoadAdapterSnapshot == nil {
 		return nil, errors.New("adapter snapshot source is required")
 	}
-	if !deps.GasAccounting && cfg.TotalBundleProfitBps != 0 {
-		return nil, errors.New("strategy.config.bid.totalBundleProfitBps requires gas accounting")
-	}
-	if !deps.GasAccounting && cfg.MinBundleProfitBidBps != 0 {
-		return nil, errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
+	if err := validateConfig(cfg, deps.GasAccounting); err != nil {
+		return nil, err
 	}
 	var (
 		mon monitorSource
@@ -111,9 +116,6 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 			return nil, err
 		}
 	} else {
-		if cfg.MorphoAPIURL == "" {
-			return nil, errors.New("morphoApiUrl is required unless strategy.config.testMonitor is configured")
-		}
 		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
 	}
 	return &Strategy{
@@ -128,6 +130,19 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		engine:        newBundleEngine(cfg, deps.Log),
 		log:           deps.Log,
 	}, nil
+}
+
+func validateConfig(cfg Config, gasAccounting bool) error {
+	if !gasAccounting && cfg.TotalBundleProfitBps != 0 {
+		return errors.New("strategy.config.bid.totalBundleProfitBps requires gas accounting")
+	}
+	if !gasAccounting && cfg.MinBundleProfitBidBps != 0 {
+		return errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
+	}
+	if cfg.TestMonitor == nil && cfg.MorphoAPIURL == "" {
+		return errors.New("morphoApiUrl is required unless strategy.config.testMonitor is configured")
+	}
+	return nil
 }
 
 func (s *Strategy) Run(ctx context.Context) {

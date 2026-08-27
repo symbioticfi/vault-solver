@@ -41,22 +41,24 @@ type Solver interface {
 	Run(ctx context.Context) error
 }
 
-// RequiresTxManager reports whether a solver uses the shared on-chain sender. Solvers default to
-// requiring it; integrations whose transactions are submitted externally may opt out.
-func RequiresTxManager(s Solver) bool {
-	requirer, ok := s.(interface{ RequiresTxManager() bool })
-	return !ok || requirer.RequiresTxManager()
-}
-
 // ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation
 // while it retires externally visible work such as active quotes.
 type ShutdownPreparer interface {
 	ShutdownPreparationTimeout() time.Duration
 }
 
-// Factory builds a Solver from its opaque config block (decoded by the solver into its own type)
-// and the shared dependencies.
+// Factory builds a Solver from its opaque config block and shared runtime dependencies.
 type Factory func(raw yaml.Node, deps Deps) (Solver, error)
+
+// ConfigValidator performs integration-owned config validation without runtime dependencies or I/O.
+type ConfigValidator func(raw yaml.Node) error
+
+// Registration describes one integration's construction and offline configuration contract.
+type Registration struct {
+	Factory             Factory
+	ValidateConfig      ConfigValidator
+	ExternallySubmitted bool
+}
 
 // DecodeStrict decodes a deferred solvers[].config node into out, rejecting unknown keys so typos in
 // a solver's config fail fast — matching the strict top-level config decode. The framework keeps
@@ -68,35 +70,68 @@ func DecodeStrict(node yaml.Node, out any) error {
 
 var (
 	mu       sync.RWMutex
-	registry = map[string]Factory{}
+	registry = map[string]Registration{}
 )
 
-// Register associates a solver name with its factory. Intended for use from package init
-// functions; panics on duplicate names (a programming error).
-func Register(name string, f Factory) {
+// Register associates a solver name with its runtime and offline config contracts. It is intended
+// for package init functions and panics on incomplete or duplicate registrations.
+func Register(name string, registration Registration) {
 	mu.Lock()
 	defer mu.Unlock()
 	if name == "" {
 		panic("solver: Register called with empty name")
 	}
-	if f == nil {
+	if registration.Factory == nil {
 		panic("solver: Register called with nil factory for " + name)
+	}
+	if registration.ValidateConfig == nil {
+		panic("solver: Register called with nil config validator for " + name)
 	}
 	if _, dup := registry[name]; dup {
 		panic("solver: duplicate registration for " + name)
 	}
-	registry[name] = f
+	registry[name] = registration
 }
 
 // New constructs the solver registered under name.
 func New(name string, raw yaml.Node, deps Deps) (Solver, error) {
-	mu.RLock()
-	f, ok := registry[name]
-	mu.RUnlock()
+	registration, ok := lookup(name)
 	if !ok {
-		return nil, errors.Errorf("solver: unknown solver %q (registered: %v)", name, Registered())
+		return nil, unknownSolverError(name)
 	}
-	return f(raw, deps)
+	return registration.Factory(raw, deps)
+}
+
+// ValidateConfig validates one opaque solver config without constructing runtime dependencies.
+func ValidateConfig(name string, raw yaml.Node) error {
+	registration, ok := lookup(name)
+	if !ok {
+		return unknownSolverError(name)
+	}
+	if err := registration.ValidateConfig(raw); err != nil {
+		return errors.Errorf("solver %q config: %w", name, err)
+	}
+	return nil
+}
+
+// RequiresTxManager reports the registered integration's transaction-submission mode.
+func RequiresTxManager(name string) (bool, error) {
+	registration, ok := lookup(name)
+	if !ok {
+		return false, unknownSolverError(name)
+	}
+	return !registration.ExternallySubmitted, nil
+}
+
+func lookup(name string) (Registration, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	registration, ok := registry[name]
+	return registration, ok
+}
+
+func unknownSolverError(name string) error {
+	return errors.Errorf("solver: unknown solver %q (registered: %v)", name, Registered())
 }
 
 // Registered returns the sorted list of registered solver names (for diagnostics).
