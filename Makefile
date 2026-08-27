@@ -81,6 +81,8 @@ PKG     := github.com/symbioticfi/vault-solver
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+E2E_DIR ?= $(CURDIR)/.e2e
+E2E_PROFILE ?= all
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) \
            -X $(PKG)/internal/version.Commit=$(COMMIT) \
            -X $(PKG)/internal/version.Date=$(DATE)
@@ -222,6 +224,22 @@ build: ## Build the binary
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
 	go test -race -cover ./...
+
+.PHONY: e2e-init
+e2e-init: ## Clone the pinned private E2E harness into the ignored E2E_DIR
+	VAULT_SOLVER_E2E_DIR="$(E2E_DIR)" ./hack/e2e-init.sh
+
+.PHONY: test-e2e
+test-e2e: e2e-init ## Run local E2E profiles (E2E_PROFILE=all|3f|rfq|lifi|uniswapx|redstoneoev)
+	cd "$(E2E_DIR)" && VAULT_SOLVER_SRC="$(CURDIR)" ./run.sh "$(E2E_PROFILE)"
+
+.PHONY: test-e2e-suite
+test-e2e-suite: ## Compile the tagged solver-owned E2E package without running live tests
+	go test -tags e2e -run '^$$' ./e2e
+
+.PHONY: test-e2e-harness
+test-e2e-harness: e2e-init test-e2e-suite ## Run unit tests for E2E fixtures and orchestration
+	cd "$(E2E_DIR)" && pnpm install --frozen-lockfile && pnpm test
 
 # Local-only OEV integration suite — build-tagged, skipped by the default `test` + CI.
 .PHONY: test-oev-live

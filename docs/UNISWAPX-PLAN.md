@@ -654,8 +654,9 @@ abstraction):
   because that immutable cannot be read through the published ABI.
 - ABI vendored → `api/bindings/uniswapx/`; executor calldata packed via abigen `--v2` (never
   `abi.Pack("...")`).
-- Contract coverage includes mock-Reactor Forge tests. The integration harness also carries a captured-order
-  mainnet-Reactor replay; a self-cosigned canonical-Reactor test remains P6.
+- Contract coverage includes mock-Reactor Forge tests. Local outcome assertions live in the solver-owned
+  [`../e2e`](../e2e) Go package and run against pinned private infrastructure; a self-cosigned
+  canonical-Reactor replay remains P6.
 
 **Optional follow-up — native output (not a launch blocker).** Canonical UniswapX Reactors accept native
 output from a callback executor (see Uniswap's
@@ -696,7 +697,8 @@ loop ourselves: build a V2 order as swapper → sign Permit2 witness → **self-
 integration test in the `rfq` repo.
 
 **Layer 3 — full local loop and stress matrix.** Mock RFQ server → our webhook → self-cosign → fork fill,
-end-to-end in one harness. The integration runner separately gates protocol E2E, quote conformance,
+end-to-end in one environment. The pinned private runner owns infrastructure and fixtures; the public
+solver-owned Go E2E package owns protocol assertions. Together they gate protocol E2E, quote conformance,
 concurrent quote/fill load, quote-capacity backpressure, forced signed-discount-only fills, a bounded soak,
 and restart/backend/RPC recovery. The fill burst asserts one successful transaction per order across equal
 exclusive and public V2 waves; the resilience case keeps an order open across a solver restart
@@ -759,9 +761,9 @@ in the owning repository and the integration harness pins the resulting revision
   and verifies direct/private route
   selection. The local matrix also covers 240-request quote bursts, replay/collision/body/auth conformance,
   three concurrent fill waves, forced-discount concurrency, phase-agnostic stateless quote pressure, soak, solver
-  restart, and temporary discount-backend/RPC outages. The integration harness contains a captured-order
-  replay against the canonical mainnet Reactor. Remaining: land and pin the executor, add the self-cosigned
-  canonical-Reactor case, then complete the Beta five-fill qualification and record the transaction hashes
+  restart, and temporary discount-backend/RPC outages. The local direct/private outcome checks now live in
+  the solver-owned Go E2E package. Remaining: land and pin the executor, add the self-cosigned
+  canonical-Reactor case there, then complete the Beta five-fill qualification and record the transaction hashes
   (§10).
 
 ---

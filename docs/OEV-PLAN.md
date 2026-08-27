@@ -597,11 +597,16 @@ network, no chain. The opt-in live suite is excluded from CI by build tags:
 
 Every other `*_test.go` is hermetic (config matrix, sizing/golden, EIP-191 golden+parity, single-token
 bundling, WS integration via in-process `httptest`, chain-reader decoders against hand-packed ABI bytes)
-and runs in CI. The contract (the OEV `SymbioticOevSolver` in the `rfq` repo's `src/oev/`, with its Forge
-suite) covers the single-adapter settlement path; deploy via `script/DeployOevOwnCore.s.sol`
-then wire/operate with external operator tooling. The bot's role ends at
-signing + sending the WS solve (proven hermetically by `wsintegration_test.go`); RedStone's auctioneer
-submits the actual `Executor.execute`.
+and runs in CI. The build-tagged, solver-owned [`../e2e`](../e2e) Go package supplies the local protocol
+E2E: pinned private infrastructure creates a liquidatable Morpho position and auction, then `TestE2E`
+checks the signed operation envelope, independent debt/liquidity clamps, callback events, bid payment,
+realized loan-token profit, and OEV metrics. The infrastructure compiles that package into a static test
+binary and retains no protocol assertions of its own.
+
+The contract (the OEV `SymbioticOevSolver` in the `rfq` repo's `src/oev/`, with its Forge suite) covers
+the single-adapter settlement path; deploy via `script/DeployOevOwnCore.s.sol` then wire/operate with
+external operator tooling. The bot's role ends at signing + sending the WS solve (proven hermetically by
+`wsintegration_test.go`); RedStone's auctioneer submits the actual `Executor.execute`.
 
 ---
 
