@@ -678,7 +678,7 @@ func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler c
 }
 
 func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, filler common.Address) ([]Route, error) {
-	routes = compactRoutes(routes)
+	routes = compactAuthorizationRoutes(routes)
 	if len(routes) == 0 {
 		return nil, nil
 	}
@@ -905,6 +905,37 @@ func dedupeAdapters(in []Adapter) []Adapter {
 		out = append(out, a)
 	}
 	return out
+}
+
+func compactAuthorizationRoutes(in []Route) []Route {
+	hasAdapter := false
+	for _, route := range in {
+		if route.Adapter == (common.Address{}) {
+			continue
+		}
+		hasAdapter = true
+		if !isAdapterOnlyRoute(route) {
+			return compactRoutes(in)
+		}
+	}
+	if !hasAdapter {
+		return nil
+	}
+
+	seen := make(map[common.Address]bool, len(in))
+	out := make([]Route, 0, len(in))
+	for _, route := range in {
+		if !isAdapterOnlyRoute(route) || seen[route.Adapter] {
+			continue
+		}
+		seen[route.Adapter] = true
+		out = append(out, route)
+	}
+	return out
+}
+
+func isAdapterOnlyRoute(route Route) bool {
+	return route.Adapter != (common.Address{}) && route == (Route{Adapter: route.Adapter})
 }
 
 func compactRoutes(in []Route) []Route {
