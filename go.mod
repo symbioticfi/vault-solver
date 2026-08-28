@@ -6,8 +6,8 @@ toolchain go1.26.5
 
 require (
 	github.com/Khan/genqlient v0.8.1
-	github.com/danielgtaylor/huma/v2 v2.39.0
-	github.com/ethereum/go-ethereum v1.17.4
+	github.com/danielgtaylor/huma/v2 v2.39.1
+	github.com/ethereum/go-ethereum v1.17.5
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-errors/errors v1.5.1
 	github.com/go-logr/logr v1.4.4
@@ -33,7 +33,7 @@ require (
 	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
-	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
+	github.com/ethereum/c-kzg-4844/v2 v2.1.8 // indirect
 	github.com/fjl/jsonw v0.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -56,7 +56,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20240404231335-c0f41cb1a7a0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
