@@ -96,8 +96,14 @@ func testLifi(t *testing.T, testEnv *testEnvironment) {
 		return errors.New("matching quote not published")
 	})
 
+	verifyLifiQuoteRanges(t, quote)
 	rangeQuote := quote.Ranges[0]
-	amountIn := parseBig(t, rangeQuote.MaxAmount)
+	minimumInput := parseBig(t, rangeQuote.MinAmount)
+	maximumInput := parseBig(t, rangeQuote.MaxAmount)
+	amountIn := new(big.Int).Sub(maximumInput, big.NewInt(1))
+	if amountIn.Cmp(minimumInput) < 0 {
+		amountIn.Set(maximumInput)
+	}
 	amountOut := decimalRateAmountOut(t, amountIn, rangeQuote.Quote, quote.FromDecimals, quote.ToDecimals)
 	if amountIn.Sign() <= 0 || amountOut.Sign() <= 0 {
 		t.Fatalf("LI.FI quote produced input=%s output=%s", amountIn, amountOut)
@@ -365,6 +371,27 @@ func findLifiFill(
 	return lifiFillEvidence{}
 }
 
+func verifyLifiQuoteRanges(t *testing.T, quote lifiQuote) {
+	t.Helper()
+	var previousMaximum *big.Int
+	for index, quoteRange := range quote.Ranges {
+		minimum := parseBig(t, quoteRange.MinAmount)
+		maximum := parseBig(t, quoteRange.MaxAmount)
+		rate, ok := parseFixed(quoteRange.Quote, 18)
+		if minimum.Sign() <= 0 || maximum.Cmp(minimum) < 0 || !ok || rate.Sign() <= 0 {
+			t.Fatalf("LI.FI range %d is invalid: %+v", index, quoteRange)
+		}
+		if previousMaximum != nil && minimum.Cmp(previousMaximum) <= 0 {
+			t.Fatalf("LI.FI range %d starts at %s after previous maximum %s", index, minimum, previousMaximum)
+		}
+		if amountOutForRate(minimum, rate, quote.FromDecimals, quote.ToDecimals).Sign() <= 0 ||
+			amountOutForRate(maximum, rate, quote.FromDecimals, quote.ToDecimals).Sign() <= 0 {
+			t.Fatalf("LI.FI range %d rounds to zero output", index)
+		}
+		previousMaximum = maximum
+	}
+}
+
 func verifyLifiMath(
 	t *testing.T,
 	testEnv *testEnvironment,
@@ -387,16 +414,23 @@ func verifyLifiMath(
 		lifiPriceBufferBPS,
 	)
 	rangeWire := quote.Ranges[0]
+	minimumInput := parseBig(t, rangeWire.MinAmount)
+	maximumInput := parseBig(t, rangeWire.MaxAmount)
 	expectedRange := singleRouteRangeQuote(rangeQuoteInput{
-		minimumInput:   parseBig(t, rangeWire.MinAmount),
-		maximumInput:   parseBig(t, rangeWire.MaxAmount),
+		minimumInput:   minimumInput,
+		maximumInput:   maximumInput,
 		candidateRate:  advertisedRate,
 		inputDecimals:  quote.FromDecimals,
 		outputDecimals: quote.ToDecimals,
 		priceBufferBPS: lifiPriceBufferBPS,
 	})
-	if amountIn.Cmp(parseBig(t, rangeWire.MaxAmount)) != 0 || amountOut.Cmp(expectedRange.amountOut) != 0 {
-		t.Fatalf("LI.FI range output = %s, want %s", amountOut, expectedRange.amountOut)
+	wireRate, ok := parseFixed(rangeWire.Quote, 18)
+	if !ok || wireRate.Cmp(expectedRange.rate) != 0 {
+		t.Fatalf("LI.FI range rate = %q, want %s", rangeWire.Quote, expectedRange.rate)
+	}
+	expectedOrderOutput := amountOutForRate(amountIn, expectedRange.rate, quote.FromDecimals, quote.ToDecimals)
+	if amountIn.Cmp(minimumInput) < 0 || amountIn.Cmp(maximumInput) > 0 || amountOut.Cmp(expectedOrderOutput) != 0 {
+		t.Fatalf("LI.FI range input/output = %s/%s, bounds %s..%s, want output %s", amountIn, amountOut, minimumInput, maximumInput, expectedOrderOutput)
 	}
 	grossOutput := testEnv.adapterAmountOut(t, redemption.adapter, testEnv.manifest.Lifi.TokenIn, amountIn)
 	executableOutput := discountedAmountOut(grossOutput, discount)
@@ -410,7 +444,11 @@ func verifyLifiMath(
 	if amountOut.Cmp(fillBufferedAmount(executableOutput, lifiPriceBufferBPS)) > 0 {
 		t.Fatalf("LI.FI quote %s exceeds fill ceiling for %s", amountOut, executableOutput)
 	}
-	return new(big.Int).Sub(quoteCeiling, amountOut)
+	headroom := new(big.Int).Sub(quoteCeiling, amountOut)
+	if headroom.Sign() < 0 {
+		t.Fatalf("LI.FI range output exceeds its independently priced ceiling by %s", new(big.Int).Neg(headroom))
+	}
+	return headroom
 }
 
 func decimalRateAmountOut(t *testing.T, amountIn *big.Int, rate string, inputDecimals, outputDecimals uint8) *big.Int {

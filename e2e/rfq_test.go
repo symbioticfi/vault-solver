@@ -83,7 +83,7 @@ func testRFQ(t *testing.T, testEnv *testEnvironment) {
 	}
 
 	user := addressForKey(t, anvilDeployerKey)
-	amount := new(big.Int).Mul(big.NewInt(23), pow10(18))
+	amount := rfqInputAmount(testEnv.variant, testEnv.tokenDecimals(t, manifest.Tokens.DefaultInput))
 	balanceBefore := testEnv.balanceOf(t, manifest.Tokens.DefaultOutput, user)
 	backendAPI := strings.TrimRight(testEnv.backendURL, "/") + "/api/v1"
 	var approval rfqApprovalResponse
@@ -199,8 +199,8 @@ func testRFQ(t *testing.T, testEnv *testEnvironment) {
 
 	var discountID string
 	if testEnv.variant == "external" {
-		if len(settlement.direct) == 0 || len(settlement.discounts) != 0 {
-			t.Fatalf("RFQ external routes = %d direct, %d discount", len(settlement.direct), len(settlement.discounts))
+		if len(settlement.direct) < 2 || len(settlement.discounts) != 0 {
+			t.Fatalf("RFQ external routes = %d direct, %d discount; want a capacity-driven direct split", len(settlement.direct), len(settlement.discounts))
 		}
 	} else {
 		if len(settlement.direct) != 0 || len(settlement.discounts) == 0 {
@@ -228,6 +228,17 @@ func testRFQ(t *testing.T, testEnv *testEnvironment) {
 		discountID,
 		mathResult.outputAmount,
 		mathResult.roundingHeadroom,
+	)
+}
+
+func rfqInputAmount(variant string, decimals uint8) *big.Int {
+	wholeTokens := int64(23)
+	if variant == "external" {
+		wholeTokens = 800
+	}
+	return new(big.Int).Add(
+		new(big.Int).Mul(big.NewInt(wholeTokens), pow10(decimals)),
+		big.NewInt(17),
 	)
 }
 
@@ -273,6 +284,9 @@ func verifyRFQSettlementMath(
 ) rfqMathResult {
 	t.Helper()
 	amountIn := parseBig(t, order.Input.Amount)
+	if settlement.order.Request.AmountIn.Cmp(amountIn) != 0 {
+		t.Fatalf("RFQ signed input = %s, want backend input %s", settlement.order.Request.AmountIn, amountIn)
+	}
 	outputAmount := new(big.Int)
 	for _, output := range order.Outputs {
 		outputAmount.Add(outputAmount, parseBig(t, output.Amount))
@@ -312,8 +326,8 @@ func verifyRFQSettlementMath(
 			gross := testEnv.adapterAmountOut(t, route.Adapter, testEnv.manifest.Tokens.DefaultInput, route.Swap.AmountIn)
 			discount := testEnv.adapterMinDiscount(t, route.Adapter, testEnv.manifest.Tokens.DefaultInput)
 			executable := discountedAmountOut(gross, discount)
-			if route.Swap.AmountOut.Cmp(executable) != 0 {
-				t.Fatalf("RFQ route %s output = %s, want %s", route.Adapter, route.Swap.AmountOut, executable)
+			if route.Swap.AmountOut.Cmp(executable) > 0 {
+				t.Fatalf("RFQ route %s output = %s, exceeds executable %s", route.Adapter, route.Swap.AmountOut, executable)
 			}
 			executableOutput.Add(executableOutput, executable)
 			routedOutput.Add(routedOutput, route.Swap.AmountOut)
@@ -321,7 +335,11 @@ func verifyRFQSettlementMath(
 		if routedOutput.Cmp(finalOutput) != 0 {
 			t.Fatalf("RFQ routed output = %s, want %s", routedOutput, finalOutput)
 		}
-		return rfqMathResult{outputAmount: outputAmount, roundingHeadroom: new(big.Int).Sub(executableOutput, finalOutput)}
+		headroom := new(big.Int).Sub(executableOutput, finalOutput)
+		if headroom.Sign() <= 0 {
+			t.Fatalf("RFQ split output has non-positive rounding headroom %s", headroom)
+		}
+		return rfqMathResult{outputAmount: outputAmount, roundingHeadroom: headroom}
 	}
 
 	if len(settlement.discounts) != 1 {
@@ -339,5 +357,9 @@ func verifyRFQSettlementMath(
 	if finalOutput.Cmp(conservativeOutput) != 0 {
 		t.Fatalf("RFQ discount output = %s, want conservative %s (executable %s)", finalOutput, conservativeOutput, executableOutput)
 	}
-	return rfqMathResult{outputAmount: outputAmount, roundingHeadroom: new(big.Int).Sub(executableOutput, finalOutput)}
+	headroom := new(big.Int).Sub(executableOutput, finalOutput)
+	if headroom.Sign() <= 0 {
+		t.Fatalf("RFQ conservative discount output has non-positive rounding headroom %s", headroom)
+	}
+	return rfqMathResult{outputAmount: outputAmount, roundingHeadroom: headroom}
 }

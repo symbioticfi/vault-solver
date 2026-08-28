@@ -84,14 +84,19 @@ type oevSizingSnapshot struct {
 	loanDecimals       uint8
 }
 
+type oevTestMarket struct {
+	scenario oevScenario
+	sizing   oevSizingSnapshot
+}
+
 func testOEV(t *testing.T, testEnv *testEnvironment) {
 	t.Helper()
 	if testEnv.variant != "protocol" {
 		t.Fatalf("redstoneoev variant = %q, want protocol", testEnv.variant)
 	}
 	manifest := testEnv.manifest.OEV
-	if manifest.Executor == (common.Address{}) || manifest.Callback == (common.Address{}) || len(manifest.Markets) == 0 {
-		t.Fatal("OEV deployment manifest is incomplete")
+	if manifest.Executor == (common.Address{}) || manifest.Callback == (common.Address{}) || len(manifest.Markets) < 2 {
+		t.Fatal("OEV deployment manifest must contain at least two markets")
 	}
 
 	var health struct {
@@ -107,28 +112,20 @@ func testOEV(t *testing.T, testEnv *testEnvironment) {
 	verifyOEVGraphQL(t, testEnv, len(manifest.Markets))
 	metricsBefore := getMetrics(t, testEnv)
 
-	var scenarioResponse struct {
-		Scenario oevScenario `json:"scenario"`
-	}
-	status := testEnv.postJSON(t, testEnv.fixtureURL+"/scenario/prepare-liquidatable", map[string]string{
-		"marketId": manifest.Markets[0].ID.Hex(),
-	}, &scenarioResponse)
-	if status != http.StatusOK {
-		t.Fatalf("prepare OEV scenario status = %d", status)
-	}
-	scenario := scenarioResponse.Scenario
-	borrowShares := parseBig(t, scenario.BorrowShares)
-	healthyLimit := parseBig(t, scenario.HealthyBorrowLimit)
-	auctionLimit := parseBig(t, scenario.AuctionBorrowLimit)
-	if borrowShares.Cmp(auctionLimit) <= 0 || borrowShares.Cmp(healthyLimit) >= 0 {
-		t.Fatalf("OEV scenario borrow=%s auctionLimit=%s healthyLimit=%s", borrowShares, auctionLimit, healthyLimit)
+	markets := make([]oevTestMarket, len(manifest.Markets))
+	marketIDs := make([]string, len(manifest.Markets))
+	for index, market := range manifest.Markets {
+		markets[index].scenario = prepareOEVScenario(t, testEnv, market)
+		marketIDs[index] = market.ID.Hex()
 	}
 	time.Sleep(12 * time.Second)
+	for index := range markets {
+		markets[index].sizing = captureOEVSizing(t, testEnv, markets[index].scenario)
+	}
 
-	sizing := captureOEVSizing(t, testEnv, scenario)
 	var created oevCreatedResponse
-	status = testEnv.postJSON(t, testEnv.fixtureURL+"/auction", map[string]any{
-		"marketIds": []string{scenario.MarketID.Hex()},
+	status := testEnv.postJSON(t, testEnv.fixtureURL+"/auction", map[string]any{
+		"marketIds": marketIDs,
 	}, &created)
 	if status != http.StatusOK || created.Auction.ID == "" {
 		t.Fatalf("create OEV auction status = %d, id = %q", status, created.Auction.ID)
@@ -159,15 +156,14 @@ func testOEV(t *testing.T, testEnv *testEnvironment) {
 		return errors.New("auction missing from state")
 	})
 
-	mathResult := verifyOEVSettlement(t, testEnv, scenario, sizing, settled)
+	mathResult := verifyOEVSettlement(t, testEnv, markets, settled)
 	verifyOEVMetrics(t, testEnv, metricsBefore)
 	t.Logf(
-		"OEV flow auction=%s tx=%s bid=%s seized=%s repaid=%s profit=%s",
+		"OEV flow auction=%s tx=%s bid=%s legs=%d profit=%s",
 		settled.ID,
 		settled.TxHash,
 		mathResult.bid,
-		mathResult.seized,
-		mathResult.repaid,
+		mathResult.legs,
 		mathResult.profit,
 	)
 }
@@ -212,6 +208,35 @@ func verifyOEVGraphQL(t *testing.T, testEnv *testEnvironment, marketCount int) {
 	if status != http.StatusOK || len(response.Data.Markets.Items) < marketCount {
 		t.Fatalf("OEV GraphQL status=%d markets=%d, want at least %d", status, len(response.Data.Markets.Items), marketCount)
 	}
+}
+
+func prepareOEVScenario(t *testing.T, testEnv *testEnvironment, market oevMarket) oevScenario {
+	t.Helper()
+	var response struct {
+		Scenario oevScenario `json:"scenario"`
+	}
+	status := testEnv.postJSON(t, testEnv.fixtureURL+"/scenario/prepare-liquidatable", map[string]string{
+		"marketId": market.ID.Hex(),
+	}, &response)
+	if status != http.StatusOK {
+		t.Fatalf("prepare OEV scenario %s status = %d", market.ID, status)
+	}
+	scenario := response.Scenario
+	borrowShares := parseBig(t, scenario.BorrowShares)
+	healthyLimit := parseBig(t, scenario.HealthyBorrowLimit)
+	auctionLimit := parseBig(t, scenario.AuctionBorrowLimit)
+	if scenario.MarketID != market.ID || scenario.Borrower != market.Borrower ||
+		borrowShares.Cmp(auctionLimit) <= 0 || borrowShares.Cmp(healthyLimit) >= 0 {
+		t.Fatalf(
+			"OEV scenario market=%s borrower=%s borrow=%s auctionLimit=%s healthyLimit=%s",
+			scenario.MarketID,
+			scenario.Borrower,
+			borrowShares,
+			auctionLimit,
+			healthyLimit,
+		)
+	}
+	return scenario
 }
 
 func captureOEVSizing(t *testing.T, testEnv *testEnvironment, scenario oevScenario) oevSizingSnapshot {
@@ -282,16 +307,14 @@ func captureOEVSizing(t *testing.T, testEnv *testEnvironment, scenario oevScenar
 
 type oevMathResult struct {
 	bid    *big.Int
-	seized *big.Int
-	repaid *big.Int
+	legs   int
 	profit *big.Int
 }
 
 func verifyOEVSettlement(
 	t *testing.T,
 	testEnv *testEnvironment,
-	scenario oevScenario,
-	sizing oevSizingSnapshot,
+	markets []oevTestMarket,
 	auction oevAuction,
 ) oevMathResult {
 	t.Helper()
@@ -312,32 +335,16 @@ func verifyOEVSettlement(
 	if common.Hash(operation.Auth.AuctionKey) != expectedAuctionKey || auction.Solve.Data.OperationCallback != testEnv.manifest.OEV.Callback {
 		t.Fatalf("OEV operation envelope key=%s callback=%s", common.Hash(operation.Auth.AuctionKey), auction.Solve.Data.OperationCallback)
 	}
-	if len(operation.Legs) != 1 {
-		t.Fatalf("OEV operation has %d legs, want 1", len(operation.Legs))
-	}
-	leg := operation.Legs[0]
-	if common.Hash(leg.MarketId) != scenario.MarketID || leg.Borrower != scenario.Borrower {
-		t.Fatalf("OEV leg targets market=%s borrower=%s", common.Hash(leg.MarketId), leg.Borrower)
+	if len(operation.Legs) != len(markets) {
+		t.Fatalf("OEV operation has %d legs, want %d", len(operation.Legs), len(markets))
 	}
 
-	price := parseBig(t, scenario.AuctionPrice)
-	debtClamp := maxSeizeForFullDebt(
-		sizing.position.BorrowShares,
-		price,
-		sizing.params.Lltv,
-		sizing.market.TotalBorrowAssets,
-		sizing.market.TotalBorrowShares,
-	)
-	liquidityClamp := collateralForBudget(
-		sizing.maxAssets,
-		sizing.maxRate,
-		sizing.collateralDecimals,
-		sizing.loanDecimals,
-		testEnv.manifest.OEV.Sizing.SwapHaircutBPS,
-	)
-	expectedMaxSeize := minBigInt(sizing.position.Collateral, minBigInt(debtClamp, liquidityClamp))
-	if leg.MaxSeizeAssets.Cmp(expectedMaxSeize) != 0 {
-		t.Fatalf("OEV max seize = %s, want %s (debt=%s liquidity=%s)", leg.MaxSeizeAssets, expectedMaxSeize, debtClamp, liquidityClamp)
+	marketsByID := make(map[common.Hash]oevTestMarket, len(markets))
+	for _, market := range markets {
+		if _, exists := marketsByID[market.scenario.MarketID]; exists {
+			t.Fatalf("duplicate OEV scenario market %s", market.scenario.MarketID)
+		}
+		marketsByID[market.scenario.MarketID] = market
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -346,39 +353,108 @@ func verifyOEVSettlement(
 	if err != nil {
 		t.Fatalf("read OEV receipt: %v", err)
 	}
-	legResult, bundleResult, payBidResult := decodeOEVEvents(t, testEnv.manifest.OEV.Callback, receipt.Logs)
-	status := new(big.Int).And(new(big.Int).Rsh(new(big.Int).Set(legResult.Code), 8), big.NewInt(0xff)).Int64()
-	reason := new(big.Int).And(new(big.Int).Set(legResult.Code), big.NewInt(0xff)).Int64()
-	if status != 1 || reason != 0 || legResult.SeizedAssets.Cmp(expectedMaxSeize) != 0 {
-		t.Fatalf("OEV leg result status=%d reason=%d seized=%s want=%s", status, reason, legResult.SeizedAssets, expectedMaxSeize)
+	legResults, bundleResult, payBidResult := decodeOEVEvents(t, testEnv.manifest.OEV.Callback, receipt.Logs)
+	if len(legResults) != len(markets) {
+		t.Fatalf("OEV receipt has %d leg results, want %d", len(legResults), len(markets))
 	}
-	expectedRepaid := repaidAssetsForSeize(
-		legResult.SeizedAssets,
-		price,
-		sizing.params.Lltv,
-		sizing.market.TotalBorrowAssets,
-		sizing.market.TotalBorrowShares,
-	)
-	if legResult.RepaidAssets.Cmp(expectedRepaid) != 0 {
-		t.Fatalf("OEV repaid assets = %s, want %s", legResult.RepaidAssets, expectedRepaid)
+	resultsByMarket := make(map[common.Hash]*callbackbinding.SymbioticOevSolverLegResult, len(legResults))
+	for _, result := range legResults {
+		marketID := common.Hash(result.MarketId)
+		if _, exists := resultsByMarket[marketID]; exists {
+			t.Fatalf("duplicate OEV leg result for market %s", marketID)
+		}
+		resultsByMarket[marketID] = result
 	}
-	grossOutput := testEnv.adapterAmountOut(t, testEnv.manifest.OEV.Adapter, sizing.marketConfig.CollateralToken, legResult.SeizedAssets)
-	discount := testEnv.adapterMinDiscount(t, testEnv.manifest.OEV.Adapter, sizing.marketConfig.CollateralToken)
-	adapterOutput := discountedAmountOut(grossOutput, discount)
-	expectedProfit := new(big.Int).Sub(adapterOutput, legResult.RepaidAssets)
-	if legResult.ProfitLoan.Cmp(expectedProfit) != 0 || legResult.ProfitLoan.Cmp(leg.MinProfit) < 0 {
-		t.Fatalf("OEV profit = %s, want %s and at least %s", legResult.ProfitLoan, expectedProfit, leg.MinProfit)
+
+	totalProfit := new(big.Int)
+	seen := make(map[common.Hash]struct{}, len(operation.Legs))
+	for _, leg := range operation.Legs {
+		marketID := common.Hash(leg.MarketId)
+		market, exists := marketsByID[marketID]
+		if !exists || leg.Borrower != market.scenario.Borrower {
+			t.Fatalf("OEV leg targets unexpected market=%s borrower=%s", marketID, leg.Borrower)
+		}
+		if _, duplicate := seen[marketID]; duplicate {
+			t.Fatalf("duplicate OEV operation leg for market %s", marketID)
+		}
+		seen[marketID] = struct{}{}
+
+		scenario := market.scenario
+		sizing := market.sizing
+		price := parseBig(t, scenario.AuctionPrice)
+		debtClamp := maxSeizeForFullDebt(
+			sizing.position.BorrowShares,
+			price,
+			sizing.params.Lltv,
+			sizing.market.TotalBorrowAssets,
+			sizing.market.TotalBorrowShares,
+		)
+		liquidityClamp := collateralForBudget(
+			sizing.maxAssets,
+			sizing.maxRate,
+			sizing.collateralDecimals,
+			sizing.loanDecimals,
+			testEnv.manifest.OEV.Sizing.SwapHaircutBPS,
+		)
+		expectedMaxSeize := minBigInt(sizing.position.Collateral, minBigInt(debtClamp, liquidityClamp))
+		if leg.MaxSeizeAssets.Cmp(expectedMaxSeize) != 0 {
+			t.Fatalf("OEV market %s max seize = %s, want %s (collateral=%s debt=%s liquidity=%s)", marketID, leg.MaxSeizeAssets, expectedMaxSeize, sizing.position.Collateral, debtClamp, liquidityClamp)
+		}
+
+		legResult, exists := resultsByMarket[marketID]
+		if !exists {
+			t.Fatalf("missing OEV leg result for market %s", marketID)
+		}
+		status := new(big.Int).And(new(big.Int).Rsh(new(big.Int).Set(legResult.Code), 8), big.NewInt(0xff)).Int64()
+		reason := new(big.Int).And(new(big.Int).Set(legResult.Code), big.NewInt(0xff)).Int64()
+		if common.Hash(legResult.AuctionKey) != expectedAuctionKey || legResult.Borrower != scenario.Borrower ||
+			status != 1 || reason != 0 || legResult.SeizedAssets.Cmp(expectedMaxSeize) != 0 {
+			t.Fatalf("OEV market %s result key=%s borrower=%s status=%d reason=%d seized=%s want=%s", marketID, common.Hash(legResult.AuctionKey), legResult.Borrower, status, reason, legResult.SeizedAssets, expectedMaxSeize)
+		}
+		expectedRepaid := repaidAssetsForSeize(
+			legResult.SeizedAssets,
+			price,
+			sizing.params.Lltv,
+			sizing.market.TotalBorrowAssets,
+			sizing.market.TotalBorrowShares,
+		)
+		if legResult.RepaidAssets.Cmp(expectedRepaid) != 0 {
+			t.Fatalf("OEV market %s repaid assets = %s, want %s", marketID, legResult.RepaidAssets, expectedRepaid)
+		}
+		grossOutput := testEnv.adapterAmountOut(
+			t,
+			testEnv.manifest.OEV.Adapter,
+			sizing.marketConfig.CollateralToken,
+			legResult.SeizedAssets,
+		)
+		discount := testEnv.adapterMinDiscount(t, testEnv.manifest.OEV.Adapter, sizing.marketConfig.CollateralToken)
+		adapterOutput := discountedAmountOut(grossOutput, discount)
+		expectedProfit := new(big.Int).Sub(adapterOutput, legResult.RepaidAssets)
+		if legResult.ProfitLoan.Cmp(expectedProfit) != 0 || legResult.ProfitLoan.Cmp(leg.MinProfit) < 0 {
+			t.Fatalf("OEV market %s profit = %s, want %s and at least %s", marketID, legResult.ProfitLoan, expectedProfit, leg.MinProfit)
+		}
+		totalProfit.Add(totalProfit, legResult.ProfitLoan)
+		t.Logf(
+			"OEV leg market=%s seized=%s repaid=%s profit=%s",
+			marketID,
+			legResult.SeizedAssets,
+			legResult.RepaidAssets,
+			legResult.ProfitLoan,
+		)
+	}
+	if len(seen) != len(marketsByID) {
+		t.Fatalf("OEV operation covered %d of %d markets", len(seen), len(marketsByID))
 	}
 	if common.Hash(bundleResult.AuctionKey) != expectedAuctionKey ||
-		bundleResult.TotalProfitLoan.Cmp(legResult.ProfitLoan) != 0 ||
+		bundleResult.TotalProfitLoan.Cmp(totalProfit) != 0 ||
 		bundleResult.MinProfitLoan.Cmp(operation.Auth.MinBundleProfit) != 0 ||
 		bundleResult.TotalProfitLoan.Cmp(bundleResult.MinProfitLoan) < 0 || !bundleResult.BidAuthorized {
-		t.Fatalf("invalid OEV bundle result: %+v", bundleResult)
+		t.Fatalf("invalid OEV bundle result: %+v; independently summed profit=%s", bundleResult, totalProfit)
 	}
 	if common.Hash(payBidResult.AuctionKey) != expectedAuctionKey || payBidResult.BidAmount.Cmp(bid) != 0 || !payBidResult.Paid {
 		t.Fatalf("invalid OEV bid payment: %+v", payBidResult)
 	}
-	return oevMathResult{bid: bid, seized: legResult.SeizedAssets, repaid: legResult.RepaidAssets, profit: legResult.ProfitLoan}
+	return oevMathResult{bid: bid, legs: len(operation.Legs), profit: totalProfit}
 }
 
 func decodeOEVOperation(t *testing.T, data []byte) oevOperationData {
@@ -412,10 +488,10 @@ func decodeOEVEvents(
 	t *testing.T,
 	callback common.Address,
 	logs []*types.Log,
-) (*callbackbinding.SymbioticOevSolverLegResult, *callbackbinding.SymbioticOevSolverBundleResult, *callbackbinding.SymbioticOevSolverPayBidResult) {
+) ([]*callbackbinding.SymbioticOevSolverLegResult, *callbackbinding.SymbioticOevSolverBundleResult, *callbackbinding.SymbioticOevSolverPayBidResult) {
 	t.Helper()
 	binding := callbackbinding.NewSymbioticOevSolver()
-	var leg *callbackbinding.SymbioticOevSolverLegResult
+	var legs []*callbackbinding.SymbioticOevSolverLegResult
 	var bundle *callbackbinding.SymbioticOevSolverBundleResult
 	var bid *callbackbinding.SymbioticOevSolverPayBidResult
 	for _, entry := range logs {
@@ -423,10 +499,7 @@ func decodeOEVEvents(
 			continue
 		}
 		if event, err := binding.UnpackLegResultEvent(entry); err == nil {
-			if leg != nil {
-				t.Fatal("multiple OEV LegResult events")
-			}
-			leg = event
+			legs = append(legs, event)
 			continue
 		}
 		if event, err := binding.UnpackBundleResultEvent(entry); err == nil {
@@ -443,10 +516,10 @@ func decodeOEVEvents(
 			bid = event
 		}
 	}
-	if leg == nil || bundle == nil || bid == nil {
-		t.Fatalf("missing OEV events: leg=%t bundle=%t bid=%t", leg != nil, bundle != nil, bid != nil)
+	if len(legs) == 0 || bundle == nil || bid == nil {
+		t.Fatalf("missing OEV events: legs=%d bundle=%t bid=%t", len(legs), bundle != nil, bid != nil)
 	}
-	return leg, bundle, bid
+	return legs, bundle, bid
 }
 
 func verifyOEVMetrics(t *testing.T, testEnv *testEnvironment, baseline string) {

@@ -89,7 +89,8 @@ func testThreeF(t *testing.T, testEnv *testEnvironment) {
 		t.Fatalf("3f expected return %s exceeds maximum %s", expectedReturn, maximumReturn)
 	}
 
-	consumedPrincipal := mulDivDown(offerAmount, big.NewInt(5_000), big.NewInt(bpsScale))
+	consumedPrincipal := new(big.Int).Add(new(big.Int).Div(offerAmount, big.NewInt(2)), big.NewInt(1))
+	verifyThreeFPartialYieldSafety(t, offerAmount, expectedReturn, minimumYieldPPM, consumedPrincipal)
 	consumedYield := proratedYield(expectedReturn, consumedPrincipal, offerAmount)
 	minimumConsumedYield := requiredYield(consumedPrincipal, minimumYieldPPM)
 	if consumedPrincipal.Sign() <= 0 || consumedPrincipal.Cmp(offerAmount) >= 0 || consumedYield.Cmp(minimumConsumedYield) < 0 {
@@ -161,6 +162,40 @@ func testThreeF(t *testing.T, testEnv *testEnvironment) {
 		consumedPrincipal,
 		consumedYield,
 	)
+}
+
+func verifyThreeFPartialYieldSafety(
+	t *testing.T,
+	principal, expectedReturn, minimumYieldPPM, selectedPrincipal *big.Int,
+) {
+	t.Helper()
+	margin := mulDivUp(principal, big.NewInt(1), big.NewInt(ppmScale))
+	if margin.Cmp(big.NewInt(2)) < 0 {
+		margin.SetInt64(2)
+	}
+	guaranteeThreshold := mulDivUp(principal, big.NewInt(1), margin)
+	samples := []struct {
+		name      string
+		principal *big.Int
+	}{
+		{name: "guarantee-threshold", principal: guaranteeThreshold},
+		{name: "threshold-plus-one", principal: new(big.Int).Add(guaranteeThreshold, big.NewInt(1))},
+		{name: "rounding-boundary", principal: selectedPrincipal},
+		{name: "almost-full", principal: new(big.Int).Sub(principal, big.NewInt(1))},
+	}
+	for _, sample := range samples {
+		consumedYield := proratedYield(expectedReturn, sample.principal, principal)
+		minimumYield := requiredYield(sample.principal, minimumYieldPPM)
+		if consumedYield.Cmp(minimumYield) < 0 {
+			t.Fatalf("3f %s partial yield = %s, want at least %s for principal %s", sample.name, consumedYield, minimumYield, sample.principal)
+		}
+	}
+
+	floorExactYield := proratedYield(minYieldReturn(principal, minimumYieldPPM), selectedPrincipal, principal)
+	selectedMinimum := requiredYield(selectedPrincipal, minimumYieldPPM)
+	if floorExactYield.Cmp(selectedMinimum) >= 0 {
+		t.Fatalf("3f rounding fixture does not distinguish floor-exact yield %s from required %s", floorExactYield, selectedMinimum)
+	}
 }
 
 func packFixtureMint(t *testing.T, recipient common.Address, amount *big.Int) []byte {

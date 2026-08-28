@@ -87,7 +87,8 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 
 	user := addressForKey(t, anvilDeployerKey)
 	balanceBefore := testEnv.balanceOf(t, manifest.TokenOut, user)
-	inputAmount := pow10(18)
+	inputUnit := pow10(testEnv.tokenDecimals(t, manifest.TokenIn))
+	inputAmount := new(big.Int).Add(inputUnit, big.NewInt(17))
 	var created uniswapCreatedOrder
 	status := testEnv.requestJSON(
 		t,
@@ -211,6 +212,10 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 	if fillOutput.Cmp(expectedRouteOutput) != 0 {
 		t.Fatalf("UniswapX route output = %s, want %s", fillOutput, expectedRouteOutput)
 	}
+	executionSurplus := new(big.Int).Sub(fillOutput, hardOutput)
+	if executionSurplus.Sign() < 0 {
+		t.Fatalf("UniswapX execution output is %s below the signed order output", new(big.Int).Neg(executionSurplus))
+	}
 
 	var restricted *manifestToken
 	for index := range testEnv.manifest.Tokens.Input {
@@ -232,7 +237,7 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		"swapper":         common.Address{}.Hex(),
 		"tokenIn":         restricted.Address.Hex(),
 		"tokenOut":        manifest.TokenOut.Hex(),
-		"amount":          new(big.Int).Mul(big.NewInt(10), pow10(18)).String(),
+		"amount":          new(big.Int).Mul(big.NewInt(10), pow10(restricted.Decimals)).String(),
 		"type":            "EXACT_INPUT",
 		"numOutputs":      1,
 		"protocol":        "v1",
@@ -241,14 +246,33 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		t.Fatalf("UniswapX restricted quote status = %d, want 204", restrictedStatus)
 	}
 
+	belowMinimumID := randomUUID(t)
+	belowMinimumStatus := testEnv.postJSON(t, testEnv.quoteURL, map[string]any{
+		"requestId":       belowMinimumID,
+		"quoteId":         belowMinimumID,
+		"tokenInChainId":  testEnv.manifest.Chain.ID,
+		"tokenOutChainId": testEnv.manifest.Chain.ID,
+		"swapper":         common.Address{}.Hex(),
+		"tokenIn":         manifest.TokenIn.Hex(),
+		"tokenOut":        manifest.TokenOut.Hex(),
+		"amount":          new(big.Int).Sub(inputUnit, big.NewInt(1)).String(),
+		"type":            "EXACT_INPUT",
+		"numOutputs":      1,
+		"protocol":        "v1",
+	}, nil)
+	if belowMinimumStatus != http.StatusNoContent {
+		t.Fatalf("UniswapX below-minimum quote status = %d, want 204", belowMinimumStatus)
+	}
+
 	t.Logf(
-		"UniswapX %s fill order=%s tx=%s adapter=%s discount=%s output=%s",
+		"UniswapX %s fill order=%s tx=%s adapter=%s discount=%s output=%s surplus=%s",
 		testEnv.variant,
 		created.Order.OrderHash,
 		filled.TxHash,
 		routeAdapter,
 		discountID,
 		fillOutput,
+		executionSurplus,
 	)
 }
 
