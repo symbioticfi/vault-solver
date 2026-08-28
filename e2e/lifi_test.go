@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -98,13 +97,12 @@ func testLifi(t *testing.T, testEnv *testEnvironment) {
 
 	verifyLifiQuoteRanges(t, quote)
 	rangeQuote := quote.Ranges[0]
-	minimumInput := parseBig(t, rangeQuote.MinAmount)
-	maximumInput := parseBig(t, rangeQuote.MaxAmount)
-	amountIn := new(big.Int).Sub(maximumInput, big.NewInt(1))
-	if amountIn.Cmp(minimumInput) < 0 {
-		amountIn.Set(maximumInput)
+	amountIn := parseBig(t, rangeQuote.MaxAmount)
+	rate, ok := parseFixed(rangeQuote.Quote, 18)
+	if !ok {
+		t.Fatalf("invalid LI.FI quote rate %q", rangeQuote.Quote)
 	}
-	amountOut := decimalRateAmountOut(t, amountIn, rangeQuote.Quote, quote.FromDecimals, quote.ToDecimals)
+	amountOut := amountOutForRate(amountIn, rate, quote.FromDecimals, quote.ToDecimals)
 	if amountIn.Sign() <= 0 || amountOut.Sign() <= 0 {
 		t.Fatalf("LI.FI quote produced input=%s output=%s", amountIn, amountOut)
 	}
@@ -146,15 +144,15 @@ func testLifi(t *testing.T, testEnv *testEnvironment) {
 
 	var discountID string
 	if testEnv.variant == "internal" {
-		for _, advertised := range discounts {
-			terms := redemption.discount
-			if advertised.Adapter == redemption.adapter && advertised.Token == terms.TokenToRedeem &&
-				advertised.Signer == terms.Signer && advertised.Discount == terms.Discount.String() &&
-				advertised.Deadline == terms.Deadline.Uint64() {
-				discountID = advertised.DiscountID
-				break
-			}
-		}
+		terms := redemption.discount
+		discountID = advertisedDiscountID(
+			discounts,
+			redemption.adapter,
+			terms.TokenToRedeem,
+			terms.Signer,
+			terms.Discount.String(),
+			terms.Deadline.Uint64(),
+		)
 		if discountID == "" {
 			t.Fatal("LI.FI fill used discount terms not advertised by backend")
 		}
@@ -223,7 +221,6 @@ func verifyLifiRegistration(t *testing.T, testEnv *testEnvironment, executorAddr
 }
 
 type openedLifiOrder struct {
-	order            inputsettler.StandardOrder
 	orderID          [32]byte
 	openReceiptBlock *big.Int
 }
@@ -291,7 +288,7 @@ func openLifiOrder(
 	if !isHTTPSuccess(status) || delivery.Delivered <= 0 {
 		t.Fatalf("LI.FI order delivery status = %d, delivered = %d", status, delivery.Delivered)
 	}
-	return openedLifiOrder{order: order, orderID: orderID, openReceiptBlock: openReceipt.BlockNumber}
+	return openedLifiOrder{orderID: orderID, openReceiptBlock: openReceipt.BlockNumber}
 }
 
 func findLifiFill(
@@ -346,14 +343,13 @@ func findLifiFill(
 		}
 		routes := make([]lifiRedemption, 0, len(direct)+len(discounts))
 		for _, route := range direct {
-			routes = append(routes, lifiRedemption{adapter: route.Adapter, kind: "direct", amountIn: route.AmountIn})
+			routes = append(routes, lifiRedemption{adapter: route.Adapter, kind: "direct"})
 		}
 		for _, route := range discounts {
 			terms := route.DiscountSwap.Discount
 			routes = append(routes, lifiRedemption{
 				adapter:  route.Adapter,
 				kind:     "discount",
-				amountIn: route.AmountIn,
 				discount: &terms,
 			})
 		}
@@ -449,24 +445,6 @@ func verifyLifiMath(
 		t.Fatalf("LI.FI range output exceeds its independently priced ceiling by %s", new(big.Int).Neg(headroom))
 	}
 	return headroom
-}
-
-func decimalRateAmountOut(t *testing.T, amountIn *big.Int, rate string, inputDecimals, outputDecimals uint8) *big.Int {
-	t.Helper()
-	parts := strings.Split(rate, ".")
-	if len(parts) > 2 {
-		t.Fatalf("invalid decimal rate %q", rate)
-	}
-	fraction := ""
-	if len(parts) == 2 {
-		fraction = parts[1]
-	}
-	digits := parts[0] + fraction
-	parsed := parseBig(t, digits)
-	numerator := new(big.Int).Mul(amountIn, parsed)
-	numerator.Mul(numerator, pow10(outputDecimals))
-	denominator := new(big.Int).Mul(pow10(uint8(len(fraction))), pow10(inputDecimals))
-	return numerator.Div(numerator, denominator)
 }
 
 func lifiWireOrder(order inputsettler.StandardOrder) map[string]any {

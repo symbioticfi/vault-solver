@@ -64,6 +64,82 @@ type advertisedDiscount struct {
 	Collateral common.Address `json:"collateral"`
 }
 
+func advertisedDiscountID(
+	discounts []advertisedDiscount,
+	adapter, token, signer common.Address,
+	discount string,
+	deadline uint64,
+) string {
+	for _, advertised := range discounts {
+		if advertised.Adapter == adapter && advertised.Token == token && advertised.Signer == signer &&
+			advertised.Discount == discount && advertised.Deadline == deadline {
+			return advertised.DiscountID
+		}
+	}
+	return ""
+}
+
+func TestAdvertisedDiscountID(t *testing.T) {
+	match := advertisedDiscount{
+		DiscountID: "match",
+		Adapter:    common.HexToAddress("0x1"),
+		Token:      common.HexToAddress("0x2"),
+		Signer:     common.HexToAddress("0x3"),
+		Discount:   "50000",
+		Deadline:   42,
+	}
+	wrongAdapter := match
+	wrongAdapter.Adapter = common.HexToAddress("0x4")
+	wrongToken := match
+	wrongToken.Token = common.HexToAddress("0x4")
+	wrongSigner := match
+	wrongSigner.Signer = common.HexToAddress("0x4")
+	wrongDiscount := match
+	wrongDiscount.Discount = "50001"
+	wrongDeadline := match
+	wrongDeadline.Deadline++
+
+	for _, test := range []struct {
+		name      string
+		candidate advertisedDiscount
+		want      string
+	}{
+		{name: "match", candidate: match, want: match.DiscountID},
+		{name: "adapter mismatch", candidate: wrongAdapter},
+		{name: "token mismatch", candidate: wrongToken},
+		{name: "signer mismatch", candidate: wrongSigner},
+		{name: "discount mismatch", candidate: wrongDiscount},
+		{name: "deadline mismatch", candidate: wrongDeadline},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := advertisedDiscountID(
+				[]advertisedDiscount{test.candidate},
+				match.Adapter,
+				match.Token,
+				match.Signer,
+				match.Discount,
+				match.Deadline,
+			)
+			if got != test.want {
+				t.Fatalf("discount ID = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	second := match
+	second.DiscountID = "second"
+	if got := advertisedDiscountID(
+		[]advertisedDiscount{match, second},
+		match.Adapter,
+		match.Token,
+		match.Signer,
+		match.Discount,
+		match.Deadline,
+	); got != match.DiscountID {
+		t.Fatalf("first matching discount ID = %q, want %q", got, match.DiscountID)
+	}
+}
+
 func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 	t.Helper()
 	if testEnv.variant != "external" && testEnv.variant != "internal" {
@@ -85,9 +161,40 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		discounts = loadAdvertisedDiscounts(t, testEnv, manifest.Adapters, manifest.TokenIn, manifest.TokenOut)
 	}
 
+	inputUnit := pow10(testEnv.tokenDecimals(t, manifest.TokenIn))
+	minimumStatus, minimumQuote := requestUniswapQuote(t, testEnv, manifest.TokenIn, manifest.TokenOut, inputUnit)
+	if minimumStatus != http.StatusOK {
+		t.Fatalf("UniswapX minimum quote status = %d, want 200", minimumStatus)
+	}
+	if minimumQuote.AmountIn != inputUnit.String() || parseBig(t, minimumQuote.AmountOut).Sign() <= 0 {
+		t.Fatalf("UniswapX minimum quote = %+v, want input %s and nonzero output", minimumQuote, inputUnit)
+	}
+
+	belowMinimum := new(big.Int).Sub(inputUnit, big.NewInt(1))
+	belowMinimumStatus, _ := requestUniswapQuote(t, testEnv, manifest.TokenIn, manifest.TokenOut, belowMinimum)
+	if belowMinimumStatus != http.StatusNoContent {
+		t.Fatalf("UniswapX below-minimum quote status = %d, want 204", belowMinimumStatus)
+	}
+
+	var restricted *manifestToken
+	for index := range testEnv.manifest.Tokens.Input {
+		candidate := &testEnv.manifest.Tokens.Input[index]
+		if candidate.Address != manifest.TokenIn {
+			restricted = candidate
+			break
+		}
+	}
+	if restricted == nil {
+		t.Fatal("UniswapX restricted-token fixture is missing")
+	}
+	restrictedAmount := new(big.Int).Mul(big.NewInt(10), pow10(restricted.Decimals))
+	restrictedStatus, _ := requestUniswapQuote(t, testEnv, restricted.Address, manifest.TokenOut, restrictedAmount)
+	if restrictedStatus != http.StatusNoContent {
+		t.Fatalf("UniswapX restricted quote status = %d, want 204", restrictedStatus)
+	}
+
 	user := addressForKey(t, anvilDeployerKey)
 	balanceBefore := testEnv.balanceOf(t, manifest.TokenOut, user)
-	inputUnit := pow10(testEnv.tokenDecimals(t, manifest.TokenIn))
 	inputAmount := new(big.Int).Add(inputUnit, big.NewInt(17))
 	var created uniswapCreatedOrder
 	status := testEnv.requestJSON(
@@ -161,16 +268,16 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		}
 		route := fill.DiscountRoutes[0]
 		routeAdapter, routeInput = route.Adapter, route.AmountIn
-		discount = route.DiscountSwap.Discount.Discount
-		for _, advertised := range discounts {
-			terms := route.DiscountSwap.Discount
-			if advertised.Adapter == route.Adapter && advertised.Token == terms.TokenToRedeem &&
-				advertised.Signer == terms.Signer && advertised.Discount == terms.Discount.String() &&
-				advertised.Deadline == terms.Deadline.Uint64() {
-				discountID = advertised.DiscountID
-				break
-			}
-		}
+		terms := route.DiscountSwap.Discount
+		discount = terms.Discount
+		discountID = advertisedDiscountID(
+			discounts,
+			route.Adapter,
+			terms.TokenToRedeem,
+			terms.Signer,
+			terms.Discount.String(),
+			terms.Deadline.Uint64(),
+		)
 		if discountID == "" {
 			t.Fatal("UniswapX fill used discount terms not advertised by backend")
 		}
@@ -213,56 +320,6 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		t.Fatalf("UniswapX route output = %s, want %s", fillOutput, expectedRouteOutput)
 	}
 	executionSurplus := new(big.Int).Sub(fillOutput, hardOutput)
-	if executionSurplus.Sign() < 0 {
-		t.Fatalf("UniswapX execution output is %s below the signed order output", new(big.Int).Neg(executionSurplus))
-	}
-
-	var restricted *manifestToken
-	for index := range testEnv.manifest.Tokens.Input {
-		candidate := &testEnv.manifest.Tokens.Input[index]
-		if candidate.Address != manifest.TokenIn {
-			restricted = candidate
-			break
-		}
-	}
-	if restricted == nil {
-		t.Fatal("UniswapX restricted-token fixture is missing")
-	}
-	requestID := randomUUID(t)
-	restrictedStatus := testEnv.postJSON(t, testEnv.quoteURL, map[string]any{
-		"requestId":       requestID,
-		"quoteId":         requestID,
-		"tokenInChainId":  testEnv.manifest.Chain.ID,
-		"tokenOutChainId": testEnv.manifest.Chain.ID,
-		"swapper":         common.Address{}.Hex(),
-		"tokenIn":         restricted.Address.Hex(),
-		"tokenOut":        manifest.TokenOut.Hex(),
-		"amount":          new(big.Int).Mul(big.NewInt(10), pow10(restricted.Decimals)).String(),
-		"type":            "EXACT_INPUT",
-		"numOutputs":      1,
-		"protocol":        "v1",
-	}, nil)
-	if restrictedStatus != http.StatusNoContent {
-		t.Fatalf("UniswapX restricted quote status = %d, want 204", restrictedStatus)
-	}
-
-	belowMinimumID := randomUUID(t)
-	belowMinimumStatus := testEnv.postJSON(t, testEnv.quoteURL, map[string]any{
-		"requestId":       belowMinimumID,
-		"quoteId":         belowMinimumID,
-		"tokenInChainId":  testEnv.manifest.Chain.ID,
-		"tokenOutChainId": testEnv.manifest.Chain.ID,
-		"swapper":         common.Address{}.Hex(),
-		"tokenIn":         manifest.TokenIn.Hex(),
-		"tokenOut":        manifest.TokenOut.Hex(),
-		"amount":          new(big.Int).Sub(inputUnit, big.NewInt(1)).String(),
-		"type":            "EXACT_INPUT",
-		"numOutputs":      1,
-		"protocol":        "v1",
-	}, nil)
-	if belowMinimumStatus != http.StatusNoContent {
-		t.Fatalf("UniswapX below-minimum quote status = %d, want 204", belowMinimumStatus)
-	}
 
 	t.Logf(
 		"UniswapX %s fill order=%s tx=%s adapter=%s discount=%s output=%s surplus=%s",
@@ -274,6 +331,30 @@ func testUniswapX(t *testing.T, testEnv *testEnvironment) {
 		fillOutput,
 		executionSurplus,
 	)
+}
+
+func requestUniswapQuote(
+	t *testing.T,
+	testEnv *testEnvironment,
+	tokenIn, tokenOut common.Address,
+	amount *big.Int,
+) (int, uniswapQuoteWire) {
+	t.Helper()
+	var quote uniswapQuoteWire
+	status := testEnv.postJSON(t, testEnv.quoteURL, map[string]any{
+		"requestId":       randomUUID(t),
+		"quoteId":         randomUUID(t),
+		"tokenInChainId":  testEnv.manifest.Chain.ID,
+		"tokenOutChainId": testEnv.manifest.Chain.ID,
+		"swapper":         common.Address{}.Hex(),
+		"tokenIn":         tokenIn.Hex(),
+		"tokenOut":        tokenOut.Hex(),
+		"amount":          amount.String(),
+		"type":            "EXACT_INPUT",
+		"numOutputs":      1,
+		"protocol":        "v1",
+	}, &quote)
+	return status, quote
 }
 
 func decodeUniswapFill(

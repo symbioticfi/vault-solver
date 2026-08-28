@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -207,11 +208,7 @@ func (testEnv *testEnvironment) tokenDecimals(t *testing.T, address common.Addre
 
 func (testEnv *testEnvironment) getJSON(t *testing.T, url string, output any) int {
 	t.Helper()
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("build GET %s: %v", url, err)
-	}
-	return testEnv.doJSON(t, request, output)
+	return testEnv.requestJSON(t, http.MethodGet, url, nil, nil, output)
 }
 
 func (testEnv *testEnvironment) postJSON(t *testing.T, url string, input, output any) int {
@@ -267,6 +264,46 @@ func (testEnv *testEnvironment) doJSON(t *testing.T, request *http.Request, outp
 		}
 	}
 	return response.StatusCode
+}
+
+func TestGetJSON(t *testing.T) {
+	type requestSnapshot struct {
+		method         string
+		hasContentType bool
+		body           []byte
+	}
+	received := make(chan requestSnapshot, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, hasContentType := request.Header["Content-Type"]
+		received <- requestSnapshot{
+			method:         request.Method,
+			hasContentType: hasContentType,
+			body:           body,
+		}
+		writer.WriteHeader(http.StatusAccepted)
+		if _, err := io.WriteString(writer, `{"value":"ok"}`); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+
+	testEnv := testEnvironment{httpClient: server.Client()}
+	var output struct {
+		Value string `json:"value"`
+	}
+	status := testEnv.getJSON(t, server.URL, &output)
+	request := <-received
+	if status != http.StatusAccepted || output.Value != "ok" {
+		t.Fatalf("GET response status=%d value=%q", status, output.Value)
+	}
+	if request.method != http.MethodGet || request.hasContentType || len(request.body) != 0 {
+		t.Fatalf("GET request method=%s has-content-type=%t body=%q", request.method, request.hasContentType, request.body)
+	}
 }
 
 func decodeMethodInput(t *testing.T, metadata *bind.MetaData, data []byte, rawName string) []any {

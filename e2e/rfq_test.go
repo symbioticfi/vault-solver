@@ -207,14 +207,14 @@ func testRFQ(t *testing.T, testEnv *testEnvironment) {
 			t.Fatalf("RFQ internal routes = %d direct, %d discount", len(settlement.direct), len(settlement.discounts))
 		}
 		terms := settlement.discounts[0].DiscountSwap.Discount
-		for _, advertised := range discounts {
-			if advertised.Adapter == settlement.discounts[0].Adapter && advertised.Token == terms.TokenToRedeem &&
-				advertised.Signer == terms.Signer && advertised.Discount == terms.Discount.String() &&
-				advertised.Deadline == terms.Deadline.Uint64() {
-				discountID = advertised.DiscountID
-				break
-			}
-		}
+		discountID = advertisedDiscountID(
+			discounts,
+			settlement.discounts[0].Adapter,
+			terms.TokenToRedeem,
+			terms.Signer,
+			terms.Discount.String(),
+			terms.Deadline.Uint64(),
+		)
 		if discountID == "" {
 			t.Fatal("RFQ fill used discount terms not advertised by backend")
 		}

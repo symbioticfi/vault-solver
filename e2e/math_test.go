@@ -298,6 +298,32 @@ func TestIndependentSolverArithmetic(t *testing.T) {
 	})
 }
 
+func TestFixedRateAmountOut(t *testing.T) {
+	tests := []struct {
+		name           string
+		amountIn       string
+		rate           string
+		inputDecimals  uint8
+		outputDecimals uint8
+		want           string
+	}{
+		{name: "whole rate", amountIn: "2000000000000000000", rate: "3", inputDecimals: 18, outputDecimals: 18, want: "6000000000000000000"},
+		{name: "short fraction", amountIn: "7000000", rate: "1.25", inputDecimals: 6, outputDecimals: 18, want: "8750000000000000000"},
+		{name: "eighteen decimals", amountIn: "1000000000000000017", rate: "0.995999999999999998", inputDecimals: 18, outputDecimals: 18, want: "996000000000000014"},
+		{name: "rounding boundary", amountIn: "1000001", rate: "0.333333333333333333", inputDecimals: 6, outputDecimals: 6, want: "333333"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rate, ok := parseFixed(test.rate, 18)
+			if !ok {
+				t.Fatalf("parseFixed(%q) failed", test.rate)
+			}
+			amountIn := bigFromDecimal(t, test.amountIn)
+			assertBigEqual(t, amountOutForRate(amountIn, rate, test.inputDecimals, test.outputDecimals), test.want)
+		})
+	}
+}
+
 func bigFromDecimal(t *testing.T, value string) *big.Int {
 	t.Helper()
 	parsed, ok := new(big.Int).SetString(value, 10)
