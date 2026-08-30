@@ -41,19 +41,6 @@ func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
 // adapter whitelist source (see buildAdapterWhitelist) and the fill-plan recovery candidate universe.
 type recoveryVault = liquidlane.Adapter
 
-// readVaultInventories reads each adapter's fill-time views (paused, getMaxAssets(tokenIn),
-// getMaxRate(tokenIn)) in one multicall, using the startup-resolved Vault/Asset (decimals cached). Used
-// to build each fill plan from current state. Paused / failing / zero-liquidity adapters are dropped;
-// direct legs only. Mirrors readAdapterInventories in inventories.ts.
-func (r *reader) readVaultInventories(
-	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
-) ([]solverInventory, error) {
-	if len(vaults) == 0 {
-		return nil, nil
-	}
-	return r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
-}
-
 // readQuoteCandidates turns amount-independent inventory into current,
 // amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
 // belongs to the solver; strategies receive only the completed decision input.
@@ -177,12 +164,6 @@ func applyResolvedQuoteAdapters(
 	return out, nil
 }
 
-// resolveVaults returns a copy of the configured entries with each Vault (adapter.vault()) and Asset
-// (vault.asset()) resolved from chain at startup — config carries only adapter addresses, both fixed
-// for the adapter's lifetime. Returning a fresh slice (rather than mutating the input) keeps the
-// resolved fill-plan recovery universe independent of the config slice. Two batched multicalls (adapters'
-// vault(), then those vaults' asset()); an entry whose reads revert is left zero and skipped by
-// fill-time reads (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
 func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
 	adapters := make([]common.Address, len(vaults))
 	for i := range vaults {
@@ -213,15 +194,14 @@ func (r *reader) validateDirectAuthorization(
 	return nil
 }
 
-// readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
-// authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
-// current marketMaker value (including zero) has delegated via adapter.isFiller(marketMaker, executor).
-// Used at fill time so we never build inputs for an unauthorized adapter. Mirrors
-// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller).
+// readPermissionedVaultInventories reads current inventory for routes the executor may fill directly.
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 ) ([]solverInventory, error) {
-	base, err := r.readVaultInventories(ctx, tokenIn, vaults)
+	if len(vaults) == 0 {
+		return nil, nil
+	}
+	base, err := r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
 	if err != nil || len(base) == 0 {
 		return base, err
 	}
