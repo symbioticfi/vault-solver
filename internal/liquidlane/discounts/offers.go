@@ -60,19 +60,8 @@ func MatchInventories(
 		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
 			continue
 		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
-		}
-		if base.AdapterMinDiscount == nil || base.AdapterMinDiscount.Sign() < 0 ||
-			offer.Discount.Cmp(base.AdapterMinDiscount) < 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
-			})
+		if err := validateOfferEconomics(offer, base.MaxRate, base.AdapterMinDiscount); err != nil {
+			issues = append(issues, OfferIssue{DiscountID: offer.DiscountID.Hex(), Err: err})
 			continue
 		}
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
@@ -111,18 +100,8 @@ func AdvertisedFillQuotes(
 		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
 			continue
 		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
-		}
-		if base.MinDiscount == nil || base.MinDiscount.Sign() < 0 || offer.Discount.Cmp(base.MinDiscount) < 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
-			})
+		if err := validateOfferEconomics(offer, base.MaxRate, base.MinDiscount); err != nil {
+			issues = append(issues, OfferIssue{DiscountID: offer.DiscountID.Hex(), Err: err})
 			continue
 		}
 		amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
@@ -161,6 +140,16 @@ func AdvertisedFillQuotes(
 		})
 	}
 	return quotes, issues
+}
+
+func validateOfferEconomics(offer Offer, currentMaxRate, currentMinDiscount *big.Int) error {
+	if currentMaxRate == nil || currentMaxRate.Sign() <= 0 || offer.MaxRate.Cmp(currentMaxRate) > 0 {
+		return errors.New("advertised discount rate exceeds current adapter max rate")
+	}
+	if currentMinDiscount == nil || currentMinDiscount.Sign() < 0 || offer.Discount.Cmp(currentMinDiscount) < 0 {
+		return errors.New("advertised discount is below current adapter minimum")
+	}
+	return nil
 }
 
 type routeKey struct {
