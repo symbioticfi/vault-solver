@@ -44,24 +44,13 @@ func (d *Decimals) Get(ctx context.Context, token common.Address) (int, error) {
 	if len(res) != 1 || !res[0].Success {
 		return 0, errors.Errorf("erc20.decimals() reverted for %s", token)
 	}
-	v, err := decodeDecimals(res[0].ReturnData)
-	if err != nil {
-		return 0, err
-	}
-	d.store(token, v)
-	return v, nil
-}
-
-func (d *Decimals) store(token common.Address, v int) {
-	d.mu.Lock()
-	d.cache[token] = v
-	d.mu.Unlock()
-}
-
-func decodeDecimals(data []byte) (int, error) {
-	v, err := erc20B.UnpackDecimals(data)
+	v, err := erc20B.UnpackDecimals(res[0].ReturnData)
 	if err != nil {
 		return 0, errors.Errorf("unpack decimals: %w", err)
 	}
-	return int(v), nil
+	decimals := int(v)
+	d.mu.Lock()
+	d.cache[token] = decimals
+	d.mu.Unlock()
+	return decimals, nil
 }
