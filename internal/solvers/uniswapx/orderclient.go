@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/uniswapxservice"
@@ -272,7 +271,7 @@ func orderTerminalFromAPI(
 			chainID,
 		)
 	}
-	orderHash, err := decodeHash(order.OrderHash)
+	orderHash, err := parseHash(order.OrderHash)
 	if err != nil || orderHash == (common.Hash{}) {
 		return common.Hash{}, orderTerminal{}, errors.Errorf("invalid order hash %q", order.OrderHash)
 	}
@@ -283,7 +282,7 @@ func orderTerminalFromAPI(
 	terminal := orderTerminal{Status: string(order.OrderStatus)}
 	txHashValue, hasTxHash := order.GetTxHashOk()
 	if hasTxHash {
-		txHash, decodeErr := decodeHash(*txHashValue)
+		txHash, decodeErr := parseHash(*txHashValue)
 		if decodeErr != nil || txHash == (common.Hash{}) {
 			return common.Hash{}, orderTerminal{}, errors.Errorf("invalid transaction hash %q", *txHashValue)
 		}
@@ -300,17 +299,6 @@ func orderTerminalFromAPI(
 		)
 	}
 	return orderHash, terminal, nil
-}
-
-func decodeHash(value string) (common.Hash, error) {
-	decoded, err := hexutil.Decode(value)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if len(decoded) != common.HashLength {
-		return common.Hash{}, errors.Errorf("got %d bytes, want %d", len(decoded), common.HashLength)
-	}
-	return common.BytesToHash(decoded), nil
 }
 
 func orderEntryFromAPI(order *uniswapxservice.DutchV2OrderEntity) (orderEntry, error) {
