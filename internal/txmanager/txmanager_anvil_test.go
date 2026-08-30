@@ -36,6 +36,7 @@ func testAnvilReplacement(t *testing.T) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
+			TipGwei:             1,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 200 * time.Millisecond,
 			PendingTimeout:      5 * time.Second,
@@ -84,6 +85,7 @@ func testAnvilCancellation(t *testing.T) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
+			TipGwei:             1,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 5 * time.Second,
 			PendingTimeout:      300 * time.Millisecond,
