@@ -21,10 +21,9 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/default"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/default"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/webhook"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -140,10 +139,40 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config); err != nil {
+	if err := validateStrategyConfig(cfg.Strategy); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil
+}
+
+func validateStrategyConfig(spec StrategyConfig) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func newStrategy(spec StrategyConfig) (strategytypes.Strategy, error) {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown UniswapX strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -160,7 +189,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	strategy, err := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config)
+	strategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
 	}

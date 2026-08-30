@@ -7,7 +7,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/webhook"
@@ -71,7 +70,7 @@ func TestStrategySelectionCharacterization(t *testing.T) {
 			}
 
 			validationErr := validateConfig(node)
-			selected, selectionErr := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config)
+			selected, selectionErr := newStrategy(cfg.Strategy)
 			if (validationErr == nil) != (selectionErr == nil) {
 				t.Fatalf("validation error = %v, selection error = %v", validationErr, selectionErr)
 			}
@@ -96,7 +95,7 @@ func TestStrategySelectionCharacterization(t *testing.T) {
 			assertUniswapXStrategyType(t, selected, test.wantType)
 		})
 	}
-	if got, want := strategies.Registered(), []string{"default", "webhook"}; !slices.Equal(got, want) {
+	if got, want := strategyNames(), []string{"default", "webhook"}; !slices.Equal(got, want) {
 		t.Fatalf("strategy catalog = %v, want %v", got, want)
 	}
 
