@@ -45,7 +45,7 @@ type decisionState struct {
 }
 
 type decisionStateCache struct {
-	v atomic.Value // stores *decisionState
+	v atomic.Pointer[decisionState]
 }
 
 func (c *decisionStateCache) store(st decisionState) {
@@ -58,7 +58,7 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 	if v == nil {
 		return decisionState{}, false
 	}
-	st := *(v.(*decisionState))
+	st := *v
 	st.CallbackNative = cloneBig(st.CallbackNative)
 	return st, true
 }
