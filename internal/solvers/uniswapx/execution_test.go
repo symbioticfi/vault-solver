@@ -524,6 +524,8 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 
 func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	refreshes := make(chan struct{}, 2)
+	fixture.solver.refreshCh = refreshes
 	accepted := make(chan struct{}, 1)
 	fixture.txm.accepted = accepted
 	fixture.txm.busy = true
@@ -543,9 +545,10 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("fill was not accepted")
 	}
-	waitForExecutionCondition(t, func() bool {
-		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
-	})
+	waitForQuoteRefreshes(t, refreshes)
+	if fixture.solver.planningFills.Load() != 0 || fixture.solver.capacity.Len() != 1 {
+		t.Fatal("accepted fill did not publish its reservation and finish planning")
+	}
 	if !fixture.solver.quoteBlocked(time.Now().Unix()) {
 		t.Fatal("accepted transaction lifecycle did not block quoting after fill planning completed")
 	}
@@ -566,6 +569,8 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 
 func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	refreshes := make(chan struct{}, 2)
+	fixture.solver.refreshCh = refreshes
 	accepted := make(chan struct{}, 1)
 	fixture.txm.accepted = accepted
 	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
@@ -585,9 +590,10 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("fill was not accepted")
 	}
-	waitForExecutionCondition(t, func() bool {
-		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
-	})
+	waitForQuoteRefreshes(t, refreshes)
+	if fixture.solver.planningFills.Load() != 0 || fixture.solver.capacity.Len() != 1 {
+		t.Fatal("accepted fill did not publish its reservation and finish planning")
+	}
 	listenErr := errors.New("accept failed")
 	server := &http.Server{ReadHeaderTimeout: time.Second}
 	serveErr := fixture.solver.serveQuoteServer(runCtx, server, failingListener{err: listenErr})
@@ -718,16 +724,15 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	}
 }
 
-func waitForExecutionCondition(t *testing.T, condition func() bool) {
+func waitForQuoteRefreshes(t *testing.T, refreshes <-chan struct{}) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
+	for range 2 {
+		select {
+		case <-refreshes:
+		case <-time.After(time.Second):
+			t.Fatal("quote refresh was not requested")
 		}
-		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("execution condition was not met")
 }
 
 func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {
