@@ -89,7 +89,6 @@ type Deps struct {
 }
 
 type signer interface {
-	Address() common.Address
 	SignHash(common.Hash) ([]byte, error)
 }
 
