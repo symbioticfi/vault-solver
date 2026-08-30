@@ -75,7 +75,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	strategy := &executionTestStrategy{plan: &strategytypes.FillPlan{Routes: []strategytypes.FillRoute{{
 		RouteID: route.ID, CapacityID: route.CapacityID, Adapter: route.Adapter,
 		AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100), MinAmountOut: big.NewInt(90),
-		ReservedAmountOut: big.NewInt(100), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+		ReservedAmountOut: big.NewInt(100), DiscountID: new(common.HexToHash(testDiscountID)),
 	}}}}
 	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
 	termsDeadline := now.Add(50 * time.Second).Unix()
@@ -188,7 +188,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		{
 			RouteID: discountRoute.ID, CapacityID: discountRoute.CapacityID, Adapter: discountRoute.Adapter,
 			AmountIn: big.NewInt(40), ExpectedAmountOut: big.NewInt(40), MinAmountOut: big.NewInt(40),
-			ReservedAmountOut: big.NewInt(40), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+			ReservedAmountOut: big.NewInt(40), DiscountID: new(common.HexToHash(testDiscountID)),
 		},
 	}}}
 	fullDirect := liquidlane.FillQuote{
@@ -296,8 +296,6 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		t.Fatalf("packed split fill = %+v", packed)
 	}
 }
-
-func hashPointer(hash common.Hash) *common.Hash { return &hash }
 
 func (r *executionTestReader) Fill(
 	_ context.Context,
