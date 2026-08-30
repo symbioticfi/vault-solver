@@ -36,11 +36,6 @@ type orderRecord struct {
 	attempts  int
 }
 
-// queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
-type queuedOrder struct {
-	OrderID string
-}
-
 // store is the filler's in-memory operational state. The execution goroutine owns all live access;
 // accessors that expose records return clones so callers cannot mutate stored state.
 type store struct {
@@ -71,12 +66,12 @@ func (s *store) sweep() {
 // the order is live, and a deterministic one just re-fails cheaply via the pre-submit guards
 // (deadline / strategy-binding / filler checks fail before any tx is sent). Active and terminal states
 // (submitting / submitted / filled / expired) are left untouched so we never regress them.
-func (s *store) upsertQueued(in queuedOrder) {
+func (s *store) upsertQueued(orderID string) {
 	now := s.now()
-	rec, ok := s.orders[in.OrderID]
+	rec, ok := s.orders[orderID]
 	if !ok {
-		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued}
-		s.orders[in.OrderID] = rec
+		rec = &orderRecord{OrderID: orderID, Status: statusQueued}
+		s.orders[orderID] = rec
 	}
 	if rec.Status == statusFailed {
 		rec.Status = statusQueued

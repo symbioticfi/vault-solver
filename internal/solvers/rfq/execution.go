@@ -108,7 +108,7 @@ func (e *executionService) pollOpenOrders(ctx context.Context) error {
 	}
 	for i := range orders {
 		o := &orders[i]
-		e.store.upsertQueued(queuedOrder{OrderID: o.OrderID})
+		e.store.upsertQueued(o.OrderID)
 	}
 	if len(orders) > 0 {
 		e.log.V(1).Info("polled open orders", "count", len(orders))

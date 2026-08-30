@@ -12,10 +12,10 @@ import (
 func TestUpsertQueued_RearmsFailedOrder(t *testing.T) {
 	t.Parallel()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
-	st.upsertQueued(queuedOrder{OrderID: "o1"})
+	st.upsertQueued("o1")
 	st.markStatus("o1", statusFailed, common.Hash{}, "fill reverted")
 
-	st.upsertQueued(queuedOrder{OrderID: "o1"}) // backend still lists it open
+	st.upsertQueued("o1") // backend still lists it open
 
 	rec := testOrder(st)
 	if rec == nil || rec.Status != statusQueued {
@@ -32,10 +32,10 @@ func TestUpsertQueued_DoesNotRegressInFlightOrTerminal(t *testing.T) {
 	t.Parallel()
 	for _, status := range []orderStatus{statusSubmitting, statusSubmitted, statusFilled, statusExpired} {
 		st := newStore(func() time.Time { return time.Unix(0, 0) })
-		st.upsertQueued(queuedOrder{OrderID: "o1"})
+		st.upsertQueued("o1")
 		st.markStatus("o1", status, common.Hash{}, "")
 
-		st.upsertQueued(queuedOrder{OrderID: "o1"})
+		st.upsertQueued("o1")
 
 		if rec := testOrder(st); rec == nil || rec.Status != status {
 			t.Fatalf("status = %v, want %v (unchanged)", rec, status)
@@ -47,13 +47,13 @@ func TestRecordAttempt_RearmAndSweepLifecycle(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(0, 0)
 	st := newStore(func() time.Time { return now })
-	st.upsertQueued(queuedOrder{OrderID: "o1"})
+	st.upsertQueued("o1")
 
 	if got := st.recordAttempt("o1"); got != 1 {
 		t.Fatalf("first attempt = %d, want 1", got)
 	}
 	st.markStatus("o1", statusFailed, common.Hash{}, "fill reverted")
-	st.upsertQueued(queuedOrder{OrderID: "o1"})
+	st.upsertQueued("o1")
 	if got := st.recordAttempt("o1"); got != 2 {
 		t.Fatalf("attempt after re-arm = %d, want 2", got)
 	}
@@ -73,7 +73,7 @@ func TestRecordAttempt_RearmAndSweepLifecycle(t *testing.T) {
 	if rec := testOrder(st); rec != nil {
 		t.Fatalf("order after terminal TTL = %v, want swept", rec)
 	}
-	st.upsertQueued(queuedOrder{OrderID: "o1"})
+	st.upsertQueued("o1")
 	if got := st.recordAttempt("o1"); got != 1 {
 		t.Fatalf("first attempt after recreation = %d, want 1", got)
 	}
