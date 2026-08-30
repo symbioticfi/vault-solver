@@ -41,16 +41,9 @@ func validateConfigFile(path string) error {
 	if err != nil {
 		return err
 	}
-	requiresTxManager := false
-	for _, entry := range cfg.Solvers {
-		if err := solver.ValidateConfig(entry.Name, entry.Config); err != nil {
-			return errors.Errorf("invalid config %q: %w", path, err)
-		}
-		requires, err := solver.RequiresTxManager(entry.Name)
-		if err != nil {
-			return errors.Errorf("invalid config %q: %w", path, err)
-		}
-		requiresTxManager = requiresTxManager || requires
+	requiresTxManager, err := validateConfiguredSolvers(cfg.Solvers)
+	if err != nil {
+		return errors.Errorf("invalid config %q: %w", path, err)
 	}
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {
@@ -58,4 +51,19 @@ func validateConfigFile(path string) error {
 		}
 	}
 	return nil
+}
+
+func validateConfiguredSolvers(entries []appconfig.SolverConfig) (bool, error) {
+	requiresTxManager := false
+	for _, entry := range entries {
+		if err := solver.ValidateConfig(entry.Name, entry.Config); err != nil {
+			return false, err
+		}
+		requires, err := solver.RequiresTxManager(entry.Name)
+		if err != nil {
+			return false, err
+		}
+		requiresTxManager = requiresTxManager || requires
+	}
+	return requiresTxManager, nil
 }

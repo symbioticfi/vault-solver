@@ -127,43 +127,45 @@ func (s characterizationSolver) Run(ctx context.Context) error {
 	return s.run(ctx)
 }
 
-func TestSolverLifecycleSelectsTransactionManagerFromRegistrationMetadata(t *testing.T) {
+func TestSolverLifecycleSelectsTransactionManagerFromCommandRequirement(t *testing.T) {
 	tests := []struct {
-		name        string
-		solverNames []string
-		wantManager bool
+		name            string
+		solverNames     []string
+		requiresManager bool
 	}{
-		{name: "OEV only", solverNames: []string{"redstone-oev"}},
-		{name: "transaction solver", solverNames: []string{"rfq-filler"}, wantManager: true},
 		{
-			name:        "mixed OEV and transaction solver",
-			solverNames: []string{"redstone-oev", "lifi-samechain"},
-			wantManager: true,
+			name:            "OEV only",
+			solverNames:     []string{"redstone-oev"},
+			requiresManager: false,
+		},
+		{
+			name:            "transaction solver",
+			solverNames:     []string{"rfq-filler"},
+			requiresManager: true,
+		},
+		{
+			name:            "mixed OEV and transaction solver",
+			solverNames:     []string{"redstone-oev", "lifi-samechain"},
+			requiresManager: true,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			testSolverLifecycleSelection(t, test.solverNames, test.wantManager)
+			testSolverLifecycleSelection(t, test.solverNames, test.requiresManager)
 		})
 	}
 }
 
-func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManager bool) {
+func testSolverLifecycleSelection(t *testing.T, solverNames []string, requiresManager bool) {
 	t.Helper()
 	trace := new(lifecycleTrace)
 	health := newCharacterizationHealth(trace)
 	manager := newCharacterizationManager(trace)
-	requiresManager := false
 	solvers := make([]solver.Solver, 0, len(solverNames))
 	solverStarted := make(chan struct{}, len(solverNames))
 	for _, name := range solverNames {
-		requires, err := solver.RequiresTxManager(name)
-		if err != nil {
-			t.Fatalf("RequiresTxManager(%q): %v", name, err)
-		}
-		requiresManager = requiresManager || requires
 		solvers = append(solvers, characterizationSolver{name: name, run: func(ctx context.Context) error {
-			if wantManager {
+			if requiresManager {
 				<-manager.started
 			}
 			trace.add("solver start")
@@ -172,12 +174,9 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManage
 			return ctx.Err()
 		}})
 	}
-	if requiresManager != wantManager {
-		t.Fatalf("registration requires manager = %t, want %t", requiresManager, wantManager)
-	}
 
 	var runtimeManager runtimeTransactionManager
-	if wantManager {
+	if requiresManager {
 		runtimeManager = manager
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -192,7 +191,7 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManage
 	for range solverNames {
 		waitForSignal(t, solverStarted, "solver start")
 	}
-	if wantManager {
+	if requiresManager {
 		manager.laneReady.Store(false)
 		manager.laneChanges <- struct{}{}
 		expectReadyState(t, health.updates, false)
@@ -201,7 +200,7 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManage
 		expectReadyState(t, health.updates, true)
 	}
 	cancel()
-	if wantManager {
+	if requiresManager {
 		expectReadyState(t, health.updates, false)
 	}
 	if err := waitForError(t, returned, "lifecycle return"); err != nil {
@@ -209,7 +208,7 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManage
 	}
 
 	wantCalls := int64(0)
-	if wantManager {
+	if requiresManager {
 		wantCalls = 1
 	}
 	for name, got := range map[string]int64{
@@ -223,7 +222,7 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, wantManage
 			t.Fatalf("manager %s calls = %d, want %d; trace %v", name, got, wantCalls, trace.snapshot())
 		}
 	}
-	if wantManager {
+	if requiresManager {
 		if manager.laneCalls.Load() != 2 {
 			t.Fatalf("LaneReady calls = %d, want 2; trace %v", manager.laneCalls.Load(), trace.snapshot())
 		}

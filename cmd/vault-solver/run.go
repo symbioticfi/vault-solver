@@ -121,21 +121,32 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,
 	}
-	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	solvers, requiresTxManager, err := constructConfiguredSolvers(cfg.Solvers, deps)
+	if err != nil {
+		return err
+	}
+	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health, log)
+}
+
+func constructConfiguredSolvers(
+	entries []config.SolverConfig,
+	deps solver.Deps,
+) ([]solver.Solver, bool, error) {
+	solvers := make([]solver.Solver, 0, len(entries))
 	requiresTxManager := false
-	for _, sc := range cfg.Solvers {
-		slv, err := solver.New(sc.Name, sc.Config, deps)
+	for _, entry := range entries {
+		slv, err := solver.New(entry.Name, entry.Config, deps)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		solvers = append(solvers, slv)
-		solverRequiresTxManager, err := solver.RequiresTxManager(sc.Name)
+		solverRequiresTxManager, err := solver.RequiresTxManager(entry.Name)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		requiresTxManager = requiresTxManager || solverRequiresTxManager
 	}
-	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health, log)
+	return solvers, requiresTxManager, nil
 }
 
 type runtimeTransactionManager interface {

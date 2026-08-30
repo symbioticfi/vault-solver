@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/config"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -19,23 +21,15 @@ import (
 
 const compositionPrivateKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
-func TestRuntimeRegistrationCompositionCharacterization(t *testing.T) {
-	deps := newCompositionDeps(t)
-	for _, env := range []string{
-		"COMPOSITION_RFQ_SECRET",
-		"COMPOSITION_OEV_API_KEY",
-		"COMPOSITION_LIFI_API_KEY",
-		"COMPOSITION_UNISWAPX_API_KEY",
-	} {
-		t.Setenv(env, "local-test-value")
-	}
+type runtimeCompositionCase struct {
+	name                string
+	config              string
+	selectionDiagnostic string
+	externallySubmitted bool
+}
 
-	tests := []struct {
-		name                string
-		config              string
-		selectionDiagnostic string
-		externallySubmitted bool
-	}{
+func runtimeCompositionCases() []runtimeCompositionCase {
+	return []runtimeCompositionCase{
 		{
 			name:                "3f-bridge-facilitator",
 			selectionDiagnostic: `unknown 3F strategy "command-characterization-missing"`,
@@ -99,43 +93,141 @@ orderServer:
 `,
 		},
 	}
+}
 
-	for _, test := range tests {
+func TestRuntimeCommandCompositionCharacterization(t *testing.T) {
+	setCompositionEnv(t)
+	deps := newCompositionDeps(t)
+	for _, test := range runtimeCompositionCases() {
 		t.Run(test.name, func(t *testing.T) {
-			raw := compositionYAMLNode(t, test.config)
-			if err := solver.ValidateConfig(test.name, raw); err != nil {
-				t.Fatalf("ValidateConfig: %v", err)
-			}
-			constructed, err := solver.New(test.name, raw, deps)
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
-			if got := constructed.Name(); got != test.name {
-				t.Fatalf("constructed solver name = %q, want %q", got, test.name)
-			}
-			requiresTxManager, err := solver.RequiresTxManager(test.name)
-			if err != nil {
-				t.Fatalf("RequiresTxManager: %v", err)
-			}
-			if got := !requiresTxManager; got != test.externallySubmitted {
-				t.Fatalf("externally submitted = %t, want %t", got, test.externallySubmitted)
-			}
+			testRuntimeCompositionCase(t, deps, test)
+		})
+	}
+}
 
-			invalid := test.config + "\nstrategy: {name: command-characterization-missing, config: {}}\n"
-			if strings.Contains(test.config, "  name: default") {
-				invalid = strings.Replace(test.config, "  name: default", "  name: command-characterization-missing", 1)
+func testRuntimeCompositionCase(t *testing.T, deps solver.Deps, test runtimeCompositionCase) {
+	t.Helper()
+	entries := compositionEntries(t, []runtimeCompositionCase{test}, test.name)
+	validatedRequiresTxManager, err := validateConfiguredSolvers(entries)
+	if err != nil {
+		t.Fatalf("validate configured solvers: %v", err)
+	}
+	constructed, constructedRequiresTxManager, err := constructConfiguredSolvers(entries, deps)
+	if err != nil {
+		t.Fatalf("construct configured solvers: %v", err)
+	}
+	if len(constructed) != 1 || constructed[0].Name() != test.name {
+		t.Fatalf("constructed solvers = %v, want one named %q", solverNames(constructed), test.name)
+	}
+	wantRequiresTxManager := !test.externallySubmitted
+	if validatedRequiresTxManager != wantRequiresTxManager ||
+		constructedRequiresTxManager != wantRequiresTxManager {
+		t.Fatalf(
+			"requires tx manager from validation/construction = %t/%t, want %t",
+			validatedRequiresTxManager, constructedRequiresTxManager, wantRequiresTxManager,
+		)
+	}
+
+	invalid := test.config + "\nstrategy: {name: command-characterization-missing, config: {}}\n"
+	if strings.Contains(test.config, "  name: default") {
+		invalid = strings.Replace(test.config, "  name: default", "  name: command-characterization-missing", 1)
+	}
+	invalidEntries := []config.SolverConfig{{
+		Name: test.name, Config: compositionYAMLNode(t, invalid),
+	}}
+	_, validationErr := validateConfiguredSolvers(invalidEntries)
+	_, _, factoryErr := constructConfiguredSolvers(invalidEntries, deps)
+	if validationErr == nil || factoryErr == nil ||
+		!strings.Contains(validationErr.Error(), test.selectionDiagnostic) ||
+		!strings.Contains(factoryErr.Error(), test.selectionDiagnostic) {
+		t.Fatalf("validation/construction selection errors = (%v, %v), want both to contain %q",
+			validationErr, factoryErr, test.selectionDiagnostic)
+	}
+}
+
+func TestConfiguredSolverAggregateRequirementCharacterization(t *testing.T) {
+	setCompositionEnv(t)
+	deps := newCompositionDeps(t)
+	cases := runtimeCompositionCases()
+	for _, test := range []struct {
+		name            string
+		solverNames     []string
+		requiresManager bool
+	}{
+		{
+			name:            "OEV only",
+			solverNames:     []string{"redstone-oev"},
+			requiresManager: false,
+		},
+		{
+			name:            "mixed OEV and transaction solver",
+			solverNames:     []string{"redstone-oev", "lifi-samechain"},
+			requiresManager: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entries := compositionEntries(t, cases, test.solverNames...)
+			validatedRequiresManager, err := validateConfiguredSolvers(entries)
+			if err != nil {
+				t.Fatalf("validate configured solvers: %v", err)
 			}
-			invalidRaw := compositionYAMLNode(t, invalid)
-			validationErr := solver.ValidateConfig(test.name, invalidRaw)
-			_, factoryErr := solver.New(test.name, invalidRaw, deps)
-			if validationErr == nil || factoryErr == nil ||
-				!strings.Contains(validationErr.Error(), test.selectionDiagnostic) ||
-				!strings.Contains(factoryErr.Error(), test.selectionDiagnostic) {
-				t.Fatalf("validator/factory selection errors = (%v, %v), want both to contain %q",
-					validationErr, factoryErr, test.selectionDiagnostic)
+			constructed, constructedRequiresManager, err := constructConfiguredSolvers(entries, deps)
+			if err != nil {
+				t.Fatalf("construct configured solvers: %v", err)
+			}
+			if got := solverNames(constructed); !slices.Equal(got, test.solverNames) {
+				t.Fatalf("constructed solver order = %v, want %v", got, test.solverNames)
+			}
+			if validatedRequiresManager != test.requiresManager ||
+				constructedRequiresManager != test.requiresManager {
+				t.Fatalf(
+					"aggregate requires tx manager from validation/construction = %t/%t, want %t",
+					validatedRequiresManager, constructedRequiresManager, test.requiresManager,
+				)
 			}
 		})
 	}
+}
+
+func compositionEntries(
+	t *testing.T,
+	cases []runtimeCompositionCase,
+	names ...string,
+) []config.SolverConfig {
+	t.Helper()
+	entries := make([]config.SolverConfig, 0, len(names))
+	for _, name := range names {
+		index := slices.IndexFunc(cases, func(test runtimeCompositionCase) bool {
+			return test.name == name
+		})
+		if index < 0 {
+			t.Fatalf("missing characterization config for %q", name)
+		}
+		entries = append(entries, config.SolverConfig{
+			Name: name, Config: compositionYAMLNode(t, cases[index].config),
+		})
+	}
+	return entries
+}
+
+func setCompositionEnv(t *testing.T) {
+	t.Helper()
+	for _, env := range []string{
+		"COMPOSITION_RFQ_SECRET",
+		"COMPOSITION_OEV_API_KEY",
+		"COMPOSITION_LIFI_API_KEY",
+		"COMPOSITION_UNISWAPX_API_KEY",
+	} {
+		t.Setenv(env, "local-test-value")
+	}
+}
+
+func solverNames(solvers []solver.Solver) []string {
+	names := make([]string, len(solvers))
+	for i, slv := range solvers {
+		names[i] = slv.Name()
+	}
+	return names
 }
 
 func TestRunBotFactoryFailureJoinsObservabilityServer(t *testing.T) {
@@ -171,20 +263,19 @@ solvers:
 
 func TestUnknownSolverDiagnosticCharacterization(t *testing.T) {
 	const want = `solver: unknown solver "future-global-solver" (registered: [3f-bridge-facilitator lifi-samechain redstone-oev rfq-filler uniswapx-filler])`
-	raw := compositionYAMLNode(t, "{}")
+	entries := []config.SolverConfig{{
+		Name: "future-global-solver", Config: compositionYAMLNode(t, "{}"),
+	}}
 	checks := []struct {
 		name string
 		run  func() error
 	}{
-		{name: "runtime factory", run: func() error {
-			_, err := solver.New("future-global-solver", raw, solver.Deps{})
+		{name: "runtime construction", run: func() error {
+			_, _, err := constructConfiguredSolvers(entries, solver.Deps{})
 			return err
 		}},
-		{name: "offline validator", run: func() error {
-			return solver.ValidateConfig("future-global-solver", raw)
-		}},
-		{name: "submission metadata", run: func() error {
-			_, err := solver.RequiresTxManager("future-global-solver")
+		{name: "offline validation", run: func() error {
+			_, err := validateConfiguredSolvers(entries)
 			return err
 		}},
 	}
