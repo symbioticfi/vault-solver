@@ -171,7 +171,7 @@ func (m *Manager) sendSigned(
 			return err
 		}
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, m.broadcastTimeout())
+	sendCtx, cancel := context.WithTimeout(ctx, m.cfg.BroadcastTimeout)
 	defer cancel()
 	err := m.backend.SendTransaction(sendCtx, signed)
 	if !existingLifecycle && (isNonceConsumedError(err) || isPendingNonceCollision(err)) {

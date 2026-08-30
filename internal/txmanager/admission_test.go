@@ -75,7 +75,7 @@ func TestBroadcastTimeout(t *testing.T) {
 			m := New(nil, nil, nil, Config{
 				BroadcastTimeout: test.configured, ReplacementInterval: 2 * time.Millisecond,
 			}, logr.Discard())
-			if got := m.broadcastTimeout(); got != test.want {
+			if got := m.cfg.BroadcastTimeout; got != test.want {
 				t.Fatalf("broadcast timeout = %s, want %s", got, test.want)
 			}
 		})

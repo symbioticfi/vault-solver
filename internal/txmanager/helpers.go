@@ -91,10 +91,6 @@ func (m *Manager) receiptReadTimeout() time.Duration {
 	return minPositiveDuration(maxReceiptReadTimeout, m.cfg.ReplacementInterval/2)
 }
 
-func (m *Manager) broadcastTimeout() time.Duration {
-	return m.cfg.BroadcastTimeout
-}
-
 func minPositiveDuration(fallback, candidate time.Duration) time.Duration {
 	if candidate > 0 && candidate < fallback {
 		return candidate
