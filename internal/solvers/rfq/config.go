@@ -10,7 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -101,7 +100,7 @@ const (
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.BackendURL == "" {

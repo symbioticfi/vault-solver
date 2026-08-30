@@ -10,7 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	cfgparse "github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
@@ -104,7 +103,7 @@ const defaultStrategyName = "default"
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := cfgparse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.APIBaseURL == "" {

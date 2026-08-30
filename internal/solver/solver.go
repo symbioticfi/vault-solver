@@ -16,7 +16,6 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -58,14 +57,6 @@ type Registration struct {
 	Factory             Factory
 	ValidateConfig      ConfigValidator
 	ExternallySubmitted bool
-}
-
-// DecodeStrict decodes a deferred solvers[].config node into out, rejecting unknown keys so typos in
-// a solver's config fail fast — matching the strict top-level config decode. The framework keeps
-// each solver's config opaque (yaml.Node has no KnownFields option of its own), so solvers call this
-// from parseConfig instead of node.Decode to get the same typo protection.
-func DecodeStrict(node yaml.Node, out any) error {
-	return parse.DecodeStrict(node, out)
 }
 
 var (

@@ -8,7 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
@@ -46,7 +45,7 @@ func ValidateConfig(raw yaml.Node) error {
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	var cfg Config
-	if err := solver.DecodeStrict(raw, &cfg); err != nil {
+	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
 	return New(cfg)

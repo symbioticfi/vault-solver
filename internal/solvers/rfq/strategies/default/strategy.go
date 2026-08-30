@@ -1,11 +1,11 @@
 package defaultstrategy
 
 import (
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/parse"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
 const Name = "default"
@@ -26,7 +26,7 @@ func ValidateConfig(raw yaml.Node) error {
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	var cfg Config
-	if err := solver.DecodeStrict(raw, &cfg); err != nil {
+	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
 	return New(), nil

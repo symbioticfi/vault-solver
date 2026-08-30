@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
@@ -27,7 +27,7 @@ func ValidateConfig(raw yaml.Node) error {
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
-	if err := solver.DecodeStrict(raw, &struct{}{}); err != nil {
+	if err := parse.DecodeStrict(raw, &struct{}{}); err != nil {
 		return nil, err
 	}
 	return New(), nil
