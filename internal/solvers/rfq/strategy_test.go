@@ -10,7 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
@@ -45,21 +44,6 @@ func TestDefaultStrategyDecideQuote(t *testing.T) {
 	}
 	if len(out.Legs) != 1 || out.Legs[0].CandidateID != string(baseQuoteInput(t).Candidates[0].ID) {
 		t.Fatalf("legs = %+v, want normalized candidate", out.Legs)
-	}
-}
-
-func TestNewStrategyUsesRegistry(t *testing.T) {
-	spec := StrategyConfig{Name: "default"}
-	got, err := strategies.New(spec.Name, spec.Config)
-	if err != nil {
-		t.Fatalf("new strategy default: %v", err)
-	}
-	if got == nil {
-		t.Fatal("strategy registry returned nil")
-	}
-	names := strategies.Registered()
-	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {
-		t.Fatalf("registered strategies = %v, want default and webhook", names)
 	}
 }
 

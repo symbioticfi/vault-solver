@@ -16,11 +16,6 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, ValidateConfig: ValidateConfig})
-}
-
 func ValidateConfig(raw yaml.Node) error {
 	_, err := webhook.ParseConfig(raw)
 	return err

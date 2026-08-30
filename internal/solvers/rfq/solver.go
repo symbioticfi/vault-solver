@@ -11,13 +11,12 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 const (
@@ -45,10 +44,40 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config); err != nil {
+	if err := validateStrategyConfig(cfg.Strategy); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil
+}
+
+func validateStrategyConfig(spec StrategyConfig) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func newStrategy(spec StrategyConfig) (types.Strategy, error) {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown RFQ strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -65,7 +94,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
-	quoteStrategy, err := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config)
+	quoteStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
 	}
