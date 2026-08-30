@@ -1451,7 +1451,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 
 	base := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	orders := make(chan *submittedOrder, 5)
-	for i := int64(0); i < 5; i++ {
+	for i := range int64(5) {
 		order := *base
 		order.OrderID = "order-" + big.NewInt(i+1).String()
 		order.Order.Nonce = new(big.Int).Add(base.Order.Nonce, big.NewInt(i))
