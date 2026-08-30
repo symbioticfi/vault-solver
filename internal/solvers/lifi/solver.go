@@ -85,7 +85,6 @@ type settlementReader interface {
 
 type chainHeadReader interface {
 	latestBlockNumber(ctx context.Context) (uint64, error)
-	latestBlockTime(ctx context.Context) (time.Time, error)
 }
 
 type txSender interface {

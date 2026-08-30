@@ -121,10 +121,6 @@ func (f fakeLifiReader) latestBlockNumber(context.Context) (uint64, error) {
 	return f.latestBlock, f.latestBlockErr
 }
 
-func (f fakeLifiReader) latestBlockTime(context.Context) (time.Time, error) {
-	return time.Unix(1_700_000_000, 0), nil
-}
-
 func unpackFinaliseCalldata(t *testing.T, calldata []byte) (
 	executor.IInputSettlerStandardOrder,
 	[]executor.ILiquidLaneLifiExecutorFillRoute,
