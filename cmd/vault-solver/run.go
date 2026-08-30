@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
@@ -60,7 +61,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,
-		"goVersion", version.GoVersion(),
+		"goVersion", runtime.Version(),
 		"solvers", solverNames,
 		"debug", debug,
 	)
