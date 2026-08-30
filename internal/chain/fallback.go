@@ -135,14 +135,6 @@ type rpcResponseEnvelope struct {
 	Error   json.RawMessage `json:"error"`
 }
 
-func decodeRPCResponse(body []byte) (rpcResponseEnvelope, bool) {
-	var response rpcResponseEnvelope
-	if err := json.Unmarshal(body, &response); err != nil {
-		return rpcResponseEnvelope{}, false
-	}
-	return response, true
-}
-
 // hasNullRPCResult buffers and restores resp.Body, then reports whether it is a matching successful
 // JSON-RPC response whose result is null. Error, malformed, and mismatched-id responses are preserved
 // for the RPC client to interpret instead of being hidden by a fallback endpoint.
@@ -155,7 +147,8 @@ func hasNullRPCResult(resp *http.Response, requestID json.RawMessage) (bool, err
 		return false, errors.Errorf("read rpc response body: %w", err)
 	}
 
-	response, valid := decodeRPCResponse(body)
+	var response rpcResponseEnvelope
+	valid := json.Unmarshal(body, &response) == nil
 	if !valid || response.JSONRPC != "2.0" {
 		return false, nil
 	}
