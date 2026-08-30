@@ -51,7 +51,7 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 		if !ok {
 			return
 		}
-		go s.handleAuction(ctx, a, start)
+		s.auctionWG.Go(func() { s.handleAuction(ctx, a, start) })
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":

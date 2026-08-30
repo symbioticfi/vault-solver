@@ -30,7 +30,7 @@ type Solver struct {
 	cfg      *Config
 	deps     solver.Deps
 	chainID  *big.Int
-	reader   *reader
+	reader   stateReader
 	strategy types.Strategy
 	nonces   *nonceStore
 	breaker  *breaker
@@ -48,6 +48,9 @@ type Solver struct {
 	// reservationTTL as a last-resort cleanup for missed result frames.
 	resMu sync.Mutex
 	res   []reservedBid
+
+	// auctionWG is fed only by the WS read pump, which ws.Run joins before Run waits on this group.
+	auctionWG sync.WaitGroup
 
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.

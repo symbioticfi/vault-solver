@@ -883,7 +883,10 @@ func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	defer close(blocking.release)
+	t.Cleanup(func() {
+		close(blocking.release)
+		s.auctionWG.Wait()
+	})
 
 	a := decodeAuction(t)
 	setAuctionPrice(&a, seedLiquidatablePrice)
