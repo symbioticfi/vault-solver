@@ -34,7 +34,7 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 			)
 			tx := types.NewTx(&types.DynamicFeeTx{
 				ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-				Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+				Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 			})
 			b.receipts[tx.Hash()] = successfulReceipt(tx, b.head-2)
 			pending := &pendingTransaction{
@@ -62,7 +62,7 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 	b.latestHeads = []uint64{102, 100, 102, 102}
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 	})
 	receipt := successfulReceipt(tx, 100)
 	b.receipts[tx.Hash()] = receipt
@@ -88,7 +88,7 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 	})
 	receipt := successfulReceipt(tx, 100)
 	receipt.BlockHash = forkedReceiptHeader(100, "fallback").Hash()
@@ -134,11 +134,11 @@ func TestReceiptLookupTimeoutDoesNotStarveOlderAttempt(t *testing.T) {
 	b := newMockBackend()
 	older := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 	})
 	newest := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(2), GasFeeCap: big.NewInt(3),
-		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 	})
 	b.receipts[older.Hash()] = successfulReceipt(older, b.head)
 	backend := &blockedReceiptHashBackend{mockBackend: b, hash: newest.Hash()}
@@ -164,7 +164,7 @@ func TestReceiptLookupTimeoutDoesNotStarveOlderAttempt(t *testing.T) {
 func TestMalformedReceiptDoesNotCompleteLifecycle(t *testing.T) {
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
-		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		Gas: 21_000, To: new(common.HexToAddress("0xabc")),
 	})
 	tests := map[string]func(*types.Receipt){
 		"mismatched transaction hash": func(receipt *types.Receipt) {

@@ -254,7 +254,7 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 	unsigned := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7,
 		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: gweiToWei(50),
-		Gas: cancellationGasLimit, To: ptr(s.Address()), Value: new(big.Int),
+		Gas: cancellationGasLimit, To: new(s.Address()), Value: new(big.Int),
 	})
 	signed, err := s.SignTx(t.Context(), unsigned, big.NewInt(11155111))
 	if err != nil {

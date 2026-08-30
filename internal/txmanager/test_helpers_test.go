@@ -643,7 +643,3 @@ func transactionHashes(transactions []*types.Transaction) []common.Hash {
 	}
 	return hashes
 }
-
-func ptr[T any](value T) *T {
-	return &value
-}
