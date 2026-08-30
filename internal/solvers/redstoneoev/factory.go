@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 )
 
 func validateConfig(raw yaml.Node) error {
@@ -17,9 +17,7 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config, strategies.ValidationDeps{
-		GasAccounting: cfg.Gas != nil,
-	}); err != nil {
+	if err := validateStrategyConfig(cfg.Strategy, cfg.Gas != nil); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil
@@ -63,7 +61,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
 	}
-	strategy, err := newStrategy(cfg, strategies.Deps{
+	strategy, err := newStrategy(cfg, defaultstrategy.FactoryDeps{
 		Chain:               deps.Chain,
 		Signer:              deps.Signer,
 		Log:                 log,

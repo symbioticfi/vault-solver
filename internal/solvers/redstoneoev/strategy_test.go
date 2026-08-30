@@ -8,12 +8,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 func TestNewStrategyRejectsUnknown(t *testing.T) {
-	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, strategies.Deps{})
+	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, defaultstrategy.FactoryDeps{})
 	if err == nil || !strings.Contains(err.Error(), "unknown OEV strategy") {
 		t.Fatalf("error = %v, want unknown strategy", err)
 	}
@@ -30,17 +30,8 @@ maxResponseBytes: 4096
 	}
 	if _, err := newStrategy(&Config{
 		Strategy: StrategyConfig{Name: "webhook", Config: *node.Content[0]},
-	}, strategies.Deps{}); err != nil {
+	}, defaultstrategy.FactoryDeps{}); err != nil {
 		t.Fatalf("new webhook strategy: %v", err)
-	}
-}
-
-func TestStrategyBidCapPolicyComesFromRegistry(t *testing.T) {
-	if strategies.RequiresBidCap("default") {
-		t.Fatal("default strategy must keep maxBidWei optional")
-	}
-	if !strategies.RequiresBidCap("webhook") {
-		t.Fatal("webhook strategy must require maxBidWei")
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
@@ -181,7 +180,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
 	}
-	if strategies.RequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
+	if strategyRequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
 		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil

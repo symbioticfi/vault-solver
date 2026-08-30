@@ -8,7 +8,6 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
@@ -116,7 +115,7 @@ maxBidWei: "1"
 			assertOEVStrategyType(t, selected, test.wantType)
 		})
 	}
-	if got, want := strategies.Registered(), []string{"default", "webhook"}; !slices.Equal(got, want) {
+	if got, want := strategyNames(), []string{"default", "webhook"}; !slices.Equal(got, want) {
 		t.Fatalf("strategy catalog = %v, want %v", got, want)
 	}
 
@@ -174,8 +173,8 @@ func oevSelectionNode(t *testing.T, raw string) yaml.Node {
 	return *document.Content[0]
 }
 
-func oevSelectionDeps() strategies.Deps {
-	return strategies.Deps{
+func oevSelectionDeps() defaultstrategy.FactoryDeps {
+	return defaultstrategy.FactoryDeps{
 		Log:      logr.Discard(),
 		ChainID:  1,
 		Adapter:  common.HexToAddress("0x2222222222222222222222222222222222222222"),

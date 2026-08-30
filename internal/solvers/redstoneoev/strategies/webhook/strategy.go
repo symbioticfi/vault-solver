@@ -6,7 +6,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -19,19 +18,12 @@ type Strategy struct {
 
 const decideBidRoute = "/decide-bid"
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{
-		Factory: NewFromConfig, ValidateConfig: ValidateConfig, RequiresBidCap: true,
-	})
-}
-
-func ValidateConfig(raw yaml.Node, _ strategies.ValidationDeps) error {
+func ValidateConfig(raw yaml.Node) error {
 	_, err := webhook.ParseConfig(raw)
 	return err
 }
 
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
+func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	clientCfg, err := webhook.ParseConfig(raw)
 	if err != nil {
 		return nil, err

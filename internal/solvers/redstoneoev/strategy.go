@@ -7,18 +7,47 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
-func newStrategy(cfg *Config, deps strategies.Deps) (types.Strategy, error) {
+func newStrategy(cfg *Config, deps defaultstrategy.FactoryDeps) (types.Strategy, error) {
 	name := cfg.Strategy.Name
 	if name == "" {
 		name = defaultStrategyName
 	}
-	return strategies.New(name, cfg.Strategy.Config, deps)
+	switch name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(cfg.Strategy.Config, deps)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(cfg.Strategy.Config)
+	default:
+		return nil, unknownStrategyError(name)
+	}
+}
+
+func validateStrategyConfig(spec StrategyConfig, gasAccounting bool) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config, gasAccounting)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func strategyRequiresBidCap(name string) bool {
+	return name == webhookstrategy.Name
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown OEV strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
 func (s *Solver) bidInput(

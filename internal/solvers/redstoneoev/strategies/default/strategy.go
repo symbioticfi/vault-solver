@@ -10,7 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	"github.com/symbioticfi/vault-solver/internal/chain"
+	internalsigner "github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,17 @@ type Strategy struct {
 	log           logr.Logger
 }
 
+type FactoryDeps struct {
+	Chain               *chain.Client
+	Signer              internalsigner.Signer
+	Log                 logr.Logger
+	ChainID             int64
+	Adapter             common.Address
+	Callback            common.Address
+	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
+	GasAccounting       bool
+}
+
 type decisionState struct {
 	CallbackNative    *big.Int
 	CallbackUpdatedAt time.Time
@@ -63,20 +75,15 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 	return st, true
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, ValidateConfig: ValidateConfig})
-}
-
-func ValidateConfig(raw yaml.Node, deps strategies.ValidationDeps) error {
+func ValidateConfig(raw yaml.Node, gasAccounting bool) error {
 	cfg, err := ParseConfig(raw)
 	if err != nil {
 		return err
 	}
-	return validateConfig(cfg, deps.GasAccounting)
+	return validateConfig(cfg, gasAccounting)
 }
 
-func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
+func NewFromConfig(raw yaml.Node, deps FactoryDeps) (types.Strategy, error) {
 	cfg, err := ParseConfig(raw)
 	if err != nil {
 		return nil, err
