@@ -66,8 +66,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
-	metrics := observability.NewMetrics()
-	metrics.SetBuildInfo(version.Version, version.Commit)
+	metrics := observability.NewMetrics(version.Version, version.Commit)
 	health := &observability.Health{}
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
 	go observability.ServeUntil(ctx, httpSrv, log)
