@@ -103,8 +103,7 @@ func TestSendAsyncKeepsFutureNonceUnsignedUntilPriorConfirmation(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go m.Start(ctx)
 
 	first, accepted := m.SendAsync(
@@ -485,8 +484,7 @@ func TestSendAsyncCanCompleteAtInclusion(t *testing.T) {
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go m.Start(ctx)
 	confirmations := uint64(0)
 	result, accepted := m.SendAsync(context.Background(), Request{

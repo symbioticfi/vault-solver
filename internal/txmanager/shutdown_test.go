@@ -28,8 +28,7 @@ func TestSend_GasEstimateFailurePropagates(t *testing.T) {
 func TestSend_RevertedReceiptIsError(t *testing.T) {
 	rb := &revertingBackend{mockBackend: newMockBackend()}
 	m := New(rb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go m.Start(ctx)
 
 	res := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21000, Label: "revert"})
