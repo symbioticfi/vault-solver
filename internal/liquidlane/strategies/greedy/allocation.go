@@ -191,7 +191,7 @@ func bestInputLeg(
 		if mustCoverRemaining && item.maxInput.Cmp(remaining) < 0 {
 			continue
 		}
-		amount := minAmount(remaining, item.maxInput)
+		amount := minBig(remaining, item.maxInput)
 		for _, candidate := range item.alternatives {
 			if candidate.MaxAmountIn.Cmp(amount) < 0 {
 				continue
@@ -261,11 +261,4 @@ func output(candidate liquidlane.QuoteCandidate, amountIn *big.Int) *big.Int {
 		return liquidlane.CloneBig(candidate.MaxAmountOut)
 	}
 	return amountOut
-}
-
-func minAmount(left, right *big.Int) *big.Int {
-	if left.Cmp(right) <= 0 {
-		return new(big.Int).Set(left)
-	}
-	return new(big.Int).Set(right)
 }
