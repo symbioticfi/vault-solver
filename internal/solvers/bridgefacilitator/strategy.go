@@ -29,7 +29,7 @@ func buildStrategyInput(
 	offerings []*adapterOffering,
 	offers *offerTracker,
 	now time.Time,
-) types.OfferInput {
+) (types.OfferInput, map[int64]auctionView) {
 	adapters := make([]types.AdapterSnapshot, 0, len(offerings))
 	for _, off := range offerings {
 		adapters = append(adapters, types.AdapterSnapshot{
@@ -47,8 +47,10 @@ func buildStrategyInput(
 	}
 
 	input := types.OfferInput{Now: now, Adapters: adapters}
+	views := make(map[int64]auctionView, len(auctions))
 	for i := range auctions {
 		av := auctionView{auctions[i]}
+		views[int64(av.dto.Id)] = av
 		auction, ok := buildAuctionSnapshot(av, i, offers, now)
 		if !ok {
 			continue
@@ -61,16 +63,7 @@ func buildStrategyInput(
 			AuctionID: k.auction,
 		})
 	}
-	return input
-}
-
-func auctionViewsByID(auctions []threef.AuctionDto) map[int64]auctionView {
-	views := make(map[int64]auctionView, len(auctions))
-	for i := range auctions {
-		av := auctionView{auctions[i]}
-		views[int64(av.dto.Id)] = av
-	}
-	return views
+	return input, views
 }
 
 func buildAuctionSnapshot(

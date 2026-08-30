@@ -77,7 +77,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	offers := newOfferTracker()
 	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
-	input := buildStrategyInput(
+	input, _ := buildStrategyInput(
 		[]threef.AuctionDto{testAuctionDto(10, collateral)},
 		[]*adapterOffering{{
 			target: Target{

@@ -193,7 +193,7 @@ func Test3FR1AuctionIdentityCharacterization(t *testing.T) {
 	second.Status = "closed"
 	invalid := characterizationAuctionDTO(-3.75, "bad", collateral)
 	invalid.AmountRequested = threef.NullableString{}
-	views := auctionViewsByID([]threef.AuctionDto{first, invalid, second})
+	_, views := buildStrategyInput([]threef.AuctionDto{first, invalid, second}, nil, newOfferTracker(), time.Unix(1_700_000_000, 0).UTC())
 	if len(views) != 2 {
 		t.Fatalf("views = %d, want every int64 identity with duplicate collapse", len(views))
 	}
@@ -206,7 +206,7 @@ func Test3FR1AuctionIdentityCharacterization(t *testing.T) {
 
 	first.Status = "open"
 	second.Status = "solvable"
-	input := buildStrategyInput([]threef.AuctionDto{first, second}, nil, newOfferTracker(), time.Unix(1_700_000_000, 0).UTC())
+	input, _ := buildStrategyInput([]threef.AuctionDto{first, second}, nil, newOfferTracker(), time.Unix(1_700_000_000, 0).UTC())
 	if len(input.Auctions) != 2 || input.Auctions[0].AuctionID != 7 || input.Auctions[1].AuctionID != 7 ||
 		input.Auctions[0].OriginalIndex != 0 || input.Auctions[1].OriginalIndex != 1 ||
 		input.Auctions[0].Request != common.HexToAddress(first.RequestId) || input.Auctions[1].Request != common.HexToAddress(second.RequestId) {

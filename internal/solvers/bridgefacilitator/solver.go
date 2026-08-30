@@ -243,7 +243,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 
 	now := time.Now()
-	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	input, auctionByID := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {
 		return // no open, offerable auctions this pass
 	}
@@ -257,7 +257,6 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		exposureByAdapter[o.target.Adapter] = o.st
 	}
 
-	auctionByID := auctionViewsByID(auctions)
 	for _, offer := range out.Offers {
 		av, ok := auctionByID[offer.AuctionID]
 		if !ok {

@@ -150,7 +150,7 @@ func Test3FR1NormalizationCharacterization(t *testing.T) { //nolint:cyclop,gocog
 	}
 	tracker := newOfferTracker()
 	seed(tracker, adapterA, 31, now.Add(time.Hour), 250)
-	input := buildStrategyInput(inputAuctions, offerings, tracker, now)
+	input, _ := buildStrategyInput(inputAuctions, offerings, tracker, now)
 
 	if !input.Now.Equal(now) || len(input.Adapters) != 2 || len(input.Auctions) != 3 || len(input.LiveOffers) != 1 {
 		t.Fatalf("strategy input cardinality/order changed: %+v", input)
