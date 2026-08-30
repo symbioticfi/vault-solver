@@ -203,9 +203,9 @@ func (s *Solver) bidExpired(a AuctionMessage, start time.Time) bool {
 }
 
 // staleStateGate fails closed when the solver-owned Executor accounting is older than cfg.ExecutorStateMaxAge.
-func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
+func (s *Solver) staleStateGate(auctionID string, st cachedState, ok bool, now time.Time) string {
 	kv := make([]any, 0, 4)
-	if st, ok := s.state.load(); !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
+	if !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
 		var at time.Time
 		if ok {
 			at = st.UpdatedAt
@@ -232,12 +232,9 @@ func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() ti
 	if tripped, _ := s.breaker.tripped(now); tripped {
 		return bidDecision{skip: "breaker"}
 	}
-	if skip := s.staleStateGate(a.ID, now); skip != "" {
-		return bidDecision{skip: skip}
-	}
 	st, ok := s.state.load()
-	if !ok {
-		return bidDecision{skip: "state_unknown"}
+	if skip := s.staleStateGate(a.ID, st, ok, now); skip != "" {
+		return bidDecision{skip: skip}
 	}
 	if st.Exec.Locked {
 		return bidDecision{skip: "signer_locked"}

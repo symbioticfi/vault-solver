@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,27 @@ func (s *recordingBidStrategy) DecideBid(_ context.Context, input types.BidInput
 	}, nil
 }
 
+type mutatingAdapterStrategy struct {
+	input types.BidInput
+}
+
+func (s *mutatingAdapterStrategy) Run(context.Context) {}
+
+func (s *mutatingAdapterStrategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+	input.Adapter.FreeAssets.SetInt64(1)
+	input.Adapter.Withdrawable.SetInt64(2)
+	input.Adapter.Redeemable[0].Asset = common.Address{}
+	input.Adapter.Redeemable[0].MaxRate.SetInt64(3)
+	input.Adapter.Redeemable[0].MaxAssets.SetInt64(4)
+	input.Adapter.Redeemable[0].AcquireBalance.SetInt64(5)
+	s.input = input
+	return types.BidOutput{
+		Decision:      types.DecisionBid,
+		BidAmount:     big.NewInt(1),
+		OperationData: []byte{0x01},
+	}, nil
+}
+
 type blockingBidStrategy struct {
 	started chan struct{}
 	release chan struct{}
@@ -286,6 +308,18 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 	base := auctionClock()()
 	pastMax := func() time.Time { return base.Add(defaultExecutorStateMaxAge + time.Second) }
 
+	t.Run("executor state missing", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		s.state = stateCache{}
+		strategy := &recordingBidStrategy{}
+		s.strategy = strategy
+		if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != skipExecutorStateStale {
+			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
+		}
+		if strategy.called {
+			t.Fatal("strategy must not be called without executor state")
+		}
+	})
 	t.Run("both caches stale", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != skipExecutorStateStale {
@@ -374,6 +408,33 @@ func TestBuildBidLetsStrategyOwnDecisionState(t *testing.T) {
 	rate := strategy.input.Context.GasPrices.TokenOutPerNative(strategy.input.Adapter.Loan)
 	if rate == nil || rate.Cmp(mustBig("2500000000")) != 0 {
 		t.Fatalf("shared gas price = %v, want 2500000000", rate)
+	}
+}
+
+func TestBuildBidStrategyAdapterMutationDoesNotMutateCache(t *testing.T) {
+	s, _ := seededSolver(t)
+	want := seedAdapterSnapshot()
+	strategy := &mutatingAdapterStrategy{}
+	s.strategy = strategy
+
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "" {
+		t.Fatalf("expected strategy bid, got skip %q", d.skip)
+	}
+	if strategy.input.Adapter.FreeAssets.Cmp(big.NewInt(1)) != 0 ||
+		strategy.input.Adapter.Withdrawable.Cmp(big.NewInt(2)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].Asset != (common.Address{}) ||
+		strategy.input.Adapter.Redeemable[0].MaxRate.Cmp(big.NewInt(3)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].MaxAssets.Cmp(big.NewInt(4)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].AcquireBalance.Cmp(big.NewInt(5)) != 0 {
+		t.Fatalf("strategy did not observe its Adapter mutations: %+v", strategy.input.Adapter)
+	}
+
+	after, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing cached state after bid")
+	}
+	if !reflect.DeepEqual(after.Adapter, want) {
+		t.Fatalf("strategy mutated cached Adapter:\n got: %+v\nwant: %+v", after.Adapter, want)
 	}
 }
 

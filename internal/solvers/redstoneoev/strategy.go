@@ -37,7 +37,7 @@ func (s *Solver) bidInput(
 			RawPriceCount: len(a.Payload.Prices),
 			Prices:        auctionPricesForStrategy(a),
 		},
-		Adapter: cloneAdapterSnapshot(st.Adapter),
+		Adapter: st.Adapter,
 		Context: types.BidContext{
 			ChainID:            cloneBig(s.chainID),
 			Executor:           s.cfg.Executor,
