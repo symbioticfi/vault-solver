@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"go.uber.org/zap/zapcore"
 )
 
 type countingTransport struct {
@@ -24,6 +25,41 @@ func (*countingTransport) FlushWithContext(context.Context) bool { return true }
 func (*countingTransport) Configure(sentry.ClientOptions)        {}
 func (*countingTransport) SendEvent(*sentry.Event)               {}
 func (*countingTransport) Close()                                {}
+
+func TestSentryCore_Enabled(t *testing.T) {
+	core := &sentryCore{}
+	tests := map[string]struct {
+		level zapcore.Level
+		want  bool
+	}{
+		"debug":  {level: zapcore.DebugLevel},
+		"warn":   {level: zapcore.WarnLevel},
+		"error":  {level: zapcore.ErrorLevel, want: true},
+		"dpanic": {level: zapcore.DPanicLevel, want: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := core.Enabled(test.level); got != test.want {
+				t.Fatalf("Enabled(%s) = %t, want %t", test.level, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSentryCore_With(t *testing.T) {
+	core := &sentryCore{fields: []zapcore.Field{{Key: "existing"}}}
+	with := core.With([]zapcore.Field{{Key: "added"}}).(*sentryCore)
+
+	if len(core.fields) != 1 || core.fields[0].Key != "existing" {
+		t.Fatalf("original fields changed: %+v", core.fields)
+	}
+	if len(with.fields) != 2 || with.fields[0].Key != "existing" || with.fields[1].Key != "added" {
+		t.Fatalf("With fields = %+v", with.fields)
+	}
+	if with.Enabled(zapcore.WarnLevel) || !with.Enabled(zapcore.ErrorLevel) {
+		t.Fatal("With changed the Error+ threshold")
+	}
+}
 
 func TestNewLoggerCleanupFlushesSentryOnce(t *testing.T) {
 	t.Setenv("SENTRY_DSN", "https://public@example.com/1")

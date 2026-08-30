@@ -26,21 +26,20 @@ func initSentry() zapcore.Core {
 		// A bad DSN must not take down the process; just leave the sink disabled.
 		return nil
 	}
-	return &sentryCore{level: zapcore.ErrorLevel}
+	return &sentryCore{}
 }
 
 // sentryCore is a barebones zapcore that captures Error+ entries as Sentry events, attaching the log
 // fields as Sentry "extra" context. It is teed alongside the normal zap core, so logging is unchanged
 // and Sentry only ever sees error-and-above.
 type sentryCore struct {
-	level  zapcore.Level
 	fields []zapcore.Field
 }
 
-func (c *sentryCore) Enabled(l zapcore.Level) bool { return l >= c.level }
+func (*sentryCore) Enabled(l zapcore.Level) bool { return l >= zapcore.ErrorLevel }
 
 func (c *sentryCore) With(fields []zapcore.Field) zapcore.Core {
-	return &sentryCore{level: c.level, fields: append(append([]zapcore.Field{}, c.fields...), fields...)}
+	return &sentryCore{fields: append(append([]zapcore.Field{}, c.fields...), fields...)}
 }
 
 func (c *sentryCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
