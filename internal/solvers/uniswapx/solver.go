@@ -21,7 +21,10 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/default"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -137,7 +140,7 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if err := validateStrategyConfig(cfg.Strategy); err != nil {
+	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil
@@ -157,7 +160,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	strategy, err := newStrategy(cfg.Strategy)
+	strategy, err := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config)
 	if err != nil {
 		return nil, err
 	}
