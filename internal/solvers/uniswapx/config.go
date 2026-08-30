@@ -123,8 +123,7 @@ type OrderServerConfig struct {
 }
 
 type OrderSourcesConfig struct {
-	ExclusiveV2 bool
-	PublicV2    bool
+	PublicV2 bool
 }
 
 type StrategyConfig struct {
@@ -272,14 +271,10 @@ func parseOrderServerConfig(raw rawOrderServerConfig) (OrderServerConfig, error)
 	if err := validateServiceURL(raw.BaseURL, "orderServer.baseUrl"); err != nil {
 		return OrderServerConfig{}, err
 	}
-	exclusiveV2 := true
-	if raw.Sources.ExclusiveV2 != nil {
-		exclusiveV2 = *raw.Sources.ExclusiveV2
-	}
-	sources := OrderSourcesConfig{ExclusiveV2: exclusiveV2, PublicV2: raw.Sources.PublicV2}
-	if !sources.ExclusiveV2 {
+	if raw.Sources.ExclusiveV2 != nil && !*raw.Sources.ExclusiveV2 {
 		return OrderServerConfig{}, errors.New("orderServer.sources.exclusiveV2 must be enabled while quote server is enabled")
 	}
+	sources := OrderSourcesConfig{PublicV2: raw.Sources.PublicV2}
 	return OrderServerConfig{
 		BaseURL: raw.BaseURL, APIKeyEnv: raw.APIKeyEnv,
 		PollInterval: pollInterval, HTTPTimeout: httpTimeout, Beta: raw.Beta, Sources: sources,

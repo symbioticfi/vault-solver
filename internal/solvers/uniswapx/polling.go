@@ -34,20 +34,18 @@ func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error
 
 func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) error {
 	var pollErrs []error
-	if s.cfg.OrderServer.Sources.ExclusiveV2 {
-		now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
-		if err != nil {
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else {
-			s.recordExclusivePollSuccess(time.Now())
-			s.observePoll(string(orderSourceExclusiveV2), "ok")
-		}
+	now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
+	if err != nil {
+		s.markExclusiveStateUnknown()
+		s.observePoll(string(orderSourceExclusiveV2), "failed")
+		pollErrs = append(pollErrs, err)
+	} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
+		s.markExclusiveStateUnknown()
+		s.observePoll(string(orderSourceExclusiveV2), "failed")
+		pollErrs = append(pollErrs, err)
+	} else {
+		s.recordExclusivePollSuccess(time.Now())
+		s.observePoll(string(orderSourceExclusiveV2), "ok")
 	}
 	if s.cfg.OrderServer.Sources.PublicV2 {
 		if _, err := s.pollSource(ctx, orderSourcePublicV2, nil, out); err != nil {

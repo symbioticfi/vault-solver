@@ -204,7 +204,7 @@ func TestPollOrdersProcessesExclusiveBeforePublicFailure(t *testing.T) {
 	solver := &Solver{
 		cfg: &Config{
 			Executor:    executor,
-			OrderServer: OrderServerConfig{Sources: OrderSourcesConfig{ExclusiveV2: true, PublicV2: true}},
+			OrderServer: OrderServerConfig{Sources: OrderSourcesConfig{PublicV2: true}},
 		},
 		chainID: 1,
 		reader:  reader,
@@ -383,7 +383,6 @@ func TestPollOrdersStopsQuotesWhenExclusiveHistoryIsUnknown(t *testing.T) {
 }
 
 func newPollingTestSolver(cfg *Config, orders orderPoller) *Solver {
-	cfg.OrderServer.Sources.ExclusiveV2 = true
 	return &Solver{
 		cfg: cfg, chainID: 1, reader: &countingChainReader{}, orders: orders, log: logr.Discard(),
 	}
