@@ -49,12 +49,13 @@ func TestDefaultStrategyDecideQuote(t *testing.T) {
 }
 
 func TestNewStrategyUsesRegistry(t *testing.T) {
-	got, err := newStrategy(StrategyConfig{Name: "default"})
+	spec := StrategyConfig{Name: "default"}
+	got, err := strategies.New(spec.Name, spec.Config)
 	if err != nil {
-		t.Fatalf("newStrategy default: %v", err)
+		t.Fatalf("new strategy default: %v", err)
 	}
 	if got == nil {
-		t.Fatal("newStrategy default returned nil")
+		t.Fatal("strategy registry returned nil")
 	}
 	names := strategies.Registered()
 	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {

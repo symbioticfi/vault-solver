@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
@@ -44,7 +45,7 @@ func validateConfig(raw yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if err := validateStrategyConfig(cfg.Strategy); err != nil {
+	if err := strategies.Validate(cfg.Strategy.Name, cfg.Strategy.Config); err != nil {
 		return errors.Errorf("strategy: %w", err)
 	}
 	return nil
@@ -64,7 +65,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
-	quoteStrategy, err := newStrategy(cfg.Strategy)
+	quoteStrategy, err := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config)
 	if err != nil {
 		return nil, err
 	}
