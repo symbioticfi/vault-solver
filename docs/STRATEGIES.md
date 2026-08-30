@@ -102,12 +102,13 @@ type StrategySpec struct {
     Config yaml.Node
 }
 
-type StrategyFactory func(raw yaml.Node) (types.Strategy, error)
 ```
 
-Each solver keeps a local registry/factory. A strategy self-registers from its own package `init()`
-under a solver-local unique name; the solver-level factory only routes by `name`, and the selected
-strategy owns parsing and validating its own `config` node.
+Each solver root selects its built-in strategies explicitly by `name`. It imports the built-in packages
+normally and routes construction and pure validation through small `switch` statements; there is no
+mutable strategy registry, package `init`, or blank import. The selected strategy owns parsing and
+validating its own `config` node. Keeping the catalog explicit makes supported names and any
+strategy-specific policy metadata visible at the composition point.
 
 ## Built-in strategies
 
@@ -136,31 +137,32 @@ the solver runs it subject to the same solver-owned structural and safety constr
 strategy. This is the fastest path and keeps your decision logic in your own
 codebase and language.
 
-**In-tree — register a new strategy on the solver.** To ship a strategy alongside a solver, implement
+**In-tree — add a built-in strategy to the solver.** To ship a strategy alongside a solver, implement
 that solver's interface (each is unique — you implement the one the target solver defines):
 
 1. Create a package under the solver's `strategies/<name>/` and implement the solver's strategy
    interface (e.g. `DecideOffers` for 3F), consuming its `strategies/types` input and returning its
    output type.
-2. Add a `NewFromConfig(raw yaml.Node) (types.Strategy, error)` constructor that parses your own
-   `strategy.config` node — the framework hands it to you opaque, so you own its schema and validation.
-3. Self-register from your package `init()` via the solver's local
-   `strategies.Register("<name>", NewFromConfig)`, under a name unique within that solver.
-4. Ensure the package is imported so its `init()` runs (blank-import it where the solver wires its
-   strategies).
-5. Select it in config: `strategy: { name: <name>, config: { … } }`.
+2. Export its unique `Name`, a `NewFromConfig(raw yaml.Node) (types.Strategy, error)` constructor, and
+   a pure `ValidateConfig(raw yaml.Node) error`. The strategy owns its opaque config schema and validation.
+3. Import the package normally from the solver root and add its construction and validation cases to
+   the root-local selectors. Add an explicit metadata case too when solver policy depends on the selected
+   strategy, as OEV's webhook bid-cap requirement does.
+4. Extend the root-owned selector tests, then select it in config:
+   `strategy: { name: <name>, config: { … } }`.
 
-Either way the solver skeleton is untouched: it provides the same input and executes whatever plan your
-strategy returns — so the correctness of the decision is entirely yours to own.
+The solver's decision and execution path remains untouched: it provides the same input and executes whatever
+plan the selected strategy returns. Only the explicit built-in catalog changes, so the correctness of the
+decision remains yours to own.
 
-LiquidLane quote/fill strategies intentionally receive no chain client or logger through their registry:
+LiquidLane quote/fill strategies intentionally receive no chain client or logger during construction:
 all current reads are represented in the typed input. A different workflow may define explicit
 strategy-owned dependencies only when the strategy itself genuinely owns that I/O.
 
 ## Shared LiquidLane strategy: `internal/liquidlane/strategies/greedy`
 
 The current shared LiquidLane algorithm is explicitly named `greedy`. Adding another algorithm means a
-sibling package under `internal/liquidlane/strategies`; it does not require a second runtime registry or
+sibling package under `internal/liquidlane/strategies`; it does not require another runtime selector or
 solver config knob until a real deployment needs selectable behavior. Sharing this pure decision engine
 does not create a cross-solver `Strategy` facade. `QuoteTask` accepts
 normalized, already-priced candidates, an exact input or output, route limit, buffer, an optional gas

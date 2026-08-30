@@ -164,8 +164,7 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 | `factory.go` | pure config validation, dependency construction, and WebSocket topic selection |
 | `runtime.go` | `Run`, ops refresh loop, head-stable Executor/adapter cache, and state publication |
 | `auction.go` | wire-message routing, auction deadline/staleness gates, `handleAuction` → `buildBid`, deposit/bid-cap checks, and outer EXECUTOR_V6 solve response |
-| `strategy.go` | lean `BidInput` construction (including solver-owned callback + adapter snapshot) and generic `BidOutput` validation |
-| `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register with policy metadata (for example, whether a solver bid cap is required), and custom strategies can register by name |
+| `strategy.go` | explicit `default`/`webhook` construction and validation selection, webhook bid-cap policy, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
 | `strategies/webhook/` | OEV webhook strategy adapter over the shared `internal/webhook` JSON client |

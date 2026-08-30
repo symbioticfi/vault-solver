@@ -79,13 +79,13 @@ architecture** (see [`STRATEGIES.md`](STRATEGIES.md)) and the shared LiquidLane 
 
 ### 2.1 Solver-local strategy, shared LiquidLane primitives
 
-UniswapX owns its strategy contract and registry under `internal/solvers/uniswapx/strategies/`:
+UniswapX owns its strategy contract under `internal/solvers/uniswapx/strategies/`; the solver root selects
+the two built-ins directly:
 
 ```
 internal/solvers/uniswapx/
-  strategy.go
+  solver.go              # explicit default/webhook construction + validation selection
   strategies/
-    registry.go
     types/types.go       # DecideQuote / DecideFill
     default/
     webhook/
@@ -165,7 +165,7 @@ assertion because the PR19 ABI has no getter.
 | `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion classification | mirror `rfq` + net-new |
 | `fill_worker.go` | single-goroutine order admission, cancellation, pending-fill tracking, and terminal-result drain | net-new |
 | `chainreader.go` | config-independent executor/route checks plus refreshed inventory/rate and optional gas snapshots | reader port |
-| `strategies/` | UniswapX-local contract, registry, `default`, and `webhook` decisions (§2.1) | net-new |
+| `strategies/` | UniswapX-local contract plus `default` and `webhook` decisions, selected explicitly by `solver.go` (§2.1) | net-new |
 | `order.go` | V2 Dutch codec, hashes, signature/exclusivity validation | net-new |
 | `orderclient.go` | generated-client adapter, authenticated polling, one ≤6 RPS limiter, pagination/body bounds | net-new |
 | `state.go` / `health.go` / `metrics.go` | reservations, quote epochs, exclusive obligations, dedup/backoff/breakers, readiness and metrics | net-new |
@@ -719,7 +719,7 @@ onboarding, deployment, and qualification work.
 
 ### Internal repositories
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
-- Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
+- Strategy architecture (root-local explicit selection + `strategies/types` + `strategies/{default,webhook}`, shared
   LiquidLane allocator + `internal/webhook`) — [`STRATEGIES.md`](STRATEGIES.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - The RFQ contracts repository owns on-chain adapters and the UniswapX executor. `rfq-integration` pins the
