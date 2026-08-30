@@ -53,7 +53,7 @@ func Big(s, field string) (*big.Int, error) {
 // EthToWei converts a decimal ether string (e.g. "0.0005") to wei exactly (no float rounding):
 // split on the point, right-pad the fraction to 18 digits, and combine.
 func EthToWei(s, field string) (*big.Int, error) {
-	intPart, fracPart, hasDot := strings.Cut(s, ".")
+	intPart, fracPart, _ := strings.Cut(s, ".")
 	if intPart == "" {
 		intPart = "0"
 	}
@@ -63,11 +63,7 @@ func EthToWei(s, field string) (*big.Int, error) {
 	for len(fracPart) < 18 {
 		fracPart += "0"
 	}
-	combined := intPart + fracPart
-	if hasDot && fracPart == "" {
-		combined = intPart // "5." form
-	}
-	wei, ok := new(big.Int).SetString(combined, 10)
+	wei, ok := new(big.Int).SetString(intPart+fracPart, 10)
 	if !ok {
 		return nil, errors.Errorf("%s: invalid decimal %q", field, s)
 	}
