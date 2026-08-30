@@ -10,7 +10,6 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -23,11 +22,6 @@ const (
 
 type Strategy struct {
 	client *webhook.Client
-}
-
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, ValidateConfig: ValidateConfig})
 }
 
 func ValidateConfig(raw yaml.Node) error {

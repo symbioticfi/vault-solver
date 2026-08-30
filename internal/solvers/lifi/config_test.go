@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
 )
@@ -75,7 +74,7 @@ quoteRefreshMode: block
 	if !cfg.TokenPolicy.RequiresSingleRoute(permissioned) {
 		t.Fatalf("token scope = %q", cfg.TokenPolicy.Scope())
 	}
-	if _, err := strategies.New(cfg.Strategy.Name, cfg.Strategy.Config); err != nil {
+	if _, err := newStrategy(cfg.Strategy); err != nil {
 		t.Fatalf("new strategy: %v", err)
 	}
 }
