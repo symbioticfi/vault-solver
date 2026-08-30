@@ -1,10 +1,6 @@
 package morpho
 
-import (
-	"math/big"
-
-	"github.com/symbioticfi/vault-solver/internal/chain"
-)
+import "math/big"
 
 // Morpho Blue math, ported verbatim from morpho-org/morpho-blue (see docs/OEV-PLAN.md §6.4). This is
 // the SINGLE source of truth for health/sizing over a worker-derived candidate set. All arithmetic is
@@ -12,12 +8,13 @@ import (
 // unprofitable fills. Lives in internal/morpho so any solver can reuse it.
 
 // WAD-scaled constants (1e18 fixed point) and Morpho library constants.
+var oraclePriceScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(36), nil) // ORACLE_PRICE_SCALE = 1e36
+
 var (
 	one               = big.NewInt(1) // reused divisor adjustment in MulDivUp (avoids a per-call alloc)
 	Wad               = big.NewInt(1e18)
 	twoWad            = big.NewInt(2e18)    // 2·WAD — Taylor-series denominators, hoisted out of the hot path
 	threeWad          = big.NewInt(3e18)    // 3·WAD
-	oraclePriceScale  = chain.Exp10(36)     // ORACLE_PRICE_SCALE = 1e36
 	virtualShares     = big.NewInt(1e6)     // SharesMathLib.VIRTUAL_SHARES
 	virtualAssets     = big.NewInt(1)       // SharesMathLib.VIRTUAL_ASSETS
 	liquidationCursor = big.NewInt(0.3e18)  // ConstantsLib.LIQUIDATION_CURSOR (β)
