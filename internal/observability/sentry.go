@@ -12,22 +12,21 @@ import (
 const sentryFlushTimeout = 2 * time.Second
 
 // initSentry initializes Sentry from SENTRY_DSN (with optional SENTRY_ENVIRONMENT) and returns a
-// zapcore that forwards Error+ log entries to Sentry, plus a flush func for shutdown. When SENTRY_DSN
-// is unset (the default) Sentry is disabled: the core is nil and flush is a no-op, so the sink is
-// strictly opt-in via the env keys.
-func initSentry() (zapcore.Core, func()) {
+// zapcore that forwards Error+ log entries to Sentry. When SENTRY_DSN is unset (the default), Sentry
+// is disabled and the core is nil, so the sink is strictly opt-in via the env keys.
+func initSentry() zapcore.Core {
 	dsn := os.Getenv("SENTRY_DSN")
 	if dsn == "" {
-		return nil, func() {}
+		return nil
 	}
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:         dsn,
 		Environment: os.Getenv("SENTRY_ENVIRONMENT"),
 	}); err != nil {
 		// A bad DSN must not take down the process; just leave the sink disabled.
-		return nil, func() {}
+		return nil
 	}
-	return &sentryCore{level: zapcore.ErrorLevel}, func() { sentry.Flush(sentryFlushTimeout) }
+	return &sentryCore{level: zapcore.ErrorLevel}
 }
 
 // sentryCore is a barebones zapcore that captures Error+ entries as Sentry events, attaching the log

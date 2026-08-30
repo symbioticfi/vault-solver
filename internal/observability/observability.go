@@ -31,13 +31,13 @@ func NewLogger(debug bool) (logr.Logger, func()) {
 		return logr.Discard(), func() {}
 	}
 	// Optional Sentry sink: when SENTRY_DSN is set, tee Error+ entries to Sentry. Disabled otherwise.
-	sentrySink, flushSentry := initSentry()
+	sentrySink := initSentry()
 	if sentrySink != nil {
 		zl = zl.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 			return zapcore.NewTee(core, sentrySink)
 		}))
 	}
-	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }
+	return zapr.NewLogger(zl), func() { _ = zl.Sync() }
 }
 
 // Metrics owns the Prometheus registry. Solvers register their own collectors on Registerer();
