@@ -93,6 +93,14 @@ func TestQuoteRejectsStrategyThatChangesRequestedSide(t *testing.T) {
 	if _, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut)); err == nil {
 		t.Fatal("quote error = nil, want changed exact-input rejection")
 	}
+
+	request := validQuoteRequest(tokenIn, tokenOut)
+	request.Type = quoteTypeExactOutput
+	request.Amount = "90"
+	strategy.quote = &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(89)}
+	if _, err := solver.quote(t.Context(), request); err == nil {
+		t.Fatal("quote error = nil, want changed exact-output rejection")
+	}
 }
 
 func TestQuoteDoesNotSelfBlockIndicativeThenHardRound(t *testing.T) {

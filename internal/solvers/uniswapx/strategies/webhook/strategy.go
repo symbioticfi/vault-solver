@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
@@ -53,12 +52,6 @@ func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (*ty
 	if err := s.client.DoJSON(ctx, http.MethodPost, decideQuoteRoute, input, &out); err != nil {
 		return nil, err
 	}
-	if out == nil {
-		return nil, nil
-	}
-	if err := validateQuote(input, out); err != nil {
-		return nil, err
-	}
 	return out, nil
 }
 
@@ -71,19 +64,6 @@ func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*type
 		return nil, nil
 	}
 	return out, nil
-}
-
-func validateQuote(input types.QuoteInput, quote *types.Quote) error {
-	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 || quote.AmountOut == nil || quote.AmountOut.Sign() <= 0 {
-		return errors.New("webhook quote amounts must be positive")
-	}
-	if input.AmountIn != nil && quote.AmountIn.Cmp(input.AmountIn) != 0 {
-		return errors.New("webhook quote changed exact-input amount")
-	}
-	if input.AmountOut != nil && quote.AmountOut.Cmp(input.AmountOut) != 0 {
-		return errors.New("webhook quote changed exact-output amount")
-	}
-	return nil
 }
 
 var _ types.Strategy = (*Strategy)(nil)
