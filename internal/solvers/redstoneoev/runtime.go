@@ -23,8 +23,8 @@ var (
 func (s *Solver) Run(ctx context.Context) error {
 	s.log.Info("starting",
 		"callback", s.cfg.Callback.Hex(), "executor", s.cfg.Executor.Hex(), "adapter", s.cfg.Adapter.Hex(),
-		"strategy", s.strategyName,
-		"dryRun", s.dryRun, "signer", s.deps.Signer.Address().Hex())
+		"strategy", s.cfg.Strategy.Name,
+		"dryRun", s.cfg.DryRun, "signer", s.deps.Signer.Address().Hex())
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

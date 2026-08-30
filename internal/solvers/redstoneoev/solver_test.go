@@ -885,7 +885,7 @@ func handleAuctionSynchronously(ctx context.Context, s *Solver, raw []byte) {
 // bot's decisions against a live feed without funding or competing.
 func TestDryRunSuppressesSend(t *testing.T) {
 	s, _ := seededSolver(t)
-	s.dryRun = true
+	s.cfg.DryRun = true
 
 	// Real metrics on a fresh registry so we can read the would-bid counter back.
 	reg := prometheus.NewRegistry()

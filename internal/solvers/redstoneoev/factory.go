@@ -55,8 +55,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		cfg:            cfg,
 		deps:           deps,
 		chainID:        chainID,
-		dryRun:         cfg.DryRun,
-		strategyName:   cfg.Strategy.Name,
 		reader:         reader,
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),

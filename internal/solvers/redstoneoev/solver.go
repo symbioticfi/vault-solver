@@ -27,19 +27,17 @@ func init() {
 
 // Solver is the RedStone OEV solver runtime.
 type Solver struct {
-	cfg          *Config
-	deps         solver.Deps
-	chainID      *big.Int
-	dryRun       bool
-	strategyName string
-	reader       *reader
-	strategy     types.Strategy
-	nonces       *nonceStore
-	breaker      *breaker
-	metrics      *metrics
-	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
-	log          logr.Logger
+	cfg      *Config
+	deps     solver.Deps
+	chainID  *big.Int
+	reader   *reader
+	strategy types.Strategy
+	nonces   *nonceStore
+	breaker  *breaker
+	metrics  *metrics
+	ws       *wsClient
+	seen     *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
+	log      logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
 	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.

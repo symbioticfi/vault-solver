@@ -150,7 +150,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 		s.logSkip(a.ID, d)
 		return
 	}
-	if s.dryRun {
+	if s.cfg.DryRun {
 		s.metrics.bid()
 		s.log.Info("DRY-RUN would bid", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 			"bidEth", d.solve.Data.Bid)
