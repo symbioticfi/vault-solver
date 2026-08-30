@@ -6,7 +6,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
@@ -95,7 +94,7 @@ func TestStrategySelectionCharacterization(t *testing.T) {
 			assertBridgeStrategyType(t, selected, test.wantType)
 		})
 	}
-	if got, want := strategies.Registered(), []string{"default", "webhook"}; !slices.Equal(got, want) {
+	if got, want := strategyNames(), []string{"default", "webhook"}; !slices.Equal(got, want) {
 		t.Fatalf("strategy catalog = %v, want %v", got, want)
 	}
 

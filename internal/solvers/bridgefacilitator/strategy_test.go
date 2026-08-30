@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
@@ -53,20 +52,6 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 			RemainingAmount: mustBig(t, "700"),
 			MaxRateBps:      200,
 		}},
-	}
-}
-
-func TestStrategyRegistryUsesBuiltIns(t *testing.T) {
-	got, err := newStrategy(StrategyConfig{Name: "default"})
-	if err != nil {
-		t.Fatalf("newStrategy default: %v", err)
-	}
-	if got == nil {
-		t.Fatal("newStrategy default returned nil")
-	}
-	names := strategies.Registered()
-	if len(names) != 2 || names[0] != "default" || names[1] != "webhook" {
-		t.Fatalf("registered strategies = %v, want [default webhook]", names)
 	}
 }
 

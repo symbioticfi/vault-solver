@@ -7,20 +7,42 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 )
 
 func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	return strategies.New(spec.Name, spec.Config)
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, unknownStrategyError(spec.Name)
+	}
 }
 
 func validateStrategyConfig(spec StrategyConfig) error {
-	return strategies.Validate(spec.Name, spec.Config)
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown 3F strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
