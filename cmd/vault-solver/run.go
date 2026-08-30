@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -134,6 +135,33 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 		requiresTxManager = requiresTxManager || solverRequiresTxManager
 	}
+	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health, log)
+}
+
+type runtimeTransactionManager interface {
+	ValidateFeeHeadroom() error
+	Initialize(context.Context) error
+	Start(context.Context)
+	SubscribeLaneState() (<-chan struct{}, func())
+	LaneReady() bool
+}
+
+type readinessSetter interface {
+	SetReady(bool)
+}
+
+var _ runtimeTransactionManager = (*txmanager.Manager)(nil)
+
+func runSolverLifecycle(
+	runCtx context.Context,
+	configPath string,
+	cfg *config.Config,
+	txm runtimeTransactionManager,
+	solvers []solver.Solver,
+	requiresTxManager bool,
+	health readinessSetter,
+	log logr.Logger,
+) error {
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {
 			return errors.Errorf("invalid config %q: %w", configPath, err)
@@ -210,7 +238,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			})
 		}()
 	}
-	err = g.Wait()
+	err := g.Wait()
 	if requiresTxManager {
 		close(solversDone)
 		<-drainMonitorDone
