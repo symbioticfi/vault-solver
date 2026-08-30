@@ -5,8 +5,21 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 )
+
+type replacementSendMode uint8
+
+const (
+	appendNewReplacementAttempt replacementSendMode = iota
+	retryReplacementAttemptInPlace
+)
+
+type replacementSendOutcome struct {
+	hash      common.Hash
+	uncertain bool
+}
 
 func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, cancellation bool) {
 	if m.hasNonceConflict(pending.nonce) {
@@ -62,20 +75,14 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		)
 		return
 	}
-	hash := signed.Hash()
-	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
-	pending.fees = cloneFeeQuote(fees)
-	pending.attempts = append(pending.attempts, txAttempt{
-		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
-	})
-	if isNonceConsumedError(sendErr) {
-		pending.nonceConflictHash = hash
-		m.reconcileExistingLifecycleNonce(ctx, pending)
-	}
-	if broadcastUncertain {
+	outcome := m.applyReplacementSend(
+		ctx, pending, appendNewReplacementAttempt,
+		txAttempt{tx: signed, cancellation: cancellation}, fees, sendErr,
+	)
+	if outcome.uncertain {
 		m.log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash",
 			"label", pending.req.Label,
-			"hash", hash.Hex(),
+			"hash", outcome.hash.Hex(),
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
@@ -84,7 +91,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	if sendErr != nil {
 		m.log.Info("replacement already known by write RPC",
 			"label", pending.req.Label,
-			"hash", hash.Hex(),
+			"hash", outcome.hash.Hex(),
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 			"rpcResult", sendErr.Error(),
@@ -93,7 +100,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	m.log.Info("pending transaction replaced",
 		"label", pending.req.Label,
-		"hash", hash.Hex(),
+		"hash", outcome.hash.Hex(),
 		"nonce", pending.nonce,
 		"cancellation", cancellation,
 		"maxFeePerGas", fees.maxFee.String(),
@@ -117,23 +124,21 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	}
 	attempt.exactRebroadcastPending = false
 	err := m.sendSigned(ctx, attempt.tx, true)
-	known := isKnownTransactionError(err)
-	if isNonceConsumedError(err) {
-		pending.nonceConflictHash = attempt.hash
-		m.reconcileExistingLifecycleNonce(ctx, pending)
-	}
+	outcome := m.applyReplacementSend(
+		ctx, pending, retryReplacementAttemptInPlace, *attempt, pending.fees, err,
+	)
 	switch {
 	case err == nil:
 		m.log.Info("uncertain transaction rebroadcast",
 			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
+			"hash", outcome.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
 		)
-	case known:
+	case !outcome.uncertain:
 		m.log.Info("uncertain transaction already known by write RPC",
 			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
+			"hash", outcome.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
 			"rpcResult", err.Error(),
@@ -141,7 +146,7 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	default:
 		m.log.Error(err, "uncertain transaction exact rebroadcast failed; replacement deferred",
 			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
+			"hash", outcome.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
 		)
@@ -169,21 +174,20 @@ func (m *Manager) rebroadcastLatestAttempt(
 		sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
 		err := m.sendSigned(sendCtx, attempt.tx, true)
 		cancelSend()
-		if isNonceConsumedError(err) {
-			pending.nonceConflictHash = attempt.hash
-			m.reconcileExistingLifecycleNonce(ctx, pending)
-		}
+		outcome := m.applyReplacementSend(
+			ctx, pending, retryReplacementAttemptInPlace, attempt, pending.fees, err,
+		)
 		if err != nil {
 			m.log.Error(err, "capped transaction rebroadcast failed",
 				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
+				"hash", outcome.hash.Hex(),
 				"nonce", pending.nonce,
 				"cancellation", cancellation,
 			)
 		} else {
 			m.log.Info("capped transaction rebroadcast",
 				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
+				"hash", outcome.hash.Hex(),
 				"nonce", pending.nonce,
 				"cancellation", cancellation,
 			)
@@ -191,6 +195,32 @@ func (m *Manager) rebroadcastLatestAttempt(
 		return true
 	}
 	return false
+}
+
+func (m *Manager) applyReplacementSend(
+	ctx context.Context,
+	pending *pendingTransaction,
+	mode replacementSendMode,
+	attempt txAttempt,
+	fees feeQuote,
+	sendErr error,
+) replacementSendOutcome {
+	outcome := replacementSendOutcome{
+		hash:      attempt.hash,
+		uncertain: sendErr != nil && !isKnownTransactionError(sendErr),
+	}
+	if mode == appendNewReplacementAttempt {
+		outcome.hash = attempt.tx.Hash()
+		attempt.hash = outcome.hash
+		attempt.exactRebroadcastPending = outcome.uncertain
+		pending.fees = cloneFeeQuote(fees)
+		pending.attempts = append(pending.attempts, attempt)
+	}
+	if isNonceConsumedError(sendErr) {
+		pending.nonceConflictHash = outcome.hash
+		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
+	return outcome
 }
 
 // Normal replacement broadcasts must not outlive the request's cancellation deadline. Cancellation
