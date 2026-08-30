@@ -50,7 +50,6 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 			Adapter:    candidate.Route.Adapter,
 			AmountIn:   liquidlane.CloneBig(leg.AmountIn),
 			AmountOut:  liquidlane.CloneBig(leg.AmountOut),
-			MaxRate:    liquidlane.CloneBig(candidate.Rate),
 			DiscountID: liquidlane.CloneHash(candidate.DiscountID),
 		})
 	}
@@ -64,13 +63,8 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		return nil, errors.New("strategy output is below required amount out")
 	}
 	return &types.FillPlan{
-		QuoteID:         input.QuoteID,
-		RequestID:       input.RequestID,
-		TokenIn:         input.TokenIn,
-		TokenOut:        input.TokenOut,
-		AmountIn:        liquidlane.CloneBig(input.AmountIn),
-		QuotedAmountOut: liquidlane.CloneBig(out.QuotedAmountOut),
-		Legs:            legs,
+		TokenIn: input.TokenIn,
+		Legs:    legs,
 	}, nil
 }
 

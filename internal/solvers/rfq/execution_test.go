@@ -148,8 +148,7 @@ func (s fixedFillStrategy) BuildFillPlan(
 
 func baseFillPlan() *types.FillPlan {
 	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
+		TokenIn: tIn,
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 		}},
@@ -158,11 +157,10 @@ func baseFillPlan() *types.FillPlan {
 
 func discountFillPlan(h common.Hash) *types.FillPlan {
 	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
+		TokenIn: tIn,
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
-			MaxRate: big.NewInt(1), DiscountID: &h,
+			DiscountID: &h,
 		}},
 	}
 }

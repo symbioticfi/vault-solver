@@ -55,14 +55,10 @@ func (s *Strategy) BuildFillPlan(_ context.Context, input types.FillInput) (*typ
 		}
 		legs = append(legs, types.FillLeg{
 			Adapter: source.Route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
-			MaxRate: liquidlane.CloneBig(source.Rate), DiscountID: liquidlane.CloneHash(source.DiscountID),
+			DiscountID: liquidlane.CloneHash(source.DiscountID),
 		})
 	}
-	return &types.FillPlan{
-		QuoteID: input.QuoteID, RequestID: input.RequestID,
-		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
-		QuotedAmountOut: quotedAmountOut, Legs: legs,
-	}, nil
+	return &types.FillPlan{TokenIn: input.TokenIn, Legs: legs}, nil
 }
 
 func decline() types.QuoteOutput {

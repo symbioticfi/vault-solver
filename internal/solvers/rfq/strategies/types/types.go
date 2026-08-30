@@ -63,19 +63,13 @@ type FillInput = QuoteInput
 // FillPlan is the execution output trusted strategies hand to the solver. The solver enforces its
 // structural constraints, then translates the plan into Executor calldata.
 type FillPlan struct {
-	QuoteID         string
-	RequestID       string
-	TokenIn         common.Address
-	TokenOut        common.Address
-	AmountIn        *big.Int
-	QuotedAmountOut *big.Int
-	Legs            []FillLeg
+	TokenIn common.Address
+	Legs    []FillLeg
 }
 
 type FillLeg struct {
 	Adapter    common.Address
 	AmountIn   *big.Int
 	AmountOut  *big.Int
-	MaxRate    *big.Int
 	DiscountID *common.Hash
 }
