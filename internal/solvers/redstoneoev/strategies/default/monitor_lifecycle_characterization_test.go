@@ -1,14 +1,15 @@
 package defaultstrategy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,12 +22,40 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-func TestAPIMonitorPublishesInitialAndPreservesLastGoodSnapshot(t *testing.T) {
-	loan := common.HexToAddress("0x0000000000000000000000000000000000000011")
-	collateral := common.HexToAddress("0x0000000000000000000000000000000000000022")
-	oracle := common.HexToAddress("0x0000000000000000000000000000000000000033")
+type apiLifecycleReader struct {
+	native *big.Int
+}
+
+func (r *apiLifecycleReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
+	return characterizationBigCopy(r.native), nil
+}
+
+func (*apiLifecycleReader) ResolveParams(context.Context, common.Address, []common.Hash) (map[common.Hash]MarketParams, error) {
+	return nil, errors.New("unexpected test-monitor params read")
+}
+
+func (*apiLifecycleReader) ReadHead(context.Context) (number uint64, timestamp uint64, err error) {
+	return 0, 0, errors.New("unexpected test-monitor head read")
+}
+
+func (*apiLifecycleReader) ReadCallbackMorpho(context.Context, common.Address) (common.Address, error) {
+	return common.Address{}, errors.New("unexpected test-monitor callback read")
+}
+
+func (*apiLifecycleReader) ReadTestMarketStates(context.Context, common.Address, map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
+	return nil, nil, errors.New("unexpected test-monitor market read")
+}
+
+func (*apiLifecycleReader) ReadTestPositions(context.Context, common.Address, map[common.Hash]MarketInfo, []common.Address) (map[common.Hash]map[common.Address]morpho.PositionState, error) {
+	return nil, errors.New("unexpected test-monitor position read")
+}
+
+func TestAPIMonitorPublishesInitialAndPreservesLastGoodDecision(t *testing.T) {
+	loan := characterizationLoan
+	collateral := characterizationColl
+	oracle := characterizationOracle
 	irm := common.HexToAddress("0x0000000000000000000000000000000000000044")
-	borrower := common.HexToAddress("0x0000000000000000000000000000000000000055")
+	borrower := characterizationBorrower
 	lltv := mustBig("860000000000000000")
 	marketID, err := deriveMarketID(MarketParams{LoanToken: loan, CollateralToken: collateral, Oracle: oracle, Irm: irm, Lltv: lltv})
 	if err != nil {
@@ -34,7 +63,9 @@ func TestAPIMonitorPublishesInitialAndPreservesLastGoodSnapshot(t *testing.T) {
 	}
 
 	var fail atomic.Bool
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		if fail.Load() {
 			http.Error(w, "refresh unavailable", http.StatusServiceUnavailable)
 			return
@@ -64,171 +95,208 @@ func TestAPIMonitorPublishesInitialAndPreservesLastGoodSnapshot(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter := types.AdapterSnapshot{
-		Loan:       loan,
-		Redeemable: []types.RedeemableSnapshot{{Asset: collateral}},
-	}
-	monitor := newAPIMonitor(logr.Discard(), Config{
+	adapter := characterizationAdapterSnapshot(big.NewInt(100_000_000_000))
+	strategy, err := New(Config{
 		MorphoAPIURL: server.URL, MaxTrackedPositions: 10, DiscoveryMaxHealthFactor: 1.3,
-		MonitorPoll: time.Hour,
-	}, 1, func() (types.AdapterSnapshot, bool) { return adapter, true })
-	if initial := monitor.snapshot(); initial == nil || !initial.updatedAt.IsZero() || len(initial.markets) != 0 {
-		t.Fatalf("initial unpublished snapshot = %+v", initial)
+		BidWei: big.NewInt(500_000_000_000_000), CallbackAuthTTL: time.Minute,
+		MonitorPoll: 2 * time.Millisecond, MaxStateAge: 10 * 365 * 24 * time.Hour,
+		Sizing: SizingParams{AllowFullLiquidation: true},
+	}, Deps{
+		Reader: &apiLifecycleReader{native: big.NewInt(1_000_000_000_000_000_000)},
+		Signer: newCharacterizationSigner(t), Log: logr.Discard(), ChainID: 11_155_111,
+		Adapter: characterizationAdapter, Callback: characterizationCallback,
+		LoadAdapterSnapshot: func() (types.AdapterSnapshot, bool) { return characterizationCloneAdapter(adapter), true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := characterizationLifecycleInput(adapter, oracle)
+	if out, decideErr := strategy.DecideBid(t.Context(), input); decideErr != nil || out.Reason != types.SkipReasonStaleState {
+		t.Fatalf("decision before initial publication = %+v, err=%v", out, decideErr)
 	}
 
-	monitor.refresh(t.Context())
-	published := cloneSnapshot(monitor.snapshot())
-	if published.updatedAt.IsZero() || published.block != 101 || published.blockTime != 1_781_243_340 {
-		t.Fatalf("published API epoch = block %d time %d updatedAt=%v", published.block, published.blockTime, published.updatedAt)
+	cancel, done := runCharacterizationStrategy(t, strategy)
+	baseline := awaitCharacterizationBid(t, strategy, input)
+	withoutFrame := characterizationCloneBidInput(input)
+	withoutFrame.Auction.ID += "-without-frame"
+	withoutFrame.Auction.Prices = nil
+	if out, decideErr := strategy.DecideBid(t.Context(), withoutFrame); decideErr != nil || out.Decision != types.DecisionSkip || out.Reason != types.SkipReasonNoLegs {
+		t.Fatalf("production decision without settlement frame = %+v, err=%v", out, decideErr)
 	}
-	if len(published.markets) != 1 || len(published.positions[marketID]) != 1 {
-		t.Fatalf("published API snapshot markets/positions = %d/%d", len(published.markets), len(published.positions[marketID]))
-	}
-	if got := published.positions[marketID][borrower]; got.BorrowShares.String() != "1685600000000000" || got.Collateral.String() != "1000000000000000000" {
-		t.Fatalf("published API position = %+v", got)
-	}
-
+	requestsBeforeFailure := requests.Load()
 	fail.Store(true)
-	monitor.refresh(t.Context())
-	if got := monitor.snapshot(); !reflect.DeepEqual(got, published) {
-		t.Fatalf("failed API refresh changed last-good publication\n got: %+v\nwant: %+v", got, published)
+	characterizationAwaitCount(t, &requests, requestsBeforeFailure+1, "failed API refresh")
+	afterFailure, err := strategy.DecideBid(t.Context(), input)
+	if err != nil || afterFailure.Decision != types.DecisionBid ||
+		afterFailure.BidAmount.Cmp(baseline.BidAmount) != 0 || !bytes.Equal(afterFailure.OperationData, baseline.OperationData) {
+		t.Fatalf("decision after failed API refresh = %+v, err=%v", afterFailure, err)
 	}
+	cancel()
+	awaitSignal(t, done, "API strategy shutdown")
 }
 
-type monitorCharacterizationReader struct {
-	Reader
+type testLifecycleReader struct {
+	marketID common.Hash
+	market   MarketInfo
+	price    *big.Int
+	borrower common.Address
+	position morpho.PositionState
 
 	fail      atomic.Bool
 	headCalls atomic.Int32
-	morpho    common.Address
-	marketID  common.Hash
-	params    MarketParams
-	market    MarketInfo
-	price     *big.Int
-	borrower  common.Address
-	position  morpho.PositionState
 }
 
-func (r *monitorCharacterizationReader) ReadHead(context.Context) (number uint64, timestamp uint64, err error) {
+func (*testLifecycleReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
+	return big.NewInt(1_000_000_000_000_000_000), nil
+}
+
+func (r *testLifecycleReader) ResolveParams(context.Context, common.Address, []common.Hash) (map[common.Hash]MarketParams, error) {
+	return map[common.Hash]MarketParams{r.marketID: r.market.Params}, nil
+}
+
+func (r *testLifecycleReader) ReadHead(context.Context) (number uint64, timestamp uint64, err error) {
+	r.headCalls.Add(1)
 	if r.fail.Load() {
 		return 0, 0, errors.New("head unavailable")
 	}
-	r.headCalls.Add(1)
-	return 101, 1_781_243_340, nil
+	return 101, uint64(characterizationNow.Unix()), nil
 }
 
-func (r *monitorCharacterizationReader) ReadCallbackMorpho(context.Context, common.Address) (common.Address, error) {
-	return r.morpho, nil
+func (*testLifecycleReader) ReadCallbackMorpho(context.Context, common.Address) (common.Address, error) {
+	return common.BigToAddress(big.NewInt(99)), nil
 }
 
-func (r *monitorCharacterizationReader) ResolveParams(context.Context, common.Address, []common.Hash) (map[common.Hash]MarketParams, error) {
-	return map[common.Hash]MarketParams{r.marketID: r.params}, nil
+func (r *testLifecycleReader) ReadTestMarketStates(context.Context, common.Address, map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
+	return map[common.Hash]MarketInfo{r.marketID: r.market}, map[common.Hash]*big.Int{r.marketID: characterizationBigCopy(r.price)}, nil
 }
 
-func (r *monitorCharacterizationReader) ReadTestMarketStates(context.Context, common.Address, map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
-	return map[common.Hash]MarketInfo{r.marketID: r.market}, map[common.Hash]*big.Int{r.marketID: cloneBig(r.price)}, nil
-}
-
-func (r *monitorCharacterizationReader) ReadTestPositions(context.Context, common.Address, map[common.Hash]MarketInfo, []common.Address) (map[common.Hash]map[common.Address]morpho.PositionState, error) {
+func (r *testLifecycleReader) ReadTestPositions(context.Context, common.Address, map[common.Hash]MarketInfo, []common.Address) (map[common.Hash]map[common.Address]morpho.PositionState, error) {
 	return map[common.Hash]map[common.Address]morpho.PositionState{
 		r.marketID: {r.borrower: morpho.ClonePositionState(r.position)},
 	}, nil
 }
 
-func TestTestMonitorPublishesInitialAndPreservesLastGoodSnapshot(t *testing.T) {
-	marketID := common.BigToHash(big.NewInt(1))
-	loan := common.BigToAddress(big.NewInt(1))
-	collateral := common.BigToAddress(big.NewInt(2))
-	borrower := common.BigToAddress(big.NewInt(3))
-	reader := &monitorCharacterizationReader{
-		morpho: common.BigToAddress(big.NewInt(4)), marketID: marketID, borrower: borrower,
-		params: MarketParams{LoanToken: loan, CollateralToken: collateral, Oracle: common.BigToAddress(big.NewInt(5)), Lltv: mustBig("860000000000000000")},
-		market: MarketInfo{
-			Params: MarketParams{LoanToken: loan, CollateralToken: collateral, Oracle: common.BigToAddress(big.NewInt(5)), Lltv: mustBig("860000000000000000")},
-			State:  goldenMarket(),
-		},
-		price: mustBig("1550000000000000000000000000"), position: goldenBorrower(),
+func TestTestMonitorPublishesInitialAndPreservesLastGoodDecision(t *testing.T) {
+	reader := &testLifecycleReader{
+		marketID: characterizationMarket, market: characterizationMarketInfo(characterizationOracle),
+		price: mustBig("1550000000000000000000000000"), borrower: characterizationBorrower,
+		position: goldenBorrower(),
 	}
-	monitor, err := newTestMonitor(reader, logr.Discard(), Config{MonitorPoll: time.Hour}, characterizationCallback,
-		func() (types.AdapterSnapshot, bool) {
-			return types.AdapterSnapshot{Loan: loan, Redeemable: []types.RedeemableSnapshot{{Asset: collateral}}}, true
+	adapter := characterizationAdapterSnapshot(big.NewInt(100_000_000_000))
+	strategy, err := New(Config{
+		TestMonitor: &TestMonitorConfig{
+			Markets: []common.Hash{characterizationMarket}, Positions: []common.Address{characterizationBorrower},
 		},
-		&TestMonitorConfig{Markets: []common.Hash{marketID}, Positions: []common.Address{borrower}},
-	)
+		BidWei: big.NewInt(500_000_000_000_000), CallbackAuthTTL: time.Minute,
+		MonitorPoll: 2 * time.Millisecond, MaxStateAge: 10 * 365 * 24 * time.Hour,
+		Sizing: SizingParams{AllowFullLiquidation: true},
+	}, Deps{
+		Reader: reader, Signer: newCharacterizationSigner(t), Log: logr.Discard(), ChainID: 11_155_111,
+		Adapter: characterizationAdapter, Callback: characterizationCallback,
+		LoadAdapterSnapshot: func() (types.AdapterSnapshot, bool) { return characterizationCloneAdapter(adapter), true },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initial := monitor.snapshot(); initial == nil || !initial.updatedAt.IsZero() || len(initial.markets) != 0 {
-		t.Fatalf("initial unpublished test snapshot = %+v", initial)
+	input := characterizationLifecycleInput(adapter, characterizationOracle)
+	// Sepolia dev settlement does not apply this conflicting frame price; the test monitor must
+	// continue sizing from its cached on-chain oracle price.
+	input.Auction.Prices[0].Price = mustBig("5000000000000000000000000000")
+	if out, decideErr := strategy.DecideBid(t.Context(), input); decideErr != nil || out.Reason != types.SkipReasonStaleState {
+		t.Fatalf("decision before initial publication = %+v, err=%v", out, decideErr)
 	}
 
-	monitor.refresh(t.Context())
-	published := cloneSnapshot(monitor.snapshot())
-	if published.updatedAt.IsZero() || published.block != 101 || published.blockTime != 1_781_243_340 {
-		t.Fatalf("published test epoch = block %d time %d updatedAt=%v", published.block, published.blockTime, published.updatedAt)
+	cancel, done := runCharacterizationStrategy(t, strategy)
+	baseline := awaitCharacterizationBid(t, strategy, input)
+	withoutFrame := characterizationCloneBidInput(input)
+	withoutFrame.Auction.ID += "-without-frame"
+	withoutFrame.Auction.Prices = nil
+	if out, decideErr := strategy.DecideBid(t.Context(), withoutFrame); decideErr != nil || out.Decision != types.DecisionBid {
+		t.Fatalf("Sepolia test-monitor decision without frame = %+v, err=%v", out, decideErr)
 	}
-	if len(published.markets) != 1 || len(published.positions[marketID]) != 1 || published.prices[marketID].Cmp(reader.price) != 0 {
-		t.Fatalf("published test snapshot = %+v", published)
-	}
-	if reader.headCalls.Load() != 2 {
-		t.Fatalf("coherent test refresh head reads = %d, want 2", reader.headCalls.Load())
-	}
-
+	headCallsBeforeFailure := reader.headCalls.Load()
 	reader.fail.Store(true)
-	monitor.refresh(t.Context())
-	if got := monitor.snapshot(); !reflect.DeepEqual(got, published) {
-		t.Fatalf("failed test refresh changed last-good publication\n got: %+v\nwant: %+v", got, published)
+	characterizationAwaitCount(t, &reader.headCalls, headCallsBeforeFailure+1, "failed test-monitor refresh")
+	afterFailure, err := strategy.DecideBid(t.Context(), input)
+	if err != nil || afterFailure.Decision != types.DecisionBid ||
+		afterFailure.BidAmount.Cmp(baseline.BidAmount) != 0 || !bytes.Equal(afterFailure.OperationData, baseline.OperationData) {
+		t.Fatalf("decision after failed test-monitor refresh = %+v, err=%v", afterFailure, err)
 	}
+	cancel()
+	awaitSignal(t, done, "test-monitor strategy shutdown")
 }
 
-type blockingMonitorSource struct {
-	refreshCalls atomic.Int32
-	blocked      chan struct{}
+type strategyLivenessReader struct {
+	marketID common.Hash
+	market   MarketInfo
+	borrower common.Address
+
+	headCalls   atomic.Int32
+	nativeCalls atomic.Int32
+	blocked     chan struct{}
+	blockOnce   sync.Once
 }
 
-func (m *blockingMonitorSource) refresh(ctx context.Context) {
-	if m.refreshCalls.Add(1) == 1 {
-		return
+func (r *strategyLivenessReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
+	r.nativeCalls.Add(1)
+	return big.NewInt(1_000_000_000_000_000_000), nil
+}
+
+func (r *strategyLivenessReader) ResolveParams(context.Context, common.Address, []common.Hash) (map[common.Hash]MarketParams, error) {
+	return map[common.Hash]MarketParams{r.marketID: r.market.Params}, nil
+}
+
+func (r *strategyLivenessReader) ReadHead(ctx context.Context) (number uint64, timestamp uint64, err error) {
+	if r.headCalls.Add(1) > 2 {
+		r.blockOnce.Do(func() { close(r.blocked) })
+		<-ctx.Done()
+		return 0, 0, ctx.Err()
 	}
-	select {
-	case m.blocked <- struct{}{}:
-	default:
-	}
-	<-ctx.Done()
+	return 101, uint64(characterizationNow.Unix()), nil
 }
 
-func (m *blockingMonitorSource) run(ctx context.Context) {
-	runMonitor(ctx, time.Millisecond, m.refresh)
+func (*strategyLivenessReader) ReadCallbackMorpho(context.Context, common.Address) (common.Address, error) {
+	return common.BigToAddress(big.NewInt(99)), nil
 }
 
-func (*blockingMonitorSource) snapshot() *snapshot { return &snapshot{} }
-
-func (*blockingMonitorSource) candidates(types.AuctionSnapshot, uint64, types.AdapterSnapshot) []evalItem {
-	return nil
+func (r *strategyLivenessReader) ReadTestMarketStates(context.Context, common.Address, map[common.Hash]MarketParams) (map[common.Hash]MarketInfo, map[common.Hash]*big.Int, error) {
+	return map[common.Hash]MarketInfo{r.marketID: r.market}, map[common.Hash]*big.Int{
+		r.marketID: mustBig("1550000000000000000000000000"),
+	}, nil
 }
 
-type livenessDecisionReader struct {
-	Reader
-
-	calls chan int32
-	count atomic.Int32
-}
-
-func (r *livenessDecisionReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
-	call := r.count.Add(1)
-	select {
-	case r.calls <- call:
-	default:
-	}
-	return big.NewInt(1), nil
+func (r *strategyLivenessReader) ReadTestPositions(context.Context, common.Address, map[common.Hash]MarketInfo, []common.Address) (map[common.Hash]map[common.Address]morpho.PositionState, error) {
+	return map[common.Hash]map[common.Address]morpho.PositionState{
+		r.marketID: {r.borrower: goldenBorrower()},
+	}, nil
 }
 
 func TestStrategyRunKeepsRefreshLoopsIndependentAndJoinsOnCancellation(t *testing.T) {
-	monitor := &blockingMonitorSource{blocked: make(chan struct{}, 1)}
-	reader := &livenessDecisionReader{calls: make(chan int32, 16)}
-	strategy := &Strategy{
-		cfg: Config{MonitorPoll: time.Millisecond}, reader: reader, mon: monitor,
-		callback: characterizationCallback, log: logr.Discard(),
+	reader := &strategyLivenessReader{
+		marketID: characterizationMarket,
+		market:   characterizationMarketInfo(characterizationOracle),
+		borrower: characterizationBorrower,
+		blocked:  make(chan struct{}),
+	}
+	adapter := types.AdapterSnapshot{
+		Address: characterizationAdapter,
+		Loan:    characterizationLoan,
+		Redeemable: []types.RedeemableSnapshot{{
+			Asset: characterizationColl,
+		}},
+	}
+	strategy, err := New(Config{
+		TestMonitor: &TestMonitorConfig{
+			Markets: []common.Hash{characterizationMarket}, Positions: []common.Address{characterizationBorrower},
+		},
+		BidWei: big.NewInt(1), MonitorPoll: time.Millisecond, MaxStateAge: time.Hour,
+	}, Deps{
+		Reader: reader, Signer: newCharacterizationSigner(t), Log: logr.Discard(), ChainID: 11_155_111,
+		Adapter: characterizationAdapter, Callback: characterizationCallback,
+		LoadAdapterSnapshot: func() (types.AdapterSnapshot, bool) { return adapter, true },
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -237,30 +305,67 @@ func TestStrategyRunKeepsRefreshLoopsIndependentAndJoinsOnCancellation(t *testin
 		close(done)
 	}()
 
-	awaitCallAtLeast(t, reader.calls, 1, "initial callback-state publication")
-	awaitSignal(t, monitor.blocked, "periodic monitor refresh to block")
-	awaitCallAtLeast(t, reader.calls, 2, "callback-state refresh while monitor is blocked")
+	awaitSignal(t, reader.blocked, "periodic monitor read to block")
+	callsWhileBlocked := reader.nativeCalls.Load()
+	characterizationAwaitCount(t, &reader.nativeCalls, callsWhileBlocked+1, "callback-state refresh while monitor is blocked")
 
 	cancel()
 	awaitSignal(t, done, "Strategy.Run cancellation join")
-	if monitor.refreshCalls.Load() < 2 {
-		t.Fatalf("monitor refresh calls = %d, want initial plus blocked periodic refresh", monitor.refreshCalls.Load())
+}
+
+func characterizationAdapterSnapshot(maxAssets *big.Int) types.AdapterSnapshot {
+	return types.AdapterSnapshot{
+		Address: characterizationAdapter, Loan: characterizationLoan, LoanDecimals: 6,
+		FreeAssets: big.NewInt(100_000_000_000), Withdrawable: big.NewInt(100_000_000_000), Filler: true,
+		Redeemable: []types.RedeemableSnapshot{{
+			Asset: characterizationColl, Decimals: 18, MaxRate: mustBig("1780000000000000000000"),
+			MaxAssets: characterizationBigCopy(maxAssets), AcquireBalance: big.NewInt(100_000_000_000),
+		}},
 	}
 }
 
-func awaitCallAtLeast(t *testing.T, calls <-chan int32, want int32, description string) {
+func characterizationLifecycleInput(adapter types.AdapterSnapshot, oracle common.Address) types.BidInput {
+	return types.BidInput{
+		Now: characterizationNow,
+		Auction: types.AuctionSnapshot{
+			ID: "monitor-lifecycle", Timestamp: characterizationNow.UnixMilli(), RawPriceCount: 1,
+			Prices: []types.AuctionPrice{{Oracle: oracle, Price: mustBig("1550000000000000000000000000")}},
+		},
+		Adapter: characterizationCloneAdapter(adapter),
+		Context: types.BidContext{
+			ChainID: big.NewInt(11_155_111), Executor: characterizationExecutor, Callback: characterizationCallback,
+			ExecutorDeposit: big.NewInt(1_000_000_000_000_000_000), ExecutorMinDeposit: big.NewInt(10_000_000_000_000),
+			MaxTxGasPrice: big.NewInt(1_000_000_000), GasLimit: 2_000_000,
+		},
+	}
+}
+
+func runCharacterizationStrategy(t *testing.T, strategy *Strategy) (context.CancelFunc, <-chan struct{}) {
 	t.Helper()
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		strategy.Run(ctx)
+		close(done)
+	}()
+	return cancel, done
+}
+
+func awaitCharacterizationBid(t *testing.T, strategy *Strategy, input types.BidInput) types.BidOutput {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
 	for {
-		select {
-		case got := <-calls:
-			if got >= want {
-				return
-			}
-		case <-timer.C:
-			t.Fatalf("timed out waiting for %s", description)
+		out, err := strategy.DecideBid(t.Context(), input)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if out.Decision == types.DecisionBid {
+			return out
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for bid; last output = %+v", out)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
