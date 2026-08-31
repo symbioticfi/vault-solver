@@ -226,6 +226,37 @@ func (s *recordingBidStrategy) DecideBid(_ context.Context, input types.BidInput
 	}, nil
 }
 
+type bidInputCaptureStrategy struct {
+	input types.BidInput
+}
+
+func (s *bidInputCaptureStrategy) Run(context.Context) {}
+
+func (s *bidInputCaptureStrategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+	s.input = input
+	return types.BidOutput{Decision: types.DecisionSkip, Reason: "captured"}, nil
+}
+
+func reservationProjectionSeenByStrategy(t *testing.T, s *Solver, now time.Time) []types.PendingAuction {
+	t.Helper()
+	state, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing seeded state")
+	}
+	state.UpdatedAt = now
+	s.state.store(state)
+
+	original := s.strategy
+	capture := &bidInputCaptureStrategy{}
+	s.strategy = capture
+	defer func() { s.strategy = original }()
+
+	if decision := s.buildBid(t.Context(), decodeAuction(t), func() time.Time { return now }); decision.skip != types.SkipReasonStrategy {
+		t.Fatalf("projection buildBid skip = %q, want %q", decision.skip, types.SkipReasonStrategy)
+	}
+	return capture.input.PendingAuctions
+}
+
 type mutatingAdapterStrategy struct {
 	input types.BidInput
 }
@@ -645,20 +676,22 @@ func TestPruneReservations(t *testing.T) {
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("all reservations should be freed, got pending=%v", inFlight.pending)
+	// Observe at the old reservation's send time so the strategy projection would expose every entry if
+	// pruning had failed, including the entry removed solely because it exceeded the TTL at prune time.
+	if pending := reservationProjectionSeenByStrategy(t, s, now.Add(-time.Hour)); len(pending) != 0 {
+		t.Fatalf("all reservations should be freed, got pending=%v", pending)
 	}
 
 	s.reserve(11, now, "auction-11")
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-11" {
-		t.Fatalf("a recent pending bid should be kept, got pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-11" {
+		t.Fatalf("a recent pending bid should be kept, got pending=%v", pending)
 	}
 
 	// A bid is freed exactly when the on-chain nonce reaches its nonce (== r.nonce), not only when it passes.
 	s.pruneReservations(11, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got pending=%v", pending)
 	}
 }
 
@@ -668,9 +701,10 @@ func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s.reserve(8, now, "auction-won")
 	s.markReservationWon("auction-won")
 
-	s.pruneReservations(7, now.Add(2*time.Minute))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || !inFlight.pending[0].Won {
-		t.Fatalf("won bid must stay reserved while settlement is delayed, pending=%v", inFlight.pending)
+	observedAt := now.Add(2 * time.Minute)
+	s.pruneReservations(7, observedAt)
+	if pending := reservationProjectionSeenByStrategy(t, s, observedAt); len(pending) != 1 || !pending[0].Won {
+		t.Fatalf("won bid must stay reserved while settlement is delayed, pending=%v", pending)
 	}
 }
 
@@ -684,8 +718,8 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 		"id":"auction-lost",
 		"data":{"bid":"0.0005","liquidator":"0x1111111111111111111111111111111111111111"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("lost auction must release reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("lost auction must release reservation, pending=%v", pending)
 	}
 
 	s.reserve(9, now, "auction-won")
@@ -694,8 +728,8 @@ func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 		"id":"auction-won",
 		"data":{"bid":"0.0005","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-won" {
-		t.Fatalf("won auction must stay reserved until liquidation result/nonce, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-won" {
+		t.Fatalf("won auction must stay reserved until liquidation result/nonce, pending=%v", pending)
 	}
 }
 
@@ -709,8 +743,8 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 		"id":"auction-ours",
 		"data":{"success":true,"txHash":"","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("our liquidation result must release reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("our liquidation result must release reservation, pending=%v", pending)
 	}
 
 	s.reserve(9, now, "auction-other")
@@ -719,8 +753,8 @@ func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 		"id":"auction-other",
 		"data":{"success":true,"txHash":"","liquidator":"0x1111111111111111111111111111111111111111","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-other" {
-		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-other" {
+		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", pending)
 	}
 }
 
@@ -746,7 +780,7 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
 	s.reserve(8, now, "auction-8")
 	s.nonces.reconcile(5)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) == 0 {
 		t.Fatal("precondition: the reservation should be present")
 	}
 
@@ -755,8 +789,8 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	s.applyExecutorState(st, now)
 
 	// pruneReservations ran: nonce 8 <= 9 → the reservation is freed.
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("pruneReservations must run from executor state; pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("pruneReservations must run from executor state; pending=%v", pending)
 	}
 	// nonces.reconcile ran: the next nonce is strictly above the on-chain 9.
 	if got := s.nonces.next(0); got != 10 {
