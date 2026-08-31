@@ -393,9 +393,6 @@ func fillRouteChoice(
 			best = &selected
 		}
 	}
-	if best == nil {
-		return nil
-	}
 	return &fillAllocation{
 		candidate:        *best,
 		amountIn:         legAmount,
