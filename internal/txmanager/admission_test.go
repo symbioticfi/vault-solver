@@ -169,14 +169,14 @@ func TestSendAsyncKeepsFutureNonceUnsignedUntilPriorConfirmation(t *testing.T) {
 	}
 }
 
-func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
+func TestLaneReadyTracksActiveAndWaitingRequests(t *testing.T) {
 	b := newMockBackend()
 	m := New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 1, PollInterval: time.Millisecond}, logr.Discard(),
 	)
-	if !m.Idle() {
-		t.Fatal("new manager is not idle")
+	if !m.LaneReady() {
+		t.Fatal("new manager lane is not ready")
 	}
 	startTestManager(t, m)
 
@@ -188,8 +188,8 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 	}
 	waitForSentTransactions(t, b, 1)
 	waitForAdmissionDemand(t, m, 1)
-	if m.Idle() {
-		t.Fatal("manager is idle while a lifecycle is active")
+	if !m.Available() || m.LaneReady() {
+		t.Fatal("active lifecycle reported an inconsistent lane state")
 	}
 
 	type submission struct {
@@ -204,8 +204,8 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 		secondSubmission <- submission{result: result, accepted: secondAccepted}
 	}()
 	waitForAdmissionDemand(t, m, 2)
-	if m.Idle() {
-		t.Fatal("manager is idle with an active lifecycle and a waiter")
+	if !m.Available() || m.LaneReady() {
+		t.Fatal("active lifecycle and waiter reported an inconsistent lane state")
 	}
 
 	b.mu.Lock()
@@ -226,8 +226,8 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 	}
 	waitForSentTransactions(t, b, 2)
 	waitForAdmissionDemand(t, m, 1)
-	if m.Idle() {
-		t.Fatal("manager became idle during the lifecycle handoff")
+	if !m.Available() || m.LaneReady() {
+		t.Fatal("lifecycle handoff reported an inconsistent lane state")
 	}
 
 	b.mu.Lock()
@@ -237,8 +237,8 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 		t.Fatalf("second result: %v", got.Err)
 	}
 	waitForAdmissionDemand(t, m, 0)
-	if !m.Idle() {
-		t.Fatal("manager did not become idle after the terminal result")
+	if !m.LaneReady() {
+		t.Fatal("manager lane did not become ready after the terminal result")
 	}
 }
 
@@ -256,7 +256,7 @@ func TestLaneStateSignalsBusyAndIdleEdges(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("subscriber did not receive busy edge")
 	}
-	if m.LaneReady() || m.Idle() || !m.Available() {
+	if !m.Available() || m.LaneReady() {
 		t.Fatal("busy manager reported an inconsistent lane state")
 	}
 
@@ -337,8 +337,8 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 			if got.Hash != (common.Hash{}) || got.Receipt != nil {
 				t.Fatalf("not-admitted result has an on-chain outcome: %+v", got)
 			}
-			if !m.Idle() {
-				t.Fatal("terminal admission failure left demand on the lane")
+			if !m.LaneReady() {
+				t.Fatal("terminal admission failure left the lane unready")
 			}
 		})
 	}
@@ -402,8 +402,9 @@ func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
 		if !errors.Is(got.Err, context.DeadlineExceeded) || !got.NotAdmitted {
 			t.Fatalf("deadline result = %+v", got)
 		}
-		if !m.Idle() {
-			t.Fatal("deadline left admission demand on the lane")
+		m.clearNonceConflict(7)
+		if !m.LaneReady() {
+			t.Fatal("deadline left the lane unready after nonce conflict cleared")
 		}
 	})
 

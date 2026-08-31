@@ -49,7 +49,7 @@ return a terminal receipt/result or its finite shutdown deadline expires.
 | State | Owner/synchronization | Rule |
 |---|---|---|
 | Admission queue and signing/broadcast order | one `Start` worker goroutine | never perform these concurrently |
-| Lifecycle occupancy | `lifecycleSlot` plus `admissionDemand` | `Idle` and `LaneReady` include queued demand |
+| Lifecycle occupancy | `lifecycleSlot` plus `admissionDemand` | `LaneReady` includes queued demand |
 | Local nonce and runtime conflict | `Manager.mu` | a conflict pauses new external commitments |
 | Active unmined lifecycle | `unminedMu` | shutdown may request cancellation of the owned nonce |
 | Readiness subscribers | `laneStateMu` | notifications carry no state; consumers re-read `LaneReady` |

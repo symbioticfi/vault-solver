@@ -477,8 +477,9 @@ func managerStateTrace(label string, m *Manager, pending *pendingTransaction, si
 			pending.nonce, feeQuoteTrace(pending.fees), pending.nonceConflictHash.Hex(), strings.Join(attempts, ","),
 		)
 	}
+	idle := m.admissionDemand.Load() == 0
 	return fmt.Sprintf("state[%s] signs=%d available=%t idle=%t ready=%t conflict=%s pending={%s}",
-		label, signCalls, m.Available(), m.Idle(), m.LaneReady(), conflict, pendingState)
+		label, signCalls, m.Available(), idle, m.LaneReady(), conflict, pendingState)
 }
 
 func feeQuoteTrace(fees feeQuote) string {

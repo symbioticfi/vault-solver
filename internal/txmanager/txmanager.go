@@ -229,17 +229,10 @@ func (m *Manager) Available() bool {
 	return m.conflict == nil
 }
 
-// Idle reports whether no request owns or is waiting for the single signed-lifecycle lane. It is
-// intentionally independent of Available: a nonce conflict pauses admission without making an
-// otherwise empty lane busy.
-func (m *Manager) Idle() bool {
-	return m.admissionDemand.Load() == 0
-}
-
 // LaneReady reports whether the nonce lane is both safe and idle, so a solver can make an external
 // commitment that requires prompt transaction admission.
 func (m *Manager) LaneReady() bool {
-	return m.Available() && m.Idle()
+	return m.Available() && m.admissionDemand.Load() == 0
 }
 
 // SubscribeLaneState returns an independent, coalesced change stream. Consumers must call
