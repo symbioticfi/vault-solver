@@ -152,9 +152,7 @@ func buildSources(candidates []liquidlane.QuoteCandidate) []source {
 				item.maxOutput.Set(candidateOutput)
 			}
 		}
-		if len(group) > 0 {
-			sources = append(sources, item)
-		}
+		sources = append(sources, item)
 	}
 	sort.Slice(sources, func(i, j int) bool {
 		if cmp := sources[i].bestRate.Cmp(sources[j].bestRate); cmp != 0 {
