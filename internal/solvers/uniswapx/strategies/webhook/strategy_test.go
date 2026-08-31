@@ -56,6 +56,22 @@ func TestWebhookStrategyDelegatesOneQuoteAndCurrentFill(t *testing.T) {
 	}
 }
 
+func TestDecideFillNullResponseDeclines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(nil)
+	}))
+	defer server.Close()
+
+	plan, err := newWebhookTestStrategy(t, server.URL).DecideFill(t.Context(), types.FillInput{})
+	if err != nil {
+		t.Fatalf("DecideFill() error = %v", err)
+	}
+	if plan != nil {
+		t.Fatalf("DecideFill() plan = %+v, want nil", plan)
+	}
+}
+
 func newWebhookTestStrategy(t *testing.T, url string) *Strategy {
 	t.Helper()
 	client, err := webhook.NewClient(webhook.Config{URL: url, Timeout: time.Second})

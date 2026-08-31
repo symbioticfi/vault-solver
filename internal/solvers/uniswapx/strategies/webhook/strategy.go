@@ -53,9 +53,6 @@ func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*type
 	if err := s.client.DoJSON(ctx, decideFillRoute, input, &out); err != nil {
 		return nil, err
 	}
-	if out == nil {
-		return nil, nil
-	}
 	return out, nil
 }
 
