@@ -17,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/symbioticfi/vault-solver/internal/chain"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -37,13 +36,6 @@ const (
 	seedHealthyPrice      = "5000000000000000000000000000"
 	seedLiquidatablePrice = "1550000000000000000000000000"
 )
-
-func newQuote(maxRate string, maxAssets *big.Int) defaultstrategy.AdapterQuote {
-	return defaultstrategy.AdapterQuote{
-		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
-		LoanScale: chain.Exp10(6), CollScale: chain.Exp10(18),
-	}
-}
 
 // seededSolver wires a Solver that does no chain/WS I/O: a monitor whose snapshot is pre-populated
 // (RedStone source), a stateCache with healthy accounting, and an in-memory signer — exactly the
@@ -70,10 +62,6 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		},
 		// Cached API/test state price. The hot path still evaluates candidates at the auction frame price.
 		Prices: map[common.Hash]*big.Int{id: mustBig(seedLiquidatablePrice)},
-		Quotes: map[common.Hash]defaultstrategy.AdapterQuote{
-			// The single adapter's quote: sells the RWA at ~$1780 (≈1% under the auctioned $1800.9); ample liquidity.
-			id: newQuote("1780000000000000000000", mustBig("100000000000")),
-		},
 		// Independently-tracked at-risk positions — the SOLE candidate source
 		// now that the frame's pushed positions are no longer consumed. Both fixture borrowers are seeded so
 		// workerCandidates surfaces them, evaluated at the auction frame price. The captured frame still

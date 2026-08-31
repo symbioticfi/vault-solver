@@ -53,7 +53,6 @@ func newTestMonitor(
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
 		prices:    map[common.Hash]*big.Int{},
-		quotes:    map[common.Hash]AdapterQuote{},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{},
 	})
 	return m, nil

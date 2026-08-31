@@ -19,7 +19,6 @@ const snapshotMaxAuctionLag = 3 * 12 * time.Second
 type snapshot struct {
 	markets   map[common.Hash]MarketInfo
 	prices    map[common.Hash]*big.Int
-	quotes    map[common.Hash]AdapterQuote
 	positions map[common.Hash]map[common.Address]morpho.PositionState
 
 	block     uint64
@@ -61,7 +60,6 @@ func newAPIMonitor(
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
 		prices:    map[common.Hash]*big.Int{},
-		quotes:    map[common.Hash]AdapterQuote{},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{},
 	})
 	return m

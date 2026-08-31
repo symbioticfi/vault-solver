@@ -50,7 +50,7 @@ func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterS
 		if px == nil {
 			continue // no settlement price for this market's oracle
 		}
-		quote, ok := quoteForMarket(snap, adapter, adapterQuotes, id, info)
+		quote, ok := quoteForMarket(adapterQuotes, info)
 		if !ok {
 			continue // adapter doesn't serve this market (or can't price it) -> can't size an exit
 		}
@@ -68,15 +68,8 @@ func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterS
 	return out
 }
 
-func quoteForMarket(snap *snapshot, adapter types.AdapterSnapshot, adapterQuotes map[common.Address]AdapterQuote, id common.Hash, info MarketInfo) (AdapterQuote, bool) {
-	if adapter.Address != (common.Address{}) {
-		quote, ok := adapterQuotes[info.Params.CollateralToken]
-		return quote, ok
-	}
-	if snap == nil {
-		return AdapterQuote{}, false
-	}
-	quote, ok := snap.quotes[id]
+func quoteForMarket(adapterQuotes map[common.Address]AdapterQuote, info MarketInfo) (AdapterQuote, bool) {
+	quote, ok := adapterQuotes[info.Params.CollateralToken]
 	return quote, ok
 }
 

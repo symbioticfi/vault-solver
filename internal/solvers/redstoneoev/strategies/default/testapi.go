@@ -13,7 +13,6 @@ import (
 type SnapshotSeed struct {
 	Markets   map[common.Hash]MarketInfo
 	Prices    map[common.Hash]*big.Int
-	Quotes    map[common.Hash]AdapterQuote
 	Positions map[common.Hash]map[common.Address]morpho.PositionState
 	Block     uint64
 	BlockTime uint64
@@ -64,7 +63,6 @@ func snapshotFromSeed(seed SnapshotSeed) *snapshot {
 	return &snapshot{
 		markets:   seed.Markets,
 		prices:    seed.Prices,
-		quotes:    seed.Quotes,
 		positions: seed.Positions,
 		block:     seed.Block,
 		blockTime: seed.BlockTime,
@@ -79,7 +77,6 @@ func seedFromSnapshot(snap *snapshot) SnapshotSeed {
 	return SnapshotSeed{
 		Markets:   snap.markets,
 		Prices:    snap.prices,
-		Quotes:    snap.quotes,
 		Positions: snap.positions,
 		Block:     snap.block,
 		BlockTime: snap.blockTime,

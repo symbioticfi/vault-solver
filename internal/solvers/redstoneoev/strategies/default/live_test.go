@@ -6,6 +6,7 @@ package defaultstrategy
 
 import (
 	"context"
+	"math/big"
 	"testing"
 	"time"
 
@@ -14,6 +15,25 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
+
+func liveAdapterSnapshot(loan, collateral common.Address) types.AdapterSnapshot {
+	return types.AdapterSnapshot{
+		Address:      common.HexToAddress("0x00000000000000000000000000000000000000ad"),
+		Vault:        common.HexToAddress("0x00000000000000000000000000000000000000da"),
+		Loan:         loan,
+		LoanDecimals: 6,
+		FreeAssets:   mustBig("100000000000"),
+		Withdrawable: mustBig("100000000000"),
+		Redeemable: []types.RedeemableSnapshot{{
+			Asset:          collateral,
+			Decimals:       18,
+			MaxRate:        mustBig("1780000000000000000000"),
+			MaxAssets:      mustBig("100000000000"),
+			AcquireBalance: new(big.Int),
+		}},
+		Filler: true,
+	}
+}
 
 // TestLiveAPIMonitorSnapshotAndCandidates exercises the same production API path the OEV monitor uses:
 // adapter-derived token pair -> Morpho markets with state -> monitor snapshot validation -> positions ->
@@ -63,10 +83,8 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	}
 
 	ids := make([]common.Hash, 0, len(apiSnap.markets))
-	quotes := make(map[common.Hash]AdapterQuote, len(apiSnap.markets))
 	for id := range apiSnap.markets {
 		ids = append(ids, id)
-		quotes[id] = newQuote("1780000000000000000000", nil)
 	}
 	apiPositions, err := mon.api.PositionsByMarket(ctx, ids, mon.maxPositions, &mon.maxHF)
 	if err != nil {
@@ -80,7 +98,6 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	mon.snap.Store(&snapshot{
 		markets:   apiSnap.markets,
 		prices:    apiSnap.prices,
-		quotes:    quotes,
 		positions: positions,
 		block:     apiSnap.block,
 		blockTime: apiSnap.blockTime,
@@ -100,7 +117,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	oracle := apiSnap.markets[targetMarket].Params.Oracle
 	price := apiSnap.prices[targetMarket]
 	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: price}}}
-	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{})
+	cands := mon.candidates(auction, apiSnap.blockTime, liveAdapterSnapshot(loan, coll))
 	if len(cands) == 0 {
 		t.Fatal("apiMonitor.candidates returned no candidates for a snapshot position with matching oracle price")
 	}
