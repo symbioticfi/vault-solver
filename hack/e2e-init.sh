@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HARNESS_REPOSITORY="https://github.com/symbioticfi/rfq-integration.git"
-HARNESS_REVISION="8dad387d748fb0265fd7c4c8a885bdc965a19df7"
+HARNESS_REVISION="4fc3fc5538b4c578362660c452fdb7444e10c630"
 HARNESS_DIR="${VAULT_SOLVER_E2E_DIR:-$ROOT_DIR/.e2e}"
 
 case "$HARNESS_DIR" in
