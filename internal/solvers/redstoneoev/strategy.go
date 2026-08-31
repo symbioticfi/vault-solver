@@ -54,7 +54,7 @@ func (s *Solver) bidInput(
 	a AuctionMessage,
 	now time.Time,
 	st cachedState,
-	inFlight inFlightState,
+	pendingAuctions []types.PendingAuction,
 	gasPrice *big.Int,
 ) types.BidInput {
 	return types.BidInput{
@@ -78,7 +78,7 @@ func (s *Solver) bidInput(
 			GasPrices:          st.GasPrices,
 			GasLimit:           st.GasLimit,
 		},
-		PendingAuctions: pendingAuctionsForStrategy(inFlight.pending, now),
+		PendingAuctions: pendingAuctions,
 	}
 }
 
@@ -96,36 +96,6 @@ func auctionPricesForStrategy(a AuctionMessage) []types.AuctionPrice {
 	}
 	slices.SortFunc(out, func(a, b types.AuctionPrice) int {
 		return a.Oracle.Cmp(b.Oracle)
-	})
-	return out
-}
-
-func pendingAuctionsForStrategy(in []pendingAuction, now time.Time) []types.PendingAuction {
-	out := make([]types.PendingAuction, 0, len(in))
-	for _, a := range in {
-		if a.ID == "" {
-			continue
-		}
-		expiresAt := a.SentAt.Add(reservationTTL)
-		if !expiresAt.After(now) {
-			continue
-		}
-		out = append(out, types.PendingAuction{
-			ID:        a.ID,
-			SentAt:    a.SentAt,
-			Won:       a.Won,
-			ExpiresAt: expiresAt,
-		})
-	}
-	slices.SortFunc(out, func(a, b types.PendingAuction) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		default:
-			return 0
-		}
 	})
 	return out
 }

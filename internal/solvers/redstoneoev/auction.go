@@ -242,13 +242,13 @@ func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() ti
 	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
 		return bidDecision{skip: depositSkip}
 	}
-	inFlight := s.inFlightSnapshot()
+	pendingAuctions := s.inFlightSnapshot(now)
 	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
 		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
 		return bidDecision{skip: "strategy_error"}
 	}
-	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, inFlight, gasPrice))
+	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, pendingAuctions, gasPrice))
 	if err != nil {
 		s.log.Error(err, "strategy failed", "auction", a.ID)
 		return bidDecision{skip: "strategy_error"}
