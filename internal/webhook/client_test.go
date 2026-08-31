@@ -211,7 +211,7 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 	var resp struct {
 		Decision string `json:"decision"`
 	}
-	if err := client.DoJSON(t.Context(), http.MethodPost, "/quote", struct {
+	if err := client.DoJSON(t.Context(), "/quote", struct {
 		ID string `json:"id"`
 	}{ID: "q1"}, &resp); err != nil {
 		t.Fatalf("DoJSON: %v", err)
@@ -227,7 +227,7 @@ func TestWebhookClientRejectsAbsoluteRoute(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	var resp struct{}
-	err = client.DoJSON(t.Context(), http.MethodPost, "https://other.example/callbacks", struct{}{}, &resp)
+	err = client.DoJSON(t.Context(), "https://other.example/callbacks", struct{}{}, &resp)
 	if err == nil || !strings.Contains(err.Error(), "route must be relative") {
 		t.Fatalf("DoJSON error = %v, want route must be relative", err)
 	}

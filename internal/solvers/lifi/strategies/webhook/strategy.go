@@ -47,7 +47,7 @@ func New(client *webhook.Client) *Strategy {
 
 func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	var out types.QuoteOutput
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideQuotesRoute, input, &out); err != nil {
+	if err := s.client.DoJSON(ctx, decideQuotesRoute, input, &out); err != nil {
 		return types.QuoteOutput{}, err
 	}
 	if err := validateQuotes(input, &out); err != nil {
@@ -58,7 +58,7 @@ func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (ty
 
 func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	var out *types.FillPlan
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideFillRoute, input, &out); err != nil {
+	if err := s.client.DoJSON(ctx, decideFillRoute, input, &out); err != nil {
 		if webhook.IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
 			return nil, types.MarkPermanentFillDecisionError(err)
 		}

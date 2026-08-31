@@ -2,7 +2,6 @@ package webhookstrategy
 
 import (
 	"context"
-	"net/http"
 
 	"gopkg.in/yaml.v3"
 
@@ -43,7 +42,7 @@ func (s *Strategy) Run(context.Context) {}
 
 func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
 	var out types.BidOutput
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideBidRoute, input, &out); err != nil {
+	if err := s.client.DoJSON(ctx, decideBidRoute, input, &out); err != nil {
 		return types.BidOutput{}, err
 	}
 	return out, nil
