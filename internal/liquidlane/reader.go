@@ -2,7 +2,6 @@ package liquidlane
 
 import (
 	"context"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
@@ -48,7 +47,6 @@ type gasAdapterState struct {
 }
 
 type liquidLaneBackend interface {
-	ChainID() *big.Int
 	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
 }
 
