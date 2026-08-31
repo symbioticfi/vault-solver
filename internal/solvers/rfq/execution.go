@@ -232,6 +232,13 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
 	if !outcome.Included() {
+		if e.metrics != nil {
+			fillOutcome := liquidlane.FillOutcomeFailure
+			if res.NotAdmitted {
+				fillOutcome = liquidlane.FillOutcomeNotAdmitted
+			}
+			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
+		}
 		err := res.Err
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)

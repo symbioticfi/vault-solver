@@ -209,6 +209,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	}
 	response.AmountIn = quote.AmountIn.String()
 	response.AmountOut = quote.AmountOut.String()
+	response.quotedPairBounded = quotePairIsBounded(state, tokenIn, tokenOut)
 	return response, nil
 }
 

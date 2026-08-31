@@ -11,9 +11,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -314,6 +316,58 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
+	}
+}
+
+func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  txmanager.Result
+		outcome string
+	}{
+		{
+			name: "reverted",
+			result: txmanager.Result{
+				Outcome: txmanager.OutcomeReverted,
+				Err:     errors.New("tx reverted on-chain"),
+			},
+			outcome: liquidlane.FillOutcomeFailure,
+		},
+		{
+			name: "not admitted",
+			result: txmanager.Result{
+				Outcome:     txmanager.OutcomeSubmissionError,
+				Err:         errors.New("admission rejected"),
+				NotAdmitted: true,
+			},
+			outcome: liquidlane.FillOutcomeNotAdmitted,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			reg := prometheus.NewRegistry()
+			metrics, err := newRFQMetrics(reg, st, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := newExec(t, st, be, &fakeTxm{result: test.result})
+			e.metrics = metrics
+
+			e.syncOnce(t.Context())
+
+			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+				t.Fatalf("status = %v, want failed", rec)
+			}
+			for _, outcome := range []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted} {
+				want := float64(0)
+				if outcome == test.outcome {
+					want = 1
+				}
+				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", outcome, want)
+			}
+		})
 	}
 }
 

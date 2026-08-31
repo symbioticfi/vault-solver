@@ -76,6 +76,37 @@ func TestFallbackTransport_FallsOverOn5xx(t *testing.T) {
 	}
 }
 
+func TestFallbackTransport_FallsOverOn3xx(t *testing.T) {
+	var primaryHits, fallbackHits int
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHits++
+		_, _ = io.WriteString(w, `fallback`)
+	}))
+	defer fallback.Close()
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits++
+		w.Header().Set("Location", "https://redirect.invalid")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer primary.Close()
+
+	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "fallback" {
+		t.Fatalf("response = (%d, %q), want fallback 200", resp.StatusCode, body)
+	}
+	if primaryHits != 1 || fallbackHits != 1 {
+		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
+	}
+}
+
 func TestFallbackTransport_PrimaryOKNoFallover(t *testing.T) {
 	var fallbackHits int
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

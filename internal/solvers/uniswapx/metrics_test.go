@@ -3,6 +3,7 @@ package uniswapx
 import (
 	"bytes"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
 func TestQuoteHandlerRecordsDetailedDeclineOutcome(t *testing.T) {
@@ -54,6 +56,7 @@ func TestQuoteMetricsRecordAmountsAndFreshness(t *testing.T) {
 	solver.observeQuote(quoteOutcomeQuoted)
 	solver.observeQuotedAmounts(quoteResponse{
 		TokenIn: tokenIn.Hex(), AmountIn: "100", TokenOut: tokenOut.Hex(), AmountOut: "90",
+		quotedPairBounded: true,
 	})
 
 	metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tokenIn.Hex(), "input", 100)
@@ -80,6 +83,27 @@ func TestQuoteMetricsRecordAmountsAndFreshness(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestQuoteMetricsRetainDecisionSnapshotAfterInvalidation(t *testing.T) {
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+	solver := newQuoteTestSolver(t, tokenIn, strategy)
+	state := solver.quoteState.Load()
+	state.inventory = []liquidlane.Inventory{{Route: liquidlane.Route{TokenIn: tokenIn, TokenOut: tokenOut}}}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
+
+	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver.invalidateQuotes()
+	solver.observeQuotedAmounts(response)
+
+	metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tokenIn.Hex(), "input", 100)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tokenOut.Hex(), "output", 90)
 }
 
 func TestQuoteDeclineMetricsUseBoundedOutcomes(t *testing.T) {

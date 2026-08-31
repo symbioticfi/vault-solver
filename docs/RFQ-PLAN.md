@@ -67,10 +67,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   are `success`, live failures are `error`, and shutdown-cancelled polls are `skipped`. Order handling
   and fill submission are outside that timer. The framework also registers the standard Go runtime +
   process collectors, so `/metrics` carries CPU,
-  memory, goroutines, GC, and FDs. RFQ win/fill workflow events, backlog gauges, token-native amounts,
-  and the txmanager lifecycle make awarded-but-unfinished orders and the
-  quote→fill funnel visible without inventing realized PnL. The canonical names,
-  labels, and meanings are in the
+  memory, goroutines, GC, and FDs. Successful receipts record `fill/success` and token-native amounts;
+  transaction failures and pre-admission rejections record `fill/failure` and `fill/not_admitted` without
+  amounts. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
+  awarded-but-unfinished orders and the quote→fill funnel visible without inventing realized PnL. The
+  canonical names, labels, and meanings are in the
   [README metrics table](../README.md#metrics).
 - **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
   request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the

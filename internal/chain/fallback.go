@@ -28,7 +28,7 @@ const (
 
 // fallbackTransport is a barebones, viem-style RPC fallback. It POSTs each JSON-RPC request to the
 // configured endpoints in order, advancing to the next only on a transport failure or an unavailable
-// response (HTTP 5xx / 429). Receipt and header reads also fall over when a non-final endpoint returns
+// response (HTTP 3xx / 5xx / 429). Receipt and header reads also fall over when a non-final endpoint returns
 // a successful JSON-RPC null result, because that can mean the endpoint has not observed the object
 // yet. Other HTTP 2xx responses — including JSON-RPC errors such as reverts — are returned as-is, so
 // application errors are surfaced unchanged.
@@ -99,7 +99,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 		resp, err := t.base.RoundTrip(attempt)
 		var inspectedOutcome *rpcOutcome
-		if err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
 			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, nullFallbackID)
 				if inspectErr != nil || unavailable {
@@ -128,10 +128,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 			} else if inspectedOutcome != nil {
 				outcome := *inspectedOutcome
-				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func(closeErr error) {
-					if closeErr != nil {
-						outcome = classifyRPCFailure(closeErr, nil)
-					}
+				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func() {
 					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
 					requestObservation.finish(outcome)
 				})
@@ -233,6 +230,12 @@ func classifyRPCFailure(err, parentErr error) rpcOutcome {
 	}
 }
 
+func unavailableHTTPStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests ||
+		statusCode >= 500 ||
+		(statusCode >= 300 && statusCode < 400)
+}
+
 func classifyHTTPStatus(statusCode int) rpcOutcome {
 	switch {
 	case statusCode == http.StatusTooManyRequests:
@@ -306,14 +309,14 @@ type classifiedRPCBody struct {
 	io.ReadCloser
 
 	cancel  context.CancelFunc
-	observe func(error)
+	observe func()
 	once    sync.Once
 }
 
 func newClassifiedRPCBody(
 	body io.ReadCloser,
 	cancel context.CancelFunc,
-	observe func(error),
+	observe func(),
 ) *classifiedRPCBody {
 	return &classifiedRPCBody{ReadCloser: body, cancel: cancel, observe: observe}
 }
@@ -321,7 +324,7 @@ func newClassifiedRPCBody(
 func (b *classifiedRPCBody) Close() error {
 	closeErr := b.ReadCloser.Close()
 	b.once.Do(func() {
-		b.observe(closeErr)
+		b.observe()
 		b.cancel()
 	})
 	return closeErr

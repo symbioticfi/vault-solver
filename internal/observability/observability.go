@@ -146,8 +146,8 @@ func (o *OperationObserver) Observe(outcome ExternalOperationOutcome, duration t
 	o.observers[outcome].Observe(duration.Seconds())
 }
 
-// OperationTimer records one operation exactly once. Cancellation changes only an unresolved error
-// outcome to skipped, so a completed operation is never relabeled by a later context cancellation.
+// OperationTimer records one operation exactly once. A canceled context maps error or degraded to
+// skipped, while success keeps its terminal classification.
 type OperationTimer struct {
 	observer  *OperationObserver
 	startedAt time.Time
@@ -177,7 +177,8 @@ func ObserveOperation(
 	outcome ExternalOperationOutcome,
 	duration time.Duration,
 ) {
-	if ctx != nil && ctx.Err() != nil && outcome == ExternalOperationError {
+	if ctx != nil && ctx.Err() != nil &&
+		(outcome == ExternalOperationError || outcome == ExternalOperationDegraded) {
 		outcome = ExternalOperationSkipped
 	}
 	observer.Observe(outcome, duration)

@@ -145,11 +145,15 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   server-accepted.
   Per-event workflow timestamps make an idle pipeline distinguishable from a stuck one without
   introducing auction identifiers. A bounded process-local lifecycle tracker retains known bid amounts
-  after nonce/TTL reservation release and deduplicates win/settlement frames. Late and post-restart frames
-  for our callback still advance lifecycle counts; amount series advance only when this process retained
-  the original bid amount. A won reservation's fallback TTL starts at the observed win rather than enqueue
-  time, so a just-won bid cannot be classified unresolved immediately. Breaker failures include late failed
-  frames for our callback and use frame ID or transaction hash for replay deduplication. The breaker
+  after nonce/TTL reservation release and deduplicates win/settlement frames. Auction IDs are normalized at
+  ingress; a result lacking both an ID and transaction hash cannot fabricate lifecycle transitions. The
+  eviction ring prefers settled records, and an in-flight reservation retains its observed-win transition
+  even if its lifecycle record ages out. Late and post-restart frames for our callback still advance
+  lifecycle counts; amount series advance only when this process retained the original bid amount. A won
+  reservation's fallback TTL starts at the observed win rather than enqueue time, so a just-won bid cannot
+  be classified unresolved immediately. `unresolved` is a local timeout observation rather than a disjoint
+  terminal state, so a later result also advances its settlement outcome. Breaker failures include late
+  failed frames for our callback and use frame ID or transaction hash for replay deduplication. The breaker
   halts bidding after N failed liquidations in a rolling window, and immediately on a `blacklisted`
   frame. Exact names and labels are in the
   [README metrics table](../README.md#metrics).

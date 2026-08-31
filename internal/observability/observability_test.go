@@ -93,9 +93,12 @@ func TestOperationTimerPreservesCompletedOutcomeAcrossCancellation(t *testing.T)
 
 	cancelledTimer := StartOperation(metrics.Operation("poll"))
 	cancelledTimer.Finish(ctx, ExternalOperationError)
+	degradedTimer := StartOperation(metrics.Operation("poll"))
+	degradedTimer.Finish(ctx, ExternalOperationDegraded)
 
 	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "success", 1)
-	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "skipped", 1)
+	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "degraded", 0)
+	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "skipped", 2)
 	metricstest.RequireExternalOperationCount(t, reg, "solver", "poll", "error", 0)
 }
 

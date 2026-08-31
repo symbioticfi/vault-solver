@@ -40,7 +40,8 @@ type quoteResponse struct {
 	Filler    string `json:"filler"`
 	QuoteID   string `json:"quoteId"`
 
-	declineReason quoteDeclineReason
+	declineReason     quoteDeclineReason
+	quotedPairBounded bool
 }
 
 type orderPage struct {

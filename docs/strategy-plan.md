@@ -190,7 +190,7 @@ Public strategy interfaces, webhook DTOs, caches, protocol lifecycle, and callda
 All integrations bind their static event/outcome, amount-kind, state-view, and external-operation labels
 through the generic workflow metric families. Solver packages still own those protocol-specific enums and
 unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and UniswapX share the same
-`fill/success` event and token-native amount kinds; UniswapX additionally classifies `failure` and
+`fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure` and
 `not_admitted`. Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
 accounting remains in txmanager.

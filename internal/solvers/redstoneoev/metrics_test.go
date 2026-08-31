@@ -3,6 +3,7 @@ package redstoneoev
 import (
 	"context"
 	"math/big"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -249,6 +250,81 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	requireOEVEvent(t, reg, "breaker", "failure", 1, 123)
 }
 
+func TestLifecycleMetricsRequireStableResultIdentity(t *testing.T) {
+	s, _ := seededSolver(t)
+	m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
+	s.metrics = m
+	m.now = func() time.Time { return time.Unix(123, 0) }
+	result := marshal(LiquidationResult{
+		Op:   "liquidation-result",
+		Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
+	})
+
+	s.handleMessage(t.Context(), result)
+	s.handleMessage(t.Context(), result)
+
+	requireOEVEvent(t, reg, "bid", oevBidWon, 0, 0)
+	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 0, 0)
+
+	identified := marshal(LiquidationResult{
+		Op: "liquidation-result",
+		Data: LiquidationResultData{
+			Success: true, Liquidator: seedCallback.Hex(), TxHash: " 0xABC ",
+		},
+	})
+	s.handleMessage(t.Context(), identified)
+	s.handleMessage(t.Context(), identified)
+	requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
+	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
+}
+
+func TestLifecycleMetricsNormalizeAuctionIDs(t *testing.T) {
+	s, _ := seededSolver(t)
+	m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
+	s.metrics = m
+	m.now = func() time.Time { return time.Unix(123, 0) }
+	bidWei := big.NewInt(123)
+	s.reserve(8, time.Now(), " auction ", bidWei)
+
+	s.handleMessage(t.Context(), marshal(AuctionResult{
+		Op: "auction-result", ID: "auction",
+		Data: AuctionResultData{Liquidator: seedCallback.Hex()},
+	}))
+	s.handleMessage(t.Context(), marshal(LiquidationResult{
+		Op: "liquidation-result", ID: " auction ",
+		Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
+	}))
+
+	requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
+	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
+	requireOEVBidAmount(t, reg, oevBidWon, 123)
+	requireOEVBidAmount(t, reg, oevBidSettledSuccess, 123)
+}
+
+func TestLifecycleEvictionDoesNotReplayInflightWin(t *testing.T) {
+	s, _ := seededSolver(t)
+	now := time.Now()
+	s.reserve(1, now, "oldest", big.NewInt(123))
+	if _, transitioned := s.markReservationWon("oldest", now); !transitioned {
+		t.Fatal("oldest reservation did not transition to won")
+	}
+	for i := range maxSeenAuctions {
+		s.reserve(uint64(i+2), now, "later-"+strconv.Itoa(i), nil)
+	}
+
+	transition := s.settleReservationByAuction("oldest", "oldest")
+	if transition.won || !transition.settled || transition.bidWei == nil || transition.bidWei.Cmp(big.NewInt(123)) != 0 {
+		t.Fatalf("settlement transition = %+v, want settled-only with original bid", transition)
+	}
+	if got := len(s.bidLifecycle); got != maxSeenAuctions {
+		t.Fatalf("lifecycle records = %d, want bounded %d", got, maxSeenAuctions)
+	}
+	replay := s.settleReservationByAuction("oldest", "oldest")
+	if replay.won || replay.settled {
+		t.Fatalf("replayed settlement transitioned again: %+v", replay)
+	}
+}
+
 func TestLifecycleMetricsSurviveNoncePruneAndRestart(t *testing.T) {
 	t.Run("nonce prune retains local bid metadata", func(t *testing.T) {
 		s, _ := seededSolver(t)
@@ -421,6 +497,13 @@ func TestWonReservationTimeoutIsVisible(t *testing.T) {
 	s.pruneReservations(7, now.Add(reservationTTL+time.Second))
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidUnresolved, 1)
 	metricstest.RequireValue(t, m.wonInflight, 0)
+
+	s.handleMessage(t.Context(), marshal(LiquidationResult{
+		Op: "liquidation-result", ID: "auction",
+		Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
+	}))
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidUnresolved, 1)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", oevBidSettledSuccess, 1)
 }
 
 func TestAuctionDecisionCountsEveryParsedTerminalPathOnce(t *testing.T) {
@@ -429,7 +512,7 @@ func TestAuctionDecisionCountsEveryParsedTerminalPathOnce(t *testing.T) {
 	s.metrics = m
 
 	empty := decodeAuction(t)
-	empty.ID = ""
+	empty.ID = "   "
 	s.handleAuctionWithContext(t.Context(), marshal(empty))
 
 	canceled := decodeAuction(t)

@@ -5,6 +5,7 @@ package redstoneoev
 import (
 	"math/big"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -67,6 +68,7 @@ func (s *Solver) reserve(
 	auctionID string,
 	bidWei *big.Int,
 ) {
+	auctionID = normalizeAuctionID(auctionID)
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = append(s.res, reservedBid{
@@ -79,6 +81,7 @@ func (s *Solver) reserve(
 }
 
 func (s *Solver) releaseReservationByAuction(id string) {
+	id = normalizeAuctionID(id)
 	if id == "" {
 		return
 	}
@@ -88,48 +91,67 @@ func (s *Solver) releaseReservationByAuction(id string) {
 }
 
 func (s *Solver) markReservationWon(id string, wonAt time.Time) (*big.Int, bool) {
+	id = normalizeAuctionID(id)
 	if id == "" || wonAt.IsZero() {
 		return nil, false
 	}
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
-	var bidWei *big.Int
+	var (
+		bidWei            *big.Int
+		reservationWasWon bool
+	)
 	for i := range s.res {
 		if s.res[i].auctionID != id {
 			continue
 		}
 		bidWei = s.res[i].bidWei
-		if !s.res[i].won {
+		reservationWasWon = s.res[i].won
+		if !reservationWasWon {
 			s.res[i].won = true
 			s.res[i].wonAt = wonAt
 		}
 		break
 	}
 	record := s.ensureBidLifecycleLocked(id, bidWei)
-	if record == nil || record.won {
+	if record == nil {
 		return cloneBig(bidWei), false
+	}
+	if reservationWasWon {
+		record.won = true
+	}
+	if record.won {
+		return cloneBig(record.bidWei), false
 	}
 	record.won = true
 	return cloneBig(record.bidWei), true
 }
 
 func (s *Solver) settleReservationByAuction(id, lifecycleKey string) bidSettlementTransition {
+	id = normalizeAuctionID(id)
+	lifecycleKey = strings.TrimSpace(lifecycleKey)
+	if lifecycleKey == "" {
+		return bidSettlementTransition{}
+	}
+
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
-	var reservation reservedBid
+	var (
+		reservation      reservedBid
+		reservationFound bool
+	)
 	s.res = slices.DeleteFunc(s.res, func(candidate reservedBid) bool {
 		if id == "" || candidate.auctionID != id {
 			return false
 		}
 		reservation = candidate
+		reservationFound = true
 		return true
 	})
-	if lifecycleKey == "" {
-		return bidSettlementTransition{
-			bidWei: cloneBig(reservation.bidWei), won: true, settled: true,
-		}
-	}
 	record := s.ensureBidLifecycleLocked(lifecycleKey, reservation.bidWei)
+	if reservationFound && reservation.won {
+		record.won = true
+	}
 	transition := bidSettlementTransition{bidWei: cloneBig(record.bidWei)}
 	if !record.won {
 		record.won = true
@@ -156,14 +178,23 @@ func (s *Solver) ensureBidLifecycleLocked(id string, bidWei *big.Int) *bidLifecy
 		return record
 	}
 	if len(s.bidLifecycleOrder) >= maxSeenAuctions {
-		oldest := s.bidLifecycleOrder[0]
-		delete(s.bidLifecycle, oldest)
-		s.bidLifecycleOrder = s.bidLifecycleOrder[1:]
+		evictionIndex := slices.IndexFunc(s.bidLifecycleOrder, func(existingID string) bool {
+			record := s.bidLifecycle[existingID]
+			return record == nil || record.settled
+		})
+		evictionIndex = max(0, evictionIndex)
+		evicted := s.bidLifecycleOrder[evictionIndex]
+		delete(s.bidLifecycle, evicted)
+		s.bidLifecycleOrder = slices.Delete(s.bidLifecycleOrder, evictionIndex, evictionIndex+1)
 	}
 	record := &bidLifecycleRecord{bidWei: cloneBig(bidWei)}
 	s.bidLifecycle[id] = record
 	s.bidLifecycleOrder = append(s.bidLifecycleOrder, id)
 	return record
+}
+
+func normalizeAuctionID(id string) string {
+	return strings.TrimSpace(id)
 }
 
 func (s *Solver) wonReservationMetrics() (int, time.Duration) {
@@ -211,7 +242,7 @@ func (s *Solver) pruneReservations(onChainNonce uint64, now time.Time) {
 	s.metrics.unresolvedWins(unresolvedWins)
 }
 
-// maxSeenAuctions bounds the de-dup set (insertion-ordered eviction); ample for the auction cadence.
+// maxSeenAuctions bounds both lifecycle replay protection and auction-ingress de-duplication.
 const maxSeenAuctions = 1024
 
 // seenAuctions is a bounded, insertion-ordered de-dup set for auction ids: a re-subscribe on reconnect can

@@ -78,6 +78,7 @@ func (s *Solver) handleAuctionResult(raw []byte) {
 		s.log.V(1).Error(err, "drop malformed frame", "op", "auction-result")
 		return
 	}
+	r.ID = normalizeAuctionID(r.ID)
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	won := liquidator == s.cfg.Callback
 	if won {
@@ -96,6 +97,7 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 		s.log.V(1).Error(err, "drop malformed frame", "op", "liquidation-result")
 		return
 	}
+	r.ID = normalizeAuctionID(r.ID)
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	ours := liquidator == s.cfg.Callback
 	s.log.Info("liquidation-result", "id", r.ID, "success", r.Data.Success,
@@ -104,7 +106,7 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 		return
 	}
 	s.requestStateRefresh()
-	lifecycleKey := strings.TrimSpace(r.ID)
+	lifecycleKey := r.ID
 	if lifecycleKey == "" {
 		lifecycleKey = liquidationResultIdentity(r)
 	}
@@ -162,6 +164,7 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 		s.log.V(1).Error(err, "drop malformed auction")
 		return AuctionMessage{}, time.Time{}, false
 	}
+	a.ID = normalizeAuctionID(a.ID)
 	key := a.dedupKey()
 	if key == "" {
 		s.metrics.auctionDecision(skipEmptyAuctionID, time.Since(start))

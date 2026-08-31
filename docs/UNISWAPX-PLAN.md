@@ -135,7 +135,8 @@ assertion because the PR19 ABI has no getter.
   `deps.Metrics.Registerer()`. Fill results come from the shared txmanager rather than a coarser duplicate.
   Quote declines use typed internal reasons mapped into workflow `quote/<outcome>`, rather than a
   request-derived label. Quote responses selected for writing record input/output atomic-unit volume only
-  when the pair belongs to the current bounded route snapshot, so a permissive webhook cannot turn the
+  when the pair belongs to the same immutable bounded route snapshot used for that decision, so concurrent
+  cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
   unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
   `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
   `fill/failure` and `fill/not_admitted`, while txmanager remains authoritative for detailed outcomes, gas,

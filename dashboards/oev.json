@@ -1086,7 +1086,7 @@
       "spec": {
         "id": 19,
         "title": "Unresolved / failed / unsafe lifecycle",
-        "description": "Unresolved wins, breaker failures, and failed settlements requiring attention.",
+        "description": "Settlement timeouts, breaker failures, and failed settlements requiring attention. A timed-out win may later also be counted as settled.",
         "links": [],
         "data": {
           "kind": "QueryGroup",

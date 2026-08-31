@@ -183,14 +183,12 @@ func (s *Solver) observeQuoteDecline(reason quoteDeclineReason) {
 }
 
 func (s *Solver) observeQuotedAmounts(response quoteResponse) {
-	if s.metrics == nil || !common.IsHexAddress(response.TokenIn) || !common.IsHexAddress(response.TokenOut) {
+	if s.metrics == nil || !response.quotedPairBounded ||
+		!common.IsHexAddress(response.TokenIn) || !common.IsHexAddress(response.TokenOut) {
 		return
 	}
 	tokenIn := common.HexToAddress(response.TokenIn)
 	tokenOut := common.HexToAddress(response.TokenOut)
-	if !s.quotedPairIsBounded(tokenIn, tokenOut) {
-		return
-	}
 	amountIn, inputOK := new(big.Int).SetString(response.AmountIn, 10)
 	amountOut, outputOK := new(big.Int).SetString(response.AmountOut, 10)
 	if !inputOK || !outputOK || amountIn.Sign() <= 0 || amountOut.Sign() <= 0 {
@@ -200,8 +198,7 @@ func (s *Solver) observeQuotedAmounts(response quoteResponse) {
 	s.metrics.addQuotedAmount(tokenOut, "output", amountOut)
 }
 
-func (s *Solver) quotedPairIsBounded(tokenIn, tokenOut common.Address) bool {
-	state := s.quoteState.Load()
+func quotePairIsBounded(state *quoteState, tokenIn, tokenOut common.Address) bool {
 	if state == nil {
 		return false
 	}

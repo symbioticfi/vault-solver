@@ -394,7 +394,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate admits work, otherwise `0`. This is process/nonce-lane readiness, not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
-| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed. |
+| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
 | RPC | `solver_bot_rpc_inflight` | `role` | Calls whose response bodies have not completed; a sustained value exposes a hung endpoint or consumer. |
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
@@ -453,11 +453,15 @@ Bounded workflow dimensions:
 
 | Solver | Events and outcomes | Amount/state dimensions |
 |---|---|---|
-| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/success` | `quote/{input,output}` and `fill/{input,output,planned_surplus}` by asset |
+| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted}` | `quote/{input,output}` and successful `fill/{input,output,planned_surplus}` by asset |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
-| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the current route snapshot |
+| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
 | 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Offer `principal` and `expected_yield` by deposit asset |
+
+OEV `bid/unresolved` records a local settlement timeout, not a mutually exclusive terminal state. A later
+result also advances `settled_success` or `settled_failed`, so lifecycle dashboards must not reconcile
+`unresolved` and settlement outcomes as disjoint counters.
 
 Event timestamps reset to `0` on restart; use `max_over_time(...[$__range])` when a dashboard should
 retain a pre-restart observation inside its selected range.
@@ -502,7 +506,8 @@ are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and nev
 endpoints. Sender-balance telemetry prefers that endpoint but falls back to the ordinary read client when a
 submission-only relay rejects `eth_getBalance`. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
 that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
-normal read fallback behavior. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
+normal read fallback behavior. An HTTP 3xx response is not followed and falls through to the next read
+endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
 multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
