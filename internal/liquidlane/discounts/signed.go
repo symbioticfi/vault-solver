@@ -77,24 +77,6 @@ func ValidateSelection(signed *Signed, selection Selection, validAfter time.Time
 	return nil
 }
 
-// ResolveAndValidate fetches fresh signed terms and binds them to a selected route and current quote.
-func ResolveAndValidate(
-	ctx context.Context,
-	provider Provider,
-	selection Selection,
-	base liquidlane.FillQuote,
-	validAfter time.Time,
-) (*Signed, error) {
-	if provider == nil {
-		return nil, errors.New("discount route cannot be resolved")
-	}
-	resolved, err := provider.Resolve(ctx, selection.DiscountID.Hex())
-	if err != nil {
-		return nil, err
-	}
-	return ParseAndValidate(resolved, selection, base, validAfter)
-}
-
 // ParseAndValidate parses a resolved backend payload and validates it against current route facts.
 func ParseAndValidate(
 	resolved *Resolved,
@@ -130,7 +112,14 @@ func ResolveSelected(
 	if !ok {
 		return nil, errors.New("resolved discount has no current on-chain quote")
 	}
-	return ResolveAndValidate(ctx, provider, selection, base, validAfter)
+	if provider == nil {
+		return nil, errors.New("discount route cannot be resolved")
+	}
+	resolved, err := provider.Resolve(ctx, selection.DiscountID.Hex())
+	if err != nil {
+		return nil, err
+	}
+	return ParseAndValidate(resolved, selection, base, validAfter)
 }
 
 // RefreshFillQuotes rebinds resolved discount candidates to a newer physical adapter snapshot.
