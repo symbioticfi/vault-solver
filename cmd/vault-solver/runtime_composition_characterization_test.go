@@ -254,11 +254,11 @@ solvers:
 `)
 
 	err := runBot(t.Context(), configPath, false, false)
+	assertLoopbackReleased(t, observabilityAddr)
 	const want = `rfq-filler: backend shared secret env "COMPOSITION_MISSING_RFQ_SECRET" is empty`
 	if err == nil || err.Error() != want {
 		t.Fatalf("runBot error = %v, want %q", err, want)
 	}
-	waitForLoopbackRelease(t, observabilityAddr)
 }
 
 func TestUnknownSolverDiagnosticCharacterization(t *testing.T) {

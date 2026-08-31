@@ -60,25 +60,14 @@ solvers:
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	err := runBot(ctx, configPath, false, false)
+	assertLoopbackReleased(t, observabilityAddr)
 	if probeErr := <-observed; probeErr != nil {
 		cancel()
-		waitForLoopbackRelease(t, observabilityAddr)
 		t.Fatalf("startup probe contract: %v", probeErr)
 	}
 	if err == nil || !strings.Contains(err.Error(), "chain id mismatch: rpc reports 1, config says 2") {
 		cancel()
-		waitForLoopbackRelease(t, observabilityAddr)
 		t.Fatalf("runBot() error = %v, want chain ID mismatch", err)
-	}
-
-	listener, listenErr := new(net.ListenConfig).Listen(t.Context(), "tcp", observabilityAddr)
-	if listenErr != nil {
-		cancel()
-		waitForLoopbackRelease(t, observabilityAddr)
-		t.Fatalf("observability listener still bound after runBot returned: %v", listenErr)
-	}
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close rebound observability listener: %v", err)
 	}
 }
 
@@ -153,20 +142,15 @@ func reserveLoopbackAddr(t *testing.T) string {
 	return addr
 }
 
-func waitForLoopbackRelease(t *testing.T, addr string) {
+func assertLoopbackReleased(t *testing.T, addr string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", addr)
-		if err == nil {
-			if closeErr := listener.Close(); closeErr != nil {
-				t.Errorf("close cleanup listener: %v", closeErr)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("observability listener still bound after runBot returned: %v", err)
 	}
-	t.Errorf("observability listener %s was not released during cleanup", addr)
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close rebound observability listener: %v", err)
+	}
 }
 
 func TestWatchReadinessTracksLaneState(t *testing.T) {
