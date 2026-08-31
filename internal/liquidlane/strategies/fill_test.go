@@ -3,6 +3,7 @@ package strategies
 import (
 	"encoding/json"
 	"math/big"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -54,6 +55,15 @@ func TestValidateFillRoutesCanonicalizesAndChecksCapacity(t *testing.T) {
 	}
 }
 
+type canonicalFillTestCase struct {
+	name            string
+	input           FillValidation
+	routes          []FillRoute
+	wantErr         bool
+	wantDiscount    *common.Hash
+	wantReservation int64
+}
+
 func TestValidateFillRoutesCanonicalTable(t *testing.T) {
 	t.Parallel()
 	tokenIn := common.HexToAddress("0x1000000000000000000000000000000000000001")
@@ -97,14 +107,7 @@ func TestValidateFillRoutesCanonicalTable(t *testing.T) {
 		}
 	}
 
-	tests := []struct {
-		name            string
-		input           FillValidation
-		routes          []FillRoute
-		wantErr         bool
-		wantDiscount    *common.Hash
-		wantReservation int64
-	}{
+	tests := []canonicalFillTestCase{
 		{
 			name: "canonical direct route",
 			input: FillValidation{TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(10),
@@ -176,53 +179,169 @@ func TestValidateFillRoutesCanonicalTable(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sourceInput := cloneFillValidationFixture(test.input)
-			sourceRoutes := cloneFillRouteFixtures(test.routes)
-			callInput := cloneFillValidationFixture(sourceInput)
-			callRoutes := cloneFillRouteFixtures(sourceRoutes)
-			normalized, err := ValidateFillRoutes(callInput, callRoutes)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("ValidateFillRoutes() error = %v, wantErr %t", err, test.wantErr)
-			}
-			if test.wantErr {
-				return
-			}
-			capacityID := liquidlane.RouteCapacityID(routeA)
-			for index, route := range normalized {
-				candidate := test.input.Quotes[index]
-				if route.RouteID != candidate.ID || route.CapacityID != capacityID ||
-					route.Adapter != candidate.Adapter ||
-					route.CandidateID != liquidlane.NewCandidateID(candidate.Route, candidate.DiscountID) {
-					t.Fatalf("canonical route %d = %+v", index, route)
-				}
-			}
-			if test.wantDiscount != nil &&
-				(normalized[0].DiscountID == nil || *normalized[0].DiscountID != *test.wantDiscount) {
-				t.Fatalf("canonical discount = %v, want %s", normalized[0].DiscountID, test.wantDiscount.Hex())
-			}
-			reservations, ok := FillRouteReservations(normalized)
-			if !ok || reservations[capacityID].Cmp(big.NewInt(test.wantReservation)) != 0 {
-				t.Fatalf("canonical reservations = %v, want %d", reservations, test.wantReservation)
-			}
-
-			normalized[0].AmountIn.SetInt64(999)
-			normalized[0].ReservedAmountOut.SetInt64(999)
-			if normalized[0].DiscountID != nil {
-				*normalized[0].DiscountID = common.HexToHash("0x1")
-			}
-			reservations[capacityID].SetInt64(999)
-			if sourceRoutes[0].AmountIn.Cmp(test.routes[0].AmountIn) != 0 ||
-				callRoutes[0].AmountIn.Cmp(test.routes[0].AmountIn) != 0 ||
-				sourceRoutes[0].ReservedAmountOut.Cmp(test.routes[0].ReservedAmountOut) != 0 ||
-				callRoutes[0].ReservedAmountOut.Cmp(test.routes[0].ReservedAmountOut) != 0 ||
-				callInput.Quotes[0].AmountIn.Cmp(test.input.Quotes[0].AmountIn) != 0 ||
-				callInput.Quotes[0].MaxAssets.Cmp(test.input.Quotes[0].MaxAssets) != 0 {
-				t.Fatal("canonical output or reservation aliases immutable validation input")
-			}
-			if sourceRoutes[0].CapacityID != "forged-capacity" || sourceRoutes[0].CandidateID != "forged-candidate" {
-				t.Fatalf("source route metadata mutated: %+v", sourceRoutes[0])
-			}
+			runCanonicalFillTestCase(t, test, routeA)
 		})
+	}
+}
+
+type canonicalFillOracleFixture struct {
+	sourceInput        FillValidation
+	sourceInputBefore  FillValidation
+	sourceRoutes       []FillRoute
+	sourceRoutesBefore []FillRoute
+	sourceQuoteOracle  []fillQuoteOracle
+	sourceLedger       *liquidlane.CapacityLedger
+	sourceLedgerBefore liquidlane.CapacityReservations
+	callInput          FillValidation
+	callInputBefore    FillValidation
+	callRoutes         []FillRoute
+	callRoutesBefore   []FillRoute
+	callQuoteOracle    []fillQuoteOracle
+	callLedger         *liquidlane.CapacityLedger
+	callLedgerBefore   liquidlane.CapacityReservations
+}
+
+func runCanonicalFillTestCase(t *testing.T, test canonicalFillTestCase, routeA liquidlane.Route) {
+	t.Helper()
+	fixture := newCanonicalFillOracleFixture(t, test)
+	normalized, err := ValidateFillRoutes(fixture.callInput, fixture.callRoutes)
+	if (err != nil) != test.wantErr {
+		t.Fatalf("ValidateFillRoutes() error = %v, wantErr %t", err, test.wantErr)
+	}
+	if test.wantErr {
+		return
+	}
+	capacityID := liquidlane.RouteCapacityID(routeA)
+	canonicalReservations := assertCanonicalFillOutput(t, test, fixture, normalized, capacityID)
+	canonicalLedger := new(liquidlane.CapacityLedger)
+	if !canonicalLedger.Set("validated-fill", canonicalReservations) {
+		t.Fatal("seed canonical capacity ledger")
+	}
+	canonicalLedgerBefore := canonicalLedger.Snapshot()
+
+	mutateCanonicalFillOutput(normalized, canonicalReservations)
+	assertCanonicalFillInputsImmutable(t, fixture)
+	assertCanonicalFillLedgersImmutable(t, fixture, canonicalLedger, canonicalLedgerBefore)
+}
+
+func newCanonicalFillOracleFixture(
+	t *testing.T,
+	test canonicalFillTestCase,
+) canonicalFillOracleFixture {
+	t.Helper()
+	sourceInput := cloneFillValidationFixture(test.input)
+	reservations := make(liquidlane.CapacityReservations)
+	reservations.AddAll(sourceInput.Reservations)
+	reservations.Add("oracle-ledger", big.NewInt(7))
+	sourceInput.Reservations = reservations
+	sourceRoutes := cloneFillRouteFixtures(test.routes)
+	sourceLedger := new(liquidlane.CapacityLedger)
+	if !sourceLedger.Set("pending-source", sourceInput.Reservations) {
+		t.Fatal("seed source capacity ledger")
+	}
+
+	callInput := cloneFillValidationFixture(sourceInput)
+	callRoutes := cloneFillRouteFixtures(sourceRoutes)
+	callLedger := new(liquidlane.CapacityLedger)
+	if !callLedger.Set("pending-call", callInput.Reservations) {
+		t.Fatal("seed call capacity ledger")
+	}
+	callInput.Reservations = callLedger.Snapshot()
+	return canonicalFillOracleFixture{
+		sourceInput: sourceInput, sourceInputBefore: cloneFillValidationFixture(sourceInput),
+		sourceRoutes: sourceRoutes, sourceRoutesBefore: cloneFillRouteFixtures(sourceRoutes),
+		sourceQuoteOracle: immutableFillQuoteOracle(sourceInput.Quotes),
+		sourceLedger:      sourceLedger, sourceLedgerBefore: sourceLedger.Snapshot(),
+		callInput: callInput, callInputBefore: cloneFillValidationFixture(callInput),
+		callRoutes: callRoutes, callRoutesBefore: cloneFillRouteFixtures(callRoutes),
+		callQuoteOracle: immutableFillQuoteOracle(callInput.Quotes),
+		callLedger:      callLedger, callLedgerBefore: callLedger.Snapshot(),
+	}
+}
+
+func assertCanonicalFillOutput(
+	t *testing.T,
+	test canonicalFillTestCase,
+	fixture canonicalFillOracleFixture,
+	normalized []FillRoute,
+	capacityID liquidlane.CapacityID,
+) liquidlane.CapacityReservations {
+	t.Helper()
+	reservations := make(liquidlane.CapacityReservations)
+	for index, route := range normalized {
+		candidate := fixture.callInputBefore.Quotes[index]
+		untrusted := fixture.callRoutesBefore[index]
+		if route.RouteID != candidate.ID || route.CapacityID != capacityID ||
+			route.Adapter != candidate.Adapter ||
+			route.CandidateID != liquidlane.NewCandidateID(candidate.Route, candidate.DiscountID) ||
+			route.AmountIn.Cmp(untrusted.AmountIn) != 0 ||
+			route.ExpectedAmountOut.Cmp(untrusted.ExpectedAmountOut) != 0 ||
+			route.MinAmountOut.Cmp(untrusted.MinAmountOut) != 0 ||
+			route.ReservedAmountOut.Cmp(untrusted.ReservedAmountOut) != 0 ||
+			!reflect.DeepEqual(route.DiscountID, candidate.DiscountID) {
+			t.Fatalf("canonical route %d = %+v", index, route)
+		}
+		reservations.Add(route.CapacityID, route.ReservedAmountOut)
+	}
+	if test.wantDiscount != nil &&
+		(normalized[0].DiscountID == nil || *normalized[0].DiscountID != *test.wantDiscount) {
+		t.Fatalf("canonical discount = %v, want %s", normalized[0].DiscountID, test.wantDiscount.Hex())
+	}
+	if got := reservations[capacityID]; got == nil || got.Cmp(big.NewInt(test.wantReservation)) != 0 {
+		t.Fatalf("canonical reservations = %v, want %d", reservations, test.wantReservation)
+	}
+	return reservations
+}
+
+func mutateCanonicalFillOutput(normalized []FillRoute, reservations liquidlane.CapacityReservations) {
+	for index := range normalized {
+		normalized[index].AmountIn.SetInt64(901 + int64(index))
+		normalized[index].ExpectedAmountOut.SetInt64(911 + int64(index))
+		normalized[index].MinAmountOut.SetInt64(921 + int64(index))
+		normalized[index].ReservedAmountOut.SetInt64(931 + int64(index))
+		if normalized[index].DiscountID != nil {
+			*normalized[index].DiscountID = common.HexToHash("0x1")
+		}
+	}
+	for _, amount := range reservations {
+		amount.SetInt64(999)
+	}
+}
+
+func assertCanonicalFillInputsImmutable(t *testing.T, fixture canonicalFillOracleFixture) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.sourceRoutes, fixture.sourceRoutesBefore) {
+		t.Fatalf("source routes mutated through canonical output: got %+v want %+v",
+			fixture.sourceRoutes, fixture.sourceRoutesBefore)
+	}
+	if !reflect.DeepEqual(fixture.callRoutes, fixture.callRoutesBefore) {
+		t.Fatalf("call routes mutated through canonical output: got %+v want %+v",
+			fixture.callRoutes, fixture.callRoutesBefore)
+	}
+	if !reflect.DeepEqual(fixture.sourceInput, fixture.sourceInputBefore) ||
+		!reflect.DeepEqual(immutableFillQuoteOracle(fixture.sourceInput.Quotes), fixture.sourceQuoteOracle) {
+		t.Fatalf("source candidate quotes mutated: got %+v want %+v",
+			fixture.sourceInput.Quotes, fixture.sourceInputBefore.Quotes)
+	}
+	if !reflect.DeepEqual(fixture.callInput, fixture.callInputBefore) ||
+		!reflect.DeepEqual(immutableFillQuoteOracle(fixture.callInput.Quotes), fixture.callQuoteOracle) {
+		t.Fatalf("call candidate quotes mutated: got %+v want %+v",
+			fixture.callInput.Quotes, fixture.callInputBefore.Quotes)
+	}
+}
+
+func assertCanonicalFillLedgersImmutable(
+	t *testing.T,
+	fixture canonicalFillOracleFixture,
+	canonicalLedger *liquidlane.CapacityLedger,
+	canonicalLedgerBefore liquidlane.CapacityReservations,
+) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.sourceLedger.Snapshot(), fixture.sourceLedgerBefore) ||
+		!reflect.DeepEqual(fixture.callLedger.Snapshot(), fixture.callLedgerBefore) ||
+		!reflect.DeepEqual(canonicalLedger.Snapshot(), canonicalLedgerBefore) {
+		t.Fatalf("canonical output or reservation mutated capacity ledgers: source=%v call=%v canonical=%v",
+			fixture.sourceLedger.Snapshot(), fixture.callLedger.Snapshot(), canonicalLedger.Snapshot())
 	}
 }
 
@@ -278,6 +397,8 @@ func cloneFillValidationFixture(input FillValidation) FillValidation {
 	input.Quotes = append([]liquidlane.FillQuote(nil), input.Quotes...)
 	for index := range input.Quotes {
 		input.Quotes[index].MaxAssets = liquidlane.CloneBig(input.Quotes[index].MaxAssets)
+		input.Quotes[index].MaxRate = liquidlane.CloneBig(input.Quotes[index].MaxRate)
+		input.Quotes[index].AdapterMinDiscount = liquidlane.CloneBig(input.Quotes[index].AdapterMinDiscount)
 		input.Quotes[index].AmountIn = liquidlane.CloneBig(input.Quotes[index].AmountIn)
 		input.Quotes[index].GrossAmountOut = liquidlane.CloneBig(input.Quotes[index].GrossAmountOut)
 		input.Quotes[index].MaxAmountOut = liquidlane.CloneBig(input.Quotes[index].MaxAmountOut)
@@ -296,6 +417,54 @@ func cloneFillRouteFixtures(routes []FillRoute) []FillRoute {
 		out[index] = cloneFillRoute(route)
 	}
 	return out
+}
+
+type fillQuoteOracle struct {
+	CandidateID     liquidlane.CandidateID
+	RouteID         liquidlane.RouteID
+	CapacityID      liquidlane.CapacityID
+	MaxAssets       string
+	MaxRate         string
+	AdapterMinimum  string
+	AmountIn        string
+	GrossAmountOut  string
+	MaxAmountOut    string
+	MinimumDiscount string
+	DiscountID      string
+}
+
+func immutableFillQuoteOracle(quotes []liquidlane.FillQuote) []fillQuoteOracle {
+	oracle := make([]fillQuoteOracle, len(quotes))
+	for index, quote := range quotes {
+		oracle[index] = fillQuoteOracle{
+			CandidateID:     liquidlane.NewCandidateID(quote.Route, quote.DiscountID),
+			RouteID:         quote.ID,
+			CapacityID:      liquidlane.RouteCapacityID(quote.Route),
+			MaxAssets:       immutableBigInt(quote.MaxAssets),
+			MaxRate:         immutableBigInt(quote.MaxRate),
+			AdapterMinimum:  immutableBigInt(quote.AdapterMinDiscount),
+			AmountIn:        immutableBigInt(quote.AmountIn),
+			GrossAmountOut:  immutableBigInt(quote.GrossAmountOut),
+			MaxAmountOut:    immutableBigInt(quote.MaxAmountOut),
+			MinimumDiscount: immutableBigInt(quote.MinDiscount),
+			DiscountID:      immutableHash(quote.DiscountID),
+		}
+	}
+	return oracle
+}
+
+func immutableBigInt(value *big.Int) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return value.String()
+}
+
+func immutableHash(value *common.Hash) string {
+	if value == nil {
+		return ""
+	}
+	return value.Hex()
 }
 
 func TestValidateFillRoutesRejectsUntrustedOutput(t *testing.T) {

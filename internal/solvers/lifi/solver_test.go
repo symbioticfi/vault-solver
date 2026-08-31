@@ -140,7 +140,14 @@ func alwaysReadyTransactionLane() transactionLaneState {
 }
 
 type quoteSubmission struct {
-	Expiry int64 `json:"expiry"`
+	FromAsset string                 `json:"fromAsset"`
+	ToAsset   string                 `json:"toAsset"`
+	Ranges    []quoteSubmissionRange `json:"ranges"`
+	Expiry    int64                  `json:"expiry"`
+}
+
+type quoteSubmissionRange struct {
+	MaxAmount string `json:"maxAmount"`
 }
 
 type quoteSubmissionRequest struct {
@@ -562,12 +569,30 @@ type fixedFillStrategy struct {
 }
 
 type lifiLifecycleStrategy struct {
-	plan    *types.FillPlan
-	onInput func(types.FillInput)
+	plan          *types.FillPlan
+	quoteRoute    route
+	quoteCapacity *big.Int
+	onInput       func(types.FillInput)
 }
 
-func (s *lifiLifecycleStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
-	return types.QuoteOutput{}, nil
+func (s *lifiLifecycleStrategy) DecideQuotes(
+	_ context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	if s.quoteCapacity == nil {
+		return types.QuoteOutput{}, nil
+	}
+	available := liquidlane.CloneBig(s.quoteCapacity)
+	if reserved := input.Reservations[s.quoteRoute.CapacityID]; reserved != nil {
+		available.Sub(available, reserved)
+	}
+	if available.Sign() <= 0 {
+		return types.QuoteOutput{}, nil
+	}
+	quote := testStandingQuote(s.quoteRoute, available.Int64())
+	quote.Expiry = input.QuoteExpiresAt.Unix()
+	quote.ExclusiveFor = input.Solver
+	return types.QuoteOutput{Quotes: []types.Quote{quote}}, nil
 }
 
 func (s *lifiLifecycleStrategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
@@ -800,10 +825,11 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 	assertLifiRejectedAdmission(t, mode, fixture, routes, discountID, expected, minimum, refresh)
 
 	trace := []lifiFillTrace{{Stage: "rejected", Mode: mode}}
-	standingState, standingSubmitter := newLifiStandingQuoteState(t, routes[0])
 	fillReads := 0
 	plan := newLifiLifecyclePlan(routes[0], discountID, expected, minimum)
-	strategy := &lifiLifecycleStrategy{plan: plan}
+	strategy := &lifiLifecycleStrategy{
+		plan: plan, quoteRoute: routes[0], quoteCapacity: big.NewInt(2_000_000),
+	}
 	strategy.onInput = func(input types.FillInput) {
 		trace = append(trace,
 			lifiFillTrace{
@@ -827,7 +853,14 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 	)
 	solver.quoteRefresh = refresh
+	solver.txLaneState = alwaysReadyTransactionLane()
+	quoteRequests, stopQuotes := startLifiLifecycleQuoteLoop(t, solver, routes)
+	defer stopQuotes()
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], 2_000_000, false,
+	)
 	configureLifiLifecycleSolver(mode, solver, routes, &fillReads)
+
 	orders := make(chan *submittedOrder, 1)
 	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	close(orders)
@@ -835,7 +868,6 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 	done := make(chan error, 1)
 	go func() { done <- worker.run() }()
 	result := receiveFillSubmission(t, submitted)
-	expectSignal(t, refresh)
 	select {
 	case err := <-done:
 		t.Fatalf("worker returned before terminal result: %v", err)
@@ -844,13 +876,21 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 	if len(txm.reqs) != 1 {
 		t.Fatalf("accepted requests = %d, want 1", len(txm.reqs))
 	}
+	reducedAmount := 2_000_000 - expected
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], reducedAmount, false,
+	)
+	if solver.capacity.Len() != 1 {
+		t.Fatalf("standing quote changed after reservation release: ledger entries = %d", solver.capacity.Len())
+	}
+
 	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, txm.reqs[0].Data)
 	resolved := false
 	if mode == "signed-discount" {
 		client := solver.discounts.(*fakeDiscountClient)
-		resolved = client.listCalls == 1 && client.resolveCalls == 1 && fillReads == 2
+		resolved = client.listCalls == 2 && client.resolveCalls == 1 && fillReads == 2
 		if !resolved {
-			t.Fatalf("signed terms/final snapshots = %d/%d/%d, want 1/1/2",
+			t.Fatalf("signed quote/fill terms and final snapshots = %d/%d/%d, want 2/1/2",
 				client.listCalls, client.resolveCalls, fillReads)
 		}
 	}
@@ -870,12 +910,14 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 			Stage: "admitted", Mode: mode, Pending: solver.capacity.Len(),
 			Capacities: lifiCapacityEntries(solver.capacity.Snapshot()),
 		},
+		lifiFillTrace{
+			Stage: "quote-reconciled", Mode: mode, Amount: strconv.FormatInt(reducedAmount, 10), Reconciled: true,
+		},
 	)
-	reconcileLifiStandingQuote(t, standingState, standingSubmitter, routes[0])
-	trace = append(trace, lifiFillTrace{
-		Stage: "quote-reconciled", Mode: mode, Amount: "1000000", Reconciled: true,
-	})
-	completeLifiLifecycle(t, txm, result, done, refresh, outcome)
+	completeLifiLifecycle(t, txm, result, done, outcome)
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], 2_000_000, false,
+	)
 	trace = append(trace, lifiFillTrace{
 		Stage: "terminal", Mode: mode, Outcome: outcome, Pending: solver.capacity.Len(),
 		Failure: outcome != "success", Closed: outcome == "closed",
@@ -891,7 +933,7 @@ func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
 		{Stage: "validated", Mode: mode, RouteID: "route-1", CandidateID: candidate, Adapter: fixture.adapter.Hex(), CapacityID: string(capacityID), DiscountID: discount, Amount: big.NewInt(expected).String()},
 		{Stage: "calldata", Mode: mode, Direct: mode == "direct", Signed: mode == "signed-discount"},
 		{Stage: "admitted", Mode: mode, Pending: 1, Capacities: []string{string(capacityID) + "=" + big.NewInt(expected).String()}},
-		{Stage: "quote-reconciled", Mode: mode, Amount: "1000000", Reconciled: true},
+		{Stage: "quote-reconciled", Mode: mode, Amount: strconv.FormatInt(2_000_000-expected, 10), Reconciled: true},
 		{Stage: "terminal", Mode: mode, Outcome: outcome, Failure: outcome != "success", Closed: outcome == "closed"},
 	}
 	if !reflect.DeepEqual(trace, want) {
@@ -976,32 +1018,97 @@ func assertLifiRejectedAdmission(
 	}
 }
 
-func newLifiStandingQuoteState(t *testing.T, route route) (*quoteState, *fakeQuoteSubmitter) {
+func startLifiLifecycleQuoteLoop(
+	t *testing.T,
+	solver *Solver,
+	routes []route,
+) (<-chan quoteSubmissionRequest, func()) {
 	t.Helper()
-	state := newQuoteState(30 * time.Second)
-	submitter := &fakeQuoteSubmitter{}
-	if _, err := state.reconcile(
-		t.Context(), submitter, []types.Quote{testStandingQuote(route, 2_000_000)}, time.Unix(1_700_000_000, 0),
-	); err != nil {
-		t.Fatalf("publish initial standing quote: %v", err)
+	requests := make(chan quoteSubmissionRequest, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode lifecycle quote submission: %v", err)
+			return
+		}
+		requests <- request
+		ranges := 0
+		for _, quote := range request.Quotes {
+			ranges += len(quote.Ranges)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, ranges)
+	}))
+	solver.orders = newOrderClient(server.URL, "test-key", time.Second, 11155111)
+	solver.cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	solver.cfg.QuoteInterval = time.Hour
+	solver.cfg.QuoteTTL = 2 * time.Hour
+	solver.cfg.OrderServer.HTTPTimeout = time.Second
+
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, routes, solver.quoteRefresh, feedConnections)
+	}()
+	return requests, func() {
+		cancel()
+		request := receiveLifiLifecycleQuoteRequest(t, requests)
+		assertLifiLifecycleQuoteRequest(t, request, routes[0], 2_000_000, true)
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("lifecycle quoteLoop error = %v, want context cancellation", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("lifecycle quoteLoop did not stop")
+		}
+		cancelConnection()
+		server.Close()
 	}
-	return state, submitter
 }
 
-func reconcileLifiStandingQuote(
+func receiveLifiLifecycleQuoteRequest(
 	t *testing.T,
-	state *quoteState,
-	submitter *fakeQuoteSubmitter,
+	requests <-chan quoteSubmissionRequest,
+) quoteSubmissionRequest {
+	t.Helper()
+	select {
+	case request := <-requests:
+		return request
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for lifecycle quote submission")
+		return quoteSubmissionRequest{}
+	}
+}
+
+func assertLifiLifecycleQuoteRequest(
+	t *testing.T,
+	request quoteSubmissionRequest,
 	route route,
+	wantMax int64,
+	expired bool,
 ) {
 	t.Helper()
-	if _, err := state.reconcile(
-		t.Context(), submitter, []types.Quote{testStandingQuote(route, 1_000_000)}, time.Unix(1_700_000_000, 0),
-	); err != nil {
-		t.Fatalf("reconcile reserved standing capacity: %v", err)
+	if len(request.Quotes) != 1 || len(request.Quotes[0].Ranges) != 1 {
+		t.Fatalf("lifecycle quote request = %#v, want one quote range", request)
 	}
-	if len(submitter.calls) != 2 || submitter.calls[1][0].Ranges[0].MaxAmount.Cmp(big.NewInt(1_000_000)) != 0 {
-		t.Fatalf("standing quote replacement = %#v", submitter.calls)
+	quote := request.Quotes[0]
+	if !strings.EqualFold(quote.FromAsset, route.TokenIn.Hex()) ||
+		!strings.EqualFold(quote.ToAsset, route.TokenOut.Hex()) ||
+		quote.Ranges[0].MaxAmount != strconv.FormatInt(wantMax, 10) {
+		t.Fatalf("lifecycle quote request = %#v, want pair %s/%s max %d",
+			request, route.TokenIn.Hex(), route.TokenOut.Hex(), wantMax)
+	}
+	isExpired := quote.Expiry < time.Unix(1_700_000_000, 0).Unix()
+	if isExpired != expired {
+		t.Fatalf("lifecycle quote expiry = %d, expired = %t, want %t", quote.Expiry, isExpired, expired)
 	}
 }
 
@@ -1010,7 +1117,6 @@ func completeLifiLifecycle(
 	txm *fakeLifiTxSender,
 	result chan<- txmanager.Result,
 	done <-chan error,
-	refresh <-chan struct{},
 	outcome string,
 ) {
 	t.Helper()
@@ -1032,7 +1138,6 @@ func completeLifiLifecycle(
 	case <-time.After(3 * time.Second):
 		t.Fatal("worker did not consume terminal result")
 	}
-	expectSignal(t, refresh)
 }
 
 func lifiCapacityEntries(reservations liquidlane.CapacityReservations) []string {
