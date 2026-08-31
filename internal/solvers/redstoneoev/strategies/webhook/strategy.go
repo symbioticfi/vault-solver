@@ -31,11 +31,7 @@ func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(client), nil
-}
-
-func New(client *webhook.Client) *Strategy {
-	return &Strategy{client: client}
+	return &Strategy{client: client}, nil
 }
 
 func (s *Strategy) Run(context.Context) {}
