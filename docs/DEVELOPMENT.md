@@ -37,7 +37,7 @@ files; inspect its diff before considering the change complete.
 
 | Change | Required context | Focused check |
 |---|---|---|
-| Common config, schema, solver registry, or example | [Architecture](ARCHITECTURE.md), affected examples | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
+| Common config, schema, solver composition, or example | [Architecture](ARCHITECTURE.md), affected examples | `make verify-race TARGET='./internal/config ./internal/solver ./cmd/vault-solver'` |
 | CLI composition or process lifecycle | [Architecture](ARCHITECTURE.md) | `make verify-race TARGET=./cmd/vault-solver` |
 | Chain reads or fallback transport | owning integration plan and reader call sites | `make verify-race TARGET=./internal/chain/...` |
 | Signer implementation | `CLAUDE.md` security rules and call sites | `make verify-fast TARGET=./internal/signer` |
