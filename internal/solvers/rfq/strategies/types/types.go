@@ -63,8 +63,7 @@ type FillInput = QuoteInput
 // FillPlan is the execution output trusted strategies hand to the solver. The solver enforces its
 // structural constraints, then translates the plan into Executor calldata.
 type FillPlan struct {
-	TokenIn common.Address
-	Legs    []FillLeg
+	Legs []FillLeg
 }
 
 type FillLeg struct {

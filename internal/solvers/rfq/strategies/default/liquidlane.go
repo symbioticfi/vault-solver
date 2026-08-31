@@ -58,7 +58,7 @@ func (s *Strategy) BuildFillPlan(_ context.Context, input types.FillInput) (*typ
 			DiscountID: liquidlane.CloneHash(source.DiscountID),
 		})
 	}
-	return &types.FillPlan{TokenIn: input.TokenIn, Legs: legs}, nil
+	return &types.FillPlan{Legs: legs}, nil
 }
 
 func decline() types.QuoteOutput {

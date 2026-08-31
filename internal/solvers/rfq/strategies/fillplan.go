@@ -62,10 +62,7 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 	if input.RequiredAmountOut != nil && out.QuotedAmountOut.Cmp(input.RequiredAmountOut) < 0 {
 		return nil, errors.New("strategy output is below required amount out")
 	}
-	return &types.FillPlan{
-		TokenIn: input.TokenIn,
-		Legs:    legs,
-	}, nil
+	return &types.FillPlan{Legs: legs}, nil
 }
 
 func indexCandidates(input []liquidlane.QuoteCandidate) (map[string]liquidlane.QuoteCandidate, error) {

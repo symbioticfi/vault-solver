@@ -167,7 +167,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 
 	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
-	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(ctx, selected, chainTime)
+	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(
+		ctx, selected, order.Request.TokenIn, chainTime,
+	)
 	if err != nil {
 		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
 		// order instead of submitting. While the backend still lists the order open, the next poll
@@ -301,6 +303,7 @@ func (e *executionService) buildFillPlan(
 func (e *executionService) buildDiscountSwapInputs(
 	ctx context.Context,
 	selected *fillPlan,
+	tokenIn common.Address,
 	chainTime time.Time,
 ) ([]executor.IReactorDiscountSwapInput, time.Time, error) {
 	var out []executor.IReactorDiscountSwapInput
@@ -328,7 +331,7 @@ func (e *executionService) buildDiscountSwapInputs(
 		}
 		if err := discounts.ValidateSelection(parsed, discounts.Selection{
 			DiscountID: *leg.DiscountID,
-			Adapter:    leg.Adapter, TokenIn: selected.TokenIn,
+			Adapter:    leg.Adapter, TokenIn: tokenIn,
 		}, chainTime); err != nil {
 			return nil, time.Time{}, errors.Errorf("discount: %w", err)
 		}

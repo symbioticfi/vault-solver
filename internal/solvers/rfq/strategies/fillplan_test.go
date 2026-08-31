@@ -33,7 +33,7 @@ func TestFillPlanFromQuote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FillPlanFromQuote: %v", err)
 	}
-	if plan == nil || plan.TokenIn != tokenIn || len(plan.Legs) != 1 ||
+	if plan == nil || len(plan.Legs) != 1 ||
 		plan.Legs[0].Adapter != adapter || plan.Legs[0].AmountIn.Cmp(input.AmountIn) != 0 ||
 		plan.Legs[0].AmountOut.Cmp(out.QuotedAmountOut) != 0 {
 		t.Fatalf("plan = %+v", plan)

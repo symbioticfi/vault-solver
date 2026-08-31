@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -148,7 +151,6 @@ func (s fixedFillStrategy) BuildFillPlan(
 
 func baseFillPlan() *types.FillPlan {
 	return &types.FillPlan{
-		TokenIn: tIn,
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 		}},
@@ -157,7 +159,6 @@ func baseFillPlan() *types.FillPlan {
 
 func discountFillPlan(h common.Hash) *types.FillPlan {
 	return &types.FillPlan{
-		TokenIn: tIn,
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 			DiscountID: &h,
@@ -305,11 +306,20 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
+	signedTokenIn := common.HexToAddress("0x0000000000000000000000000000000000000021")
+	order := sampleOrder()
+	order.Request.TokenIn = signedTokenIn
+	encoded, err := orderTupleArgs.Pack(order)
+	if err != nil {
+		t.Fatalf("pack order: %v", err)
+	}
+	be.executable.EncodedOrder = new(hexutil.Encode(encoded))
+
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
 		Discount: discounts.Terms{
-			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
+			Adapter: vlt.Hex(), TokenToRedeem: signedTokenIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
 			Nonce:    "0x1", Deadline: 4_102_444_700,
@@ -330,6 +340,17 @@ func TestExecution_DiscountFill(t *testing.T) {
 	}
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	values, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
+	if err != nil {
+		t.Fatalf("unpack fill calldata: %v", err)
+	}
+	discountSwaps := *abi.ConvertType(
+		values[3], new([]executor.IReactorDiscountSwapInput),
+	).(*[]executor.IReactorDiscountSwapInput)
+	if len(discountSwaps) != 1 ||
+		discountSwaps[0].DiscountSwap.Discount.TokenToRedeem != signedTokenIn {
+		t.Fatalf("discount swaps = %+v, want signed order tokenIn %s", discountSwaps, signedTokenIn)
 	}
 	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
 		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
