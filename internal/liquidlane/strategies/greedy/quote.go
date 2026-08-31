@@ -191,7 +191,7 @@ func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 
 func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolution {
 	targetGross := grossOutputForNet(task.ExactOutput, new(big.Int), task.OutputBufferBps)
-	for targetGross.Sign() > 0 {
+	for {
 		allocation := allocator.allocateExactOutput(targetGross, task.MaxRoutes)
 		if len(allocation.Allocations) == 0 || allocation.Remaining.Sign() != 0 {
 			task.Trace.Decline(
@@ -231,7 +231,6 @@ func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolu
 		}
 		targetGross = requiredGross
 	}
-	return nil
 }
 
 func grossOutputForNet(netOutput, gasCost *big.Int, outputBufferBps int) *big.Int {
