@@ -32,11 +32,6 @@ const (
 	lifiOrderStatusRefunded
 )
 
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
-}
-
 type Solver struct {
 	cfg          *Config
 	chainID      int64
@@ -95,7 +90,7 @@ type transactionLaneState interface {
 	SubscribeLaneState() (<-chan struct{}, func())
 }
 
-func validateConfig(raw yaml.Node) error {
+func ValidateConfig(raw yaml.Node) error {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return err
@@ -136,7 +131,7 @@ func strategyNames() []string {
 	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err

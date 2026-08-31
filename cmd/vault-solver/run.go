@@ -135,16 +135,16 @@ func constructConfiguredSolvers(
 	solvers := make([]solver.Solver, 0, len(entries))
 	requiresTxManager := false
 	for _, entry := range entries {
-		slv, err := solver.New(entry.Name, entry.Config, deps)
+		descriptor, err := findSolverDescriptor(entry.Name)
+		if err != nil {
+			return nil, false, err
+		}
+		slv, err := descriptor.factory(entry.Config, deps)
 		if err != nil {
 			return nil, false, err
 		}
 		solvers = append(solvers, slv)
-		solverRequiresTxManager, err := solver.RequiresTxManager(entry.Name)
-		if err != nil {
-			return nil, false, err
-		}
-		requiresTxManager = requiresTxManager || solverRequiresTxManager
+		requiresTxManager = requiresTxManager || !descriptor.externallySubmitted
 	}
 	return solvers, requiresTxManager, nil
 }

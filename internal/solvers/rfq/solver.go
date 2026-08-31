@@ -1,6 +1,6 @@
 // Package rfq implements the Symbiotic RFQ filler solver: it serves backend quote requests off the
-// on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. It
-// self-registers with the solver framework via init(). See docs/RFQ-PLAN.md.
+// on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. See
+// docs/RFQ-PLAN.md.
 package rfq
 
 import (
@@ -20,15 +20,10 @@ import (
 )
 
 const (
-	// Name is the registry key that selects this solver from config.
+	// Name identifies this solver in config.
 	Name                       = "rfq-filler"
 	quoteServerShutdownTimeout = 5 * time.Second
 )
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
-}
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
@@ -39,7 +34,7 @@ type Solver struct {
 	reportFatal func(error)
 }
 
-func validateConfig(raw yaml.Node) error {
+func ValidateConfig(raw yaml.Node) error {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return err
@@ -80,7 +75,7 @@ func strategyNames() []string {
 	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -123,9 +118,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}, nil
 }
 
-// buildServices wires the quote and execution services from the parsed config and shared deps.
-// Split from factory so the config → service wiring (notably the adapter whitelist reaching both
-// services) is unit-testable without a chain client.
 func buildServices(
 	cfg *Config,
 	chainID int64,

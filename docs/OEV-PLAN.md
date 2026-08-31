@@ -107,8 +107,8 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   ops loop. It joins every background loop on shutdown (`sync.WaitGroup`) so no goroutine outlives `Run`.
   Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
 - **The solver sends no transactions** — RedStone's auctioneer submits the settlement tx; Executor deposit
-  management is out-of-band. Its registration sets `ExternallySubmitted`, so an OEV-only process does not
-  require `txManager.maxFeeGwei` and neither initializes nor starts the nonce lane. `deps.TxManager` remains
+  management is out-of-band. The command descriptor marks it externally submitted, so an OEV-only process does
+  not require `txManager.maxFeeGwei` and neither initializes nor starts the nonce lane. `deps.TxManager` remains
   unused and the example needs no `txManager` section; a mixed process still starts the one shared manager for
   its transaction-sending solvers.
 - **`deps.Signer` is the EXECUTOR_V6 signer.** The bid digest is `keccak256(abi.encode("EXECUTOR_V6",
@@ -160,7 +160,7 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 
 | File | Responsibility |
 |---|---|
-| `solver.go` | registration, solver-owned dependencies/state, and runtime name |
+| `solver.go` | solver-owned dependencies/state and runtime name |
 | `factory.go` | pure config validation, dependency construction, and WebSocket topic selection |
 | `runtime.go` | `Run`, ops refresh loop, head-stable Executor/adapter cache, and state publication |
 | `auction.go` | wire-message routing, auction deadline/staleness gates, `handleAuction` → `buildBid`, deposit/bid-cap checks, and outer EXECUTOR_V6 solve response |

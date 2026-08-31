@@ -5,7 +5,6 @@ import (
 	"github.com/spf13/cobra"
 
 	appconfig "github.com/symbioticfi/vault-solver/internal/config"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -56,14 +55,14 @@ func validateConfigFile(path string) error {
 func validateConfiguredSolvers(entries []appconfig.SolverConfig) (bool, error) {
 	requiresTxManager := false
 	for _, entry := range entries {
-		if err := solver.ValidateConfig(entry.Name, entry.Config); err != nil {
-			return false, err
-		}
-		requires, err := solver.RequiresTxManager(entry.Name)
+		descriptor, err := findSolverDescriptor(entry.Name)
 		if err != nil {
 			return false, err
 		}
-		requiresTxManager = requiresTxManager || requires
+		if err := descriptor.validateConfig(entry.Config); err != nil {
+			return false, errors.Errorf("solver %q config: %w", entry.Name, err)
+		}
+		requiresTxManager = requiresTxManager || !descriptor.externallySubmitted
 	}
 	return requiresTxManager, nil
 }

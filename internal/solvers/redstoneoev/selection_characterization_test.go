@@ -89,7 +89,7 @@ maxBidWei: "1"
 				t.Fatalf("strategy name = %q, want %q", cfg.Strategy.Name, test.wantName)
 			}
 
-			validationErr := validateConfig(node)
+			validationErr := ValidateConfig(node)
 			selected, selectionErr := newStrategy(cfg, oevSelectionDeps())
 			if (validationErr == nil) != (selectionErr == nil) {
 				t.Fatalf("validation error = %v, selection error = %v", validationErr, selectionErr)
@@ -150,7 +150,7 @@ func TestStrategyBidCapPolicyCharacterization(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateConfig(oevSelectionNode(t, oevSelectionBase+test.config))
+			err := ValidateConfig(oevSelectionNode(t, oevSelectionBase+test.config))
 			if test.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validateConfig: %v", err)

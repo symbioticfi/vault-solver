@@ -66,7 +66,7 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load signer: %v", err)
 	}
-	built, err := factory(cfg.Solvers[0].Config, solver.Deps{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
+	built, err := Factory(cfg.Solvers[0].Config, solver.Deps{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
 	if err != nil {
 		t.Fatalf("build solver: %v", err)
 	}

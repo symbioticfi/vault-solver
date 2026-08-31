@@ -4,8 +4,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-
-	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 func TestConfigCompositionCharacterization(t *testing.T) {
@@ -17,7 +15,7 @@ func TestConfigCompositionCharacterization(t *testing.T) {
 			"rfq-filler",
 			"uniswapx-filler",
 		}
-		if got := solver.Registered(); !slices.Equal(got, want) {
+		if got := configuredSolverNames(); !slices.Equal(got, want) {
 			t.Fatalf("solver catalog = %v, want %v", got, want)
 		}
 	})

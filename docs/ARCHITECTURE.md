@@ -5,7 +5,7 @@
 ```text
 cmd/vault-solver
   ├── generic framework: config, chain, signer, txmanager, solver, observability
-  └── blank imports: internal/solvers/<integration>
+  └── explicit composition imports: internal/solvers/<integration>
 
 internal/solvers/<integration>
   ├── generic framework interfaces
@@ -19,10 +19,10 @@ external contract.
 
 ## Composition and startup
 
-`cmd/vault-solver` is the composition root. Concrete solvers self-register a runtime factory, pure config
-validator, and external-submission capability from package `init` functions; they are blank-imported only by
-the command. The same metadata powers offline validation without constructing chain, signer, or API clients.
-Runtime startup is:
+`cmd/vault-solver` is the composition root. Its immutable descriptor literal binds each concrete solver's
+name, exported runtime factory, pure config validator, and external-submission capability. There is no mutable
+registry or init-time registration. The same descriptors power offline validation without constructing chain,
+signer, or API clients. Runtime startup is:
 
 1. load and strictly decode the generic YAML config;
 2. initialize logging, metrics, chain reads, and signer;
@@ -55,9 +55,9 @@ chain IDs, rates, intervals, limits, and secret references belong in YAML or an 
 
 ## Adding an integration
 
-1. Add `internal/solvers/<name>` implementing `solver.Solver` and an integration-owned config parser.
-2. Register its factory and pure validator through `solver.Registration`; mark externally submitted settlement
-   explicitly, then blank-import it from `cmd/vault-solver/root.go`.
+1. Add `internal/solvers/<name>` implementing `solver.Solver`, exported `Factory` and `ValidateConfig`
+   functions, and an integration-owned config parser.
+2. Add one descriptor to `cmd/vault-solver/composition.go`, marking externally submitted settlement explicitly.
 3. Add generated external contracts under `api/` through the vendored-artifact Make targets.
 4. Add the schema variant, annotated example config, root README solver-table row, integration plan, docs-index row,
    and focused tests.

@@ -1,7 +1,6 @@
 // Package bridgefacilitator implements the 3F (Grunt) Bridge Facilitator solver: it discovers
 // bridge-loan auctions via the 3F API, snapshots adapter state for a trusted strategy, signs the
-// returned offers, and realizes repaid loans back into the vault. It self-registers with the solver
-// framework via init().
+// returned offers, and realizes repaid loans back into the vault.
 package bridgefacilitator
 
 import (
@@ -30,13 +29,8 @@ var offerStatusIgnored = map[string]bool{
 	"CANCELED":     true,
 }
 
-// Name is the registry key that selects this solver from config.
+// Name identifies this solver in config.
 const Name = "3f-bridge-facilitator"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, solver.Registration{Factory: factory, ValidateConfig: validateConfig})
-}
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
@@ -47,8 +41,8 @@ type Solver struct {
 	strategy   types.Strategy
 	log        logr.Logger
 	laneReady  func() bool    // shared txmanager lane state; safe for the single Run goroutine
-	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
-	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
+	signerAddr common.Address // the solver's signer address for diagnostics
+	probe      signerProbe    // one-time offer-signer authorization probe
 	nonceSeq   uint64         // wall-clock-seeded offer nonce; owned exclusively by the Run goroutine
 	offers     *offerTracker  // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
 	targets    []Target       // current resolved snapshot; owned exclusively by the Run goroutine
@@ -67,7 +61,7 @@ func deduplicateAdapters(adapters []common.Address) []common.Address {
 	return unique
 }
 
-func validateConfig(raw yaml.Node) error {
+func ValidateConfig(raw yaml.Node) error {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return err
@@ -78,7 +72,7 @@ func validateConfig(raw yaml.Node) error {
 	return nil
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err

@@ -30,7 +30,7 @@ The integration remains self-contained and shares only the generic framework wit
 | Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
-| Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
+| Multi-solver shape | 3F logic fully encapsulated in its own package; the command's immutable descriptor selects its validator and factory from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
 
 ---
 
@@ -72,8 +72,8 @@ No historical event indexer, no DB.
 
 ## 5. Framework integration
 
-The package self-registers its runtime factory and pure config validator, then the command blank-imports it.
-Generic registration and startup rules live in [Architecture](ARCHITECTURE.md); nonce, fee, replacement, and
+The package exports its runtime factory and pure config validator; the command binds them to the runtime name.
+Generic composition and startup rules live in [Architecture](ARCHITECTURE.md); nonce, fee, replacement, and
 shutdown behavior live in [Transaction manager](TXMANAGER.md).
 
 3F-specific integration rules are:

@@ -212,9 +212,9 @@ The comparison below records current reuse boundaries against the local RFQ and 
   `webhook` strategy).
 - A thin UniswapX reader composes those shared readers for startup route resolution, authorization,
   inventory/rate snapshots, optional gas snapshots, and fill-time quotes (§2.1).
-- Solver scaffolding patterns: `init()` registration + factory, solver-local strategy selection through
-  `strategy: {name, config}`, bounded quote server, poll loop, and calldata-only submission through the
-  shared `txmanager`.
+- Solver scaffolding patterns: exported factory and pure validator bound by the command descriptor,
+  solver-local strategy selection through `strategy: {name, config}`, bounded quote server, poll loop, and
+  calldata-only submission through the shared `txmanager`.
 
 **Done differently from `rfq` (the real implementation work):**
 

@@ -1,18 +1,13 @@
-// Package solver defines the generic, solver-agnostic framework: the Solver interface, a
-// name->factory registry, shared dependencies, and a thin run engine. Concrete strategies live in
-// their own packages under internal/solvers and self-register via Register in an init function.
+// Package solver defines shared solver contracts and lifecycle execution.
 package solver
 
 import (
 	"context"
-	"sort"
-	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
 
 	"github.com/go-logr/logr"
-	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -44,97 +39,6 @@ type Solver interface {
 // while it retires externally visible work such as active quotes.
 type ShutdownPreparer interface {
 	ShutdownPreparationTimeout() time.Duration
-}
-
-// Factory builds a Solver from its opaque config block and shared runtime dependencies.
-type Factory func(raw yaml.Node, deps Deps) (Solver, error)
-
-// ConfigValidator performs integration-owned config validation without runtime dependencies or I/O.
-type ConfigValidator func(raw yaml.Node) error
-
-// Registration describes one integration's construction and offline configuration contract.
-type Registration struct {
-	Factory             Factory
-	ValidateConfig      ConfigValidator
-	ExternallySubmitted bool
-}
-
-var (
-	mu       sync.RWMutex
-	registry = map[string]Registration{}
-)
-
-// Register associates a solver name with its runtime and offline config contracts. It is intended
-// for package init functions and panics on incomplete or duplicate registrations.
-func Register(name string, registration Registration) {
-	mu.Lock()
-	defer mu.Unlock()
-	if name == "" {
-		panic("solver: Register called with empty name")
-	}
-	if registration.Factory == nil {
-		panic("solver: Register called with nil factory for " + name)
-	}
-	if registration.ValidateConfig == nil {
-		panic("solver: Register called with nil config validator for " + name)
-	}
-	if _, dup := registry[name]; dup {
-		panic("solver: duplicate registration for " + name)
-	}
-	registry[name] = registration
-}
-
-// New constructs the solver registered under name.
-func New(name string, raw yaml.Node, deps Deps) (Solver, error) {
-	registration, ok := lookup(name)
-	if !ok {
-		return nil, unknownSolverError(name)
-	}
-	return registration.Factory(raw, deps)
-}
-
-// ValidateConfig validates one opaque solver config without constructing runtime dependencies.
-func ValidateConfig(name string, raw yaml.Node) error {
-	registration, ok := lookup(name)
-	if !ok {
-		return unknownSolverError(name)
-	}
-	if err := registration.ValidateConfig(raw); err != nil {
-		return errors.Errorf("solver %q config: %w", name, err)
-	}
-	return nil
-}
-
-// RequiresTxManager reports the registered integration's transaction-submission mode.
-func RequiresTxManager(name string) (bool, error) {
-	registration, ok := lookup(name)
-	if !ok {
-		return false, unknownSolverError(name)
-	}
-	return !registration.ExternallySubmitted, nil
-}
-
-func lookup(name string) (Registration, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	registration, ok := registry[name]
-	return registration, ok
-}
-
-func unknownSolverError(name string) error {
-	return errors.Errorf("solver: unknown solver %q (registered: %v)", name, Registered())
-}
-
-// Registered returns the sorted list of registered solver names (for diagnostics).
-func Registered() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	names := make([]string, 0, len(registry))
-	for n := range registry {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // Run executes a solver until it returns or ctx is cancelled. A context cancellation is treated

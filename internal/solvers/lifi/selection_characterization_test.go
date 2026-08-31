@@ -79,7 +79,7 @@ func TestStrategySelectionCharacterization(t *testing.T) {
 				t.Fatalf("strategy name = %q, want %q", cfg.Strategy.Name, test.wantName)
 			}
 
-			validationErr := validateConfig(node)
+			validationErr := ValidateConfig(node)
 			selected, selectionErr := newStrategy(cfg.Strategy)
 			if (validationErr == nil) != (selectionErr == nil) {
 				t.Fatalf("validation error = %v, selection error = %v", validationErr, selectionErr)

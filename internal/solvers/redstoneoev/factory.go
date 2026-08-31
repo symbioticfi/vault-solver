@@ -12,7 +12,7 @@ import (
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 )
 
-func validateConfig(raw yaml.Node) error {
+func ValidateConfig(raw yaml.Node) error {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return err
@@ -23,7 +23,7 @@ func validateConfig(raw yaml.Node) error {
 	return nil
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err

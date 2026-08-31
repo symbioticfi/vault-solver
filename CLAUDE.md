@@ -36,8 +36,9 @@ architecture contracts; focused commands live in [`docs/DEVELOPMENT.md`](docs/DE
 Two layers, and code lives in exactly one:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
-  `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
-  Nothing here may know about 3F, RFQ, RedStone, or any specific protocol.
+  `internal/{config,chain,signer,txmanager,solver,observability,version}` and the command lifecycle.
+  `cmd/vault-solver/composition.go` is the sole integration-aware boundary: it imports solver packages only
+  to bind their names, validators, factories, and submission metadata. Protocol behavior stays out of `cmd/`.
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/` — currently
   `bridgefacilitator/`, `rfq/`, `redstoneoev/`, `lifi/`, and `uniswapx/`. All protocol-specific logic,
   types, ABIs usage, pricing, and config live here.
@@ -50,11 +51,10 @@ actually reuses them. Neutral, protocol-agnostic helpers live in small focused p
 `internal/tokenpolicy`, `internal/webhook`, and `internal/tenderly`.
 
 To add a new integration:
-1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
-   `factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error)`.
-2. Self-register in `init()` with `solver.Registration{Factory, ValidateConfig}`; set
-   `ExternallySubmitted` only when an upstream auctioneer submits settlement, then blank-import the package
-   from `main`.
+1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`) and exporting
+   `Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error)` plus pure `ValidateConfig(raw yaml.Node)`.
+2. Add one immutable descriptor to `cmd/vault-solver/composition.go`; mark it externally submitted only when
+   an upstream auctioneer submits settlement.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).
 4. Decode your own config from the deferred `solvers[].config` YAML node — no framework edits.
@@ -70,8 +70,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - Config lists solvers under `solvers:` (one or more, at most one per type). The generic layer decodes
   only `chain`, `signer`, `txManager`, `observability`, and each `solvers[].name`, and keeps each
   `solvers[].config` as an opaque `yaml.Node` (two-stage decode); each solver decodes that node into
-  its own typed, **validated** struct in `parseConfig`. Each registration also exposes a pure validator so
-  `vault-solver config validate` checks the same integration and strategy semantics without network I/O. All
+  its own typed, **validated** struct in `parseConfig`. Each integration exports a pure validator wired by
+  the command composition root, so `vault-solver config validate` checks the same integration and strategy
+  semantics without network I/O. All
   solvers run in one process and share the
   chain client, signer, and the single nonce-serialized `txManager` — which is why multiple solvers on
   one EOA never race on nonces.
@@ -233,8 +234,8 @@ bug fix or refactor needs no docs change unless it changes a documented invarian
 
 - Run gate: `make format && make verify` (`make verify` itself is read-only).
 - Context map: [`docs/README.md`](docs/README.md); commands and checks: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
-- Add an integration: new `internal/solvers/<name>/` + `solver.Registration` in `init()` + bindings under
-  `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
+- Add an integration: new `internal/solvers/<name>/` + one command descriptor + bindings under
+  `api/bindings/<name>/` + a `solvers[]` entry. No generic framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
 - Keep the canonical documentation owner current in the same change; use the map in `docs/README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

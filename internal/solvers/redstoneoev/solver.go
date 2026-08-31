@@ -1,8 +1,7 @@
 // Package redstoneoev implements the RedStone Atom OEV solver: it subscribes to OEV auctions over
 // WebSocket, delegates bid/skip decisions to a configured strategy, signs EXECUTOR_V6 bids, and replies
 // with solve payloads that settle through strategy-selected callback operationData. The built-in default
-// strategy is the Morpho/LiquidLane liquidation path. The solver registers itself via init(). See
-// docs/OEV-PLAN.md.
+// strategy is the Morpho/LiquidLane liquidation path. See docs/OEV-PLAN.md.
 package redstoneoev
 
 import (
@@ -15,15 +14,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// Name is the registry key that selects this solver from config.
+// Name identifies this solver in config.
 const Name = "redstone-oev"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, solver.Registration{
-		Factory: factory, ValidateConfig: validateConfig, ExternallySubmitted: true,
-	})
-}
 
 // Solver is the RedStone OEV solver runtime.
 type Solver struct {
