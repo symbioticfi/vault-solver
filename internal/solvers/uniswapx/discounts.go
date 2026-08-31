@@ -21,9 +21,6 @@ type advertisedRouteFilter struct {
 }
 
 func (s *Solver) listDiscounts(ctx context.Context) (*liquiddiscounts.List, error) {
-	if s.discounts == nil {
-		return &liquiddiscounts.List{}, nil
-	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.Discounts.HTTPTimeout)
 	defer cancel()
 	return s.discounts.ListDiscounts(requestCtx)
