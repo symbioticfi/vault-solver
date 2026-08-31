@@ -119,11 +119,7 @@ type OrderServerConfig struct {
 	PollInterval time.Duration
 	HTTPTimeout  time.Duration
 	Beta         bool
-	Sources      OrderSourcesConfig
-}
-
-type OrderSourcesConfig struct {
-	PublicV2 bool
+	PublicV2     bool
 }
 
 type StrategyConfig struct {
@@ -274,10 +270,10 @@ func parseOrderServerConfig(raw rawOrderServerConfig) (OrderServerConfig, error)
 	if raw.Sources.ExclusiveV2 != nil && !*raw.Sources.ExclusiveV2 {
 		return OrderServerConfig{}, errors.New("orderServer.sources.exclusiveV2 must be enabled while quote server is enabled")
 	}
-	sources := OrderSourcesConfig{PublicV2: raw.Sources.PublicV2}
 	return OrderServerConfig{
 		BaseURL: raw.BaseURL, APIKeyEnv: raw.APIKeyEnv,
-		PollInterval: pollInterval, HTTPTimeout: httpTimeout, Beta: raw.Beta, Sources: sources,
+		PollInterval: pollInterval, HTTPTimeout: httpTimeout, Beta: raw.Beta,
+		PublicV2: raw.Sources.PublicV2,
 	}, nil
 }
 

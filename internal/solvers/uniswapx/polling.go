@@ -47,7 +47,7 @@ func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) erro
 		s.recordExclusivePollSuccess(time.Now())
 		s.observePoll(string(orderSourceExclusiveV2), "ok")
 	}
-	if s.cfg.OrderServer.Sources.PublicV2 {
+	if s.cfg.OrderServer.PublicV2 {
 		if _, err := s.pollSource(ctx, orderSourcePublicV2, nil, out); err != nil {
 			pollErrs = append(pollErrs, err)
 			s.observePoll(string(orderSourcePublicV2), "failed")

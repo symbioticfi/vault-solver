@@ -210,7 +210,7 @@ func runPollCharacterizationCase(
 	if tc.wantTracked != (common.Hash{}) {
 		cfg = partialConfig
 		cfg.OrderServer = OrderServerConfig{
-			PollInterval: time.Second, Sources: OrderSourcesConfig{PublicV2: true},
+			PollInterval: time.Second, PublicV2: true,
 		}
 		cfg.Breaker = BreakerConfig{Window: time.Minute}
 	}
@@ -249,7 +249,7 @@ func pollCharacterizationConfig(executor common.Address) *Config {
 	return &Config{
 		Executor: executor,
 		OrderServer: OrderServerConfig{
-			PollInterval: time.Second, Sources: OrderSourcesConfig{PublicV2: true},
+			PollInterval: time.Second, PublicV2: true,
 		},
 		Breaker: BreakerConfig{Window: time.Minute},
 	}

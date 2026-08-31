@@ -204,7 +204,7 @@ func TestPollOrdersProcessesExclusiveBeforePublicFailure(t *testing.T) {
 	solver := &Solver{
 		cfg: &Config{
 			Executor:    executor,
-			OrderServer: OrderServerConfig{Sources: OrderSourcesConfig{PublicV2: true}},
+			OrderServer: OrderServerConfig{PublicV2: true},
 		},
 		chainID: 1,
 		reader:  reader,

@@ -49,8 +49,8 @@ func TestParseConfigDefaultsAndSources(t *testing.T) {
 		cfg.usesDiscounts() {
 		t.Fatalf("defaults were not applied: %+v", cfg)
 	}
-	if !cfg.OrderServer.Sources.PublicV2 {
-		t.Fatalf("sources = %+v", cfg.OrderServer.Sources)
+	if !cfg.OrderServer.PublicV2 {
+		t.Fatalf("order server = %+v", cfg.OrderServer)
 	}
 	if cfg.Gas == nil {
 		t.Fatal("gas config = nil")
