@@ -22,9 +22,6 @@ type metrics struct {
 }
 
 func newMetrics(reg prometheus.Registerer, strategyName string) (*metrics, error) {
-	if strategyName == "" {
-		strategyName = defaultStrategyName
-	}
 	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
 	m := &metrics{
 		auctions:  prometheus.NewCounter(prometheus.CounterOpts{Name: "oev_auctions_total", Help: "OEV auction frames seen."}),

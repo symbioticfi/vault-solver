@@ -13,17 +13,13 @@ import (
 )
 
 func newStrategy(cfg *Config, deps defaultstrategy.FactoryDeps) (types.Strategy, error) {
-	name := cfg.Strategy.Name
-	if name == "" {
-		name = defaultStrategyName
-	}
-	switch name {
+	switch cfg.Strategy.Name {
 	case defaultstrategy.Name:
 		return defaultstrategy.NewFromConfig(cfg.Strategy.Config, deps)
 	case webhookstrategy.Name:
 		return webhookstrategy.NewFromConfig(cfg.Strategy.Config)
 	default:
-		return nil, unknownStrategyError(name)
+		return nil, unknownStrategyError(cfg.Strategy.Name)
 	}
 }
 
