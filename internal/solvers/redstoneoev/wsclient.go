@@ -170,10 +170,7 @@ func (w *wsClient) readPump(ctx context.Context, conn *websocket.Conn, errCh cha
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			select {
-			case errCh <- errors.Errorf("read: %w", err):
-			default:
-			}
+			w.nonblockErr(errCh, errors.Errorf("read: %w", err))
 			return
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(w.cfg.MsgTimeout))
