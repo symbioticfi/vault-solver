@@ -110,7 +110,7 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 		}
 	}
 
-	if err := r.resolveDelegatedAuth(ctx, adapters, filler, auths, delegatedChecks); err != nil {
+	if err := r.resolveDelegatedAuth(ctx, filler, auths, delegatedChecks); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +125,6 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 
 func (r *Reader) resolveDelegatedAuth(
 	ctx context.Context,
-	adapters []common.Address,
 	filler common.Address,
 	auths []Auth,
 	checks []int,
@@ -137,7 +136,7 @@ func (r *Reader) resolveDelegatedAuth(
 	for j, i := range checks {
 		// Delegation is keyed by the adapter's exact current marketMaker value; zero is valid.
 		calls[j] = chain.Call{
-			Target: adapters[i], AllowFailure: true,
+			Target: auths[i].Adapter, AllowFailure: true,
 			Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler),
 		}
 	}
