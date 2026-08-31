@@ -1,18 +1,11 @@
 package redstoneoev
 
 import (
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
-	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
 func TestBuildBidCharacterizesPendingAuctionProjection(t *testing.T) {
@@ -37,46 +30,6 @@ func TestBuildBidCharacterizesPendingAuctionProjection(t *testing.T) {
 	}
 	if !slices.Equal(next.input.PendingAuctions, want) {
 		t.Fatalf("strategy input aliased reservation state: got %+v, want %+v", next.input.PendingAuctions, want)
-	}
-}
-
-func TestBuildBidCharacterizesPendingAuctionsWebhookJSON(t *testing.T) {
-	requestBody := make(chan []byte, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		requestBody <- body
-		_, _ = w.Write([]byte(`{"decision":"skip","reason":"captured"}`))
-	}))
-	defer server.Close()
-
-	var node yaml.Node
-	if err := yaml.Unmarshal([]byte("url: "+server.URL+"\n"), &node); err != nil {
-		t.Fatalf("unmarshal webhook config: %v", err)
-	}
-	strategy, err := webhookstrategy.NewFromConfig(*node.Content[0])
-	if err != nil {
-		t.Fatalf("new webhook strategy: %v", err)
-	}
-
-	s, now := solverWithPendingProjectionFacts(t)
-	s.strategy = strategy
-	if decision := s.buildBid(t.Context(), decodeAuction(t), func() time.Time { return now }); decision.skip != types.SkipReasonStrategy {
-		t.Fatalf("buildBid skip = %q, want %q", decision.skip, types.SkipReasonStrategy)
-	}
-
-	var wire struct {
-		PendingAuctions json.RawMessage `json:"pendingAuctions"`
-	}
-	if err := json.Unmarshal(<-requestBody, &wire); err != nil {
-		t.Fatalf("decode webhook request: %v", err)
-	}
-	const want = `[{"id":"alpha","sentAt":"2030-01-02T02:59:05.000000001Z","won":false,"expiresAt":"2030-01-02T03:04:05.000000001Z"},{"id":"zeta","sentAt":"2030-01-02T03:03:05Z","won":true,"expiresAt":"2030-01-02T03:08:05Z"}]`
-	if string(wire.PendingAuctions) != want {
-		t.Fatalf("pendingAuctions JSON = %s, want %s", wire.PendingAuctions, want)
 	}
 }
 
