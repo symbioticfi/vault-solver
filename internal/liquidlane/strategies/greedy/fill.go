@@ -218,7 +218,7 @@ func buildFillCandidates(task FillTask) ([]fillCandidate, error) {
 			continue
 		}
 		capacityID := liquidlane.RouteCapacityID(quote.Route)
-		capacity := AvailableCapacity(quote.MaxAssets, task.InventoryReserveBps)
+		capacity := availableCapacity(quote.MaxAssets, task.InventoryReserveBps)
 		if reserved := task.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
 			capacity.Sub(capacity, reserved)
 		}

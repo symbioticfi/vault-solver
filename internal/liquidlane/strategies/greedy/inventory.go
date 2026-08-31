@@ -115,7 +115,7 @@ func groupAvailableCapacity(
 			}
 		}
 	}
-	remaining := AvailableCapacity(domainMax, reserveBps)
+	remaining := availableCapacity(domainMax, reserveBps)
 	if reserved != nil && reserved.Sign() > 0 {
 		remaining.Sub(remaining, reserved)
 	}
@@ -131,7 +131,7 @@ func routeCapacityShare(
 	share := liquidlane.MulDivUp(remaining, big.NewInt(1), big.NewInt(int64(routesLeft)))
 	routeCap := new(big.Int)
 	for _, item := range items {
-		itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
+		itemCap := availableCapacity(item.MaxAssets, reserveBps)
 		if itemCap.Cmp(routeCap) > 0 {
 			routeCap.Set(itemCap)
 		}
@@ -149,7 +149,7 @@ func capRouteInventory(
 ) []liquidlane.Inventory {
 	out := make([]liquidlane.Inventory, 0, len(items))
 	for _, item := range items {
-		itemCap := AvailableCapacity(item.MaxAssets, reserveBps)
+		itemCap := availableCapacity(item.MaxAssets, reserveBps)
 		if itemCap.Cmp(share) > 0 {
 			itemCap.Set(share)
 		}
@@ -164,7 +164,7 @@ func capRouteInventory(
 	return out
 }
 
-func AvailableCapacity(maxAssets *big.Int, reserveBps int) *big.Int {
+func availableCapacity(maxAssets *big.Int, reserveBps int) *big.Int {
 	return applyBpsDown(maxAssets, bpsDenominator-reserveBps)
 }
 
