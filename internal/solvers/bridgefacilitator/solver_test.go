@@ -34,6 +34,19 @@ func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
 	}
 }
 
+func TestNextNonceStrictlyIncreasesFromSeed(t *testing.T) {
+	t.Parallel()
+
+	s := &Solver{}
+	s.nonceSeq = 42
+
+	for i, want := range []uint64{43, 44, 45} {
+		if got := s.nextNonce(); got != want {
+			t.Fatalf("nextNonce call %d = %d, want %d", i+1, got, want)
+		}
+	}
+}
+
 func TestDiscoverAndOfferSkipsPlanningWhenLaneNotReady(t *testing.T) {
 	t.Parallel()
 
@@ -69,7 +82,7 @@ func TestSubmitOfferRechecksLaneReadinessBeforeEveryAPICall(t *testing.T) {
 	var ready atomic.Bool
 	ready.Store(true)
 	s := &Solver{
-		api:       newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:       newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second),
 		laneReady: ready.Load,
 	}
 
@@ -316,7 +329,7 @@ func TestRefreshTargetsAndHydrate_HydratesOnlyNewlyUsableAdapters(t *testing.T) 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
 		reader:     newReader(c, common.Address{}),
-		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -360,7 +373,7 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 	s := &Solver{
 		cfg:        &Config{AdapterFactory: factoryAddr},
 		reader:     newReader(c, common.Address{}),
-		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),

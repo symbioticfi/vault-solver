@@ -1,6 +1,7 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — 3F Bridge Facilitator (`3f-bridge-facilitator`), annotated example.
 #
-# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic BridgeFacilitatorAdapters,
+# Bids in 3F (Grunt) bridge-loan auctions on behalf of one or more Symbiotic ThreeFAdapters,
 # funds the loans it wins, and permissionlessly redeems repaid loans back to the vault. Addresses below
 # are the 3F Sepolia dev deployment.
 #
@@ -13,7 +14,6 @@ chain:
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
   # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest/pending nonce reads; defaults to rpcUrl
-  # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
 signer:
@@ -38,14 +38,14 @@ observability:
   # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
 solvers:
-  - name: 3f-bridge-facilitator    # registry key selecting the implementation
+  - name: 3f-bridge-facilitator    # solver name selecting the implementation
     config:                        # opaque to the framework; typed by the 3F solver
       apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL (no API key — auth is by signature)
       # httpTimeout: 30s               # per-call timeout for 3F API requests (default 30s)
       # offerExpiryBuffer: 2h          # signed-offer expiry = auction solve_start_time + this (default 2h)
       redeemBatchSize: 10              # max matured Requests redeemed per redeem() call (gas bound; default 10)
 
-      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md
+      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/STRATEGIES.md
         name: default                  #   "default" (in-process sizing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 

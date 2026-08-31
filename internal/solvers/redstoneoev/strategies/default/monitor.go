@@ -19,7 +19,6 @@ const snapshotMaxAuctionLag = 3 * 12 * time.Second
 type snapshot struct {
 	markets   map[common.Hash]MarketInfo
 	prices    map[common.Hash]*big.Int
-	quotes    map[common.Hash]AdapterQuote
 	positions map[common.Hash]map[common.Address]morpho.PositionState
 
 	block     uint64
@@ -61,7 +60,6 @@ func newAPIMonitor(
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
 		prices:    map[common.Hash]*big.Int{},
-		quotes:    map[common.Hash]AdapterQuote{},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{},
 	})
 	return m
@@ -77,14 +75,18 @@ func (m *apiMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, ada
 }
 
 func (m *apiMonitor) run(ctx context.Context) {
-	tick := time.NewTicker(m.monitorPoll)
+	runMonitor(ctx, m.monitorPoll, m.refresh)
+}
+
+func runMonitor(ctx context.Context, poll time.Duration, refresh func(context.Context)) {
+	tick := time.NewTicker(poll)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			m.refresh(ctx)
+			refresh(ctx)
 		}
 	}
 }

@@ -18,6 +18,12 @@ import (
 
 var executorB = executor.NewRedStoneExecutor()
 
+type stateReader interface {
+	ReadExecutorState(ctx context.Context, executor, signer common.Address) (ExecutorState, error)
+	ReadAdapterSnapshot(ctx context.Context, adapter, callback common.Address) (types.AdapterSnapshot, error)
+	ReadGasPrices(ctx context.Context, adapter types.AdapterSnapshot, now time.Time) (*liquidlanegas.PriceSnapshot, error)
+}
+
 // reader owns RedStone Executor reads and maps shared LiquidLane facts into OEV strategy input.
 type reader struct {
 	chain *chain.Client

@@ -32,7 +32,7 @@ func (r *quoteModeReader) latestBlockTime(context.Context) (time.Time, error) {
 	return r.now, nil
 }
 
-func (r *quoteModeReader) resolveRoutes(
+func (r *quoteModeReader) ResolveRoutes(
 	_ context.Context,
 	adapters []common.Address,
 ) ([]liquidlane.Route, error) {
@@ -43,11 +43,11 @@ func (r *quoteModeReader) resolveRoutes(
 	return append([]liquidlane.Route(nil), r.resolved...), r.resolveErr
 }
 
-func (r *quoteModeReader) validateGasTokens([]liquidlane.Route) error {
+func (r *quoteModeReader) ValidateGasTokens([]liquidlane.Route) error {
 	return r.gasErr
 }
 
-func (r *quoteModeReader) quoteSnapshot(
+func (r *quoteModeReader) Quote(
 	_ context.Context,
 	routes []liquidlane.Route,
 	_ common.Address,

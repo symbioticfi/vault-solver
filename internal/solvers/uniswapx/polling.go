@@ -2,11 +2,19 @@ package uniswapx
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 )
+
+type trackedOrder struct {
+	completedAt time.Time
+	retryAt     time.Time
+	inFlight    bool
+	attempts    int
+}
 
 func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error {
 	defer close(out)
@@ -26,22 +34,20 @@ func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error
 
 func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) error {
 	var pollErrs []error
-	if s.cfg.OrderServer.Sources.ExclusiveV2 {
-		now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
-		if err != nil {
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else {
-			s.recordExclusivePollSuccess(time.Now())
-			s.observePoll(string(orderSourceExclusiveV2), "ok")
-		}
+	now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
+	if err != nil {
+		s.markExclusiveStateUnknown()
+		s.observePoll(string(orderSourceExclusiveV2), "failed")
+		pollErrs = append(pollErrs, err)
+	} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
+		s.markExclusiveStateUnknown()
+		s.observePoll(string(orderSourceExclusiveV2), "failed")
+		pollErrs = append(pollErrs, err)
+	} else {
+		s.recordExclusivePollSuccess(time.Now())
+		s.observePoll(string(orderSourceExclusiveV2), "ok")
 	}
-	if s.cfg.OrderServer.Sources.PublicV2 {
+	if s.cfg.OrderServer.PublicV2 {
 		if _, err := s.pollSource(ctx, orderSourcePublicV2, nil, out); err != nil {
 			pollErrs = append(pollErrs, err)
 			s.observePoll(string(orderSourcePublicV2), "failed")
@@ -120,7 +126,7 @@ func (s *Solver) pollSource(
 		return time.Time{}, errors.Errorf("read chain time for %s orders: %w", source, nowErr)
 	}
 	for _, entry := range entries {
-		order, parseErr := parseAndResolveOrder(entry, source, s.cfg, s.chainID, now)
+		order, parseErr := parseAndResolveV2Order(entry, source, s.cfg, s.chainID, now)
 		if parseErr != nil {
 			if source == orderSourceExclusiveV2 {
 				obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
@@ -186,64 +192,48 @@ func (s *Solver) recordExclusivePollSuccess(now time.Time) {
 }
 
 func (s *Solver) claim(hash common.Hash, now time.Time) bool {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	for key, filledAt := range s.filled {
-		if now.Sub(filledAt) > time.Hour {
-			delete(s.filled, key)
-		}
-	}
-	for key, retryAt := range s.retryAt {
-		if now.Sub(retryAt) > time.Hour {
-			delete(s.retryAt, key)
-			delete(s.attempts, key)
-		}
-	}
-	if _, exists := s.filled[hash]; exists {
+	s.orderMu.Lock()
+	defer s.orderMu.Unlock()
+	maps.DeleteFunc(s.orderState, func(_ common.Hash, order trackedOrder) bool {
+		return (!order.completedAt.IsZero() && now.Sub(order.completedAt) > time.Hour) ||
+			(!order.retryAt.IsZero() && now.Sub(order.retryAt) > time.Hour)
+	})
+	order := s.orderState[hash]
+	if !order.completedAt.IsZero() || order.inFlight || order.retryAt.After(now) {
 		return false
 	}
-	if s.inFlight[hash] {
-		return false
-	}
-	if retryAt, exists := s.retryAt[hash]; exists && retryAt.After(now) {
-		return false
-	}
-	delete(s.retryAt, hash)
+	order.retryAt = time.Time{}
 	s.beginFillPlanning()
-	s.inFlight[hash] = true
+	order.inFlight = true
+	s.orderState[hash] = order
 	return true
 }
 
 func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {
-	s.stateMu.Lock()
-	delete(s.inFlight, hash)
+	s.orderMu.Lock()
+	order := s.orderState[hash]
+	order.inFlight = false
 	backoff := s.cfg.OrderServer.PollInterval
-	attempt := s.attempts[hash]
 	if failed {
-		attempt++
-		s.attempts[hash] = attempt
-		shift := min(attempt-1, 5)
-		backoff *= time.Duration(1 << shift)
+		order.attempts++
+		backoff *= time.Duration(1 << min(order.attempts-1, 5))
 		backoff = min(backoff, 30*time.Second)
 	}
-	retryAt := now.Add(backoff)
-	s.retryAt[hash] = retryAt
-	s.stateMu.Unlock()
+	order.retryAt = now.Add(backoff)
+	s.orderState[hash] = order
+	s.orderMu.Unlock()
 	s.log.V(1).Info(
 		"order retry scheduled",
 		"orderHash", hash.Hex(),
 		"failed", failed,
-		"attempt", attempt,
+		"attempt", order.attempts,
 		"backoff", backoff,
-		"retryAt", retryAt.Unix(),
+		"retryAt", order.retryAt.Unix(),
 	)
 }
 
 func (s *Solver) complete(hash common.Hash, now time.Time) {
-	s.stateMu.Lock()
-	delete(s.retryAt, hash)
-	delete(s.inFlight, hash)
-	delete(s.attempts, hash)
-	s.filled[hash] = now
-	s.stateMu.Unlock()
+	s.orderMu.Lock()
+	s.orderState[hash] = trackedOrder{completedAt: now}
+	s.orderMu.Unlock()
 }

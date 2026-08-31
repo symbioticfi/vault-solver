@@ -37,7 +37,7 @@ func RouteUnits(routes []Route) uint64 {
 }
 
 func UnitsForRouteAt(route Route, first bool) uint64 {
-	switch route {
+	switch route { //nolint:exhaustive // Unknown and invalid routes intentionally share the conservative default.
 	case RouteAcquire:
 		if first {
 			return firstAcquireSwap
@@ -53,11 +53,6 @@ func UnitsForRouteAt(route Route, first bool) uint64 {
 			return firstDeallocateSwap
 		}
 		return additionalDeallocateSwap
-	case RouteUnknown:
-		if first {
-			return firstUnknownSwap
-		}
-		return additionalUnknownSwap
 	default:
 		if first {
 			return firstUnknownSwap

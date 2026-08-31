@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -60,17 +62,25 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,
-		"goVersion", version.GoVersion(),
+		"goVersion", runtime.Version(),
 		"solvers", solverNames,
 		"debug", debug,
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
-	metrics := observability.NewMetrics()
-	metrics.SetBuildInfo(version.Version, version.Commit)
+	metrics := observability.NewMetrics(version.Version, version.Commit)
 	health := &observability.Health{}
 	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
-	go observability.ServeUntil(ctx, httpSrv, log)
+	serverCtx, stopServer := context.WithCancel(ctx)
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		observability.ServeUntil(serverCtx, httpSrv, log)
+	}()
+	defer func() {
+		stopServer()
+		<-serverDone
+	}()
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
@@ -111,16 +121,54 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,
 	}
-	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	solvers, requiresTxManager, err := constructConfiguredSolvers(cfg.Solvers, deps)
+	if err != nil {
+		return err
+	}
+	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health.SetReady, log)
+}
+
+func constructConfiguredSolvers(
+	entries []config.SolverConfig,
+	deps solver.Deps,
+) ([]solver.Solver, bool, error) {
+	solvers := make([]solver.Solver, 0, len(entries))
 	requiresTxManager := false
-	for _, sc := range cfg.Solvers {
-		slv, err := solver.New(sc.Name, sc.Config, deps)
+	for _, entry := range entries {
+		descriptor, err := findSolverDescriptor(entry.Name)
 		if err != nil {
-			return err
+			return nil, false, err
+		}
+		slv, err := descriptor.factory(entry.Config, deps)
+		if err != nil {
+			return nil, false, err
 		}
 		solvers = append(solvers, slv)
-		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+		requiresTxManager = requiresTxManager || !descriptor.externallySubmitted
 	}
+	return solvers, requiresTxManager, nil
+}
+
+type runtimeTransactionManager interface {
+	ValidateFeeHeadroom() error
+	Initialize(context.Context) error
+	Start(context.Context)
+	SubscribeLaneState() (<-chan struct{}, func())
+	LaneReady() bool
+}
+
+var _ runtimeTransactionManager = (*txmanager.Manager)(nil)
+
+func runSolverLifecycle(
+	runCtx context.Context,
+	configPath string,
+	cfg *config.Config,
+	txm runtimeTransactionManager,
+	solvers []solver.Solver,
+	requiresTxManager bool,
+	setReady func(bool),
+	log logr.Logger,
+) error {
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {
 			return errors.Errorf("invalid config %q: %w", configPath, err)
@@ -150,7 +198,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}()
 	}
 
-	health.SetReady(true)
+	setReady(true)
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
@@ -169,7 +217,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
 		background.Go(func() {
 			defer unsubscribe()
-			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
+			watchReadiness(gctx, laneStateChanged, txm.LaneReady, setReady)
 		})
 	}
 	for _, slv := range solvers {
@@ -197,7 +245,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			})
 		}()
 	}
-	err = g.Wait()
+	err := g.Wait()
 	if requiresTxManager {
 		close(solversDone)
 		<-drainMonitorDone

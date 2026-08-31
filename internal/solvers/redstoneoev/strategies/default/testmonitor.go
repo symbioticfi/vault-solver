@@ -3,8 +3,6 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
-	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -16,13 +14,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-const (
-	envTestMarkets   = "OEV_TEST_MARKETS"
-	envTestPositions = "OEV_TEST_POSITIONS"
-)
-
-// testMonitor is the Sepolia harness source. It enumerates nothing: markets/borrowers are supplied by the
-// testbed manifest env, then market state and positions are read from the callback's Morpho contract.
+// testMonitor reads configured Sepolia markets and positions from the callback's Morpho contract.
 type testMonitor struct {
 	reader      Reader
 	log         logr.Logger
@@ -41,50 +33,33 @@ func newTestMonitor(
 	cfg Config,
 	callback common.Address,
 	loadAdapter func() (types.AdapterSnapshot, bool),
+	seed *TestMonitorConfig,
 ) (*testMonitor, error) {
-	markets, err := parseHashListEnv(envTestMarkets)
-	if err != nil {
-		return nil, err
+	if seed == nil || len(seed.Markets) == 0 {
+		return nil, errors.New("test monitor requires at least one market")
 	}
-	if len(markets) == 0 {
-		return nil, errors.Errorf("test monitor: set at least one market id for %s", envTestMarkets)
-	}
-	positions, err := parseAddressListEnv(envTestPositions)
-	if err != nil {
-		return nil, err
-	}
-	if len(positions) == 0 {
-		return nil, errors.Errorf("test monitor: set at least one borrower for %s", envTestPositions)
+	if len(seed.Positions) == 0 {
+		return nil, errors.New("test monitor requires at least one borrower")
 	}
 	m := &testMonitor{
 		reader:      r,
 		log:         log.WithName("testMonitor"),
 		callback:    callback,
 		loadAdapter: loadAdapter,
-		markets:     markets,
-		positions:   positions,
+		markets:     append([]common.Hash(nil), seed.Markets...),
+		positions:   append([]common.Address(nil), seed.Positions...),
 		monitorPoll: cfg.MonitorPoll,
 	}
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
 		prices:    map[common.Hash]*big.Int{},
-		quotes:    map[common.Hash]AdapterQuote{},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{},
 	})
 	return m, nil
 }
 
 func (m *testMonitor) run(ctx context.Context) {
-	tick := time.NewTicker(m.monitorPoll)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			m.refresh(ctx)
-		}
-	}
+	runMonitor(ctx, m.monitorPoll, m.refresh)
 }
 
 func (m *testMonitor) refresh(ctx context.Context) {
@@ -162,47 +137,13 @@ func verifyAdapterPair(params map[common.Hash]MarketParams, adapterLoan common.A
 	return out
 }
 
-func (m *testMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
+func (m *testMonitor) candidates(_ types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
+	snap := m.snapshot()
+	return candidatesFromSnapshot(snap, nowTs, adapter, func(id common.Hash, _ MarketInfo) *big.Int {
+		return snap.prices[id]
+	})
 }
 
 func (m *testMonitor) snapshot() *snapshot {
 	return m.snap.Load()
-}
-
-func parseHashListEnv(key string) ([]common.Hash, error) {
-	parts := splitEnvList(os.Getenv(key))
-	out := make([]common.Hash, 0, len(parts))
-	for _, p := range parts {
-		if !common.IsHexHash(p) {
-			return nil, errors.Errorf("%s: invalid hash %q", key, p)
-		}
-		out = append(out, common.HexToHash(p))
-	}
-	return out, nil
-}
-
-func parseAddressListEnv(key string) ([]common.Address, error) {
-	parts := splitEnvList(os.Getenv(key))
-	out := make([]common.Address, 0, len(parts))
-	for _, p := range parts {
-		if !common.IsHexAddress(p) {
-			return nil, errors.Errorf("%s: invalid address %q", key, p)
-		}
-		out = append(out, common.HexToAddress(p))
-	}
-	return out, nil
-}
-
-func splitEnvList(v string) []string {
-	fields := strings.FieldsFunc(v, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\t' || r == ' '
-	})
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		if f = strings.TrimSpace(f); f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
 }

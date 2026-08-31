@@ -19,17 +19,15 @@ var (
 	bigCeilBias      = big.NewInt(yieldPpmScale - 1) // for ceil(x/1e6) = (x + 1e6-1) / 1e6
 )
 
-// ValidateYield checks that expectedReturn on principal is acceptable to BOTH the adapter's on-chain
-// minYieldPerRequest floor and the 3F auction's max rate, in exact integer ppm — so the offer can't
-// revert on-chain (below floor) nor be rejected by the auction (above maxRate). Yield is compared the way
-// the contract computes it, floor(expectedReturn*1e6/principal), which for integer bounds is equivalent
-// to the exact integer comparisons below. A zero/absent floor or maxRate skips that bound; nil or
-// non-positive amounts are rejected.
-func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps float64) error {
-	// Reject a non-positive return: a 0 yield (what the pricing helpers produce when floor and maxRate are
-	// both 0, or on dust principals) is never a real offer, so the pair is skipped rather than offered.
+// ValidateYield checks the full offer and every partial consumption the adapter permits. Request.consume
+// floors expectedReturn*consumed/principal before ThreeFAdapter applies its ppm floor, so validating only
+// the signed totals is insufficient.
+func ValidateYield(expectedReturn, principal, minPrincipal, minYieldPpm *big.Int, maxRateBps float64) error {
 	if principal == nil || principal.Sign() <= 0 || expectedReturn == nil || expectedReturn.Sign() <= 0 {
 		return errors.Errorf("invalid offer amounts (must be positive): principal=%v expectedReturn=%v", principal, expectedReturn)
+	}
+	if minPrincipal != nil && minPrincipal.Sign() > 0 && principal.Cmp(minPrincipal) < 0 {
+		return errors.Errorf("principal %s below minAssetsPerRequest %s", principal, minPrincipal)
 	}
 	if !MeetsMinYield(expectedReturn, principal, minYieldPpm) {
 		return errors.Errorf("yield below minYieldPerRequest floor %s ppm", minYieldPpm)
@@ -40,6 +38,20 @@ func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps f
 		if scaled.Cmp(new(big.Int).Mul(principal, big.NewInt(maxRatePpm))) > 0 {
 			return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
 		}
+	}
+	if minYieldPpm == nil || minYieldPpm.Sign() <= 0 {
+		return nil
+	}
+	minimum := big.NewInt(1) // Request.consume rejects zero; a zero adapter floor therefore permits one unit.
+	if minPrincipal != nil && minPrincipal.Sign() > 0 {
+		minimum = minPrincipal
+	}
+	if minimum.Cmp(principal) >= 0 {
+		return nil
+	}
+	margin := new(big.Int).Sub(expectedReturn, MinYieldReturn(principal, minYieldPpm))
+	if margin.Sign() <= 0 || new(big.Int).Mul(margin, minimum).Cmp(principal) < 0 {
+		return errors.Errorf("yield is unsafe for partial consumption at minAssetsPerRequest %s", minimum)
 	}
 	return nil
 }
@@ -82,33 +94,22 @@ func MeetsMinYield(expectedReturn, principal, minYieldPpm *big.Int) bool {
 	return lhs.Cmp(rhs) >= 0
 }
 
-// bigTwo is the minimum partial-consumption pricing margin (see PartialSafeMinYieldReturn).
-var bigTwo = big.NewInt(2)
-
-// PartialSafeMinYieldReturn prices an offer above MinYieldReturn by a margin that keeps PARTIAL
-// consumptions clear of the floor. The Request contract pro-rates a partially consumed offer's return
-// with floor division — yt = expectedReturn*pt/principal — and requires ceil(pt*minYieldPpm/1e6), so an
-// offer priced exactly at MinYieldReturn carries under one base unit of slack and most partial amounts
-// truncate one unit below the floor, reverting TooLowYield. (Mainnet tx 0xc637…8386: 30,000.035000 USDC
-// offered at the 190 ppm floor was consumed at 29,946.365238 and delivered 5,689,809 against the
-// required 5,689,810.)
-//
-// The margin is max(2, ceil(principal/1e6)) — one ppm of principal, floored at two base units. Since
-// margin*pt >= principal implies the pro-rated return exceeds the requirement by at least a full unit,
-// this guarantees floor(return*pt/principal) >= ceil(pt*minYieldPpm/1e6) for every pt >=
-// principal/margin: every consumption of at least half the offer and, for principals above 2e6 base
-// units, everything down to the ppm quantum (1e6 base units) — for any floor ppm and any token scale.
-// The rate cost is ~1 ppm (two base units on dust principals). Returns 0 when there is no floor, like
-// MinYieldReturn.
-func PartialSafeMinYieldReturn(principal, minYieldPpm *big.Int) *big.Int {
+// PartialSafeMinYieldReturn adds enough margin to keep every consumption accepted by
+// ThreeFAdapter.minAssetsPerRequest above the yield floor. A zero minimum means Request.consume may use
+// one base unit. When only the full principal is permitted, the exact full-offer floor needs no margin.
+func PartialSafeMinYieldReturn(principal, minPrincipal, minYieldPpm *big.Int) *big.Int {
 	ret := MinYieldReturn(principal, minYieldPpm)
 	if ret.Sign() <= 0 {
 		return ret
 	}
-	margin := new(big.Int).Add(principal, bigCeilBias)
-	margin.Quo(margin, bigYieldPpmScale)
-	if margin.Cmp(bigTwo) < 0 {
-		margin.Set(bigTwo)
+	minimum := big.NewInt(1)
+	if minPrincipal != nil && minPrincipal.Sign() > 0 {
+		minimum = minPrincipal
 	}
+	if minimum.Cmp(principal) >= 0 {
+		return ret
+	}
+	margin := new(big.Int).Sub(principal, big.NewInt(1))
+	margin.Quo(margin, minimum).Add(margin, big.NewInt(1))
 	return ret.Add(ret, margin)
 }

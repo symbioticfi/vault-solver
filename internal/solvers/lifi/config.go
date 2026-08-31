@@ -10,7 +10,6 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -95,7 +94,7 @@ const (
 
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 

@@ -212,15 +212,13 @@ func minBig(a, b *big.Int) *big.Int {
 }
 
 func (r Route) String() string {
-	switch r {
+	switch r { //nolint:exhaustive // Unknown and invalid routes intentionally share the default string.
 	case RouteAcquire:
 		return "acquire"
 	case RouteAllocate:
 		return "allocate"
 	case RouteDeallocate:
 		return "deallocate"
-	case RouteUnknown:
-		return "unknown"
 	default:
 		return "unknown"
 	}

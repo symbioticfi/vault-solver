@@ -218,8 +218,8 @@ func decodeFeed(results []chain.CallResult, feed common.Address, now time.Time, 
 }
 
 func tokenPerNative(native, token feedPrice, tokenDecimals int) *big.Int {
-	numerator := new(big.Int).Mul(native.answer, pow10(int(token.decimals)+tokenDecimals))
-	denominator := new(big.Int).Mul(token.answer, pow10(int(native.decimals)))
+	numerator := new(big.Int).Mul(native.answer, chain.Exp10(int(token.decimals)+tokenDecimals))
+	denominator := new(big.Int).Mul(token.answer, chain.Exp10(int(native.decimals)))
 	return numerator.Div(numerator, denominator)
 }
 
@@ -236,8 +236,4 @@ func uniqueTokens(tokens []Token) []Token {
 	}
 	slices.SortFunc(out, func(a, b Token) int { return a.Address.Cmp(b.Address) })
 	return out
-}
-
-func pow10(decimals int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
 }

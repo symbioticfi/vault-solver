@@ -46,8 +46,6 @@ type ChainConfig struct {
 	// fills so startup observes its private nonce lane. Optional; empty means `rpcUrl` serves both.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
-	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
-	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
 	// canonical cross-chain Multicall3 deployment when unset.
 	MulticallAddress string `yaml:"multicallAddress,omitempty"`
@@ -86,22 +84,22 @@ type SolverConfig struct {
 	Config yaml.Node `yaml:"config"`
 }
 
-// DefaultConfirmations is used when TxManager.Confirmations is unset.
-const DefaultConfirmations = 2
+// defaultConfirmations is used when TxManager.Confirmations is unset.
+const defaultConfirmations = 2
 
 const (
-	DefaultBroadcastTimeoutMs    = 5_000
-	DefaultReplacementIntervalMs = 30_000
-	DefaultPendingTimeoutMs      = 300_000
-	DefaultShutdownTimeoutMs     = 60_000
+	defaultBroadcastTimeoutMs    = 5_000
+	defaultReplacementIntervalMs = 30_000
+	defaultPendingTimeoutMs      = 300_000
+	defaultShutdownTimeoutMs     = 60_000
 )
 
-// DefaultObservabilityAddr is used when Observability.Addr is unset.
-const DefaultObservabilityAddr = ":9090"
+// defaultObservabilityAddr is used when Observability.Addr is unset.
+const defaultObservabilityAddr = ":9090"
 
-// DefaultMulticallAddress is the canonical Multicall3 deployment (same address on most chains,
+// defaultMulticallAddress is the canonical Multicall3 deployment (same address on most chains,
 // including Ethereum mainnet and Sepolia). Used when Chain.MulticallAddress is unset.
-const DefaultMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
+const defaultMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
 
 // Load reads, parses, defaults, and validates the config at path.
 func Load(path string) (*Config, error) {
@@ -114,7 +112,7 @@ func Load(path string) (*Config, error) {
 	// can come from the environment. Secrets must NOT use this: they belong in the *Env name fields
 	// (keyEnv, passphraseEnv, backendSharedSecretEnv, …), which os.Getenv at point of use and never place the secret
 	// into this Config struct (so dumping/logging the config can't leak it). An undefined var
-	// expands to "", which surfaces via Validate for required fields.
+	// expands to "", which surfaces through validation for required fields.
 	raw = []byte(os.ExpandEnv(string(raw)))
 
 	var cfg Config
@@ -125,7 +123,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.applyDefaults()
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, errors.Errorf("invalid config %q: %w", path, err)
 	}
 	return &cfg, nil
@@ -133,30 +131,30 @@ func Load(path string) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	if c.TxManager.Confirmations == 0 {
-		c.TxManager.Confirmations = DefaultConfirmations
+		c.TxManager.Confirmations = defaultConfirmations
 	}
 	if c.TxManager.BroadcastTimeoutMs == 0 {
-		c.TxManager.BroadcastTimeoutMs = DefaultBroadcastTimeoutMs
+		c.TxManager.BroadcastTimeoutMs = defaultBroadcastTimeoutMs
 	}
 	if c.TxManager.ReplacementIntervalMs == 0 {
-		c.TxManager.ReplacementIntervalMs = DefaultReplacementIntervalMs
+		c.TxManager.ReplacementIntervalMs = defaultReplacementIntervalMs
 	}
 	if c.TxManager.PendingTimeoutMs == 0 {
-		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
+		c.TxManager.PendingTimeoutMs = defaultPendingTimeoutMs
 	}
 	if c.TxManager.ShutdownTimeoutMs == 0 {
-		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
+		c.TxManager.ShutdownTimeoutMs = defaultShutdownTimeoutMs
 	}
 	if c.Observability.Addr == "" {
-		c.Observability.Addr = DefaultObservabilityAddr
+		c.Observability.Addr = defaultObservabilityAddr
 	}
 	if c.Chain.MulticallAddress == "" {
-		c.Chain.MulticallAddress = DefaultMulticallAddress
+		c.Chain.MulticallAddress = defaultMulticallAddress
 	}
 }
 
-// Validate checks required fields and mutually-exclusive options.
-func (c *Config) Validate() error {
+// validate checks required fields and mutually-exclusive options.
+func (c *Config) validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("chain.rpcUrl is required")
 	}

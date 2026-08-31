@@ -10,7 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	"github.com/symbioticfi/vault-solver/internal/chain"
+	internalsigner "github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"gopkg.in/yaml.v3"
 )
@@ -36,8 +37,18 @@ type Strategy struct {
 	engine        bundleEngine
 	state         decisionStateCache
 	reservations  decisionReservations
-	maxAge        time.Duration
 	log           logr.Logger
+}
+
+type FactoryDeps struct {
+	Chain               *chain.Client
+	Signer              internalsigner.Signer
+	Log                 logr.Logger
+	ChainID             int64
+	Adapter             common.Address
+	Callback            common.Address
+	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
+	GasAccounting       bool
 }
 
 type decisionState struct {
@@ -46,7 +57,7 @@ type decisionState struct {
 }
 
 type decisionStateCache struct {
-	v atomic.Value // stores *decisionState
+	v atomic.Pointer[decisionState]
 }
 
 func (c *decisionStateCache) store(st decisionState) {
@@ -59,21 +70,20 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 	if v == nil {
 		return decisionState{}, false
 	}
-	st := *(v.(*decisionState))
+	st := *v
 	st.CallbackNative = cloneBig(st.CallbackNative)
 	return st, true
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig})
+func ValidateConfig(raw yaml.Node, gasAccounting bool) error {
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return err
+	}
+	return validateConfig(cfg, gasAccounting)
 }
 
-func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
-	testMonitor, err := testMonitorFromEnv()
-	if err != nil {
-		return nil, err
-	}
+func NewFromConfig(raw yaml.Node, deps FactoryDeps) (types.Strategy, error) {
 	cfg, err := ParseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -87,7 +97,6 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 		Callback:            deps.Callback,
 		LoadAdapterSnapshot: deps.LoadAdapterSnapshot,
 		GasAccounting:       deps.GasAccounting,
-		TestMonitor:         testMonitor,
 	})
 }
 
@@ -101,25 +110,19 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 	if deps.LoadAdapterSnapshot == nil {
 		return nil, errors.New("adapter snapshot source is required")
 	}
-	if !deps.GasAccounting && cfg.TotalBundleProfitBps != 0 {
-		return nil, errors.New("strategy.config.bid.totalBundleProfitBps requires gas accounting")
-	}
-	if !deps.GasAccounting && cfg.MinBundleProfitBidBps != 0 {
-		return nil, errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
+	if err := validateConfig(cfg, deps.GasAccounting); err != nil {
+		return nil, err
 	}
 	var (
 		mon monitorSource
 		err error
 	)
-	if deps.TestMonitor {
-		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot)
+	if cfg.TestMonitor != nil {
+		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot, cfg.TestMonitor)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		if cfg.MorphoAPIURL == "" {
-			return nil, errors.New("morphoApiUrl is required unless test monitor is enabled")
-		}
 		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
 	}
 	return &Strategy{
@@ -132,9 +135,21 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		chainID:       big.NewInt(deps.ChainID),
 		mon:           mon,
 		engine:        newBundleEngine(cfg, deps.Log),
-		maxAge:        cfg.MaxStateAge,
 		log:           deps.Log,
 	}, nil
+}
+
+func validateConfig(cfg Config, gasAccounting bool) error {
+	if !gasAccounting && cfg.TotalBundleProfitBps != 0 {
+		return errors.New("strategy.config.bid.totalBundleProfitBps requires gas accounting")
+	}
+	if !gasAccounting && cfg.MinBundleProfitBidBps != 0 {
+		return errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
+	}
+	if cfg.TestMonitor == nil && cfg.MorphoAPIURL == "" {
+		return errors.New("morphoApiUrl is required unless strategy.config.testMonitor is configured")
+	}
+	return nil
 }
 
 func (s *Strategy) Run(ctx context.Context) {
@@ -195,11 +210,11 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return skipBid(skipNoLegs), nil
 	}
 	snap := s.mon.snapshot()
-	if snap == nil || (s.maxAge > 0 && input.Now.Sub(snap.updatedAt) > s.maxAge) {
+	if snap == nil || (s.cfg.MaxStateAge > 0 && input.Now.Sub(snap.updatedAt) > s.cfg.MaxStateAge) {
 		return skipBid(skipStaleState), nil
 	}
 	st, ok := s.state.load()
-	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
+	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.cfg.MaxStateAge) {
 		return skipBid(skipStaleState), nil
 	}
 	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {
@@ -214,31 +229,7 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
 	feedCount := auctionFeedCount(input.Auction)
-	var (
-		b      chosenBundle
-		priced pricedBundle
-		skip   string
-	)
-	if s.gasAccounting {
-		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
-		if rate == nil {
-			s.log.Info("bid skipped: loan/native gas rate unavailable",
-				"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
-			return skipBid(skipGasUnprofitable), nil
-		}
-		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
-			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
-				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
-		}
-	} else {
-		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
-		}
-	}
+	priced, skip := s.selectAndPriceBundle(input, scored, laneState, gasPrice, feedCount)
 	if skip != "" {
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
@@ -269,6 +260,40 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	}
 	s.reservations.reserve(input.Auction.ID, priced)
 	return out, nil
+}
+
+func (s *Strategy) selectAndPriceBundle(
+	input types.BidInput,
+	scored []scoredLeg,
+	laneState *liquidLaneState,
+	gasPrice *big.Int,
+	feedCount int,
+) (pricedBundle, string) {
+	if !s.gasAccounting {
+		bundle, skip := s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
+		if skip != "" {
+			return pricedBundle{}, skip
+		}
+		return s.engine.priceBundleWithoutGasAccounting(bundle, laneState, gasPrice, feedCount), ""
+	}
+
+	rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
+	if rate == nil {
+		s.log.Info("bid skipped: loan/native gas rate unavailable",
+			"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
+		return pricedBundle{}, skipGasUnprofitable
+	}
+	bundle, skip := s.engine.selectNetBundle(
+		scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount,
+	)
+	if skip == "" {
+		return s.engine.priceBundle(bundle, rate, laneState, gasPrice, feedCount), ""
+	}
+	if skip == skipGasUnprofitable && len(bundle.legs) > 0 {
+		s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
+			bundle, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
+	}
+	return pricedBundle{}, skip
 }
 
 func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {

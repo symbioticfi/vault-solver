@@ -31,24 +31,23 @@ func NewLogger(debug bool) (logr.Logger, func()) {
 		return logr.Discard(), func() {}
 	}
 	// Optional Sentry sink: when SENTRY_DSN is set, tee Error+ entries to Sentry. Disabled otherwise.
-	sentrySink, flushSentry := initSentry()
+	sentrySink := initSentry()
 	if sentrySink != nil {
 		zl = zl.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
 			return zapcore.NewTee(core, sentrySink)
 		}))
 	}
-	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }
+	return zapr.NewLogger(zl), func() { _ = zl.Sync() }
 }
 
 // Metrics owns the Prometheus registry. Solvers register their own collectors on Registerer();
 // the framework only records build info here so the package stays solver-agnostic.
 type Metrics struct {
-	registry  *prometheus.Registry
-	buildInfo *prometheus.GaugeVec
+	registry *prometheus.Registry
 }
 
 // NewMetrics creates a registry seeded with build-info.
-func NewMetrics() *Metrics {
+func NewMetrics(version, commit string) *Metrics {
 	reg := prometheus.NewRegistry()
 	buildInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -58,18 +57,14 @@ func NewMetrics() *Metrics {
 		},
 		[]string{"version", "commit"},
 	)
+	buildInfo.WithLabelValues(version, commit).Set(1)
 	// Standard Go runtime + process metrics, so /metrics carries CPU, memory, goroutines, GC, FDs, etc.
 	reg.MustRegister(buildInfo, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	return &Metrics{registry: reg, buildInfo: buildInfo}
+	return &Metrics{registry: reg}
 }
 
 // Registerer lets solvers register their domain metrics on the shared registry.
 func (m *Metrics) Registerer() prometheus.Registerer { return m.registry }
-
-// SetBuildInfo records the running build's version and commit.
-func (m *Metrics) SetBuildInfo(version, commit string) {
-	m.buildInfo.WithLabelValues(version, commit).Set(1)
-}
 
 // Health tracks process liveness and readiness for the HTTP probes.
 type Health struct {

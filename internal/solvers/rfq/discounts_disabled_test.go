@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -18,7 +19,7 @@ import (
 func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store → forces recovery
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", MaxAssets: "10000000", MaxRate: "1000000000000000000",
@@ -30,7 +31,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (no inventory: no vaults, discounts disabled)", rec)
 	}
 	if be.listCalls != 0 {
@@ -55,7 +56,7 @@ func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}

@@ -7,6 +7,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,7 +140,14 @@ func alwaysReadyTransactionLane() transactionLaneState {
 }
 
 type quoteSubmission struct {
-	Expiry int64 `json:"expiry"`
+	FromAsset string                 `json:"fromAsset"`
+	ToAsset   string                 `json:"toAsset"`
+	Ranges    []quoteSubmissionRange `json:"ranges"`
+	Expiry    int64                  `json:"expiry"`
+}
+
+type quoteSubmissionRange struct {
+	MaxAmount string `json:"maxAmount"`
 }
 
 type quoteSubmissionRequest struct {
@@ -558,6 +568,65 @@ type fixedFillStrategy struct {
 	plan *types.FillPlan
 }
 
+type lifiLifecycleStrategy struct {
+	plan          *types.FillPlan
+	quoteRoute    route
+	quoteCapacity *big.Int
+	onInput       func(types.FillInput)
+}
+
+func (s *lifiLifecycleStrategy) DecideQuotes(
+	_ context.Context,
+	input types.QuoteInput,
+) (types.QuoteOutput, error) {
+	if s.quoteCapacity == nil {
+		return types.QuoteOutput{}, nil
+	}
+	available := liquidlane.CloneBig(s.quoteCapacity)
+	if reserved := input.Reservations[s.quoteRoute.CapacityID]; reserved != nil {
+		available.Sub(available, reserved)
+	}
+	if available.Sign() <= 0 {
+		return types.QuoteOutput{}, nil
+	}
+	quote := testStandingQuote(s.quoteRoute, available.Int64())
+	quote.Expiry = input.QuoteExpiresAt.Unix()
+	quote.ExclusiveFor = input.Solver
+	return types.QuoteOutput{Quotes: []types.Quote{quote}}, nil
+}
+
+func (s *lifiLifecycleStrategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
+	if s.onInput != nil {
+		s.onInput(input)
+	}
+	return s.plan, nil
+}
+
+type lifiFillTrace struct {
+	Stage       string
+	Mode        string
+	Outcome     string
+	RouteID     string
+	CandidateID string
+	Adapter     string
+	CapacityID  string
+	DiscountID  string
+	Amount      string
+	ChainTime   string
+	MaxFee      string
+	GasFacts    bool
+	Quotes      int
+	Pending     int
+	Capacities  []string
+	Direct      bool
+	Signed      bool
+	Reconciled  bool
+	Resolved    bool
+	Refreshes   int
+	Failure     bool
+	Closed      bool
+}
+
 func (s fixedFillStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
 	return types.QuoteOutput{}, nil
 }
@@ -601,6 +670,7 @@ type reservationAwareFillStrategy struct {
 	plan            *types.FillPlan
 	blockAtReserved *big.Int
 	inputs          chan types.FillInput
+	beforeReturn    func(types.FillInput)
 }
 
 func (s reservationAwareFillStrategy) DecideQuotes(
@@ -615,6 +685,9 @@ func (s reservationAwareFillStrategy) DecideFill(
 	input types.FillInput,
 ) (*types.FillPlan, error) {
 	s.inputs <- input
+	if s.beforeReturn != nil {
+		s.beforeReturn(input)
+	}
 	reserved := input.Reservations[s.plan.Routes[0].CapacityID]
 	if reserved != nil && (s.blockAtReserved == nil || reserved.Cmp(s.blockAtReserved) >= 0) {
 		return nil, nil
@@ -628,6 +701,9 @@ func (s reservationAwareFillStrategy) DecideFillWithoutReservations(
 ) (*types.FillPlan, error) {
 	input.Reservations = nil
 	s.inputs <- input
+	if s.beforeReturn != nil {
+		s.beforeReturn(input)
+	}
 	return s.plan, nil
 }
 
@@ -716,6 +792,368 @@ func (s *reroutingFillStrategy) DecideFillWithoutReservations(
 ) (*types.FillPlan, error) {
 	s.events <- "probe-" + string(s.blockedCapacity)
 	return s.plans[s.blockedCapacity], nil
+}
+
+func TestFillReservationLifecycleTrace(t *testing.T) {
+	for _, mode := range []string{"direct", "signed-discount"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, outcome := range []string{"success", "error", "cancellation", "closed"} {
+				t.Run(outcome, func(t *testing.T) {
+					runLifiFillReservationLifecycle(t, mode, outcome)
+				})
+			}
+		})
+	}
+}
+
+func runLifiFillReservationLifecycle(t *testing.T, mode, outcome string) {
+	t.Helper()
+	fixture := immediateTestSetup(t)
+	routes := testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter)
+	capacityID := routes[0].CapacityID
+	var discountID *common.Hash
+	expected := int64(1_000_000)
+	minimum := int64(990_001)
+	wantRefreshes := 0
+	if mode == "signed-discount" {
+		discountID = new(common.HexToHash(testDiscountID))
+		expected = 990_090
+		minimum = 990_001
+		wantRefreshes = 2
+	}
+	refresh := make(chan struct{}, 4)
+	assertLifiRejectedAdmission(t, mode, fixture, routes, discountID, expected, minimum, refresh)
+
+	trace := []lifiFillTrace{{Stage: "rejected", Mode: mode}}
+	fillReads := 0
+	plan := newLifiLifecyclePlan(routes[0], discountID, expected, minimum)
+	strategy := &lifiLifecycleStrategy{
+		plan: plan, quoteRoute: routes[0], quoteCapacity: big.NewInt(2_000_000),
+	}
+	strategy.onInput = func(input types.FillInput) {
+		trace = append(trace,
+			lifiFillTrace{
+				Stage: "facts", Mode: mode, ChainTime: strconv.FormatInt(input.ChainTime.Unix(), 10),
+				MaxFee: input.MaxFeePerGas.String(), GasFacts: input.GasPrices != nil, Quotes: len(input.Quotes),
+				Capacities: lifiCapacityEntries(input.Reservations),
+			},
+			lifiFillTrace{
+				Stage: "strategy", Mode: mode, RouteID: string(plan.Routes[0].RouteID),
+				Adapter: plan.Routes[0].Adapter.Hex(), CapacityID: string(plan.Routes[0].CapacityID),
+				DiscountID: hashString(plan.Routes[0].DiscountID), Amount: plan.Routes[0].ReservedAmountOut.String(),
+			},
+		)
+	}
+	submitted := make(chan chan<- txmanager.Result, 1)
+	txm := &fakeLifiTxSender{hold: true, onSend: func(_ int, result chan<- txmanager.Result) {
+		submitted <- result
+	}}
+	solver := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	solver.quoteRefresh = refresh
+	solver.txLaneState = alwaysReadyTransactionLane()
+	quoteRequests, stopQuotes := startLifiLifecycleQuoteLoop(t, solver, routes)
+	defer stopQuotes()
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], 2_000_000, false,
+	)
+	configureLifiLifecycleSolver(mode, solver, routes, &fillReads)
+
+	orders := make(chan *submittedOrder, 1)
+	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	close(orders)
+	worker := solver.newOrderWorker(t.Context(), routes, orders, nil, nil)
+	done := make(chan error, 1)
+	go func() { done <- worker.run() }()
+	result := receiveFillSubmission(t, submitted)
+	select {
+	case err := <-done:
+		t.Fatalf("worker returned before terminal result: %v", err)
+	default:
+	}
+	if len(txm.reqs) != 1 {
+		t.Fatalf("accepted requests = %d, want 1", len(txm.reqs))
+	}
+	reducedAmount := 2_000_000 - expected
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], reducedAmount, false,
+	)
+	if solver.capacity.Len() != 1 {
+		t.Fatalf("standing quote changed after reservation release: ledger entries = %d", solver.capacity.Len())
+	}
+
+	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, txm.reqs[0].Data)
+	resolved := false
+	if mode == "signed-discount" {
+		client := solver.discounts.(*fakeDiscountClient)
+		resolved = client.listCalls == 2 && client.resolveCalls == 1 && fillReads == 2
+		if !resolved {
+			t.Fatalf("signed quote/fill terms and final snapshots = %d/%d/%d, want 2/1/2",
+				client.listCalls, client.resolveCalls, fillReads)
+		}
+	}
+	trace = append(trace,
+		lifiFillTrace{Stage: "terms", Mode: mode, Signed: mode == "signed-discount", Resolved: resolved, Refreshes: fillReads},
+		lifiFillTrace{
+			Stage: "validated", Mode: mode, RouteID: string(plan.Routes[0].RouteID),
+			CandidateID: string(plan.Routes[0].CandidateID), Adapter: plan.Routes[0].Adapter.Hex(),
+			CapacityID: string(plan.Routes[0].CapacityID), DiscountID: hashString(plan.Routes[0].DiscountID),
+			Amount: plan.Routes[0].ReservedAmountOut.String(),
+		},
+		lifiFillTrace{
+			Stage: "calldata", Mode: mode, Direct: len(directRoutes) == 1,
+			Signed: len(discountRoutes) == 1,
+		},
+		lifiFillTrace{
+			Stage: "admitted", Mode: mode, Pending: solver.capacity.Len(),
+			Capacities: lifiCapacityEntries(solver.capacity.Snapshot()),
+		},
+		lifiFillTrace{
+			Stage: "quote-reconciled", Mode: mode, Amount: strconv.FormatInt(reducedAmount, 10), Reconciled: true,
+		},
+	)
+	completeLifiLifecycle(t, txm, result, done, outcome)
+	assertLifiLifecycleQuoteRequest(
+		t, receiveLifiLifecycleQuoteRequest(t, quoteRequests), routes[0], 2_000_000, false,
+	)
+	trace = append(trace, lifiFillTrace{
+		Stage: "terminal", Mode: mode, Outcome: outcome, Pending: solver.capacity.Len(),
+		Failure: outcome != "success", Closed: outcome == "closed",
+	})
+
+	discount := hashString(discountID)
+	candidate := string(liquidlane.NewCandidateID(routes[0], discountID))
+	want := []lifiFillTrace{
+		{Stage: "rejected", Mode: mode},
+		{Stage: "facts", Mode: mode, ChainTime: "1700000000", MaxFee: "1", GasFacts: true, Quotes: 1, Capacities: []string{}},
+		{Stage: "strategy", Mode: mode, RouteID: "route-1", Adapter: common.HexToAddress("0xdead").Hex(), CapacityID: "forged-capacity", DiscountID: discount, Amount: big.NewInt(expected).String()},
+		{Stage: "terms", Mode: mode, Signed: mode == "signed-discount", Resolved: mode == "signed-discount", Refreshes: wantRefreshes},
+		{Stage: "validated", Mode: mode, RouteID: "route-1", CandidateID: candidate, Adapter: fixture.adapter.Hex(), CapacityID: string(capacityID), DiscountID: discount, Amount: big.NewInt(expected).String()},
+		{Stage: "calldata", Mode: mode, Direct: mode == "direct", Signed: mode == "signed-discount"},
+		{Stage: "admitted", Mode: mode, Pending: 1, Capacities: []string{string(capacityID) + "=" + big.NewInt(expected).String()}},
+		{Stage: "quote-reconciled", Mode: mode, Amount: strconv.FormatInt(2_000_000-expected, 10), Reconciled: true},
+		{Stage: "terminal", Mode: mode, Outcome: outcome, Failure: outcome != "success", Closed: outcome == "closed"},
+	}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("lifecycle trace =\n%#v\nwant\n%#v", trace, want)
+	}
+}
+
+func newLifiLifecyclePlan(
+	route route,
+	discountID *common.Hash,
+	expected, minimum int64,
+) *types.FillPlan {
+	return &types.FillPlan{Routes: []types.FillRoute{{
+		CandidateID: "forged-candidate", RouteID: route.ID,
+		CapacityID: "forged-capacity", Adapter: common.HexToAddress("0xdead"),
+		AmountIn: big.NewInt(1_000_000), ExpectedAmountOut: big.NewInt(expected),
+		MinAmountOut: big.NewInt(minimum), ReservedAmountOut: big.NewInt(expected),
+		DiscountID: liquidlane.CloneHash(discountID),
+	}}}
+}
+
+func configureLifiLifecycleSolver(mode string, solver *Solver, routes []route, fillReads *int) {
+	if mode != "signed-discount" {
+		return
+	}
+	now := time.Unix(1_700_000_000, 0)
+	baseInventory := liquidlane.DirectInventory(
+		routes[0], big.NewInt(2_000_000), big.NewInt(1_000_000_000_000_000_000),
+	)
+	baseInventory.AdapterMinDiscount = big.NewInt(100_000)
+	base := liquidlane.FillQuote{
+		Inventory: baseInventory, AmountIn: big.NewInt(1_000_000),
+		GrossAmountOut: big.NewInt(1_100_100), MaxAmountOut: big.NewInt(990_090),
+		MinDiscount: big.NewInt(100_000),
+	}
+	solver.discounts = &fakeDiscountClient{
+		listed: &discounts.List{Discounts: []discounts.ListItem{
+			testDiscountListItem(base.Inventory, 2_000_000, now.Add(time.Minute)),
+		}},
+		resolved: testResolvedDiscount(base.Inventory, 100_000, now.Add(time.Minute)),
+	}
+	solver.reader = fakeLifiReader{
+		orderID: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		status:  lifiOrderStatusDeposited,
+		fillSetFn: func() fillSnapshotSet {
+			*fillReads++
+			return fillSnapshotSet{Physical: []liquidlane.FillQuote{base}}
+		},
+	}
+}
+
+func assertLifiRejectedAdmission(
+	t *testing.T,
+	mode string,
+	fixture processTestFixture,
+	routes []route,
+	discountID *common.Hash,
+	expected, minimum int64,
+	refresh chan struct{},
+) {
+	t.Helper()
+	txm := &fakeLifiTxSender{reject: true}
+	solver := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm,
+		&lifiLifecycleStrategy{plan: newLifiLifecyclePlan(routes[0], discountID, expected, minimum)},
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	solver.quoteRefresh = refresh
+	rejectedFillReads := 0
+	configureLifiLifecycleSolver(mode, solver, routes, &rejectedFillReads)
+	result := solver.processOrderWithPending(
+		t.Context(), routes, testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
+	)
+	if result.fill != nil || solver.capacity.Len() != 0 || len(txm.reqs) != 0 {
+		t.Fatalf("rejected admission retained fill/capacity/request: %+v/%d/%d",
+			result.fill, solver.capacity.Len(), len(txm.reqs))
+	}
+	select {
+	case <-refresh:
+		t.Fatal("rejected admission requested quote reconciliation")
+	default:
+	}
+}
+
+func startLifiLifecycleQuoteLoop(
+	t *testing.T,
+	solver *Solver,
+	routes []route,
+) (<-chan quoteSubmissionRequest, func()) {
+	t.Helper()
+	requests := make(chan quoteSubmissionRequest, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/quotes/submit" {
+			http.NotFound(w, r)
+			return
+		}
+		var request quoteSubmissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode lifecycle quote submission: %v", err)
+			return
+		}
+		requests <- request
+		ranges := 0
+		for _, quote := range request.Quotes {
+			ranges += len(quote.Ranges)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, ranges)
+	}))
+	solver.orders = newOrderClient(server.URL, "test-key", time.Second, 11155111)
+	solver.cfg.QuoteRefreshMode = quoteRefreshModeInterval
+	solver.cfg.QuoteInterval = time.Hour
+	solver.cfg.QuoteTTL = 2 * time.Hour
+	solver.cfg.OrderServer.HTTPTimeout = time.Second
+
+	ctx, cancel := context.WithCancel(t.Context())
+	connectionCtx, cancelConnection := context.WithCancel(t.Context())
+	feedConnections := make(chan context.Context, 1)
+	feedConnections <- connectionCtx
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.quoteLoop(ctx, routes, solver.quoteRefresh, feedConnections)
+	}()
+	return requests, func() {
+		cancel()
+		request := receiveLifiLifecycleQuoteRequest(t, requests)
+		assertLifiLifecycleQuoteRequest(t, request, routes[0], 2_000_000, true)
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("lifecycle quoteLoop error = %v, want context cancellation", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("lifecycle quoteLoop did not stop")
+		}
+		cancelConnection()
+		server.Close()
+	}
+}
+
+func receiveLifiLifecycleQuoteRequest(
+	t *testing.T,
+	requests <-chan quoteSubmissionRequest,
+) quoteSubmissionRequest {
+	t.Helper()
+	select {
+	case request := <-requests:
+		return request
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for lifecycle quote submission")
+		return quoteSubmissionRequest{}
+	}
+}
+
+func assertLifiLifecycleQuoteRequest(
+	t *testing.T,
+	request quoteSubmissionRequest,
+	route route,
+	wantMax int64,
+	expired bool,
+) {
+	t.Helper()
+	if len(request.Quotes) != 1 || len(request.Quotes[0].Ranges) != 1 {
+		t.Fatalf("lifecycle quote request = %#v, want one quote range", request)
+	}
+	quote := request.Quotes[0]
+	if !strings.EqualFold(quote.FromAsset, route.TokenIn.Hex()) ||
+		!strings.EqualFold(quote.ToAsset, route.TokenOut.Hex()) ||
+		quote.Ranges[0].MaxAmount != strconv.FormatInt(wantMax, 10) {
+		t.Fatalf("lifecycle quote request = %#v, want pair %s/%s max %d",
+			request, route.TokenIn.Hex(), route.TokenOut.Hex(), wantMax)
+	}
+	isExpired := quote.Expiry < time.Unix(1_700_000_000, 0).Unix()
+	if isExpired != expired {
+		t.Fatalf("lifecycle quote expiry = %d, expired = %t, want %t", quote.Expiry, isExpired, expired)
+	}
+}
+
+func completeLifiLifecycle(
+	t *testing.T,
+	txm *fakeLifiTxSender,
+	result chan<- txmanager.Result,
+	done <-chan error,
+	outcome string,
+) {
+	t.Helper()
+	switch outcome {
+	case "success":
+		result <- txm.fillResult()
+	case "error":
+		result <- txmanager.Result{Err: errors.New("terminal send failure")}
+	case "cancellation":
+		result <- txmanager.Result{Err: context.Canceled}
+	case "closed":
+		close(result)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("worker: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not consume terminal result")
+	}
+}
+
+func lifiCapacityEntries(reservations liquidlane.CapacityReservations) []string {
+	entries := make([]string, 0, len(reservations))
+	for capacityID, amount := range reservations {
+		entries = append(entries, string(capacityID)+"="+amount.String())
+	}
+	slices.Sort(entries)
+	return entries
+}
+
+func hashString(hash *common.Hash) string {
+	if hash == nil {
+		return ""
+	}
+	return hash.Hex()
 }
 
 func TestBlockedPlanCapacityIDsUsesOnlySelectedRoutes(t *testing.T) {
@@ -1400,9 +1838,9 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 	orders <- &secondValue
 	close(orders)
 
-	if err := s.runOrderWorker(
+	if err := s.newOrderWorker(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
-	); err != nil {
+	).run(); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	if fillReads != 2 || feeReads != 2 {
@@ -1451,7 +1889,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 
 	base := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	orders := make(chan *submittedOrder, 5)
-	for i := int64(0); i < 5; i++ {
+	for i := range int64(5) {
 		order := *base
 		order.OrderID = "order-" + big.NewInt(i+1).String()
 		order.Order.Nonce = new(big.Int).Add(base.Order.Nonce, big.NewInt(i))
@@ -1460,9 +1898,9 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
-		)
+		).run()
 	}()
 
 	results := make([]chan<- txmanager.Result, 0, 5)
@@ -1503,19 +1941,35 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 		ReservedAmountOut: big.NewInt(1_000_000),
 	}}}
 	submitted := make(chan chan<- txmanager.Result, 3)
+	retryTrace := make(chan lifiFillTrace, 1)
+	retryRelease := make(chan struct{})
 	txm := &fakeLifiTxSender{
 		hold: true,
 		onSend: func(_ int, result chan<- txmanager.Result) {
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
+	var s *Solver
+	strategy := reservationAwareFillStrategy{
+		plan: plan, blockAtReserved: big.NewInt(2_000_000), inputs: inputs,
+	}
+	strategy.beforeReturn = func(input types.FillInput) {
+		reserved := input.Reservations["capacity-1"]
+		if input.OrderID != "order-3" || reserved == nil || reserved.Cmp(big.NewInt(1_000_000)) != 0 {
+			return
+		}
+		global := s.capacity.Snapshot()
+		retryTrace <- lifiFillTrace{
+			Stage: "retry-planned-before-release", Capacities: lifiCapacityEntries(input.Reservations),
+			Amount: global["capacity-1"].String(),
+		}
+		<-retryRelease
+	}
+	s = newProcessTestSolver(
 		fixture.cfg,
 		fixture.caller,
 		txm,
-		reservationAwareFillStrategy{
-			plan: plan, blockAtReserved: big.NewInt(2_000_000), inputs: inputs,
-		},
+		strategy,
 		fixture.tokenIn,
 		fixture.tokenOut,
 		fixture.adapter,
@@ -1546,13 +2000,13 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	firstInput := receiveFillInput(t, inputs)
@@ -1583,11 +2037,29 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 	if got := retryInput.Reservations["capacity-1"]; got == nil || got.Cmp(big.NewInt(1_000_000)) != 0 {
 		t.Fatalf("retried fill reservations = %v, want capacity-1=1000000", retryInput.Reservations)
 	}
+	var replacementTrace []lifiFillTrace
+	select {
+	case event := <-retryTrace:
+		replacementTrace = append(replacementTrace, event)
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry plan did not capture old reservation before release")
+	}
+	close(retryRelease)
 	thirdResult := receiveFillSubmission(t, submitted)
 	if len(txm.reqs) != 3 {
 		t.Fatalf("submitted fills = %d, want retry after first of two reservations released", len(txm.reqs))
 	}
 	expectSignal(t, s.quoteRefresh)
+	replacementTrace = append(replacementTrace, lifiFillTrace{
+		Stage: "replacement-after-release", Capacities: lifiCapacityEntries(s.capacity.Snapshot()),
+	})
+	wantReplacementTrace := []lifiFillTrace{
+		{Stage: "retry-planned-before-release", Amount: "2000000", Capacities: []string{"capacity-1=1000000"}},
+		{Stage: "replacement-after-release", Capacities: []string{"capacity-1=2000000"}},
+	}
+	if !reflect.DeepEqual(replacementTrace, wantReplacementTrace) {
+		t.Fatalf("replacement trace = %#v, want %#v", replacementTrace, wantReplacementTrace)
+	}
 	select {
 	case <-s.quoteRefresh:
 		t.Fatal("reservation replacement requested more than one quote refresh")
@@ -1666,13 +2138,13 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 	defer inbox.endRecovery()
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			inbox.markRecoveryRetry,
 			nil,
-		)
+		).run()
 	}()
 
 	pendingResult := receiveFillSubmission(t, submitted)
@@ -1768,7 +2240,7 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 	}
 	close(orders)
 	done := make(chan error, 1)
-	go func() { done <- s.runOrderWorker(t.Context(), routes, orders, nil, nil) }()
+	go func() { done <- s.newOrderWorker(t.Context(), routes, orders, nil, nil).run() }()
 
 	results := []chan<- txmanager.Result{
 		receiveFillSubmission(t, submitted),
@@ -1820,13 +2292,13 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	close(orders)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.runOrderWorker(
+		done <- s.newOrderWorker(
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
 			nil,
 			nil,
-		)
+		).run()
 	}()
 
 	result := receiveFillSubmission(t, submitted)

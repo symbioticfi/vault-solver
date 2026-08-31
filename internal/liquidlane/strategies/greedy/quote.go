@@ -78,7 +78,7 @@ func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
 	routes := newAllocator(task.Candidates)
 	var solution *QuoteSolution
 	if task.ExactInput != nil {
-		solution = solveExactInputQuote(task, routes, task.ExactInput, task.MaxRoutes)
+		solution = solveExactInputQuote(task, routes, task.ExactInput)
 	} else {
 		solution = solveExactOutputQuote(task, routes)
 	}
@@ -90,7 +90,6 @@ func solveExactInputQuote(
 	task QuoteTask,
 	allocator allocator,
 	amountIn *big.Int,
-	maxRoutes int,
 ) *QuoteSolution {
 	if amountIn == nil || amountIn.Sign() <= 0 ||
 		(task.MinInput != nil && amountIn.Cmp(task.MinInput) < 0) {
@@ -103,7 +102,7 @@ func solveExactInputQuote(
 	}
 	allocation := allocator.allocateExactInputWithPolicy(
 		amountIn,
-		maxRoutes,
+		task.MaxRoutes,
 		task.InputPolicy == RejectUncoveredInput,
 	)
 	if len(allocation.Allocations) == 0 {
@@ -174,7 +173,7 @@ func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 			"calculatedAmountIn", solution.AmountIn.String(),
 			"minInput", task.MinInput.String(),
 		)
-		minimumQuote := solveExactInputQuote(task, allocator, task.MinInput, task.MaxRoutes)
+		minimumQuote := solveExactInputQuote(task, allocator, task.MinInput)
 		if minimumQuote == nil || minimumQuote.AmountOut.Cmp(task.ExactOutput) < 0 {
 			task.Trace.Decline(
 				"quote", "minimum-input-cannot-cover-output",
@@ -191,7 +190,7 @@ func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 
 func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolution {
 	targetGross := grossOutputForNet(task.ExactOutput, new(big.Int), task.OutputBufferBps)
-	for targetGross.Sign() > 0 {
+	for {
 		allocation := allocator.allocateExactOutput(targetGross, task.MaxRoutes)
 		if len(allocation.Allocations) == 0 || allocation.Remaining.Sign() != 0 {
 			task.Trace.Decline(
@@ -231,7 +230,6 @@ func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolu
 		}
 		targetGross = requiredGross
 	}
-	return nil
 }
 
 func grossOutputForNet(netOutput, gasCost *big.Int, outputBufferBps int) *big.Int {

@@ -12,36 +12,34 @@ import (
 const sentryFlushTimeout = 2 * time.Second
 
 // initSentry initializes Sentry from SENTRY_DSN (with optional SENTRY_ENVIRONMENT) and returns a
-// zapcore that forwards Error+ log entries to Sentry, plus a flush func for shutdown. When SENTRY_DSN
-// is unset (the default) Sentry is disabled: the core is nil and flush is a no-op, so the sink is
-// strictly opt-in via the env keys.
-func initSentry() (zapcore.Core, func()) {
+// zapcore that forwards Error+ log entries to Sentry. When SENTRY_DSN is unset (the default), Sentry
+// is disabled and the core is nil, so the sink is strictly opt-in via the env keys.
+func initSentry() zapcore.Core {
 	dsn := os.Getenv("SENTRY_DSN")
 	if dsn == "" {
-		return nil, func() {}
+		return nil
 	}
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:         dsn,
 		Environment: os.Getenv("SENTRY_ENVIRONMENT"),
 	}); err != nil {
 		// A bad DSN must not take down the process; just leave the sink disabled.
-		return nil, func() {}
+		return nil
 	}
-	return &sentryCore{level: zapcore.ErrorLevel}, func() { sentry.Flush(sentryFlushTimeout) }
+	return &sentryCore{}
 }
 
 // sentryCore is a barebones zapcore that captures Error+ entries as Sentry events, attaching the log
 // fields as Sentry "extra" context. It is teed alongside the normal zap core, so logging is unchanged
 // and Sentry only ever sees error-and-above.
 type sentryCore struct {
-	level  zapcore.Level
 	fields []zapcore.Field
 }
 
-func (c *sentryCore) Enabled(l zapcore.Level) bool { return l >= c.level }
+func (*sentryCore) Enabled(l zapcore.Level) bool { return l >= zapcore.ErrorLevel }
 
 func (c *sentryCore) With(fields []zapcore.Field) zapcore.Core {
-	return &sentryCore{level: c.level, fields: append(append([]zapcore.Field{}, c.fields...), fields...)}
+	return &sentryCore{fields: append(append([]zapcore.Field{}, c.fields...), fields...)}
 }
 
 func (c *sentryCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {

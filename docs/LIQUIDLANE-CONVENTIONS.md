@@ -1,13 +1,13 @@
 # LiquidLane conventions
 
 LiquidLane is shared liquidity infrastructure, not a solver. This document is the compact standard for
-RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
+RFQ, LI.FI, OEV, UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
 
 ## Ownership
 
 | Package | Owns |
 |---|---|
-| `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
+| `internal/liquidlane` | adapter/vault/route types, latest-state reads (adapter or optional liquidity lens), direct authorization, ids, rate math, and the pending-capacity ledger |
 | `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and optional gas snapshot composition |
 | `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
 | `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
@@ -74,6 +74,9 @@ not independent liquidity.
 LiquidLane reads always target RPC `latest` through ordinary `chain.Multicall`.
 
 - Do not use historical block tags or require archive-capable RPCs.
+- By default, capacity comes from each adapter's `getMaxAssets`. When a solver configures
+  `liquidityLens`, the shared reader calls the lens for the adapter's cross-adapter deallocation-cascade
+  estimate instead. The selected source is deployment config; strategies receive only the resulting fact.
 - Batch related calls once per logical read. A single Multicall is internally coherent enough for current
   quoting; separate protocol reads may naturally observe adjacent heads.
 - Do not attach an exact block number to latest inventory. Use decision-time chain state, TTLs, and
@@ -185,9 +188,9 @@ Generated executor calldata and protocol lifecycle remain solver-local.
 | Solver | LiquidLane usage | Solver-local responsibility |
 |---|---|---|
 | RFQ | amount-specific quote and fresh fill inventory; narrow pricing capability may read during strategy evaluation | RFQ order lifecycle and Reactor/Executor calldata |
-| LI.FI | latest inventory on tick/block refresh; fresh `FillQuote` for each received order | range curves, OIF contexts, exclusivity, `AllowOpen`, and immediate-fill lifecycle |
+| LI.FI | latest inventory on tick/block refresh; fresh `FillQuote` for each received order | range curves, OIF contexts, exclusivity, and immediate-fill lifecycle |
 | OEV | background latest inventory stored by Morpho market id | Morpho discovery, auction pricing, safety haircut, liquidation sizing, bundle/gas/deposit accounting |
-| UniswapX | latest inventory either on request or from a short-lived background cache | quote request policy, Reactor orders, Permit2/cosigner rules, auction curve, order status, and fill calldata |
+| UniswapX | short-lived background quote inventory; fresh `FillQuote` for each admitted order | quote request policy, Reactor orders, Permit2/cosigner rules, auction curve, order status, and fill calldata |
 
 3F does not use LiquidLane and should not be forced through these types. Shared code is justified by the
 protocol dependency, not by making every solver look identical.

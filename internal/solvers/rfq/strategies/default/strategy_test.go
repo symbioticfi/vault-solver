@@ -116,7 +116,6 @@ func TestBuildFillPlanUsesTypedCandidateWithoutRepricing(t *testing.T) {
 	leg := plan.Legs[0]
 	if leg.Adapter != vlt || leg.AmountIn.Cmp(big.NewInt(100)) != 0 ||
 		leg.AmountOut.Cmp(big.NewInt(100)) != 0 ||
-		leg.MaxRate.Cmp(big.NewInt(2_000_000_000_000_000_000)) != 0 ||
 		leg.DiscountID == nil || *leg.DiscountID != discountID {
 		t.Fatalf("leg = %+v", leg)
 	}
@@ -129,8 +128,8 @@ func TestBuildFillPlanSingleRouteKeepsCappedQuoteWhenInputExceedsCapacity(t *tes
 	input.RequiredAmountOut = big.NewInt(120)
 
 	plan, err := New().BuildFillPlan(t.Context(), input)
-	if err != nil || plan == nil || plan.QuotedAmountOut.Cmp(big.NewInt(120)) != 0 ||
-		len(plan.Legs) != 1 || plan.Legs[0].AmountIn.Cmp(big.NewInt(100)) != 0 ||
+	if err != nil || plan == nil || len(plan.Legs) != 1 ||
+		plan.Legs[0].AmountIn.Cmp(big.NewInt(100)) != 0 ||
 		plan.Legs[0].AmountOut.Cmp(big.NewInt(120)) != 0 {
 		t.Fatalf("single-route capped plan = %+v, err %v", plan, err)
 	}

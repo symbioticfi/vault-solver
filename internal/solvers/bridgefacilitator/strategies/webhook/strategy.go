@@ -5,7 +5,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -16,12 +15,12 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
+func ValidateConfig(raw yaml.Node) error {
+	_, err := webhook.ParseConfig(raw)
+	return err
 }
 
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
+func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	cfg, err := webhook.ParseConfig(raw)
 	if err != nil {
 		return nil, err

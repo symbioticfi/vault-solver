@@ -4,16 +4,15 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 func TestNewStrategyRejectsUnknown(t *testing.T) {
-	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, strategies.Deps{})
+	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, defaultstrategy.FactoryDeps{})
 	if err == nil || !strings.Contains(err.Error(), "unknown OEV strategy") {
 		t.Fatalf("error = %v, want unknown strategy", err)
 	}
@@ -30,17 +29,8 @@ maxResponseBytes: 4096
 	}
 	if _, err := newStrategy(&Config{
 		Strategy: StrategyConfig{Name: "webhook", Config: *node.Content[0]},
-	}, strategies.Deps{}); err != nil {
+	}, defaultstrategy.FactoryDeps{}); err != nil {
 		t.Fatalf("new webhook strategy: %v", err)
-	}
-}
-
-func TestStrategyBidCapPolicyComesFromRegistry(t *testing.T) {
-	if strategies.RequiresBidCap("default") {
-		t.Fatal("default strategy must keep maxBidWei optional")
-	}
-	if !strategies.RequiresBidCap("webhook") {
-		t.Fatal("webhook strategy must require maxBidWei")
 	}
 }
 
@@ -72,18 +62,6 @@ func TestCheckExecutionEnvelopeAcceptsGenericOperationData(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPendingAuctionsForStrategyFiltersExpired(t *testing.T) {
-	now := time.Unix(1000, 0)
-	got := pendingAuctionsForStrategy([]pendingAuction{
-		{ID: "", SentAt: now},
-		{ID: "expired", SentAt: now.Add(-reservationTTL - time.Second)},
-		{ID: "pending", SentAt: now.Add(-time.Minute), Won: true},
-	}, now)
-	if len(got) != 1 || got[0].ID != "pending" || !got[0].Won {
-		t.Fatalf("pending = %+v", got)
 	}
 }
 

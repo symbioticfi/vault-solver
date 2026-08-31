@@ -8,7 +8,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -35,7 +34,7 @@ func TestWebhookStrategyRoutes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	strategy, err := NewFromConfig(testYAMLNode(t, "url: "+srv.URL+"/oev\n"), nilDeps())
+	strategy, err := NewFromConfig(testYAMLNode(t, "url: "+srv.URL+"/oev\n"))
 	if err != nil {
 		t.Fatalf("NewFromConfig: %v", err)
 	}
@@ -53,12 +52,8 @@ func TestWebhookStrategyRejectsCallbackListConfig(t *testing.T) {
 url: https://strategy.example/oev
 callbacks:
   - "0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"
-`), nilDeps())
+`))
 	if err == nil || !strings.Contains(err.Error(), "field callbacks not found") {
 		t.Fatalf("NewFromConfig error = %v, want callbacks unknown field", err)
 	}
-}
-
-func nilDeps() strategies.Deps {
-	return strategies.Deps{}
 }

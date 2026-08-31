@@ -10,7 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -20,7 +19,6 @@ type rawConfig struct {
 	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
 	ListenAddr             string            `yaml:"listenAddr"`
 	Executor               string            `yaml:"executor"`
-	Reactor                string            `yaml:"reactor"`
 	LiquidityLens          string            `yaml:"liquidityLens"`
 	PollIntervalMs         int               `yaml:"pollIntervalMs"`
 	OrderLimit             int               `yaml:"orderLimit"`
@@ -49,8 +47,6 @@ type Config struct {
 	// Executor is the Executor contract (the on-chain filler identity; the bot EOA must be an authorized
 	// caller — added to the Executor's callers allowlist via setCallers by its owner).
 	Executor common.Address
-	// Reactor is the RFQ Reactor (used at execution time); optional.
-	Reactor common.Address
 	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
 	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
 	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
@@ -104,7 +100,7 @@ const (
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.BackendURL == "" {
@@ -145,11 +141,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
-	}
-	if raw.Reactor != "" {
-		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
-			return nil, err
-		}
 	}
 	if raw.LiquidityLens != "" {
 		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {

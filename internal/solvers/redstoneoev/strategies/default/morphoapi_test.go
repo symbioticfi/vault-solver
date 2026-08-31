@@ -132,7 +132,53 @@ func TestMorphoClientDiscoverMarketData(t *testing.T) {
 	})
 }
 
+func testMorphoPositionsChunkCaps(t *testing.T) {
+	var calls []positionsGraphQLVars
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req positionsGraphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		calls = append(calls, req.Variables)
+		if len(req.Variables.IDs) > maxPositionMarketIDs || req.Variables.First > maxPositionsPage {
+			_, _ = io.WriteString(w, `{"errors":[{"message":"Input validation failed"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[]}}}`)
+	}))
+	defer srv.Close()
+
+	ids := make([]common.Hash, maxPositionMarketIDs+1)
+	for i := range ids {
+		ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
+	}
+	if _, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 10_000, nil); err != nil {
+		t.Fatalf("PositionsByMarket: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2 chunks", len(calls))
+	}
+	if len(calls[0].IDs) != maxPositionMarketIDs || len(calls[1].IDs) != 1 {
+		t.Fatalf("bad id chunks: %d/%d", len(calls[0].IDs), len(calls[1].IDs))
+	}
+	for _, c := range calls {
+		if c.First != maxPositionsPage || c.Skip != 0 {
+			t.Fatalf("bad page args: %+v", c)
+		}
+	}
+}
+
 func TestMorphoClientPositions(t *testing.T) {
+	t.Run("bulk by market", testMorphoPositionsBulkByMarket)
+	t.Run("missing state does not panic", testMorphoPositionsMissingState)
+	t.Run("bulk chunks live API request caps", testMorphoPositionsChunkCaps)
+	t.Run("bulk paginates beyond one API page", testMorphoPositionsPagination)
+	t.Run("bulk truncates by global risk after market chunks", testMorphoPositionsGlobalRisk)
+}
+
+func morphoPositionFixture() (common.Address, string) {
 	borrower := common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE")
 	item := `{
 		"user":{"address":"` + borrower.Hex() + `"},
@@ -143,147 +189,113 @@ func TestMorphoClientPositions(t *testing.T) {
 		},
 		"healthFactor":1.2
 	}`
+	return borrower, item
+}
 
-	t.Run("bulk by market", func(t *testing.T) {
-		srv := newJSONServer(t, http.StatusOK, `{"data":{"marketPositions":{"items":[`+item+`]}}}`)
-		defer srv.Close()
-		maxHF := 1.3
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, &maxHF)
-		if err != nil {
-			t.Fatalf("PositionsByMarket: %v", err)
-		}
-		if len(got) != 1 || got[0].MarketID != apiMktA || got[0].Borrower != borrower {
-			t.Fatalf("bad position parse: %+v", got)
-		}
-		if got[0].HealthFactor == nil || *got[0].HealthFactor != 1.2 ||
-			got[0].BorrowShares != "34" || got[0].Collateral != "56" {
-			t.Fatalf("bad state parse: %+v", got[0])
-		}
-	})
+func testMorphoPositionsBulkByMarket(t *testing.T) {
+	borrower, item := morphoPositionFixture()
+	srv := newJSONServer(t, http.StatusOK, `{"data":{"marketPositions":{"items":[`+item+`]}}}`)
+	defer srv.Close()
 
-	t.Run("missing state does not panic", func(t *testing.T) {
-		body := `{"data":{"marketPositions":{"items":[{
-			"user":{"address":"` + borrower.Hex() + `"},
-			"market":{"marketId":"` + apiMktA.Hex() + `"},
-			"healthFactor":1.2
-		}]}}}`
-		srv := newJSONServer(t, http.StatusOK, body)
-		defer srv.Close()
+	maxHF := 1.3
+	got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, &maxHF)
+	if err != nil {
+		t.Fatalf("PositionsByMarket: %v", err)
+	}
+	if len(got) != 1 || got[0].MarketID != apiMktA || got[0].Borrower != borrower {
+		t.Fatalf("bad position parse: %+v", got)
+	}
+	if got[0].HealthFactor == nil || *got[0].HealthFactor != 1.2 ||
+		got[0].BorrowShares != "34" || got[0].Collateral != "56" {
+		t.Fatalf("bad state parse: %+v", got[0])
+	}
+}
 
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, nil)
-		if err != nil {
-			t.Fatalf("PositionsByMarket: %v", err)
-		}
-		if len(got) != 1 || got[0].BorrowShares != "" || got[0].Collateral != "" {
-			t.Fatalf("missing state should keep only identity/risk, got %+v", got)
-		}
-		if _, ok := positionStateFromAPI(got[0]); ok {
-			t.Fatal("missing state must fail closed before entering the monitor snapshot")
-		}
-	})
+func testMorphoPositionsMissingState(t *testing.T) {
+	borrower, _ := morphoPositionFixture()
+	body := `{"data":{"marketPositions":{"items":[{
+		"user":{"address":"` + borrower.Hex() + `"},
+		"market":{"marketId":"` + apiMktA.Hex() + `"},
+		"healthFactor":1.2
+	}]}}}`
+	srv := newJSONServer(t, http.StatusOK, body)
+	defer srv.Close()
 
-	t.Run("bulk chunks live API request caps", func(t *testing.T) {
-		var calls []positionsGraphQLVars
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req positionsGraphQLRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode request: %v", err)
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			calls = append(calls, req.Variables)
-			if len(req.Variables.IDs) > maxPositionMarketIDs || req.Variables.First > maxPositionsPage {
-				_, _ = io.WriteString(w, `{"errors":[{"message":"Input validation failed"}]}`)
-				return
-			}
-			_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[]}}}`)
-		}))
-		defer srv.Close()
+	got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, nil)
+	if err != nil {
+		t.Fatalf("PositionsByMarket: %v", err)
+	}
+	if len(got) != 1 || got[0].BorrowShares != "" || got[0].Collateral != "" {
+		t.Fatalf("missing state should keep only identity/risk, got %+v", got)
+	}
+	if _, ok := positionStateFromAPI(got[0]); ok {
+		t.Fatal("missing state must fail closed before entering the monitor snapshot")
+	}
+}
 
-		ids := make([]common.Hash, maxPositionMarketIDs+1)
-		for i := range ids {
-			ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
+func testMorphoPositionsPagination(t *testing.T) {
+	var skips []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req positionsGraphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		if _, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 10_000, nil); err != nil {
-			t.Fatalf("PositionsByMarket: %v", err)
+		skips = append(skips, req.Variables.Skip)
+		count := req.Variables.First
+		if req.Variables.Skip >= maxPositionsPage {
+			count = 1
 		}
-		if len(calls) != 2 {
-			t.Fatalf("calls = %d, want 2 chunks", len(calls))
+		items := make([]string, count)
+		for i := range items {
+			addr := common.BigToAddress(big.NewInt(int64(req.Variables.Skip + i + 1))).Hex()
+			items[i] = `{"user":{"address":"` + addr + `"},"market":{"marketId":"` + apiMktA.Hex() + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":1.2}`
 		}
-		if len(calls[0].IDs) != maxPositionMarketIDs || len(calls[1].IDs) != 1 {
-			t.Fatalf("bad id chunks: %d/%d", len(calls[0].IDs), len(calls[1].IDs))
-		}
-		for _, c := range calls {
-			if c.First != maxPositionsPage || c.Skip != 0 {
-				t.Fatalf("bad page args: %+v", c)
-			}
-		}
-	})
+		_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[`+strings.Join(items, ",")+`]}}}`)
+	}))
+	defer srv.Close()
 
-	t.Run("bulk paginates beyond one API page", func(t *testing.T) {
-		var skips []int
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req positionsGraphQLRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode request: %v", err)
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			skips = append(skips, req.Variables.Skip)
-			count := req.Variables.First
-			if req.Variables.Skip >= maxPositionsPage {
-				count = 1
-			}
-			items := make([]string, count)
-			for i := range items {
-				addr := common.BigToAddress(big.NewInt(int64(req.Variables.Skip + i + 1))).Hex()
-				items[i] = `{"user":{"address":"` + addr + `"},"market":{"marketId":"` + apiMktA.Hex() + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":1.2}`
-			}
-			_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[`+strings.Join(items, ",")+`]}}}`)
-		}))
-		defer srv.Close()
+	got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, maxPositionsPage+1, nil)
+	if err != nil {
+		t.Fatalf("PositionsByMarket: %v", err)
+	}
+	if len(got) != maxPositionsPage+1 {
+		t.Fatalf("positions = %d, want %d", len(got), maxPositionsPage+1)
+	}
+	if len(skips) != 2 || skips[0] != 0 || skips[1] != maxPositionsPage {
+		t.Fatalf("skips = %+v, want [0 %d]", skips, maxPositionsPage)
+	}
+}
 
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, maxPositionsPage+1, nil)
-		if err != nil {
-			t.Fatalf("PositionsByMarket: %v", err)
+func testMorphoPositionsGlobalRisk(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req positionsGraphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		if len(got) != maxPositionsPage+1 {
-			t.Fatalf("positions = %d, want %d", len(got), maxPositionsPage+1)
+		hf := "1.2"
+		chunkBorrower := common.HexToAddress("0x0000000000000000000000000000000000000001")
+		if len(req.Variables.IDs) == 1 {
+			hf = "1.01"
+			chunkBorrower = common.HexToAddress("0x0000000000000000000000000000000000000002")
 		}
-		if len(skips) != 2 || skips[0] != 0 || skips[1] != maxPositionsPage {
-			t.Fatalf("skips = %+v, want [0 %d]", skips, maxPositionsPage)
-		}
-	})
+		chunkItem := `{"user":{"address":"` + chunkBorrower.Hex() + `"},"market":{"marketId":"` + apiMktA.Hex() + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":` + hf + `}`
+		_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[`+chunkItem+`]}}}`)
+	}))
+	defer srv.Close()
 
-	t.Run("bulk truncates by global risk after market chunks", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req positionsGraphQLRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode request: %v", err)
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			hf := "1.2"
-			chunkBorrower := common.HexToAddress("0x0000000000000000000000000000000000000001")
-			if len(req.Variables.IDs) == 1 {
-				hf = "1.01"
-				chunkBorrower = common.HexToAddress("0x0000000000000000000000000000000000000002")
-			}
-			chunkItem := `{"user":{"address":"` + chunkBorrower.Hex() + `"},"market":{"marketId":"` + apiMktA.Hex() + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":` + hf + `}`
-			_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[`+chunkItem+`]}}}`)
-		}))
-		defer srv.Close()
-
-		ids := make([]common.Hash, maxPositionMarketIDs+1)
-		for i := range ids {
-			ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
-		}
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 1, nil)
-		if err != nil {
-			t.Fatalf("PositionsByMarket: %v", err)
-		}
-		if len(got) != 1 || got[0].Borrower != common.HexToAddress("0x0000000000000000000000000000000000000002") {
-			t.Fatalf("global top risk was not selected after chunk merge: %+v", got)
-		}
-	})
+	ids := make([]common.Hash, maxPositionMarketIDs+1)
+	for i := range ids {
+		ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
+	}
+	got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 1, nil)
+	if err != nil {
+		t.Fatalf("PositionsByMarket: %v", err)
+	}
+	if len(got) != 1 || got[0].Borrower != common.HexToAddress("0x0000000000000000000000000000000000000002") {
+		t.Fatalf("global top risk was not selected after chunk merge: %+v", got)
+	}
 }

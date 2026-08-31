@@ -21,8 +21,6 @@ type scriptedLiquidLaneBackend struct {
 	latest [][]chain.CallResult
 }
 
-func (b *scriptedLiquidLaneBackend) ChainID() *big.Int { return big.NewInt(11155111) }
-
 func (b *scriptedLiquidLaneBackend) Multicall(_ context.Context, _ []chain.Call) ([]chain.CallResult, error) {
 	result := b.latest[0]
 	b.latest = b.latest[1:]

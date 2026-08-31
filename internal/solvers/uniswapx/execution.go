@@ -22,106 +22,6 @@ var (
 	errFillPreflight    = errors.New("fill preflight failed")
 )
 
-type pendingUniswapFill struct {
-	order  *resolvedOrder
-	result <-chan txmanager.Result
-}
-
-type uniswapFillCompletion struct {
-	fill   *pendingUniswapFill
-	result txmanager.Result
-}
-
-func (s *Solver) fillLoop(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	orders <-chan *resolvedOrder,
-) error {
-	completions := make(chan uniswapFillCompletion, orderQueueCapacity)
-	pending := make(map[common.Hash]*pendingUniswapFill)
-	ctxDone := ctx.Done()
-	var shutdownErr error
-	for orders != nil || len(pending) > 0 {
-		select {
-		case <-ctxDone:
-			shutdownErr = ctx.Err()
-			ctxDone = nil
-		case completion := <-completions:
-			delete(pending, completion.fill.order.Hash)
-			s.completePendingFill(completion)
-		case order, ok := <-orders:
-			if !ok {
-				orders = nil
-				continue
-			}
-			if shutdownErr != nil || ctx.Err() != nil {
-				if shutdownErr == nil {
-					shutdownErr = ctx.Err()
-				}
-				ctxDone = nil
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				continue
-			}
-			if !s.txm.Available() {
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				s.log.V(1).Info(
-					"order fill deferred while transaction nonce lane is paused",
-					"source", order.Source,
-					"orderHash", order.Hash.Hex(),
-					"quoteId", order.QuoteID,
-				)
-				continue
-			}
-			s.log.V(1).Info(
-				"order fill planning started",
-				"source", order.Source,
-				"orderHash", order.Hash.Hex(),
-				"quoteId", order.QuoteID,
-			)
-			chainObservedAt := time.Now()
-			now, err := s.reader.latestBlockTime(ctx)
-			if err != nil {
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
-				continue
-			}
-			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
-			s.endFillPlanning()
-			if err != nil {
-				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
-				if errors.Is(err, errFillPreflight) {
-					s.recordOrderFillFailure(order, now)
-				}
-				if errors.Is(err, errOrderNotFillable) {
-					s.log.V(1).Info("order not fillable yet", "source", order.Source,
-						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-					continue
-				}
-				s.log.Error(err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-				continue
-			}
-			pending[order.Hash] = fill
-			go awaitUniswapFill(fill, completions)
-		}
-	}
-	return shutdownErr
-}
-
-// Once txmanager accepts a fill, shutdown may stop new admission but must not drop its terminal result.
-func awaitUniswapFill(
-	fill *pendingUniswapFill,
-	out chan<- uniswapFillCompletion,
-) {
-	result, ok := <-fill.result
-	if !ok {
-		result.Err = errors.New("transaction result channel closed without a result")
-	}
-	out <- uniswapFillCompletion{fill: fill, result: result}
-}
-
 func (s *Solver) startFill(
 	ctx context.Context,
 	routes []liquidlane.Route,
@@ -145,7 +45,7 @@ func (s *Solver) startFill(
 	if discountErr != nil {
 		s.log.Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
 	}
-	snapshot, err := s.reader.fillSnapshot(
+	snapshot, err := s.reader.Fill(
 		ctx,
 		decisionRoutes,
 		order.Executor,
@@ -188,7 +88,7 @@ func (s *Solver) startFill(
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
 		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
-		Trace: s.decisionTrace(
+		Trace: liquidstrategies.NewDecisionTrace(s.log,
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -306,7 +206,7 @@ func (s *Solver) buildExecutorCalldata(
 			"adapter", route.Adapter.Hex(),
 			"amountIn", route.AmountIn.String(),
 		)
-		physicalQuotes, err := s.reader.physicalFillQuotes(
+		physicalQuotes, err := s.reader.ReadFillQuotes(
 			ctx,
 			[]liquidlane.Route{selectedRoute},
 			order.TokenIn,

@@ -75,7 +75,7 @@ quoteRefreshMode: block
 		t.Fatalf("token scope = %q", cfg.TokenPolicy.Scope())
 	}
 	if _, err := newStrategy(cfg.Strategy); err != nil {
-		t.Fatalf("newStrategy: %v", err)
+		t.Fatalf("new strategy: %v", err)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -33,13 +36,6 @@ const (
 	seedHealthyPrice      = "5000000000000000000000000000"
 	seedLiquidatablePrice = "1550000000000000000000000000"
 )
-
-func newQuote(maxRate string, maxAssets *big.Int) defaultstrategy.AdapterQuote {
-	return defaultstrategy.AdapterQuote{
-		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
-		LoanScale: exp10(6), CollScale: exp10(18),
-	}
-}
 
 // seededSolver wires a Solver that does no chain/WS I/O: a monitor whose snapshot is pre-populated
 // (RedStone source), a stateCache with healthy accounting, and an in-memory signer — exactly the
@@ -66,10 +62,6 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		},
 		// Cached API/test state price. The hot path still evaluates candidates at the auction frame price.
 		Prices: map[common.Hash]*big.Int{id: mustBig(seedLiquidatablePrice)},
-		Quotes: map[common.Hash]defaultstrategy.AdapterQuote{
-			// The single adapter's quote: sells the RWA at ~$1780 (≈1% under the auctioned $1800.9); ample liquidity.
-			id: newQuote("1780000000000000000000", mustBig("100000000000")),
-		},
 		// Independently-tracked at-risk positions — the SOLE candidate source
 		// now that the frame's pushed positions are no longer consumed. Both fixture borrowers are seeded so
 		// workerCandidates surfaces them, evaluated at the auction frame price. The captured frame still
@@ -111,11 +103,12 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}),
 	}
-	strategyCfg := defaultstrategy.ConfigForTest(defaultstrategy.Config{
-		BidWei:      seedBidWei,
-		MaxStateAge: defaultExecutorStateMaxAge,
-		Sizing:      defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
-	})
+	strategyCfg := defaultstrategy.Config{
+		BidWei:          seedBidWei,
+		CallbackAuthTTL: time.Minute,
+		MaxStateAge:     defaultExecutorStateMaxAge,
+		Sizing:          defaultstrategy.SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0},
+	}
 	s.strategy = defaultstrategy.NewWithSnapshotForTest(
 		strategyCfg,
 		seedAdapter,
@@ -221,6 +214,58 @@ func (s *recordingBidStrategy) DecideBid(_ context.Context, input types.BidInput
 	}, nil
 }
 
+type bidInputCaptureStrategy struct {
+	input types.BidInput
+}
+
+func (s *bidInputCaptureStrategy) Run(context.Context) {}
+
+func (s *bidInputCaptureStrategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+	s.input = input
+	return types.BidOutput{Decision: types.DecisionSkip, Reason: "captured"}, nil
+}
+
+func reservationProjectionSeenByStrategy(t *testing.T, s *Solver, now time.Time) []types.PendingAuction {
+	t.Helper()
+	state, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing seeded state")
+	}
+	state.UpdatedAt = now
+	s.state.store(state)
+
+	original := s.strategy
+	capture := &bidInputCaptureStrategy{}
+	s.strategy = capture
+	defer func() { s.strategy = original }()
+
+	if decision := s.buildBid(t.Context(), decodeAuction(t), func() time.Time { return now }); decision.skip != types.SkipReasonStrategy {
+		t.Fatalf("projection buildBid skip = %q, want %q", decision.skip, types.SkipReasonStrategy)
+	}
+	return capture.input.PendingAuctions
+}
+
+type mutatingAdapterStrategy struct {
+	input types.BidInput
+}
+
+func (s *mutatingAdapterStrategy) Run(context.Context) {}
+
+func (s *mutatingAdapterStrategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+	input.Adapter.FreeAssets.SetInt64(1)
+	input.Adapter.Withdrawable.SetInt64(2)
+	input.Adapter.Redeemable[0].Asset = common.Address{}
+	input.Adapter.Redeemable[0].MaxRate.SetInt64(3)
+	input.Adapter.Redeemable[0].MaxAssets.SetInt64(4)
+	input.Adapter.Redeemable[0].AcquireBalance.SetInt64(5)
+	s.input = input
+	return types.BidOutput{
+		Decision:      types.DecisionBid,
+		BidAmount:     big.NewInt(1),
+		OperationData: []byte{0x01},
+	}, nil
+}
+
 type blockingBidStrategy struct {
 	started chan struct{}
 	release chan struct{}
@@ -282,6 +327,18 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 	base := auctionClock()()
 	pastMax := func() time.Time { return base.Add(defaultExecutorStateMaxAge + time.Second) }
 
+	t.Run("executor state missing", func(t *testing.T) {
+		s, _ := seededSolver(t)
+		s.state = stateCache{}
+		strategy := &recordingBidStrategy{}
+		s.strategy = strategy
+		if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != skipExecutorStateStale {
+			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
+		}
+		if strategy.called {
+			t.Fatal("strategy must not be called without executor state")
+		}
+	})
 	t.Run("both caches stale", func(t *testing.T) {
 		s, _ := seededSolver(t)
 		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != skipExecutorStateStale {
@@ -370,6 +427,33 @@ func TestBuildBidLetsStrategyOwnDecisionState(t *testing.T) {
 	rate := strategy.input.Context.GasPrices.TokenOutPerNative(strategy.input.Adapter.Loan)
 	if rate == nil || rate.Cmp(mustBig("2500000000")) != 0 {
 		t.Fatalf("shared gas price = %v, want 2500000000", rate)
+	}
+}
+
+func TestBuildBidStrategyAdapterMutationDoesNotMutateCache(t *testing.T) {
+	s, _ := seededSolver(t)
+	want := seedAdapterSnapshot()
+	strategy := &mutatingAdapterStrategy{}
+	s.strategy = strategy
+
+	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "" {
+		t.Fatalf("expected strategy bid, got skip %q", d.skip)
+	}
+	if strategy.input.Adapter.FreeAssets.Cmp(big.NewInt(1)) != 0 ||
+		strategy.input.Adapter.Withdrawable.Cmp(big.NewInt(2)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].Asset != (common.Address{}) ||
+		strategy.input.Adapter.Redeemable[0].MaxRate.Cmp(big.NewInt(3)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].MaxAssets.Cmp(big.NewInt(4)) != 0 ||
+		strategy.input.Adapter.Redeemable[0].AcquireBalance.Cmp(big.NewInt(5)) != 0 {
+		t.Fatalf("strategy did not observe its Adapter mutations: %+v", strategy.input.Adapter)
+	}
+
+	after, ok := s.state.load()
+	if !ok {
+		t.Fatal("missing cached state after bid")
+	}
+	if !reflect.DeepEqual(after.Adapter, want) {
+		t.Fatalf("strategy mutated cached Adapter:\n got: %+v\nwant: %+v", after.Adapter, want)
 	}
 }
 
@@ -549,7 +633,7 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 	if d1.skip != "" {
 		t.Fatalf("first bid should succeed, got skip %q", d1.skip)
 	}
-	s.reserve(d1.nonce, time.Unix(1781243340, 0), seedCallback, a.ID)
+	s.reserve(d1.nonce, time.Unix(1781243340, 0), a.ID)
 
 	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
 		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
@@ -573,89 +657,92 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 func TestPruneReservations(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-8")
-	s.reserve(10, now, seedCallback, "auction-10")
-	s.reserve(12, now.Add(-time.Hour), seedCallback, "auction-old")
+	s.reserve(8, now, "auction-8")
+	s.reserve(10, now, "auction-10")
+	s.reserve(12, now.Add(-time.Hour), "auction-old")
 
 	// nonce 10 frees 8 (below) AND 10 (settlement sets the on-chain nonce to the consumed bid's nonce, so
 	// nonce == r.nonce must release it — the F1 fix: `<=`, not `<`); 12 is freed by age (> TTL) → none left.
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("all reservations should be freed, got pending=%v", inFlight.pending)
+	// Observe at the old reservation's send time so the strategy projection would expose every entry if
+	// pruning had failed, including the entry removed solely because it exceeded the TTL at prune time.
+	if pending := reservationProjectionSeenByStrategy(t, s, now.Add(-time.Hour)); len(pending) != 0 {
+		t.Fatalf("all reservations should be freed, got pending=%v", pending)
 	}
 
-	s.reserve(11, now, seedCallback, "auction-11")
+	s.reserve(11, now, "auction-11")
 	s.pruneReservations(10, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-11" {
-		t.Fatalf("a recent pending bid should be kept, got pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-11" {
+		t.Fatalf("a recent pending bid should be kept, got pending=%v", pending)
 	}
 
 	// A bid is freed exactly when the on-chain nonce reaches its nonce (== r.nonce), not only when it passes.
 	s.pruneReservations(11, now)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("bid with nonce == on-chain nonce should be freed at settlement, got pending=%v", pending)
 	}
 }
 
 func TestWonReservationSurvivesDelayedSettlement(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-won")
+	s.reserve(8, now, "auction-won")
 	s.markReservationWon("auction-won")
 
-	s.pruneReservations(7, now.Add(2*time.Minute))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || !inFlight.pending[0].Won {
-		t.Fatalf("won bid must stay reserved while settlement is delayed, pending=%v", inFlight.pending)
+	observedAt := now.Add(2 * time.Minute)
+	s.pruneReservations(7, observedAt)
+	if pending := reservationProjectionSeenByStrategy(t, s, observedAt); len(pending) != 1 || !pending[0].Won {
+		t.Fatalf("won bid must stay reserved while settlement is delayed, pending=%v", pending)
 	}
 }
 
 func TestAuctionResultReleasesLostBidReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-lost")
+	s.reserve(8, now, "auction-lost")
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-lost",
 		"data":{"bid":"0.0005","liquidator":"0x1111111111111111111111111111111111111111"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("lost auction must release reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("lost auction must release reservation, pending=%v", pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-won")
+	s.reserve(9, now, "auction-won")
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"auction-result",
 		"id":"auction-won",
 		"data":{"bid":"0.0005","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`"}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-won" {
-		t.Fatalf("won auction must stay reserved until liquidation result/nonce, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-won" {
+		t.Fatalf("won auction must stay reserved until liquidation result/nonce, pending=%v", pending)
 	}
 }
 
 func TestLiquidationResultReleasesOurReservation(t *testing.T) {
 	s, _ := seededSolver(t)
 	now := time.Unix(1781243340, 0)
-	s.reserve(8, now, seedCallback, "auction-ours")
+	s.reserve(8, now, "auction-ours")
 
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-ours",
 		"data":{"success":true,"txHash":"","liquidator":"`+`0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1`+`","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("our liquidation result must release reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("our liquidation result must release reservation, pending=%v", pending)
 	}
 
-	s.reserve(9, now, seedCallback, "auction-other")
+	s.reserve(9, now, "auction-other")
 	s.handleMessage(t.Context(), []byte(`{
 		"op":"liquidation-result",
 		"id":"auction-other",
 		"data":{"success":true,"txHash":"","liquidator":"0x1111111111111111111111111111111111111111","error":""}
 	}`))
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 1 || inFlight.pending[0].ID != "auction-other" {
-		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 1 || pending[0].ID != "auction-other" {
+		t.Fatalf("other solver liquidation result must not release our reservation, pending=%v", pending)
 	}
 }
 
@@ -679,9 +766,9 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	now := time.Unix(1781243340, 0)
 
 	// A sent bid (nonce 8), plus a stale local nonce high-water mark (5).
-	s.reserve(8, now, seedCallback, "auction-8")
+	s.reserve(8, now, "auction-8")
 	s.nonces.reconcile(5)
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) == 0 {
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) == 0 {
 		t.Fatal("precondition: the reservation should be present")
 	}
 
@@ -690,8 +777,8 @@ func TestApplyExecutorStatePrunesReservations(t *testing.T) {
 	s.applyExecutorState(st, now)
 
 	// pruneReservations ran: nonce 8 <= 9 → the reservation is freed.
-	if inFlight := s.inFlightSnapshot(); len(inFlight.pending) != 0 {
-		t.Fatalf("pruneReservations must run from executor state; pending=%v", inFlight.pending)
+	if pending := reservationProjectionSeenByStrategy(t, s, now); len(pending) != 0 {
+		t.Fatalf("pruneReservations must run from executor state; pending=%v", pending)
 	}
 	// nonces.reconcile ran: the next nonce is strictly above the on-chain 9.
 	if got := s.nonces.next(0); got != 10 {
@@ -797,13 +884,31 @@ func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 	}
 }
 
+func TestMalformedBlacklistedFrameTripsBreakerAndLogs(t *testing.T) {
+	s, _ := seededSolver(t)
+	var logs []string
+	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+
+	s.handleBlacklisted([]byte(`{"op":"blacklisted","data":`))
+
+	if tripped, _ := s.breaker.tripped(time.Now()); !tripped {
+		t.Fatal("malformed blacklisted frame did not trip breaker")
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0], "malformed blacklisted frame") {
+		t.Fatalf("logs = %v", logs)
+	}
+}
+
 func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 	s, _ := seededSolver(t)
 	blocking := &blockingBidStrategy{
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	defer close(blocking.release)
+	t.Cleanup(func() {
+		close(blocking.release)
+		s.auctionWG.Wait()
+	})
 
 	a := decodeAuction(t)
 	setAuctionPrice(&a, seedLiquidatablePrice)
@@ -853,12 +958,20 @@ func TestRedstoneClosedPositionNotBid(t *testing.T) {
 	}
 }
 
-// TestDryRunSuppressesSend pins the OEV_DRY_RUN observe mode: a profitable auction is fully evaluated
+func handleAuctionSynchronously(ctx context.Context, s *Solver, raw []byte) {
+	a, start, ok := s.parseAuctionFrame(raw)
+	if !ok {
+		return
+	}
+	s.handleAuction(ctx, a, start)
+}
+
+// TestDryRunSuppressesSend pins configured observe mode: a profitable auction is fully evaluated
 // (counted as a would-bid via metrics.bid()) but NO solve is sent on the wire — the operator can watch the
 // bot's decisions against a live feed without funding or competing.
 func TestDryRunSuppressesSend(t *testing.T) {
 	s, _ := seededSolver(t)
-	s.dryRun = true
+	s.cfg.DryRun = true
 
 	// Real metrics on a fresh registry so we can read the would-bid counter back.
 	reg := prometheus.NewRegistry()
@@ -872,7 +985,7 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	setAuctionPrice(&a, seedLiquidatablePrice)
 	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
 	setSnapshotBlockTime(t, s, a.Timestamp)
-	s.handleAuctionWithContext(t.Context(), marshal(a))
+	handleAuctionSynchronously(t.Context(), s, marshal(a))
 
 	if f := drainSend(s); f != nil {
 		t.Fatalf("dry-run must not send a solve, got %s", f)
@@ -930,7 +1043,7 @@ func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	if f := drainSend(s); f != nil {
 		t.Fatalf("precondition: send channel should be empty, got %s", f)
 	}
-	s.handleAuctionWithContext(t.Context(), marshal(a))
+	handleAuctionSynchronously(t.Context(), s, marshal(a))
 	if f := drainSend(s); f != nil {
 		t.Fatalf("empty-id auction must be ignored, got solve %s", f)
 	}

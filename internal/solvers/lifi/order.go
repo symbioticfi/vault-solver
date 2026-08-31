@@ -46,8 +46,7 @@ type submittedOrder struct {
 	processed      chan struct{}
 	recoveryGen    uint64
 
-	Order        inputsettler.StandardOrder
-	InputSettler common.Address
+	Order inputsettler.StandardOrder
 
 	TokenIn      common.Address
 	AmountIn     *big.Int
@@ -116,7 +115,6 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OnChainOrderID: event.Meta.OnChainOrderID,
 		dedupeKey:      dedupeKey,
 		Order:          parsed.order,
-		InputSettler:   inputSettler,
 		TokenIn:        parsed.tokenIn,
 		AmountIn:       parsed.amountIn,
 		TokenOut:       parsed.tokenOut,

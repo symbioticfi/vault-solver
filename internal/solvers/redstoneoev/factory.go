@@ -9,10 +9,21 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 )
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func ValidateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if err := validateStrategyConfig(cfg.Strategy, cfg.Gas != nil); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
+}
+
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -20,11 +31,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	apiKey := os.Getenv(cfg.APIKeyEnv)
 	if apiKey == "" {
 		return nil, errors.Errorf("%s: ws api key env %q is empty", Name, cfg.APIKeyEnv)
-	}
-	// Dry-run is solver-owned because it suppresses outbound solve frames for every strategy.
-	dryRun, err := dryRunEnv()
-	if err != nil {
-		return nil, errors.Errorf("%s: %w", Name, err)
 	}
 	chainID := deps.Chain.ChainID()
 	if !chainID.IsInt64() || chainID.Sign() <= 0 {
@@ -47,8 +53,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		cfg:            cfg,
 		deps:           deps,
 		chainID:        chainID,
-		dryRun:         dryRun,
-		strategyName:   cfg.Strategy.Name,
 		reader:         reader,
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
@@ -57,7 +61,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
 	}
-	strategy, err := newStrategy(cfg, strategies.Deps{
+	strategy, err := newStrategy(cfg, defaultstrategy.FactoryDeps{
 		Chain:               deps.Chain,
 		Signer:              deps.Signer,
 		Log:                 log,

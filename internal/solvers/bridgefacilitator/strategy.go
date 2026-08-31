@@ -7,20 +7,42 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 )
 
 func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	name := spec.Name
-	if name == "" {
-		name = defaultStrategyName
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, unknownStrategyError(spec.Name)
 	}
-	return strategies.New(name, spec.Config, strategies.Deps{})
+}
+
+func validateStrategyConfig(spec StrategyConfig) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown 3F strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
@@ -29,7 +51,7 @@ func buildStrategyInput(
 	offerings []*adapterOffering,
 	offers *offerTracker,
 	now time.Time,
-) types.OfferInput {
+) (types.OfferInput, map[int64]auctionView) {
 	adapters := make([]types.AdapterSnapshot, 0, len(offerings))
 	for _, off := range offerings {
 		adapters = append(adapters, types.AdapterSnapshot{
@@ -47,8 +69,10 @@ func buildStrategyInput(
 	}
 
 	input := types.OfferInput{Now: now, Adapters: adapters}
+	views := make(map[int64]auctionView, len(auctions))
 	for i := range auctions {
 		av := auctionView{auctions[i]}
+		views[int64(av.dto.Id)] = av
 		auction, ok := buildAuctionSnapshot(av, i, offers, now)
 		if !ok {
 			continue
@@ -61,16 +85,7 @@ func buildStrategyInput(
 			AuctionID: k.auction,
 		})
 	}
-	return input
-}
-
-func auctionViewsByID(auctions []threef.AuctionDto) map[int64]auctionView {
-	views := make(map[int64]auctionView, len(auctions))
-	for i := range auctions {
-		av := auctionView{auctions[i]}
-		views[int64(av.dto.Id)] = av
-	}
-	return views
+	return input, views
 }
 
 func buildAuctionSnapshot(

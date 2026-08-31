@@ -1,10 +1,14 @@
-# vault-solver — UniswapX Quoter + Filler solver (plan)
+# UniswapX quoter and filler
 
-Adding a **UniswapX RFQ quoter + filler** to `vault-solver` as the **`uniswapx-filler`** solver, following the
-framework boundary and conventions in [`../CLAUDE.md`](../CLAUDE.md). We become a UniswapX **market maker**:
-we expose the quote webhook Uniswap's RFQ server calls, win exclusivity, then settle the order on Uniswap's
-Reactor — sourcing liquidity from our Symbiotic vault `LiquidLaneAdapter`s (vaults-first; a secondary-DEX hop
-is a later step).
+> **Role:** maintained integration contract for `uniswapx-filler`: protocol ground truth, design decisions,
+> deployment prerequisites, and live open work.
+>
+> **Code/config:** `internal/solvers/uniswapx` ·
+> [`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml)
+
+The solver acts as a UniswapX **market maker**: it exposes the RFQ quote webhook, wins exclusivity, then
+settles the order on Uniswap's Reactor using Symbiotic vault `LiquidLaneAdapter` liquidity. It follows the
+framework boundary in [Architecture](ARCHITECTURE.md); a secondary-DEX hop remains deferred.
 
 ---
 
@@ -30,15 +34,15 @@ shared strategy facade.
 - **Settlement.** We call **`executeWithCallback`** on Uniswap's V2 Dutch Order Reactor; our
   `LiquidLaneUniswapXExecutor` implements `IReactorCallback.reactorCallback`, sources the output token from
   one or more `LiquidLaneAdapter`s, and approves it back to the Reactor. Inputs are pulled from the swapper
-  via Permit2. The current prototype supports typed direct `swap` and signed `discountSwap` routes, plus
+  via Permit2. The implementation supports typed direct `swap` and signed `discountSwap` routes, plus
   multiple same-token outputs (including fee outputs). A decaying exact-output order may resolve to more
   input in the execution block than the solver planned against; the routes consume their planned input and
   the executor retains the positive difference as filler surplus.
 - **Safety.** Fail-closed pre-fill validation gates, quote-state epochs, post-fill snapshot refresh, and a
   fade-aware circuit breaker (Uniswap penalizes win-but-don't-fill — see §4, §6).
 - **State** — in-memory only: an immutable refreshed inventory and optional gas snapshot, its epoch, pending-fill capacity
-  reservations, exclusive-obligation reconciliation state, order dedup/retry state, and breaker timestamps;
-  TTL-swept.
+  reservations, and independently locked order-lifecycle, exclusive-obligation, and breaker state. Order and exclusive
+  lifecycle data each use one TTL-swept record map instead of parallel maps.
 
 **Scope decisions (locked):**
 
@@ -70,18 +74,18 @@ exclusivity-override pricing controller, and quoting any pair our vaults can't s
 A self-contained `internal/solvers/uniswapx/` implements `solver.Solver`; protocol behavior stays out of the
 generic framework (CLAUDE.md modularity rule). Shared lifecycle hardening in `internal/{chain,txmanager,solver}`
 and `cmd/` remains protocol-neutral. Code organization follows the repo's **solver-local strategy
-architecture** (see `docs/strategy-plan.md`) and the shared LiquidLane read/type conventions
+architecture** (see [`STRATEGIES.md`](STRATEGIES.md)) and the shared LiquidLane read/type conventions
 (`docs/LIQUIDLANE-CONVENTIONS.md`). §2.5 is the consolidated reuse-vs-delta implementation checklist.
 
 ### 2.1 Solver-local strategy, shared LiquidLane primitives
 
-UniswapX owns its strategy contract and registry under `internal/solvers/uniswapx/strategies/`:
+UniswapX owns its strategy contract under `internal/solvers/uniswapx/strategies/`; the solver root selects
+the two built-ins directly:
 
 ```
 internal/solvers/uniswapx/
-  strategy.go
+  solver.go              # explicit default/webhook construction + validation selection
   strategies/
-    registry.go
     types/types.go       # DecideQuote / DecideFill
     default/
     webhook/
@@ -132,57 +136,18 @@ assertion because the PR19 ABI has no getter.
   the order-service OpenAPI and remains a hand-vendored, tested boundary (§4.1, §4.3).
 - **`/metrics`** is the framework's shared registry; the solver registers bounded quote, poll, fill,
   readiness, and breaker collectors via `deps.Metrics.Registerer()`.
-- **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). It keeps
-  at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process
-  cannot create a future transaction queued behind a missing lower nonce. `CancelAt` is the earliest order,
-  signed-discount, or protocol-signature deadline. It is derived from chain time, translated to a wall-clock
-  deadline without extending the remaining validity, and also bounds the pre-sign wait. The wall-clock
-  observation anchor is captured before the chain-time RPC so lookup and planning latency consume, rather
-  than extend, the remaining validity. The active lifecycle is replaced by a same-nonce cancellation on
-  expiry or, when nonce ownership is not conflicted, shutdown, and drained to a terminal result. Shutdown
-  stops waiting after `shutdownTimeoutMs`, cancels outstanding RPC work, and returns a deadline error so
-  SIGTERM cannot hang indefinitely; the deployment grace period must be longer than that bound.
-  UniswapX treats the lane as busy from lifecycle-slot acquisition through the terminal result: quote
-  responses and solver readiness stay blocked while a request is queued or admitted, including receipt
-  confirmation. Pending capacity reservations independently protect already-awarded orders; installing one
-  is not a signal to reopen quoting.
-- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
-  floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
-  minimum gas-weighted p25 priority reward from the latest five blocks, aligned with the observed behavior
-  of Etherscan Gas Tracker's Fast tier, also clamped to headroom, and fails new submissions closed when
-  `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a 12.5% bump;
-  when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei` is the
-  absolute global ceiling and normal sends reserve cancellation headroom below it. With gas accounting
-  disabled, UniswapX supplies no request ceiling. With gas accounting enabled, `MaxFeePerGas` returns the
-  profitability ceiling including one normal replacement, and the initial send reserves that replacement
-  inside the ceiling. Cancellation may exceed the request ceiling but never the global ceiling. Startup
-  rejects a configured positive tip floor that leaves no base-fee headroom beneath the initial cap after
-  both reserved bumps.
-- **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
-  re-signed at another nonce. Before escalating fees, the next normal replacement tick rebroadcasts the
-  latest transport-ambiguous attempt's exact signed bytes once; it does not append a duplicate attempt or
-  change cached fees. A later tick may apply the normal bump. `CancelAt`, pending timeout, and shutdown skip
-  this grace retry and proceed directly to same-nonce cancellation. A consumed/colliding nonce is reconciled
-  against every exact attempt. During a replacement of an already tracked lifecycle, a receipt proven
-  canonical against a stable head resolves
-  ownership conflict immediately, but the single lifecycle still holds the lane through its configured
-  confirmation depth, so UniswapX quote responses and readiness remain blocked until it is terminal.
-  Initial-broadcast collisions, and replacements without an owned canonical receipt, keep further sends,
-  quotes, and readiness fail-closed until terminal reconciliation or operator action; a later receipt reorg
-  restores the conflict pause. Each confirmation check proves that the receipt
-  block is in the stable head's
-  ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
-  or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
-  read fallbacks. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
-  Exact-attempt ownership is in-memory: the packaged Compose deployment restarts automatically after an
-  unclean exit even though nonce equality cannot prove that a private hidden attempt is gone. If such an
-  attempt later consumes the reused nonce, admission and readiness remain fail-closed for operator
-  reconciliation; automatic restart does not reconstruct ownership.
+- **Fills use the shared transaction manager asynchronously.** `CancelAt` is the earliest order,
+  signed-discount, or protocol-signature deadline, translated from observed chain time without extending its
+  remaining validity. A queued or admitted lifecycle blocks quotes and readiness through terminal confirmation;
+  pending capacity remains reserved independently. With gas accounting enabled, the request carries the
+  strategy's profitability ceiling; without it, only the global manager cap applies. Generic nonce, fee,
+  replacement, exact-hash reconciliation, and shutdown behavior lives in
+  [Transaction manager](TXMANAGER.md).
 - **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
   until a fresh post-fill snapshot is published.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives
   validated inventory plus gas snapshots and current fee inputs only when gas accounting is configured.
-- **Addresses + URLs come from `solver.config`**; secrets (`UNISWAP_API_KEY`, the solver key) via `*Env`
+- **Addresses + URLs come from `solvers[].config`**; secrets (`UNISWAP_API_KEY`, the solver key) via `*Env`
   indirection (`os.Getenv` at point of use).
 - **Signer** — the framework's single EOA is the UniswapX **solver** (holds the role on `LiquidLaneUniswapXExecutor`,
   submits `execute`). We do **not** cosign or sign orders in production (that's Uniswap Labs + the swapper);
@@ -197,73 +162,28 @@ assertion because the PR19 ABI has no getter.
 | `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/healthz`, `/ready`; source-IP auth stays at ingress | net-new |
 | `quote_refresh.go` | background inventory and optional gas snapshots, epoch binding, and atomic publication | net-new |
 | `polling.go` | exclusive and public V2 polling; dedup/retry admission and exclusive reconciliation | net-new |
-| `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
+| `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion classification | mirror `rfq` + net-new |
+| `fill_worker.go` | single-goroutine order admission, cancellation, pending-fill tracking, and terminal-result drain | net-new |
 | `chainreader.go` | config-independent executor/route checks plus refreshed inventory/rate and optional gas snapshots | reader port |
-| `strategies/` | UniswapX-local contract, registry, `default`, and `webhook` decisions (§2.1) | net-new |
+| `strategies/` | UniswapX-local contract plus `default` and `webhook` decisions, selected explicitly by `solver.go` (§2.1) | net-new |
 | `order.go` | V2 Dutch codec, hashes, signature/exclusivity validation | net-new |
 | `orderclient.go` | generated-client adapter, authenticated polling, one ≤6 RPS limiter, pagination/body bounds | net-new |
 | `state.go` / `health.go` / `metrics.go` | reservations, quote epochs, exclusive obligations, dedup/backoff/breakers, readiness and metrics | net-new |
 
 **On-chain:** the RFQ contracts repository owns `LiquidLaneUniswapXExecutor.sol`, its interfaces, and
 contract tests. `rfq-integration` consumes a pinned RFQ contracts revision, while this solver vendors only
-the executor ABI and generated binding under `api/bindings/uniswapx/` — see §7/P3.
+the executor ABI and generated binding under `api/bindings/uniswapx/` — see §7 and §10.3.
 
-### 2.4 Configuration (`solver.config`)
+### 2.4 Configuration (`solvers[].config`)
 
-One code path; per-environment differences are pure YAML (CLAUDE.md "config is king"). Secrets via `*Env`
-indirection (read with `os.Getenv` at point of use, never stored in the parsed config). `chain` / `signer` /
-`txManager` / `observability` use the same shared framework schema as the `rfq` profile, with
-UniswapX-specific timing and fee values. The current profile is
-[`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is:
+One code path serves every environment. Exact fields, defaults, timing constraints, and `*Env` secret
+references live in [`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); this section retains
+only cross-field and safety semantics.
 
-```yaml
-chain: { rpcUrl: "${ETH_RPC_URL_MAINNET}", writeRpcUrl: "${WRITE_RPC_URL}", chainId: 1 }
-txManager:
-  confirmations: 2
-  maxFeeGwei: 50
-  tipGwei: 0
-  broadcastTimeoutMs: 5000
-  replacementIntervalMs: 15000
-  pendingTimeoutMs: 300000
-  shutdownTimeoutMs: 60000
-
-solvers:
-  - name: uniswapx-filler
-    config:
-      reactor:  "0x00000011F84B9aa48e5f8aA8B9897600006289Be"  # V2 Dutch Order Reactor (per chain)
-      executor: "0x…LiquidLaneUniswapXExecutor"
-      adapters: ["0x…liquidLaneAdapter"]
-      solverMode: internal
-      tokensToQuote: permissioned
-      permissionedTokens: ["0x…tokenToRedeem"]
-      quoteServer: { listenAddress: ":42080", refreshInterval: 12s, quoteTtl: 30s }
-      orderServer:
-        baseUrl: "https://api.uniswap.org/v2"
-        apiKeyEnv: UNISWAPX_ORDER_API_KEY
-        pollInterval: 1s
-        sources: { exclusiveV2: true, publicV2: true }
-      discounts: { baseUrl: "https://rfq.example", httpTimeout: 2s, minimumValidity: 15s }
-      gas:
-        nativeUsdFeed: "0x…"
-        nativeMaxAge: 1h
-        tokenUsdFeeds: [{ token: "0x…asset", feed: "0x…", maxAge: 1h }]
-      breaker: { maxFailures: 3, window: 5m }
-      strategy: { name: default, config: { priceBufferBps: 20 } }
-```
-
-The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
-skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
-quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
-the quote. With `tipGwei: 0`, the fee-history policy aligned with observed Etherscan Fast behavior avoids
-relying on a potentially unusable node tip suggestion. Suggestions and rewards are advisory and are clamped
-to available headroom; a positive value remains the mandatory operator-controlled floor and fallback.
-`maxFeeGwei` remains the absolute ceiling described in §2.2.
-
-The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
-account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read
-fallbacks. A signed broadcast is never replayed across those endpoints. Startup requires the write endpoint's
-mined and pending nonces to match. Because standard nonce methods cannot reveal a future transaction queued
-beyond a nonce gap, the signer EOA must remain exclusive to this process.
+The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver skips
+gas-state and Chainlink reads; transaction submission still pays dynamically selected fees without passing the
+cost through to the quote. Shared fee, nonce, write-endpoint, replacement, and cancellation rules live in
+[Transaction manager](TXMANAGER.md).
 
 Startup scans the executor's indexed `callers(uint256)` entries for the framework signer and checks
 executor bytecode. In external mode it also requires every configured adapter to authorize the executor as a
@@ -282,9 +202,7 @@ without configured adapters it publishes an empty quote state until the API reco
 
 ### 2.5 Implementation delta vs `rfq` — what reuses, what changes, what's manual
 
-The working checklist for the build: everything below is either lifted from the shipped `rfq` solver,
-deliberately different from it, or an operational step `rfq` never needed. (Re-verified against the local
-RFQ and UniswapX code on 2026-07-20.)
+The comparison below records current reuse boundaries against the local RFQ and UniswapX implementations.
 
 **Reused as-is:**
 
@@ -294,9 +212,9 @@ RFQ and UniswapX code on 2026-07-20.)
   `webhook` strategy).
 - A thin UniswapX reader composes those shared readers for startup route resolution, authorization,
   inventory/rate snapshots, optional gas snapshots, and fill-time quotes (§2.1).
-- Solver scaffolding patterns: `init()` registration + factory, solver-local strategy selection through
-  `strategy: {name, config}`, bounded quote server, poll loop, and calldata-only submission through the
-  shared `txmanager`.
+- Solver scaffolding patterns: exported factory and pure validator bound by the command descriptor,
+  solver-local strategy selection through `strategy: {name, config}`, bounded quote server, poll loop, and
+  calldata-only submission through the shared `txmanager`.
 
 **Done differently from `rfq` (the real implementation work):**
 
@@ -306,11 +224,11 @@ RFQ and UniswapX code on 2026-07-20.)
 | 2 | Quote wire contract | Backend schema, `x-rfq-shared-secret`, 204 decline, 422 on schema violation | UniswapX quote schema, **`204` decline**, `requestId` echo, independent opposing-probe handling; published source IPs are enforced at ingress, not through an invented application header — §4.1/§10.1 |
 | 3 | Quoted price policy | Quotes the raw oracle `getAmountOut` (no margin) | UniswapX-local strategy applies the configured price buffer and optional gas-aware floor; below an enabled floor ⇒ decline — §2.1, §5 |
 | 4 | `EXACT_OUTPUT` | Hard-rejected at validation | UniswapX prices the concrete requested output with current capacity and optional gas, returning the required input — §2.1, §5 |
-| 5 | Order ingestion | Polls own backend `GET /orders`, decodes the Symbiotic Reactor order from the backend payload | Polls Uniswap `GET /orders?filler=<executor>` (≤6 RPS); **net-new V2 Dutch order codec + Permit2 witness EIP-712 + cosignature recovery** (`order.go`, the riskiest unit — P2) — §3.3, §4.2 |
+| 5 | Order ingestion | Polls own backend `GET /orders`, decodes the Symbiotic Reactor order from the backend payload | Polls Uniswap `GET /orders?filler=<executor>` (≤6 RPS); **net-new V2 Dutch order codec + Permit2 witness EIP-712 + cosignature recovery** (`order.go`, the riskiest unit) — §3.3, §4.2 |
 | 6 | Pre-fill validation | Order-deadline + strategy↔order binding checks | Those **plus**: cosignature recovers to the swapper-authorized per-order `cosigner`, `exclusiveFiller == our executor`, decay window still fillable, resolved output at current block ≥ quoted floor — §6 |
 | 7 | Settlement call | `Executor.fill(order, protocolSig, swaps[], discountSwaps[], executorData)` on our Reactor | `LiquidLaneUniswapXExecutor.execute(SignedOrder, FillCall)` → Uniswap reactor `executeWithCallback` → callback routes through direct `swap` or signed `discountSwap`; native output is declined in v1 — §7 |
 | 8 | Failure economics | Failed fill ⇒ order re-armed next poll; no external penalty | **Fade penalty regime**: fail-closed gates before gas, local breaker, honor `blockUntilTimestamp`, quote only what inventory certainly fills — §6 |
-| 9 | Private discounts | Offer discovery, fill-time signed resolution, and `discountSwap` calldata | Reuse shared discovery, route matching, candidate construction, and fresh-term validation; keep resolve timing and executor calldata inside UniswapX; implemented across P3/P5 |
+| 9 | Private discounts | Offer discovery, fill-time signed resolution, and `discountSwap` calldata | Reuse shared discovery, route matching, candidate construction, and fresh-term validation; keep resolve timing and executor calldata inside UniswapX |
 
 **Manual / operational (no `rfq` analogue — `rfq` only needed a shared secret with our own backend):**
 
@@ -321,15 +239,15 @@ RFQ and UniswapX code on 2026-07-20.)
   the executor authorized as
   `isFiller`/`marketMaker` on each sourced adapter, confirm adapter `ALLOCATE_ROLE` — §10.3.
 - Vendoring: `LiquidLaneUniswapXExecutor` ABI → `api/bindings/uniswapx/`, `uniswapx-service`
-  `swagger.json` → generated poll client, hand-vendored quote-webhook structs — §4.3, P0.
+  `swagger.json` → generated poll client, hand-vendored quote-webhook structs — §4.3.
 
 ---
 
 ## 3. UniswapX protocol reference (verified ground truth)
 
-Collected and source-verified during planning; **re-verified 2026-07-20** against the UniswapX repo,
-the uniswapx-sdk `constants.ts`, and developers.uniswap.org. Treat as the contract-of-record; re-verify
-addresses against the live deployments page before going live.
+The protocol facts below were collected from the UniswapX repository, uniswapx-sdk `constants.ts`, and
+developers.uniswap.org. Vendored artifacts are this repository's build contract; re-verify volatile addresses,
+chain support, limits, and onboarding policy against upstream before going live.
 
 ### 3.1 Auction model & order versions per chain
 
@@ -340,48 +258,16 @@ fillers. A non-exclusive filler can override exclusivity only by paying the swap
 exclusivity, `ExclusivityLib` reverts `NoExclusiveOverride`) no override is possible at all; Uniswap's
 hard-quote cosigner sets a nonzero default.
 
-Mainnet RFQ is now branded **"UniswapX RFQ V2"** — an *off-chain* redesign (indicative quotes pre-signature
-vs **hard quotes** post-signature, with hard-quoters "held fully accountable"). On-chain settlement is
-unchanged: it still runs the `V2DutchOrderReactor`. Consequence for us: fade discipline (§6) is
-program-critical, not just polite.
+The implementation targets Ethereum V2 Dutch orders with time-based decay. V3/block-based orders remain out
+of scope until a second codec is justified. Fade discipline (§6) is program-critical regardless of the
+onboarding brand or current exclusivity window.
 
-| Chain | Order type | Decay | Quoter-relevant? |
-|---|---|---|---|
-| **Ethereum mainnet (chainId 1)** | **V2** Dutch | time-based (`decayStartTime`/`decayEndTime`); exclusivity ~24 s (2 blocks) | **Yes — our first target** |
-| Tempo, Base, Arbitrum, Avalanche, BNB, Unichain, Robinhood Chain | **V3** Dutch | block-based, nonlinear (`decayStartBlock`, `relativeBlocks[]`/`relativeAmounts[]`); exclusivity ~2–4 s | Yes (later) |
+### 3.2 Chain and contract selection
 
-- Exclusivity window on mainnet is **"currently about 24 seconds (2 blocks)"** — long enough that ≤1 s
-  polling (§4.2) comfortably fits inside it.
-- The chain matrix keeps expanding — **confirm the live matrix with Uniswap** (§10). A V3 reactor is also deployed on mainnet but docs state mainnet RFQ does
-  not route to it today.
-
-### 3.2 Deployed addresses (mainnet, chainId 1 — verify before use)
-
-| Contract | Address |
-|---|---|
-| V2 Dutch Order Reactor | `0x00000011F84B9aa48e5f8aA8B9897600006289Be` |
-| V3 Dutch Order Reactor | `0x0000000015757c461808EA25Eb309638B62681cf` |
-| OrderQuoter | `0xc6ef4C96Ee89e48Eff1C35545DBEED4Ad8dAC9D4` |
-| Permit2 (all chains except zkSync Era — out of scope) | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
-| Arbitrum V3 Reactor | `0xB274d5F4b833b61B340b654d600A864fB604a87c` |
-| Base DutchV3 Reactor | `0x000000008a8330B5d1F43A62Bf4C673A49f27ba0` |
-
-Reactor constructor (V2 and V3): `constructor(IPermit2 _permit2, address _protocolFeeOwner)`.
-
-**Testnet reactors (from the SDK `REACTOR_ADDRESS_MAPPING`, NOT the docs deployments page — the docs omit
-testnets).** These exist on-chain and are usable for settlement/fill testing (§8); there is **no RFQ *server***
-on these chains, so the quote/order-delivery half can't be driven by Uniswap there.
-
-| Chain | Order type | Reactor address |
-|---|---|---|
-| **Sepolia (11155111)** | **Dutch V2** | `0x0e22B6638161A89533940Db590E67A52474bEBcd` |
-| Unichain Sepolia (1301) | Hybrid (v4) | `0x000000000C75276D956cc35218ca8f132D877957` |
-| **Tempo (4217)** | Dutch V3 | `0x00000000fc1E66C9f582566EAd00108e55F1c0C6` (RPC `https://rpc.tempo.xyz`) |
-
-Source of truth for deployed addresses is the SDK `sdks/uniswapx-sdk/src/constants.ts` `REACTOR_ADDRESS_MAPPING`
-(Permit2 canonical on all incl. Sepolia). The public `uniswapx-tool` supports production-chain quote/order
-flows; `Env.Beta` and `Env.Prod` both use the normal gateway with an environment flag. Testnets are reachable
-only for direct on-chain settlement.
+Do not copy the live chain matrix or reactor addresses into this plan. Resolve `REACTOR_ADDRESS_MAPPING` and
+Permit2 from the current uniswapx-sdk/deployments source, confirm the enabled order version with Uniswap, pin
+the selected addresses in the YAML profile, and validate the deployed executor's immutable Reactor out of
+band. Testnet contracts may support direct settlement without providing an RFQ quote/order server.
 
 ### 3.3 V2 Dutch order struct & cosignature
 
@@ -442,9 +328,9 @@ and `uniswapx-service` (order pool, Joi + an OpenAPI `swagger.json`).
   sent in randomized order — the pair is **indistinguishable and uncorrelatable by design**. So: no
   probe-pairing logic anywhere; price every request independently and honestly. For us the probe's
   reverse direction (vault-asset → RWA) is structurally unfillable and auto-declines (§1 directionality).
-- **Auth:** the public quote schema specifies no signed/header scheme. The FAQ publishes source IPs to
-  allowlist (Beta `3.135.148.114`, Prod `3.138.88.28`); confirm any additional shared header during
-  onboarding. Until then, authenticate at the ingress by source IP rather than inventing a required header.
+- **Auth:** the public quote schema specifies no signed/header scheme. Enforce Uniswap's current published
+  source-IP allowlist at ingress and confirm any additional shared header during onboarding; do not hardcode
+  a copied address list into the solver.
 - **Decline:** empty **`204 No Content`**, as required by the current Become a Quoter guide and FAQ. Never
   use `404`, which is an error rather than a normal non-quote.
 - **Response must echo the (obfuscated) `requestId` received** or it's dropped (`RFQ_FAIL_REQUEST_MATCH`).
@@ -655,7 +541,7 @@ abstraction):
 - ABI vendored → `api/bindings/uniswapx/`; executor calldata packed via abigen `--v2` (never
   `abi.Pack("...")`).
 - Contract coverage includes mock-Reactor Forge tests. The integration harness also carries a captured-order
-  mainnet-Reactor replay; a self-cosigned canonical-Reactor test remains P6.
+  mainnet-Reactor replay; a self-cosigned canonical-Reactor test remains an open gate in §10.3.
 
 **Optional follow-up — native output (not a launch blocker).** Canonical UniswapX Reactors accept native
 output from a callback executor (see Uniswap's
@@ -671,11 +557,9 @@ Never unwrap the executor's full standing WETH balance.
 
 ## 8. Validation & testing strategy
 
-The public quoter onboarding flow is a **mainnet/Beta** program. The public `uniswapx-tool` currently exposes
-production chain profiles; separately, the SDK maps a deployed **Sepolia Dutch V2 reactor**
-(`0x0e22B6…BEBcd`) + canonical Permit2. Therefore settlement can be exercised on Sepolia or a mainnet fork,
-while the quote-request half stays synthetic until we capture real Beta traffic. Confirm continued Sepolia
-support and the exact Beta order transport during onboarding (§10.1).
+The public quoter onboarding flow is a mainnet/Beta program. Exercise settlement against a V2 reactor from
+the current SDK mapping or a mainnet fork; keep quote-request fixtures synthetic until a real Beta payload is
+captured. Confirm the available testnet and exact Beta order transport during onboarding (§10.1).
 
 **Layer 1 — quote-path, synthetic & local (no Uniswap, no funds).** We *are* the RFQ server: an `httptest`
 harness + a small local mock POSTs schema-faithful requests (incl. the opposing probe with its distinct
@@ -683,11 +567,9 @@ obfuscated `requestId`, §4.1) at our webhook — asserting pricing, empty-`204`
 response shape, and `requestId` echo. The public guide's `quoteId` differs from the public Joi schema, so a
 captured Beta payload remains required before calling the fixture bit-for-bit faithful (§4.1, §10.1).
 
-**Layer 2 — settlement, real Sepolia or mainnet fork (no funds).** Preferred: the **live Sepolia Dutch V2
-reactor** (`0x0e22B6…BEBcd`, §3.2) + canonical Permit2 — a persistent, shareable public testbed; deploy our
-`LiquidLaneAdapter` + vault + `LiquidLaneUniswapXExecutor` on Sepolia.
-Alternative: an Anvil **mainnet fork** where canonical Permit2 + the real `V2DutchOrderReactor` already exist
-(or deploy our own via UniswapX `DeployDutchV2.s.sol`, ctor `(IPermit2, protocolFeeOwner)`). Either way, drive
+**Layer 2 — settlement, current V2 testnet or mainnet fork (no funds).** Use a V2 reactor and Permit2 from
+the current SDK mapping, or an Anvil mainnet fork with the deployed contracts; otherwise deploy a local V2
+reactor through UniswapX's script. Drive
 the whole
 loop ourselves: build a V2 order as swapper → sign Permit2 witness → **self-cosign with our test key**
 (per-order cosigner) → `LiquidLaneUniswapXExecutor.execute(signedOrder, callbackData)` → assert the swapper received
@@ -721,48 +603,14 @@ promotion. Do Layers 1–3 exhaustively first; use **minimum-size orders** in Be
 
 ---
 
-## 9. Build phases (code)
+## 9. Implementation status
 
-Each phase is a reviewable increment. A cross-repository phase is complete only after its changes are landed
-in the owning repository and the integration harness pins the resulting revision.
-
-- [x] **P0 — Scaffold + codegen.** Vendor UniswapX V2 reactor + Permit2 ABIs → `api/bindings/uniswapx/`;
-  vendor `uniswapx-service/swagger.json` spec version 2.0.0 → generated typed poll client; scaffold the
-  `uniswapx` package + `init()` register + blank-import from `main`. CGO-free build holds.
-- [x] **P1 — UniswapX-local strategy layer.** Local contract + registry + `default`/`webhook`, background
-  chain and optional gas snapshot, request-scoped exact-input/output pricing, and independent fill decision tests are present. `DiscountID` flows
-  through strategy plans and the solver resolves fresh signed terms before execution. RFQ and UniswapX
-  default quoting reuse `QuoteTask`; RFQ, LI.FI, and UniswapX default filling reuse `FillTask` while
-  keeping their strategy contracts, protocol mapping, and lifecycle separate.
-- [x] **P2 — V2 order codec.** V2 Dutch serialize/parse and Permit2 witness/cosignature validation have
-  golden/parity coverage. Legacy V1 limit orders are deliberately unsupported; no premature V3 abstraction.
-- [ ] **P3 — `LiquidLaneUniswapXExecutor.sol`.** Land the contract in the canonical RFQ repository with typed
-  direct + signed-discount routes, actual balance-delta enforcement, same-token multi-output settlement, and
-  mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
-  and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
-- [ ] **P4 — Quote webhook completion.** The bounded stateless server, local strategy pricing, health,
-  readiness, metrics, phase-agnostic `v1`/`v2` and zero-swapper handling, empty-`204` decline, ingress-owned
-  source-IP authentication, native-output decline, and request tests exist. Replay a captured Beta payload
-  before marking the phase complete.
-- [x] **P5 — Ingestion + execution completion.** Authenticated bounded polling, validation, preflight,
-  async txmanager submission, receipts, pending-fill reservations, breaker, retries, and signed-discount
-  discovery/resolution/calldata exist. Deadline, fee, nonce, exact-hash, readiness, and shutdown semantics are
-  implemented as described in §2.2 and §6. Released capacity stays unavailable until a post-fill snapshot.
-  Exclusive obligations are tracked through `decayStartTime` from admission (including execution-invalid
-  awarded orders), recent terminal history is recovered after
-  startup/poll gaps, and confirmed terminal receipts are batch-reconciled before clearing obligations,
-  opening the independent local fade breaker for live/runtime misses, or recording a startup-only historical
-  miss without a new breaker window.
-- [ ] **P6 — Packaging + E2E.** The isolated local stack now passes quote → order → on-chain fill for
-  exclusive V2 exact-input/exact-output/same-token multi-output, decaying public V2, public V2 with an
-  exclusivity override, and a forced signed-discount-only route; the smoke test decodes executor calldata
-  and verifies direct/private route
-  selection. The local matrix also covers 240-request quote bursts, replay/collision/body/auth conformance,
-  three concurrent fill waves, forced-discount concurrency, phase-agnostic stateless quote pressure, soak, solver
-  restart, and temporary discount-backend/RPC outages. The integration harness contains a captured-order
-  replay against the canonical mainnet Reactor. Remaining: land and pin the executor, add the self-cosigned
-  canonical-Reactor case, then complete the Beta five-fill qualification and record the transaction hashes
-  (§10).
+The generated order client, V2 codec/signature checks, quote server, solver-local strategies, direct/private
+LiquidLane planning, authenticated polling, preflight, reservations, breaker, fade reconciliation, and
+transaction submission are implemented. The local integration matrix covers exact-input, exact-output,
+same-token multi-output, public/exclusive orders, signed discounts, concurrency, restart, and dependency
+outages. Remaining cross-repository landing, captured-Beta replay, canonical-Reactor, and qualification gates
+are tracked only in §10.
 
 ---
 
@@ -770,30 +618,24 @@ in the owning repository and the integration harness pins the resulting revision
 
 Tracked operational and onboarding steps — **update as items start/finish/drop** (CLAUDE.md plan-sync).
 
-### 10.1 Confirm with Uniswap (Henrique / Andrey) — blockers to going live
-- [ ] **Testnet posture:** the SDK maps a Sepolia Dutch V2 reactor (`0x0e22B6…BEBcd`, §3.2), while public
-      quoter onboarding targets mainnet/Beta. Confirm whether Sepolia settlement remains supported and
-      whether any testnet quote/order service exists.
-- [ ] **Quote-webhook auth scheme** — exact header/secret (no signed scheme in source; FAQ publishes fixed
-      RFQ source IPs to whitelist: Beta `3.135.148.114`, Prod `3.138.88.28`).
-- [x] **Decline status code:** empty HTTP `204`, per the current Become a Quoter guide.
-- [x] **Order delivery:** RESOLVED — order webhooks are **deprecated for new integrations** (Filler FAQ);
-      delivery is **poll-only, `GET /orders` at ≤6 RPS**. Residual TODO: confirm poll auth + exact
-      rate-limit enforcement at onboarding.
+Stable quote, polling, and fade contracts live in §4 and §6. This checklist contains only unresolved
+onboarding, deployment, and qualification work.
+
+### 10.1 Confirm with Uniswap — blockers to going live
+- [ ] **Testnet posture:** resolve the current V2 testnet contracts from the SDK mapping and confirm whether
+      any testnet quote/order service exists; public quoter onboarding otherwise targets mainnet/Beta.
+- [ ] **Quote-webhook auth scheme** — confirm the current ingress source-IP allowlist and any additional
+      header/secret directly from Uniswap's onboarding contract.
+- [ ] **Order-poll authentication and exact rate-limit enforcement** for onboarding.
 - [ ] **Quote-webhook registration** — how we register our quote URL, filler addr, `chainIds`,
       exclusive-filler status (the `WebhookConfiguration` is S3/Uniswap-provisioned).
 - [ ] **Live chain matrix** for RFQ quoting and the order versions enabled for our onboarding account.
 - [ ] **Real order flow for our assets** — is there meaningful RFQ flow for *our* vault collaterals on
       mainnet? (Determines whether quoting is worth it before the secondary-DEX hop.)
-- [x] **Published limits:** quote response ≤500ms on Ethereum and ≤250ms on other chains; quote traffic is
-      expected at about 1 RPS on Ethereum; order polling is capped at 6 RPS.
-- [x] **`uniswapx-tool` source access:** the repository is public. Any separate reference quoter or private
-      onboarding artifact still needs to be requested explicitly.
 - [ ] **Captured real Beta quote-request payloads / a recording** to replay in CI (makes Layer-1 testing
       bit-for-bit faithful instead of schema-faithful).
-- [x] **Order-service spec** — upstream GitHub `swagger.json` version 2.0.0 is vendored and generates the
-      current typed Dutch V2 response. Confirm separately whether a spec exists for the
-      parameterization-api (quote) surface.
+- [ ] **Quote parameterization spec** — confirm whether a machine-readable contract exists for the quote
+      request/response surface.
 
 ### 10.2 Onboarding
 - [ ] Submit the quoter intake form: **https://developers.uniswap.org/quoter**.
@@ -803,7 +645,8 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 - [ ] Hand Uniswap our **quote-server URL** + **filler (`LiquidLaneUniswapXExecutor`) address**.
 
 ### 10.3 On-chain prerequisites
-- [ ] Land, review, and deploy `LiquidLaneUniswapXExecutor.sol` (mainnet).
+- [ ] Land and review `LiquidLaneUniswapXExecutor.sol`, regenerate the vendored ABI, pin the owning RFQ
+      revision in the integration harness, and pass a canonical-Reactor self-cosign test before deployment.
 - [ ] Deploy it with the V2 Reactor, owner, and initial caller addresses; fund the tx-sending caller EOA
       with ETH for gas (the prototype Reactor address is immutable, not owner-set).
 - [ ] Configure the production signed-discount offer source. Local discovery, fill-time term resolution,
@@ -876,22 +719,9 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 
 ### Internal repositories
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
-- Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
-  LiquidLane allocator + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
+- Strategy architecture (root-local explicit selection + `strategies/types` + `strategies/{default,webhook}`, shared
+  LiquidLane allocator + `internal/webhook`) — [`STRATEGIES.md`](STRATEGIES.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - The RFQ contracts repository owns on-chain adapters and the UniswapX executor. `rfq-integration` pins the
   landed RFQ contracts revision. This solver repository contains only the generated/vendored executor ABI
   binding needed to build calldata.
-
-### Beta program facts
-- Gate: **5 valid exclusive fills** (before `decayStartTime`) → submit tx hashes → manual promotion.
-- Env: `UNISWAP_API_KEY` (all Beta requests), `UNISWAP_PRIVATE_KEY` (CLI `submit`).
-- Quote SLA: **≤500ms on Ethereum, ≤250ms on other chains**; decline with an empty HTTP `204` (§4.1).
-- Won orders: **poll-only, `GET /orders` at ≤6 RPS** (order webhooks deprecated for new integrations).
-- Fade penalty: **15 min**, exponential for consecutive fades; `blockUntilTimestamp` surfaced.
-- Tokens: **no allow-list** (there *is* a blocklist — unsupportedtokens.uniswap.org) — open
-  `tokenIn`/`tokenOut`; we **decline** (empty `204`) anything we can't price. Our fillable universe =
-  pairs where `tokenIn` is redeemable through a configured direct route or a valid advertised signed-discount
-  route **and** `tokenOut` is that adapter's ERC-20 vault asset. Native-ETH output is currently declined and
-  remains an optional post-v1 extension (§7); the universe remains narrow by construction until the
-  secondary-DEX hop.

@@ -74,6 +74,10 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 
 func newDefaultTestStrategy() types.Strategy { return defaultstrategy.New() }
 
+func testOrder(s *store) *orderRecord {
+	return cloneOrder(s.orders["o1"])
+}
+
 func maxUint256() *big.Int {
 	return new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 }

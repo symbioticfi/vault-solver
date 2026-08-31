@@ -59,17 +59,36 @@ func TestBidInputMarshalJSON(t *testing.T) {
 			}),
 			GasLimit: 2_000_000,
 		},
-		PendingAuctions: []PendingAuction{{
-			ID:        "a0",
-			SentAt:    time.Unix(9, 0).UTC(),
-			Won:       true,
-			ExpiresAt: time.Unix(20, 0).UTC(),
-		}},
+		PendingAuctions: []PendingAuction{
+			{
+				ID:        "alpha",
+				SentAt:    time.Date(2030, time.January, 2, 2, 59, 5, 1, time.UTC),
+				Won:       false,
+				ExpiresAt: time.Date(2030, time.January, 2, 3, 4, 5, 1, time.UTC),
+			},
+			{
+				ID:        "zeta",
+				SentAt:    time.Date(2030, time.January, 2, 3, 3, 5, 0, time.UTC),
+				Won:       true,
+				ExpiresAt: time.Date(2030, time.January, 2, 3, 8, 5, 0, time.UTC),
+			},
+		},
 	}
 	b, err := json.Marshal(input)
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
+	var wire struct {
+		PendingAuctions json.RawMessage `json:"pendingAuctions"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("decode bid input JSON: %v", err)
+	}
+	const wantPendingAuctions = `[{"id":"alpha","sentAt":"2030-01-02T02:59:05.000000001Z","won":false,"expiresAt":"2030-01-02T03:04:05.000000001Z"},{"id":"zeta","sentAt":"2030-01-02T03:03:05Z","won":true,"expiresAt":"2030-01-02T03:08:05Z"}]`
+	if string(wire.PendingAuctions) != wantPendingAuctions {
+		t.Fatalf("pendingAuctions JSON = %s, want %s", wire.PendingAuctions, wantPendingAuctions)
+	}
+
 	js := string(b)
 	for _, want := range []string{
 		`"timeoutMs":400`,
@@ -92,8 +111,6 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		`"executorMinDeposit":"100"`,
 		`"gasPrices":{"tokenOutPerNative":{"0x00000000000000000000000000000000000000ee":"1234567890123456789012345"}}`,
 		`"price":"123456789"`,
-		`"pendingAuctions":`,
-		`"won":true`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("json %s missing %s", js, want)

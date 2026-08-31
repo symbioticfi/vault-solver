@@ -24,10 +24,12 @@ type exampleConfigFile struct {
 // TestExampleConfigParses loads the committed Sepolia profile and runs its solver block through
 // parseConfig, so the example can't drift out of sync with the parser/validation.
 func TestExampleConfigParses(t *testing.T) {
+	t.Setenv("OEV_MORPHO_API_URL", "https://api.morpho.org/graphql")
 	data, err := os.ReadFile("../../../config/redstone-oev.example.yaml")
 	if err != nil {
 		t.Fatalf("read example config: %v", err)
 	}
+	data = []byte(os.ExpandEnv(string(data)))
 	var top exampleConfigFile
 	if err := yaml.Unmarshal(data, &top); err != nil {
 		t.Fatal(err)
@@ -47,6 +49,10 @@ func TestExampleConfigParses(t *testing.T) {
 	}
 	if cfg.Gas == nil {
 		t.Fatal("example settings drifted: shared gas accounting must stay enabled")
+	}
+	if cfg.DryRun || strategyCfg.TestMonitor != nil || strategyCfg.MorphoAPIURL == "" {
+		t.Fatalf("example runtime profile drifted: dryRun=%v testMonitor=%+v morphoApiUrl=%q",
+			cfg.DryRun, strategyCfg.TestMonitor, strategyCfg.MorphoAPIURL)
 	}
 }
 
@@ -159,6 +165,7 @@ ws:
 executor: "0xfdFB1862a53a974b166d1f0D012f524Ebd2e0EbD"
 adapter: "0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b"
 callback: "0x7Aa367073B5c2b6Db34cF843d2f1FEbd9dC042B1"
+dryRun: true
 gas:
   nativeUsdFeed: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
   nativeMaxAge: 1h
@@ -215,6 +222,9 @@ func TestParseConfigValid(t *testing.T) {
 	if cfg.MaxBidWei == nil || cfg.MaxBidWei.String() != "1000000000000000" {
 		t.Fatalf("maxBidWei = %v, want 1000000000000000", cfg.MaxBidWei)
 	}
+	if !cfg.DryRun {
+		t.Fatal("dryRun=true was not parsed")
+	}
 }
 
 func TestParseConfigDefaults(t *testing.T) {
@@ -253,6 +263,33 @@ strategy:
 	}
 	if strategyCfg.CallbackAuthTTL != time.Minute {
 		t.Fatalf("callback auth TTL default wrong: %v, want %v", strategyCfg.CallbackAuthTTL, time.Minute)
+	}
+	if cfg.DryRun {
+		t.Fatal("dryRun must default to false")
+	}
+}
+
+func TestParseConfigTestMonitor(t *testing.T) {
+	cfg, err := decodeCfg(t, wsline+addrs+strategyConfigBlock(`    testMonitor:
+      markets:
+        - "0x6209dbd022c20923c071d7183d7a9729a75596136540d474a27d08ef31f440a5"
+      positions:
+        - "0x629d764eC8563AFA701709B52c1a215e865632dE"
+    bid: {bidEth: "0.0005"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategyCfg := parseDefaultStrategyConfigForTest(t, cfg)
+	if strategyCfg.TestMonitor == nil || len(strategyCfg.TestMonitor.Markets) != 1 ||
+		len(strategyCfg.TestMonitor.Positions) != 1 {
+		t.Fatalf("test monitor = %+v", strategyCfg.TestMonitor)
+	}
+	if strategyCfg.TestMonitor.Markets[0] != common.HexToHash(mkt) {
+		t.Fatalf("test monitor market = %s", strategyCfg.TestMonitor.Markets[0].Hex())
+	}
+	if strategyCfg.TestMonitor.Positions[0] != common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE") {
+		t.Fatalf("test monitor position = %s", strategyCfg.TestMonitor.Positions[0].Hex())
 	}
 }
 
@@ -356,6 +393,10 @@ func TestParseConfigErrors(t *testing.T) {
 		"removed minBundleProfitLoan":    wsline + addrs + api + feedLine + "bid: {bidEth: \"0.1\", minBundleProfitLoan: \"1\"}",
 		"negative minBundleProfitBidBps": wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", minBundleProfitBidBps: -1}\n") + feedLine,
 		"bad totalBundleProfitBps":       wsline + addrs + strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.1\", totalBundleProfitBps: 10001}\n") + feedLine,
+		"empty test monitor markets":     wsline + addrs + strategyConfigBlock("    testMonitor: {positions: [\"0x629d764eC8563AFA701709B52c1a215e865632dE\"]}\n    bid: {bidEth: \"0.1\"}\n"),
+		"empty test monitor positions":   wsline + addrs + strategyConfigBlock("    testMonitor: {markets: [\""+mkt+"\"]}\n    bid: {bidEth: \"0.1\"}\n"),
+		"invalid test monitor market":    wsline + addrs + strategyConfigBlock("    testMonitor: {markets: [nope], positions: [\"0x629d764eC8563AFA701709B52c1a215e865632dE\"]}\n    bid: {bidEth: \"0.1\"}\n"),
+		"invalid test monitor position":  wsline + addrs + strategyConfigBlock("    testMonitor: {markets: [\""+mkt+"\"], positions: [nope]}\n    bid: {bidEth: \"0.1\"}\n"),
 		"zero maxTxGasPrice":             wsline + addrs + api + feedLine + "maxTxGasPriceWei: \"0\"",
 		"zero maxBidWei":                 wsline + addrs + api + feedLine + "maxBidWei: \"0\"",
 		"bad maxBidWei":                  wsline + addrs + api + feedLine + "maxBidWei: nope",

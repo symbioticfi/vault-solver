@@ -10,10 +10,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-var weiPerEth = exp10(18)
+var weiPerEth = chain.Exp10(18)
 
 const (
 	skipBidCap             = "bid_cap"
@@ -49,7 +51,7 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 		if !ok {
 			return
 		}
-		go s.handleAuction(ctx, a, start)
+		s.auctionWG.Go(func() { s.handleAuction(ctx, a, start) })
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":
@@ -101,17 +103,11 @@ func (s *Solver) handleLiquidationResult(raw []byte) {
 
 func (s *Solver) handleBlacklisted(raw []byte) {
 	var b Blacklisted
-	_ = json.Unmarshal(raw, &b)
+	if err := json.Unmarshal(raw, &b); err != nil {
+		s.log.Error(err, "malformed blacklisted frame; halting bidding")
+	}
 	s.breaker.blacklist()
 	s.log.Error(errors.New("api key blacklisted"), "halting bidding", "msg", b.Data.Msg)
-}
-
-func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
-	a, start, ok := s.parseAuctionFrame(raw)
-	if !ok {
-		return
-	}
-	s.handleAuction(ctx, a, start)
 }
 
 func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool) {
@@ -147,14 +143,14 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	}
 	bidCtx, cancel := auctionBidContext(ctx, a, start)
 	defer cancel()
-	d := s.buildBidWithContext(bidCtx, a, time.Now)
+	d := s.buildBid(bidCtx, a, time.Now)
 	s.metrics.latency(time.Since(start))
 
 	if d.skip != "" {
 		s.logSkip(a.ID, d)
 		return
 	}
-	if s.dryRun {
+	if s.cfg.DryRun {
 		s.metrics.bid()
 		s.log.Info("DRY-RUN would bid", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 			"bidEth", d.solve.Data.Bid)
@@ -168,7 +164,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 		s.log.Info("bid NOT sent (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
 		return
 	}
-	s.reserve(d.nonce, time.Now(), d.callback, a.ID)
+	s.reserve(d.nonce, time.Now(), a.ID)
 	s.metrics.bid()
 	s.log.Info("bid sent", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid)
@@ -207,9 +203,9 @@ func (s *Solver) bidExpired(a AuctionMessage, start time.Time) bool {
 }
 
 // staleStateGate fails closed when the solver-owned Executor accounting is older than cfg.ExecutorStateMaxAge.
-func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
+func (s *Solver) staleStateGate(auctionID string, st cachedState, ok bool, now time.Time) string {
 	kv := make([]any, 0, 4)
-	if st, ok := s.state.load(); !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
+	if !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
 		var at time.Time
 		if ok {
 			at = st.UpdatedAt
@@ -232,20 +228,13 @@ func cacheAge(at, now time.Time) string {
 }
 
 func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
-	return s.buildBidWithContext(ctx, a, nowFn)
-}
-
-func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
 	now := nowFn()
 	if tripped, _ := s.breaker.tripped(now); tripped {
 		return bidDecision{skip: "breaker"}
 	}
-	if skip := s.staleStateGate(a.ID, now); skip != "" {
-		return bidDecision{skip: skip}
-	}
 	st, ok := s.state.load()
-	if !ok {
-		return bidDecision{skip: "state_unknown"}
+	if skip := s.staleStateGate(a.ID, st, ok, now); skip != "" {
+		return bidDecision{skip: skip}
 	}
 	if st.Exec.Locked {
 		return bidDecision{skip: "signer_locked"}
@@ -253,13 +242,13 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
 		return bidDecision{skip: depositSkip}
 	}
-	inFlight := s.inFlightSnapshot()
+	pendingAuctions := s.inFlightSnapshot(now)
 	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
 		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
 		return bidDecision{skip: "strategy_error"}
 	}
-	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, inFlight, gasPrice))
+	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, pendingAuctions, gasPrice))
 	if err != nil {
 		s.log.Error(err, "strategy failed", "auction", a.ID)
 		return bidDecision{skip: "strategy_error"}

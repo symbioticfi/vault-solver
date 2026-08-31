@@ -5,6 +5,9 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"reflect"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,6 +37,7 @@ type executionTestReader struct {
 	fillQuoteRoutes  [][]liquidlane.Route
 	fillQuoteAmounts []*big.Int
 	snapshot         fillSnapshot
+	quoteSnapshot    snapshot
 	fillSnapshotFn   func([]liquidlane.Route, *big.Int) fillSnapshot
 	now              time.Time
 	latestBlockReads int
@@ -45,7 +49,7 @@ func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
 func (failingListener) Close() error                { return nil }
 func (failingListener) Addr() net.Addr              { return &net.TCPAddr{} }
 
-func (r *executionTestReader) resolveRoutes(
+func (r *executionTestReader) ResolveRoutes(
 	_ context.Context,
 	adapters []common.Address,
 ) ([]liquidlane.Route, error) {
@@ -53,7 +57,7 @@ func (r *executionTestReader) resolveRoutes(
 	return append([]liquidlane.Route(nil), r.resolved...), nil
 }
 
-func (r *executionTestReader) validateGasTokens([]liquidlane.Route) error { return nil }
+func (r *executionTestReader) ValidateGasTokens([]liquidlane.Route) error { return nil }
 
 func (r *executionTestReader) latestBlockTime(context.Context) (time.Time, error) {
 	r.latestBlockReads++
@@ -75,7 +79,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	strategy := &executionTestStrategy{plan: &strategytypes.FillPlan{Routes: []strategytypes.FillRoute{{
 		RouteID: route.ID, CapacityID: route.CapacityID, Adapter: route.Adapter,
 		AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100), MinAmountOut: big.NewInt(90),
-		ReservedAmountOut: big.NewInt(100), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+		ReservedAmountOut: big.NewInt(100), DiscountID: new(common.HexToHash(testDiscountID)),
 	}}}}
 	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
 	termsDeadline := now.Add(50 * time.Second).Unix()
@@ -135,8 +139,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 		reader:   reader,
 		strategy: strategy, txm: txm,
 		discounts: provider, log: logr.Discard(),
-		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+		orderState: make(map[common.Hash]trackedOrder),
 	}
 	order := &resolvedOrder{
 		Encoded: []byte{1}, Signature: []byte{2}, Hash: common.HexToHash("0x1"), Source: orderSourcePublicV2,
@@ -189,7 +192,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		{
 			RouteID: discountRoute.ID, CapacityID: discountRoute.CapacityID, Adapter: discountRoute.Adapter,
 			AmountIn: big.NewInt(40), ExpectedAmountOut: big.NewInt(40), MinAmountOut: big.NewInt(40),
-			ReservedAmountOut: big.NewInt(40), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+			ReservedAmountOut: big.NewInt(40), DiscountID: new(common.HexToHash(testDiscountID)),
 		},
 	}}}
 	fullDirect := liquidlane.FillQuote{
@@ -272,8 +275,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		reader: reader, strategy: strategy,
 		txm:       &executionTestTxManager{result: make(chan txmanager.Result, 1)},
 		discounts: provider, log: logr.Discard(),
-		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+		orderState: make(map[common.Hash]trackedOrder),
 	}
 	order := &resolvedOrder{
 		Encoded: []byte{1}, Signature: []byte{2}, Hash: common.HexToHash("0x1"), Source: orderSourcePublicV2,
@@ -299,9 +301,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 	}
 }
 
-func hashPointer(hash common.Hash) *common.Hash { return &hash }
-
-func (r *executionTestReader) fillSnapshot(
+func (r *executionTestReader) Fill(
 	_ context.Context,
 	routes []liquidlane.Route,
 	_ common.Address,
@@ -317,7 +317,16 @@ func (r *executionTestReader) fillSnapshot(
 	return r.snapshot, nil
 }
 
-func (r *executionTestReader) physicalFillQuotes(
+func (r *executionTestReader) Quote(
+	context.Context,
+	[]liquidlane.Route,
+	common.Address,
+	time.Time,
+) (snapshot, error) {
+	return r.quoteSnapshot, nil
+}
+
+func (r *executionTestReader) ReadFillQuotes(
 	_ context.Context,
 	routes []liquidlane.Route,
 	_ common.Address,
@@ -349,15 +358,17 @@ func TestStartFillRejectsExpiredOrderBeforeStrategy(t *testing.T) {
 }
 
 type executionTestStrategy struct {
-	input strategytypes.FillInput
-	plan  *strategytypes.FillPlan
+	input   strategytypes.FillInput
+	plan    *strategytypes.FillPlan
+	quote   *strategytypes.Quote
+	onInput func(strategytypes.FillInput)
 }
 
 func (s *executionTestStrategy) DecideQuote(
 	context.Context,
 	strategytypes.QuoteInput,
 ) (*strategytypes.Quote, error) {
-	return nil, nil
+	return s.quote, nil
 }
 
 func (s *executionTestStrategy) DecideFill(
@@ -365,6 +376,9 @@ func (s *executionTestStrategy) DecideFill(
 	input strategytypes.FillInput,
 ) (*strategytypes.FillPlan, error) {
 	s.input = input
+	if s.onInput != nil {
+		s.onInput(input)
+	}
 	return s.plan, nil
 }
 
@@ -374,7 +388,8 @@ type executionTestTxManager struct {
 	reqs        []txmanager.Request
 	unavailable bool
 	busy        bool
-	accepted    chan<- struct{}
+	reject      bool
+	accepted    chan struct{}
 }
 
 func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error) {
@@ -390,6 +405,9 @@ func (m *executionTestTxManager) SendAsync(
 	request txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
 	m.reqs = append(m.reqs, request)
+	if m.reject {
+		return nil, false
+	}
 	if m.accepted != nil {
 		select {
 		case m.accepted <- struct{}{}:
@@ -412,6 +430,368 @@ func (f contractCallerFunc) CallContract(
 	blockNumber *big.Int,
 ) ([]byte, error) {
 	return f(ctx, call, blockNumber)
+}
+
+type uniswapFillTrace struct {
+	Stage       string
+	Mode        string
+	Outcome     string
+	RouteID     string
+	CandidateID string
+	Adapter     string
+	CapacityID  string
+	DiscountID  string
+	Amount      string
+	ChainTime   string
+	MaxFee      string
+	GasFacts    bool
+	Quotes      int
+	Pending     int
+	Capacities  []string
+	Direct      bool
+	Signed      bool
+	Preflight   bool
+	Repriced    bool
+	Resolved    bool
+	Quoted      bool
+	Failure     bool
+	Closed      bool
+	Attempts    int
+}
+
+type uniswapLifecycleFixture struct {
+	now      time.Time
+	route    liquidlane.Route
+	routes   []liquidlane.Route
+	order    *resolvedOrder
+	solver   *Solver
+	strategy *executionTestStrategy
+	txm      *executionTestTxManager
+	packed   *uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	refresh  chan struct{}
+}
+
+func TestFillReservationLifecycleTrace(t *testing.T) {
+	for _, mode := range []string{"direct", "signed-discount"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, outcome := range []string{"success", "error", "cancellation", "closed", "not-admitted"} {
+				t.Run(outcome, func(t *testing.T) {
+					runUniswapFillReservationLifecycle(t, mode, outcome)
+				})
+			}
+		})
+	}
+}
+
+func runUniswapFillReservationLifecycle(t *testing.T, mode, outcome string) {
+	t.Helper()
+	assertUniswapRejectedAdmission(t, mode)
+
+	fixture := newUniswapLifecycleFixture(t, mode, false)
+	trace := []uniswapFillTrace{{Stage: "rejected", Mode: mode}}
+	plan := fixture.strategy.plan
+	fixture.strategy.onInput = func(input strategytypes.FillInput) {
+		trace = append(trace,
+			uniswapFillTrace{
+				Stage: "facts", Mode: mode, ChainTime: strconv.FormatBool(input.ChainTime.Equal(fixture.now)),
+				MaxFee: input.MaxFeePerGas.String(), GasFacts: input.GasPrices != nil || input.GasSnapshot != nil,
+				Quotes: len(input.Quotes), Capacities: uniswapCapacityEntries(input.Reservations),
+			},
+			uniswapFillTrace{
+				Stage: "strategy", Mode: mode, RouteID: string(plan.Routes[0].RouteID),
+				Adapter: plan.Routes[0].Adapter.Hex(), CapacityID: string(plan.Routes[0].CapacityID),
+				DiscountID: uniswapHashString(plan.Routes[0].DiscountID), Amount: plan.Routes[0].ReservedAmountOut.String(),
+			},
+		)
+	}
+	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
+		t.Fatal("claim order")
+	}
+	orders := make(chan *resolvedOrder, 1)
+	orders <- fixture.order
+	close(orders)
+	done := make(chan error, 1)
+	go func() {
+		done <- fixture.solver.newFillWorker(t.Context(), fixture.routes, orders).run()
+	}()
+	select {
+	case <-fixture.txm.accepted:
+	case err := <-done:
+		t.Fatalf("worker returned before admission: %v, strategy=%+v", err, fixture.strategy.input)
+	case <-time.After(3 * time.Second):
+		t.Fatal("fill was not admitted")
+	}
+	expectUniswapRefresh(t, fixture.refresh)
+	select {
+	case err := <-done:
+		t.Fatalf("worker returned before terminal result: %v", err)
+	default:
+	}
+	if len(fixture.txm.reqs) != 1 {
+		t.Fatalf("accepted requests = %d, want 1", len(fixture.txm.reqs))
+	}
+	declined, err := fixture.solver.quote(
+		t.Context(), validQuoteRequest(fixture.route.TokenIn, fixture.route.TokenOut),
+	)
+	if err != nil || declined.AmountOut != "0" {
+		t.Fatalf("quote during accepted fill = %+v, err %v", declined, err)
+	}
+	reader := fixture.solver.reader.(*executionTestReader)
+	repriced := mode == "signed-discount" && len(reader.fillQuoteAmounts) == 1 &&
+		reader.fillQuoteAmounts[0].Cmp(big.NewInt(100)) == 0
+	resolved := mode == "signed-discount" && len(fixture.packed.DiscountRoutes) == 1 &&
+		fixture.packed.DiscountRoutes[0].DiscountSwap.Discount.TokenToRedeem == fixture.route.TokenIn
+	if mode == "signed-discount" && (!repriced || !resolved) {
+		t.Fatalf("selected discount repricing/terms = %v/%+v", reader.fillQuoteAmounts, fixture.packed.DiscountRoutes)
+	}
+	trace = append(trace,
+		uniswapFillTrace{
+			Stage: "validated", Mode: mode, RouteID: string(plan.Routes[0].RouteID),
+			CandidateID: string(plan.Routes[0].CandidateID), Adapter: plan.Routes[0].Adapter.Hex(),
+			CapacityID: string(plan.Routes[0].CapacityID), DiscountID: uniswapHashString(plan.Routes[0].DiscountID),
+			Amount: plan.Routes[0].ReservedAmountOut.String(),
+		},
+		uniswapFillTrace{
+			Stage: "calldata", Mode: mode, Direct: len(fixture.packed.Routes) == 1,
+			Signed: len(fixture.packed.DiscountRoutes) == 1, Preflight: true,
+			Repriced: repriced, Resolved: resolved,
+		},
+		uniswapFillTrace{
+			Stage: "admitted", Mode: mode, Pending: fixture.solver.capacity.Len(),
+			Capacities: uniswapCapacityEntries(fixture.solver.capacity.Snapshot()),
+			Quoted:     false,
+		},
+	)
+	tracked := completeUniswapLifecycle(t, fixture, done, outcome)
+	trace = append(trace, uniswapFillTrace{
+		Stage: "terminal", Mode: mode, Outcome: outcome, Pending: fixture.solver.capacity.Len(),
+		Quoted: true, Failure: outcome != "success" && outcome != "not-admitted",
+		Closed: outcome == "closed", Attempts: tracked.attempts,
+	})
+
+	discount := uniswapHashString(plan.Routes[0].DiscountID)
+	attempts := 0
+	failure := false
+	if outcome != "success" && outcome != "not-admitted" {
+		attempts = 1
+		failure = true
+	}
+	want := []uniswapFillTrace{
+		{Stage: "rejected", Mode: mode},
+		{Stage: "facts", Mode: mode, ChainTime: "true", MaxFee: "0", Quotes: 1, Capacities: []string{}},
+		{Stage: "strategy", Mode: mode, RouteID: string(fixture.route.ID), Adapter: common.HexToAddress("0xdead").Hex(), CapacityID: "forged-capacity", DiscountID: discount, Amount: "100"},
+		{Stage: "validated", Mode: mode, RouteID: string(fixture.route.ID), CandidateID: string(liquidlane.NewCandidateID(fixture.route, plan.Routes[0].DiscountID)), Adapter: fixture.route.Adapter.Hex(), CapacityID: string(fixture.route.CapacityID), DiscountID: discount, Amount: "100"},
+		{Stage: "calldata", Mode: mode, Direct: mode == "direct", Signed: mode == "signed-discount", Preflight: true, Repriced: mode == "signed-discount", Resolved: mode == "signed-discount"},
+		{Stage: "admitted", Mode: mode, Pending: 1, Capacities: []string{string(fixture.route.CapacityID) + "=100"}},
+		{Stage: "terminal", Mode: mode, Outcome: outcome, Quoted: true, Failure: failure, Closed: outcome == "closed", Attempts: attempts},
+	}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("lifecycle trace =\n%#v\nwant\n%#v", trace, want)
+	}
+}
+
+func assertUniswapRejectedAdmission(t *testing.T, mode string) {
+	t.Helper()
+	fixture := newUniswapLifecycleFixture(t, mode, true)
+	initialState := fixture.solver.quoteState.Load()
+	initialEpoch := fixture.solver.quoteEpoch.Load()
+	pending, err := fixture.solver.startFill(
+		t.Context(), fixture.routes, fixture.order, fixture.now, time.Now(),
+	)
+	if err == nil || pending != nil || fixture.solver.capacity.Len() != 0 ||
+		fixture.solver.quoteState.Load() != initialState || fixture.solver.quoteEpoch.Load() != initialEpoch {
+		t.Fatalf("rejected admission changed lifecycle state: pending=%v err=%v capacity=%d epoch=%d",
+			pending, err, fixture.solver.capacity.Len(), fixture.solver.quoteEpoch.Load())
+	}
+	select {
+	case <-fixture.refresh:
+		t.Fatal("rejected admission requested quote refresh")
+	default:
+	}
+}
+
+func completeUniswapLifecycle(
+	t *testing.T,
+	fixture *uniswapLifecycleFixture,
+	done <-chan error,
+	outcome string,
+) trackedOrder {
+	t.Helper()
+	switch outcome {
+	case "success":
+		fixture.txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	case "error":
+		fixture.txm.result <- txmanager.Result{Err: errors.New("terminal send failure")}
+	case "cancellation":
+		fixture.txm.result <- txmanager.Result{Err: context.Canceled}
+	case "closed":
+		close(fixture.txm.result)
+	case "not-admitted":
+		fixture.txm.result <- txmanager.Result{Err: errors.New("not admitted"), NotAdmitted: true}
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("worker: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not consume terminal result")
+	}
+	expectUniswapRefresh(t, fixture.refresh)
+	if fixture.solver.quoteState.Load() != nil || fixture.solver.capacity.Len() != 0 {
+		t.Fatal("terminal result released capacity without retaining invalidated quote state")
+	}
+	declined, err := fixture.solver.quote(
+		t.Context(), validQuoteRequest(fixture.route.TokenIn, fixture.route.TokenOut),
+	)
+	if err != nil || declined.AmountOut != "0" {
+		t.Fatalf("quote before refreshed state = %+v, err %v", declined, err)
+	}
+	if err := fixture.solver.refreshQuoteState(t.Context(), fixture.routes); err != nil {
+		t.Fatalf("refresh quote state: %v", err)
+	}
+	if fixture.solver.quoteState.Load() == nil {
+		t.Fatalf("refreshed quote state was not published: planning=%d epoch=%d",
+			fixture.solver.planningFills.Load(), fixture.solver.quoteEpoch.Load())
+	}
+	quoted, err := fixture.solver.quote(
+		t.Context(), validQuoteRequest(fixture.route.TokenIn, fixture.route.TokenOut),
+	)
+	if err != nil || quoted.AmountOut != "90" {
+		t.Fatalf("quote after refreshed state = %+v, err %v", quoted, err)
+	}
+	return fixture.solver.orderState[fixture.order.Hash]
+}
+
+func newUniswapLifecycleFixture(t *testing.T, mode string, reject bool) *uniswapLifecycleFixture {
+	t.Helper()
+	now := time.Now().Truncate(time.Second)
+	route := testDiscountRoute()
+	discountID := (*common.Hash)(nil)
+	if mode == "signed-discount" {
+		discountID = new(common.HexToHash(testDiscountID))
+	}
+	plan := &strategytypes.FillPlan{Routes: []strategytypes.FillRoute{{
+		CandidateID: "forged-candidate", RouteID: route.ID,
+		CapacityID: "forged-capacity", Adapter: common.HexToAddress("0xdead"),
+		AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100), MinAmountOut: big.NewInt(90),
+		ReservedAmountOut: big.NewInt(100), DiscountID: liquidlane.CloneHash(discountID),
+	}}}
+	inventory := testInventoryWithMinDiscount(
+		route, big.NewInt(100), big.NewInt(1_000_000_000_000_000_000), new(big.Int),
+	)
+	fillQuote := liquidlane.FillQuote{
+		Inventory: inventory, AmountIn: big.NewInt(100), GrossAmountOut: big.NewInt(100),
+		MaxAmountOut: big.NewInt(100), MinDiscount: new(big.Int),
+	}
+	reader := &executionTestReader{now: now}
+	cfg := &Config{
+		Executor:    route.Adapter,
+		OrderServer: OrderServerConfig{PollInterval: time.Second},
+		QuoteServer: QuoteServerConfig{QuoteTTL: time.Minute},
+		Breaker:     BreakerConfig{MaxFailures: 100, Window: time.Minute},
+	}
+	routes := []liquidlane.Route{route}
+	if mode == "signed-discount" {
+		cfg.SolverMode = solverModeInternal
+		cfg.Discounts = &DiscountConfig{HTTPTimeout: time.Second, MinimumValidity: 15 * time.Second}
+		reader.resolved = []liquidlane.Route{route}
+		reader.snapshot = fillSnapshot{Physical: []liquidlane.FillQuote{fillQuote}}
+		reader.quoteSnapshot = snapshot{Physical: []liquidlane.Inventory{inventory}}
+		routes = nil
+	} else {
+		reader.snapshot = fillSnapshot{Direct: []liquidlane.FillQuote{fillQuote}}
+		reader.quoteSnapshot = snapshot{Direct: []liquidlane.Inventory{inventory}}
+	}
+	policy, err := tokenpolicy.New(tokenpolicy.All, nil)
+	if err != nil {
+		t.Fatalf("token policy: %v", err)
+	}
+	cfg.TokenPolicy = policy
+	strategy := &executionTestStrategy{
+		plan: plan, quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)},
+	}
+	txm := &executionTestTxManager{
+		result: make(chan txmanager.Result, 1), reject: reject, accepted: make(chan struct{}, 1),
+	}
+	packed := new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+	solver := &Solver{
+		chainID: 1, cfg: cfg,
+		solverAddress: common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		chain: contractCallerFunc(func(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+			parsed, err := uxexecutor.LiquidLaneUniswapXExecutorMetaData.ParseABI()
+			if err != nil {
+				return nil, err
+			}
+			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
+			if err != nil {
+				return nil, err
+			}
+			*packed = *abi.ConvertType(
+				values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall),
+			).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+			return nil, nil
+		}),
+		reader: reader, strategy: strategy, txm: txm, log: logr.Discard(),
+		orderState: make(map[common.Hash]trackedOrder), refreshCh: make(chan struct{}, 4),
+	}
+	if mode == "signed-discount" {
+		deadline := now.Add(time.Minute).Unix()
+		solver.discounts = &fakeDiscountProvider{
+			list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
+				testDiscountOffer(route, now.Add(time.Minute), "100", "1000000000000000000"),
+			}},
+			resolved: &liquiddiscounts.Resolved{
+				DiscountID: testDiscountID,
+				Discount: liquiddiscounts.Terms{
+					Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
+					Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
+					Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
+					Nonce:    "0x1", Deadline: deadline,
+				},
+				SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
+			},
+		}
+	}
+	solver.quoteState.Store(&quoteState{
+		inventory: []liquidlane.Inventory{inventory}, chainTime: now,
+		expiresAt: time.Now().Add(time.Minute), singleRouteFor: map[common.Address]bool{},
+	})
+	order := &resolvedOrder{
+		Encoded: []byte{1}, Signature: []byte{2}, Hash: common.HexToHash("0x1234"), QuoteID: "quote-1",
+		Source: orderSourcePublicV2, Executor: cfg.Executor,
+		TokenIn: route.TokenIn, TokenOut: route.TokenOut, AmountIn: big.NewInt(100), AmountOut: big.NewInt(90),
+		Deadline: uint32(now.Add(time.Minute).Unix()),
+	}
+	return &uniswapLifecycleFixture{
+		now: now, route: route, routes: routes, order: order, solver: solver,
+		strategy: strategy, txm: txm, packed: packed, refresh: solver.refreshCh,
+	}
+}
+
+func uniswapHashString(hash *common.Hash) string {
+	if hash == nil {
+		return ""
+	}
+	return hash.Hex()
+}
+
+func uniswapCapacityEntries(reservations liquidlane.CapacityReservations) []string {
+	entries := make([]string, 0, len(reservations))
+	for capacityID, amount := range reservations {
+		entries = append(entries, string(capacityID)+"="+amount.String())
+	}
+	slices.Sort(entries)
+	return entries
+}
+
+func expectUniswapRefresh(t *testing.T, refresh <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-refresh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("quote refresh was not requested")
+	}
 }
 
 type directExecutionFixture struct {
@@ -463,8 +843,7 @@ func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
 			Inventory: liquidlane.DirectInventory(route, big.NewInt(100), big.NewInt(1_000_000_000_000_000_000)),
 			AmountIn:  big.NewInt(100), MaxAmountOut: big.NewInt(100),
 		}}}}, strategy: strategy, txm: txm, log: logr.Discard(),
-		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+		orderState: make(map[common.Hash]trackedOrder),
 	}
 	order := &resolvedOrder{
 		Encoded: []byte{1}, Signature: []byte{2}, Hash: common.HexToHash("0x1"), QuoteID: "quote-1",
@@ -522,13 +901,15 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if fixture.solver.capacity.Len() != 0 {
 		t.Fatal("pending reservation was not released")
 	}
-	if _, pending := fixture.solver.exclusiveUntil[fixture.order.Hash]; !pending {
+	if !fixture.solver.exclusiveState[fixture.order.Hash].pending() {
 		t.Fatal("successful tx cleared exclusive obligation before its canonical block time was reconciled")
 	}
 }
 
 func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	refreshes := make(chan struct{}, 2)
+	fixture.solver.refreshCh = refreshes
 	accepted := make(chan struct{}, 1)
 	fixture.txm.accepted = accepted
 	fixture.txm.busy = true
@@ -539,16 +920,19 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 	orders <- fixture.order
 	close(orders)
 	done := make(chan error, 1)
-	go func() { done <- fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders) }()
+	go func() {
+		done <- fixture.solver.newFillWorker(t.Context(), []liquidlane.Route{fixture.route}, orders).run()
+	}()
 
 	select {
 	case <-accepted:
 	case <-time.After(time.Second):
 		t.Fatal("fill was not accepted")
 	}
-	waitForExecutionCondition(t, func() bool {
-		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
-	})
+	waitForQuoteRefreshes(t, refreshes)
+	if fixture.solver.planningFills.Load() != 0 || fixture.solver.capacity.Len() != 1 {
+		t.Fatal("accepted fill did not publish its reservation and finish planning")
+	}
 	if !fixture.solver.quoteBlocked(time.Now().Unix()) {
 		t.Fatal("accepted transaction lifecycle did not block quoting after fill planning completed")
 	}
@@ -569,6 +953,8 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 
 func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	refreshes := make(chan struct{}, 2)
+	fixture.solver.refreshCh = refreshes
 	accepted := make(chan struct{}, 1)
 	fixture.txm.accepted = accepted
 	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
@@ -580,15 +966,18 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	runCtx, reportFatal := context.WithCancelCause(t.Context())
 	fixture.solver.reportFatal = reportFatal
 	done := make(chan error, 1)
-	go func() { done <- fixture.solver.fillLoop(runCtx, []liquidlane.Route{fixture.route}, orders) }()
+	go func() {
+		done <- fixture.solver.newFillWorker(runCtx, []liquidlane.Route{fixture.route}, orders).run()
+	}()
 	select {
 	case <-accepted:
 	case <-time.After(time.Second):
 		t.Fatal("fill was not accepted")
 	}
-	waitForExecutionCondition(t, func() bool {
-		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
-	})
+	waitForQuoteRefreshes(t, refreshes)
+	if fixture.solver.planningFills.Load() != 0 || fixture.solver.capacity.Len() != 1 {
+		t.Fatal("accepted fill did not publish its reservation and finish planning")
+	}
 	listenErr := errors.New("accept failed")
 	server := &http.Server{ReadHeaderTimeout: time.Second}
 	serveErr := fixture.solver.serveQuoteServer(runCtx, server, failingListener{err: listenErr})
@@ -612,10 +1001,11 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("fill loop did not finish after accepted lifecycle completed")
 	}
-	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+	tracked := fixture.solver.orderState[fixture.order.Hash]
+	if fixture.solver.capacity.Len() != 0 || tracked.inFlight {
 		t.Fatal("drained fill retained reservation or in-flight state")
 	}
-	if _, filled := fixture.solver.filled[fixture.order.Hash]; !filled {
+	if tracked.completedAt.IsZero() {
 		t.Fatal("drained fill was not terminalized")
 	}
 }
@@ -631,12 +1021,12 @@ func TestFillLoopDropsQueuedOrderAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := fixture.solver.fillLoop(ctx, []liquidlane.Route{fixture.route}, orders)
+	err := fixture.solver.newFillWorker(ctx, []liquidlane.Route{fixture.route}, orders).run()
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("fill loop result = %v, want context cancellation", err)
 	}
 	if len(fixture.txm.reqs) != 0 || fixture.solver.planningFills.Load() != 0 ||
-		fixture.solver.inFlight[fixture.order.Hash] {
+		fixture.solver.orderState[fixture.order.Hash].inFlight {
 		t.Fatal("queued order was submitted or retained after cancellation")
 	}
 }
@@ -651,7 +1041,9 @@ func TestFillLoopDefersQueuedOrderWhileNonceLaneUnavailable(t *testing.T) {
 	orders <- fixture.order
 	close(orders)
 
-	if err := fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders); err != nil {
+	if err := fixture.solver.newFillWorker(
+		t.Context(), []liquidlane.Route{fixture.route}, orders,
+	).run(); err != nil {
 		t.Fatalf("fill loop: %v", err)
 	}
 	reader := fixture.solver.reader.(*executionTestReader)
@@ -662,12 +1054,12 @@ func TestFillLoopDefersQueuedOrderWhileNonceLaneUnavailable(t *testing.T) {
 			reader.latestBlockReads, fixture.strategy.input.OrderID, len(fixture.txm.reqs), len(fixture.packed.Routes),
 		)
 	}
-	if fixture.solver.planningFills.Load() != 0 || fixture.solver.inFlight[fixture.order.Hash] ||
-		fixture.solver.attempts[fixture.order.Hash] != 0 {
+	tracked := fixture.solver.orderState[fixture.order.Hash]
+	if fixture.solver.planningFills.Load() != 0 || tracked.inFlight || tracked.attempts != 0 {
 		t.Fatal("deferred order retained planning/in-flight state or counted as a failed attempt")
 	}
-	retryAt, scheduled := fixture.solver.retryAt[fixture.order.Hash]
-	if !scheduled {
+	retryAt := tracked.retryAt
+	if retryAt.IsZero() {
 		t.Fatal("deferred order did not receive a normal retry")
 	}
 	if fixture.solver.claim(fixture.order.Hash, retryAt.Add(-time.Nanosecond)) {
@@ -688,7 +1080,7 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 		t.Fatalf("metrics: %v", err)
 	}
 	fixture.solver.metrics = metrics
-	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.orderState[fixture.order.Hash] = trackedOrder{inFlight: true}
 	fixture.solver.setPendingReservations(
 		fixture.order.Hash,
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
@@ -703,10 +1095,11 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 		},
 	})
 
-	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+	tracked := fixture.solver.orderState[fixture.order.Hash]
+	if fixture.solver.capacity.Len() != 0 || tracked.inFlight {
 		t.Fatal("not-admitted fill retained reservation or in-flight state")
 	}
-	if fixture.solver.attempts[fixture.order.Hash] != 0 || len(fixture.solver.failureTimes) != 0 ||
+	if tracked.attempts != 0 || len(fixture.solver.failureTimes) != 0 ||
 		fixture.solver.localBlockUntil.Load() != 0 {
 		t.Fatal("not-admitted fill counted toward retry or fade breaker failures")
 	}
@@ -715,16 +1108,15 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	}
 }
 
-func waitForExecutionCondition(t *testing.T, condition func() bool) {
+func waitForQuoteRefreshes(t *testing.T, refreshes <-chan struct{}) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
+	for range 2 {
+		select {
+		case <-refreshes:
+		case <-time.After(time.Second):
+			t.Fatal("quote refresh was not requested")
 		}
-		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("execution condition was not met")
 }
 
 func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {

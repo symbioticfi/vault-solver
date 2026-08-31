@@ -218,40 +218,34 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// DoJSON sends an optional JSON request body and decodes a strict JSON response into resp.
-func (c *Client) DoJSON(ctx context.Context, method, route string, req, resp any) error {
+// DoJSON sends a JSON POST request and decodes a strict JSON response into resp.
+func (c *Client) DoJSON(ctx context.Context, route string, req, resp any) error {
 	if resp == nil {
 		return errors.New("webhook: response target is nil")
 	}
-	var body io.Reader
-	if req != nil {
-		b, err := json.Marshal(req)
-		if err != nil {
-			return errors.Errorf("webhook: encode request: %w", err)
-		}
-		if int64(len(b)) > c.maxRequestBytes {
-			return errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
-		}
-		body = bytes.NewReader(b)
+	requestBody, err := json.Marshal(req)
+	if err != nil {
+		return errors.Errorf("webhook: encode request: %w", err)
+	}
+	if int64(len(requestBody)) > c.maxRequestBytes {
+		return errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
 	}
 	endpoint, err := c.endpoint(route)
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
 	if err != nil {
 		return errors.Errorf("webhook: build request: %w", err)
 	}
-	if req != nil {
-		httpReq.Header.Set("Content-Type", "application/json")
-	}
+	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return errors.Errorf("webhook: %s: %w", method, err)
+		return errors.Errorf("webhook: POST: %w", err)
 	}
 	defer httpResp.Body.Close()
 
@@ -283,12 +277,7 @@ func (c *Client) DoJSON(ctx context.Context, method, route string, req, resp any
 
 // PostJSON sends req as JSON to the configured base URL and decodes a strict JSON response into resp.
 func (c *Client) PostJSON(ctx context.Context, req, resp any) error {
-	return c.DoJSON(ctx, http.MethodPost, "", req, resp)
-}
-
-// GetJSON sends a GET request and decodes a strict JSON response into resp.
-func (c *Client) GetJSON(ctx context.Context, route string, resp any) error {
-	return c.DoJSON(ctx, http.MethodGet, route, nil, resp)
+	return c.DoJSON(ctx, "", req, resp)
 }
 
 func (c *Client) endpoint(route string) (string, error) {

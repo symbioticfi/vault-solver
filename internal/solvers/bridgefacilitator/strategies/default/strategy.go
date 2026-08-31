@@ -7,25 +7,21 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 const Name = "default"
 
-type Config struct{}
-
 type Strategy struct{}
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
+func ValidateConfig(raw yaml.Node) error {
+	_, err := NewFromConfig(raw)
+	return err
 }
 
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
-	var cfg Config
-	if err := decodeConfig(raw, &cfg); err != nil {
+func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
+	if err := parse.DecodeStrict(raw, &struct{}{}); err != nil {
 		return nil, err
 	}
 	return New(), nil
@@ -33,13 +29,6 @@ func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
 
 func New() *Strategy {
 	return &Strategy{}
-}
-
-func decodeConfig(node yaml.Node, out any) error {
-	if node.Kind == 0 {
-		node = yaml.Node{Kind: yaml.MappingNode}
-	}
-	return solver.DecodeStrict(node, out)
 }
 
 func (s *Strategy) DecideOffers(
@@ -77,12 +66,10 @@ func (s *Strategy) DecideOffers(
 			if st.belowMinAssets(principal) {
 				continue
 			}
-			// Price at the minYieldPerRequest floor plus a partial-consumption margin (a floor-exact
-			// offer reverts TooLowYield when consume() pro-rates a partial fill down), or the auction max
-			// rate when there is no floor. When the margin would break the auction cap but the cap itself
-			// clears the floor, price at the cap and keep whatever margin fits. ValidateYield drops the
-			// pair if the result isn't in [floor, maxRate] (including a 0 return).
-			expectedReturn := types.PartialSafeMinYieldReturn(principal, st.snapshot.MinYieldPpm)
+			// Price every partial consumption allowed by minAssetsPerRequest above the yield floor.
+			expectedReturn := types.PartialSafeMinYieldReturn(
+				principal, st.snapshot.MinAssets, st.snapshot.MinYieldPpm,
+			)
 			if expectedReturn.Sign() <= 0 {
 				expectedReturn = types.ExpectedReturn(principal, auction.MaxRateBps)
 			} else if maxReturn := types.ExpectedReturn(principal, auction.MaxRateBps); maxReturn.Sign() > 0 &&
@@ -90,7 +77,9 @@ func (s *Strategy) DecideOffers(
 				types.MeetsMinYield(maxReturn, principal, st.snapshot.MinYieldPpm) {
 				expectedReturn = maxReturn
 			}
-			if types.ValidateYield(expectedReturn, principal, st.snapshot.MinYieldPpm, auction.MaxRateBps) != nil {
+			if types.ValidateYield(
+				expectedReturn, principal, st.snapshot.MinAssets, st.snapshot.MinYieldPpm, auction.MaxRateBps,
+			) != nil {
 				continue
 			}
 			offers = append(offers, types.OfferExecution{
@@ -181,9 +170,6 @@ func (s *adapterState) full() bool {
 }
 
 func (s *adapterState) remainingBudget() *big.Int {
-	if s.snapshot.Fundable == nil {
-		return new(big.Int)
-	}
 	return new(big.Int).Sub(s.snapshot.Fundable, s.committed)
 }
 

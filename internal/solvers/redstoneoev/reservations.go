@@ -1,12 +1,11 @@
 package redstoneoev
 
-// reservations.go holds the in-flight auction lifecycle state and auction-id dedup ring.
-
 import (
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 // reservedBid is one sent-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
@@ -16,7 +15,6 @@ type reservedBid struct {
 	nonce     uint64
 	at        time.Time
 	auctionID string
-	callback  common.Address
 	won       bool
 }
 
@@ -25,38 +23,38 @@ type reservedBid struct {
 // without a result stays pinned long enough for delayed settlement/nonce reconciliation.
 const reservationTTL = 5 * time.Minute
 
-type inFlightState struct {
-	pending []pendingAuction
-}
-
-type pendingAuction struct {
-	ID     string
-	SentAt time.Time
-	Won    bool
-}
-
-// inFlightSnapshot returns the bounded pending-auction state strategies use for de-duping/risk control.
-func (s *Solver) inFlightSnapshot() inFlightState {
+func (s *Solver) inFlightSnapshot(now time.Time) []types.PendingAuction {
 	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	var out inFlightState
-	if len(s.res) > 0 {
-		out.pending = make([]pendingAuction, 0, len(s.res))
-	}
+	out := make([]types.PendingAuction, 0, len(s.res))
 	for _, r := range s.res {
-		out.pending = append(out.pending, pendingAuction{ID: r.auctionID, SentAt: r.at, Won: r.won})
+		if r.auctionID == "" {
+			continue
+		}
+		expiresAt := r.at.Add(reservationTTL)
+		if !expiresAt.After(now) {
+			continue
+		}
+		out = append(out, types.PendingAuction{
+			ID:        r.auctionID,
+			SentAt:    r.at,
+			Won:       r.won,
+			ExpiresAt: expiresAt,
+		})
 	}
+	s.resMu.Unlock()
+	slices.SortFunc(out, func(a, b types.PendingAuction) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 	return out
 }
 
-func (s *Solver) reserve(nonce uint64, now time.Time, callback common.Address, auctionID string) {
+func (s *Solver) reserve(nonce uint64, now time.Time, auctionID string) {
 	s.resMu.Lock()
 	defer s.resMu.Unlock()
 	s.res = append(s.res, reservedBid{
 		nonce:     nonce,
 		at:        now,
 		auctionID: auctionID,
-		callback:  callback,
 	})
 }
 

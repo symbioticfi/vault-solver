@@ -33,13 +33,6 @@ func newAllocator(candidates []liquidlane.QuoteCandidate) allocator {
 	return allocator{sources: buildSources(candidates)}
 }
 
-// allocateExactInput greedily allocates amountIn to the best route candidates.
-// maxRoutes must be positive. Direct and private candidates for the same route
-// are alternatives: the best one that can cover the selected leg wins.
-func (a allocator) allocateExactInput(amountIn *big.Int, maxRoutes int) allocationResult {
-	return a.allocateExactInputWithPolicy(amountIn, maxRoutes, false)
-}
-
 func (a allocator) allocateExactInputWithPolicy(
 	amountIn *big.Int,
 	maxRoutes int,
@@ -159,9 +152,7 @@ func buildSources(candidates []liquidlane.QuoteCandidate) []source {
 				item.maxOutput.Set(candidateOutput)
 			}
 		}
-		if len(group) > 0 {
-			sources = append(sources, item)
-		}
+		sources = append(sources, item)
 	}
 	sort.Slice(sources, func(i, j int) bool {
 		if cmp := sources[i].bestRate.Cmp(sources[j].bestRate); cmp != 0 {
@@ -198,7 +189,7 @@ func bestInputLeg(
 		if mustCoverRemaining && item.maxInput.Cmp(remaining) < 0 {
 			continue
 		}
-		amount := minAmount(remaining, item.maxInput)
+		amount := minBig(remaining, item.maxInput)
 		for _, candidate := range item.alternatives {
 			if candidate.MaxAmountIn.Cmp(amount) < 0 {
 				continue
@@ -268,11 +259,4 @@ func output(candidate liquidlane.QuoteCandidate, amountIn *big.Int) *big.Int {
 		return liquidlane.CloneBig(candidate.MaxAmountOut)
 	}
 	return amountOut
-}
-
-func minAmount(left, right *big.Int) *big.Int {
-	if left.Cmp(right) <= 0 {
-		return new(big.Int).Set(left)
-	}
-	return new(big.Int).Set(right)
 }

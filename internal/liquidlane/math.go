@@ -1,6 +1,10 @@
 package liquidlane
 
-import "math/big"
+import (
+	"math/big"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
+)
 
 var rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
@@ -18,17 +22,13 @@ func MulDivUp(left, right, denominator *big.Int) *big.Int {
 	return quotient
 }
 
-func pow10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
-}
-
 func AmountOutForRate(amountIn, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
 	if amountIn == nil || rate == nil || amountIn.Sign() <= 0 || rate.Sign() <= 0 {
 		return new(big.Int)
 	}
 	num := new(big.Int).Mul(amountIn, rate)
-	num.Mul(num, pow10(tokenOutDecimals))
-	den := new(big.Int).Mul(rateScale, pow10(tokenInDecimals))
+	num.Mul(num, chain.Exp10(tokenOutDecimals))
+	den := new(big.Int).Mul(rateScale, chain.Exp10(tokenInDecimals))
 	return num.Div(num, den)
 }
 
@@ -36,9 +36,9 @@ func MaxAmountInForRate(maxAssets, rate *big.Int, tokenInDecimals, tokenOutDecim
 	if maxAssets == nil || rate == nil || maxAssets.Sign() <= 0 || rate.Sign() <= 0 {
 		return new(big.Int)
 	}
-	den := new(big.Int).Mul(rate, pow10(tokenOutDecimals))
+	den := new(big.Int).Mul(rate, chain.Exp10(tokenOutDecimals))
 	num := new(big.Int).Mul(maxAssets, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
+	num.Mul(num, chain.Exp10(tokenInDecimals))
 	return num.Div(num, den)
 }
 
@@ -46,9 +46,9 @@ func MinAmountInForAmountOut(amountOut, rate *big.Int, tokenInDecimals, tokenOut
 	if amountOut == nil || rate == nil || amountOut.Sign() <= 0 || rate.Sign() <= 0 {
 		return new(big.Int)
 	}
-	den := new(big.Int).Mul(rate, pow10(tokenOutDecimals))
+	den := new(big.Int).Mul(rate, chain.Exp10(tokenOutDecimals))
 	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
+	num.Mul(num, chain.Exp10(tokenInDecimals))
 	num.Add(num, new(big.Int).Sub(den, big.NewInt(1)))
 	return num.Div(num, den)
 }
@@ -58,8 +58,8 @@ func RateForAmountOut(amountOut, amountIn *big.Int, tokenInDecimals, tokenOutDec
 		return new(big.Int)
 	}
 	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
-	den := new(big.Int).Mul(amountIn, pow10(tokenOutDecimals))
+	num.Mul(num, chain.Exp10(tokenInDecimals))
+	den := new(big.Int).Mul(amountIn, chain.Exp10(tokenOutDecimals))
 	return num.Div(num, den)
 }
 

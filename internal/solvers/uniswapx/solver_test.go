@@ -58,7 +58,7 @@ type startupChainReader struct {
 	authorizationCalls int
 }
 
-func (r *startupChainReader) resolveRoutes(context.Context, []common.Address) ([]liquidlane.Route, error) {
+func (r *startupChainReader) ResolveRoutes(context.Context, []common.Address) ([]liquidlane.Route, error) {
 	return r.routes, nil
 }
 
@@ -89,7 +89,7 @@ func (r *startupChainReader) unauthorizedAdapters(
 	return r.unauthorized, r.adapterErr
 }
 
-func (r *startupChainReader) validateGasTokens([]liquidlane.Route) error { return nil }
+func (r *startupChainReader) ValidateGasTokens([]liquidlane.Route) error { return nil }
 
 func TestRunLogsStartupValidationFailures(t *testing.T) {
 	adapter := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -204,7 +204,7 @@ func TestPollOrdersProcessesExclusiveBeforePublicFailure(t *testing.T) {
 	solver := &Solver{
 		cfg: &Config{
 			Executor:    executor,
-			OrderServer: OrderServerConfig{Sources: OrderSourcesConfig{ExclusiveV2: true, PublicV2: true}},
+			OrderServer: OrderServerConfig{PublicV2: true},
 		},
 		chainID: 1,
 		reader:  reader,
@@ -214,9 +214,8 @@ func TestPollOrdersProcessesExclusiveBeforePublicFailure(t *testing.T) {
 			}
 			return nil, errors.New("public unavailable")
 		}),
-		log:     logr.Discard(),
-		filled:  make(map[common.Hash]time.Time),
-		retryAt: make(map[common.Hash]time.Time),
+		log:        logr.Discard(),
+		orderState: make(map[common.Hash]trackedOrder),
 	}
 	err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1))
 	if err == nil || !strings.Contains(err.Error(), "poll public-v2 orders: public unavailable") {
@@ -254,7 +253,7 @@ func TestPollOrdersKeepsUnknownExclusivePendingAndStopsQuotes(t *testing.T) {
 	if solver.exclusiveBlockUntil.Load() != 0 {
 		t.Fatal("unknown exclusive state was counted as a fade")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; !pending {
+	if !solver.exclusiveState[hash].pending() {
 		t.Fatal("unknown exclusive obligation was not retained for retry")
 	}
 }
@@ -281,7 +280,7 @@ func TestPollSourceTracksRejectedExclusiveOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := common.HexToHash(entry.OrderHash)
-	if tracked, ok := solver.exclusiveUntil[hash]; !ok || !tracked.deadline.Equal(now) {
+	if tracked, ok := solver.exclusiveState[hash]; !ok || !tracked.deadline.Equal(now) {
 		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", tracked.deadline, ok)
 	}
 }
@@ -333,10 +332,10 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			if got := solver.quoteState.Load() == nil; got != wantBreaker {
 				t.Fatalf("recovered missed exclusive invalidated quotes = %v, want %v", got, wantBreaker)
 			}
-			if _, pending := solver.exclusiveUntil[hash]; pending {
+			if solver.exclusiveState[hash].pending() {
 				t.Fatal("recovered terminal obligation remained pending")
 			}
-			if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
+			if !solver.exclusiveState[hash].terminal() {
 				t.Fatal("recovered terminal obligation was not retained")
 			}
 
@@ -384,7 +383,6 @@ func TestPollOrdersStopsQuotesWhenExclusiveHistoryIsUnknown(t *testing.T) {
 }
 
 func newPollingTestSolver(cfg *Config, orders orderPoller) *Solver {
-	cfg.OrderServer.Sources.ExclusiveV2 = true
 	return &Solver{
 		cfg: cfg, chainID: 1, reader: &countingChainReader{}, orders: orders, log: logr.Discard(),
 	}

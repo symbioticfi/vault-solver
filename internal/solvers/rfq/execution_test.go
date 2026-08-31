@@ -7,11 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -21,8 +25,8 @@ type fakeBackend struct {
 	open         []backendOrder
 	executable   *backendOrder
 	order        *backendOrder
-	discount     *resolveDiscountResponse
-	discounts    *discountsResponse
+	discount     *discounts.Resolved
+	discounts    *discounts.List
 	resolveCalls int
 	listCalls    int
 }
@@ -35,15 +39,15 @@ func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*back
 }
 func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
 
-func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
+func (f *fakeBackend) Resolve(context.Context, string) (*discounts.Resolved, error) {
 	f.resolveCalls++
 	return f.discount, nil
 }
 
-func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+func (f *fakeBackend) ListDiscounts(context.Context) (*discounts.List, error) {
 	f.listCalls++
 	if f.discounts == nil {
-		return &discountsResponse{}, nil
+		return &discounts.List{}, nil
 	}
 	return f.discounts, nil
 }
@@ -119,7 +123,6 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		strategy: fixedFillStrategy{plan: baseFillPlan()},
 		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
-		inflight: make(map[string]bool),
 	}
 }
 
@@ -148,8 +151,6 @@ func (s fixedFillStrategy) BuildFillPlan(
 
 func baseFillPlan() *types.FillPlan {
 	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 		}},
@@ -158,11 +159,9 @@ func baseFillPlan() *types.FillPlan {
 
 func discountFillPlan(h common.Hash) *types.FillPlan {
 	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
 		Legs: []types.FillLeg{{
 			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
-			MaxRate: big.NewInt(1), DiscountID: &h,
+			DiscountID: &h,
 		}},
 	}
 }
@@ -196,7 +195,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
@@ -249,7 +248,7 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 	if txm.lastReq.Data != nil {
 		t.Fatal("fill was admitted after its chain deadline elapsed")
 	}
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed ||
 		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
 		t.Fatalf("status = %+v, want deadline failure", rec)
@@ -285,7 +284,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 	if len(txm.lastReq.Data) != 0 {
@@ -300,18 +299,27 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 }
 
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
+	signedTokenIn := common.HexToAddress("0x0000000000000000000000000000000000000021")
+	order := sampleOrder()
+	order.Request.TokenIn = signedTokenIn
+	encoded, err := orderTupleArgs.Pack(order)
+	if err != nil {
+		t.Fatalf("pack order: %v", err)
+	}
+	be.executable.EncodedOrder = new(hexutil.Encode(encoded))
+
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
-			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
+		Discount: discounts.Terms{
+			Adapter: vlt.Hex(), TokenToRedeem: signedTokenIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
 			Nonce:    "0x1", Deadline: 4_102_444_700,
@@ -324,7 +332,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -332,6 +340,17 @@ func TestExecution_DiscountFill(t *testing.T) {
 	}
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	values, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
+	if err != nil {
+		t.Fatalf("unpack fill calldata: %v", err)
+	}
+	discountSwaps := *abi.ConvertType(
+		values[3], new([]executor.IReactorDiscountSwapInput),
+	).(*[]executor.IReactorDiscountSwapInput)
+	if len(discountSwaps) != 1 ||
+		discountSwaps[0].DiscountSwap.Discount.TokenToRedeem != signedTokenIn {
+		t.Fatalf("discount swaps = %+v, want signed order tokenIn %s", discountSwaps, signedTokenIn)
 	}
 	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
 		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
@@ -348,15 +367,15 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
@@ -373,7 +392,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -392,9 +411,9 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
 			TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -409,7 +428,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
@@ -426,7 +445,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if be.resolveCalls != 2 {
 		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
 	}
-	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec = testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -438,7 +457,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	listedID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
 	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
@@ -467,7 +486,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,
@@ -491,7 +510,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
 	if txm.lastReq.Data != nil {

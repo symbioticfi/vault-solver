@@ -1,8 +1,7 @@
 // Package redstoneoev implements the RedStone Atom OEV solver: it subscribes to OEV auctions over
 // WebSocket, delegates bid/skip decisions to a configured strategy, signs EXECUTOR_V6 bids, and replies
 // with solve payloads that settle through strategy-selected callback operationData. The built-in default
-// strategy is the Morpho/LiquidLane liquidation path. The solver registers itself via init(). See
-// docs/OEV-PLAN.md.
+// strategy is the Morpho/LiquidLane liquidation path. See docs/OEV-PLAN.md.
 package redstoneoev
 
 import (
@@ -15,29 +14,22 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// Name is the registry key that selects this solver from config.
+// Name identifies this solver in config.
 const Name = "redstone-oev"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver is the RedStone OEV solver runtime.
 type Solver struct {
-	cfg          *Config
-	deps         solver.Deps
-	chainID      *big.Int
-	dryRun       bool // OEV_DRY_RUN: observe mode: sign + log would-bids, never send (env knob, not config)
-	strategyName string
-	reader       *reader
-	strategy     types.Strategy
-	nonces       *nonceStore
-	breaker      *breaker
-	metrics      *metrics
-	ws           *wsClient
-	seen         *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
-	log          logr.Logger
+	cfg      *Config
+	deps     solver.Deps
+	chainID  *big.Int
+	reader   stateReader
+	strategy types.Strategy
+	nonces   *nonceStore
+	breaker  *breaker
+	metrics  *metrics
+	ws       *wsClient
+	seen     *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
+	log      logr.Logger
 
 	state stateCache // cached executor accounting, refreshed by the ops loop
 	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.
@@ -49,6 +41,9 @@ type Solver struct {
 	resMu sync.Mutex
 	res   []reservedBid
 
+	// auctionWG is fed only by the WS read pump, which ws.Run joins before Run waits on this group.
+	auctionWG sync.WaitGroup
+
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.
 	bidMu sync.Mutex
@@ -56,6 +51,3 @@ type Solver struct {
 
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
-
-// RequiresTxManager is false because RedStone's auctioneer submits settlement transactions.
-func (*Solver) RequiresTxManager() bool { return false }

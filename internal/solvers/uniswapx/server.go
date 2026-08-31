@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -182,7 +183,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: s.decisionTrace(
+		Trace: liquidstrategies.NewDecisionTrace(s.log,
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
 			"quoteType", request.Type,

@@ -10,7 +10,6 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -25,9 +24,9 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
+func ValidateConfig(raw yaml.Node) error {
+	_, err := webhook.ParseConfig(raw)
+	return err
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
@@ -48,7 +47,7 @@ func New(client *webhook.Client) *Strategy {
 
 func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	var out types.QuoteOutput
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideQuotesRoute, input, &out); err != nil {
+	if err := s.client.DoJSON(ctx, decideQuotesRoute, input, &out); err != nil {
 		return types.QuoteOutput{}, err
 	}
 	if err := validateQuotes(input, &out); err != nil {
@@ -59,7 +58,7 @@ func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (ty
 
 func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	var out *types.FillPlan
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideFillRoute, input, &out); err != nil {
+	if err := s.client.DoJSON(ctx, decideFillRoute, input, &out); err != nil {
 		if webhook.IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
 			return nil, types.MarkPermanentFillDecisionError(err)
 		}

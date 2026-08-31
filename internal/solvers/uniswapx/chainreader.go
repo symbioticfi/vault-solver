@@ -22,8 +22,9 @@ var uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
 const maxExecutorCallers = 256
 
 type reader struct {
-	chain     *chain.Client
-	snapshots *liquidsnapshot.Reader
+	*liquidsnapshot.Reader
+
+	chain *chain.Client
 }
 
 type snapshot = liquidsnapshot.Quote
@@ -34,11 +35,7 @@ func newReader(c *chain.Client, log logr.Logger, cfg *liquidlanegas.OracleConfig
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, snapshots: snapshots}, nil
-}
-
-func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error) {
-	return r.snapshots.ResolveRoutes(ctx, adapters)
+	return &reader{chain: c, Reader: snapshots}, nil
 }
 
 func (r *reader) validateExecutorCode(
@@ -106,38 +103,11 @@ func (r *reader) unauthorizedAdapters(
 	executor common.Address,
 	routes []liquidlane.Route,
 ) ([]common.Address, error) {
-	authorized, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executor)
+	authorized, err := r.FilterAuthorizedRoutes(ctx, routes, executor)
 	if err != nil {
 		return nil, err
 	}
 	return liquidlane.UnauthorizedAdapters(routes, authorized), nil
-}
-
-func (r *reader) validateGasTokens(routes []liquidlane.Route) error {
-	return r.snapshots.ValidateGasTokens(routes)
-}
-
-func (r *reader) quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error) {
-	return r.snapshots.Quote(ctx, routes, executor, now)
-}
-
-func (r *reader) fillSnapshot(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	executor, tokenIn common.Address,
-	amountIn *big.Int,
-	now time.Time,
-) (fillSnapshot, error) {
-	return r.snapshots.Fill(ctx, routes, executor, tokenIn, amountIn, now)
-}
-
-func (r *reader) physicalFillQuotes(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	tokenIn common.Address,
-	amountIn *big.Int,
-) ([]liquidlane.FillQuote, error) {
-	return r.snapshots.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {

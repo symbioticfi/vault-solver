@@ -12,20 +12,37 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-func TestCandidatePriceSource(t *testing.T) {
+func monitorAdapterSnapshot(collateral common.Address) types.AdapterSnapshot {
+	return types.AdapterSnapshot{
+		Address:      common.HexToAddress("0x00000000000000000000000000000000000000ad"),
+		Vault:        common.HexToAddress("0x00000000000000000000000000000000000000da"),
+		Loan:         common.HexToAddress("0x0000000000000000000000000000000000000010"),
+		LoanDecimals: 6,
+		FreeAssets:   mustBig("100000000000"),
+		Withdrawable: mustBig("100000000000"),
+		Redeemable: []types.RedeemableSnapshot{{
+			Asset:          collateral,
+			Decimals:       18,
+			MaxRate:        mustBig("1780000000000000000000"),
+			MaxAssets:      mustBig("100000000000"),
+			AcquireBalance: new(big.Int),
+		}},
+		Filler: true,
+	}
+}
+
+func TestMonitorCandidatePricePolicy(t *testing.T) {
 	id := common.HexToHash("0x01")
 	oracle := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	collateral := common.HexToAddress("0x00000000000000000000000000000000000000cc")
 	onchain := mustBig("1000000000000000000000000000000000000")
 	framePx := new(big.Int).Mul(onchain, big.NewInt(2))
 
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
+			id: {Params: MarketParams{Oracle: oracle, CollateralToken: collateral}, State: goldenMarket()},
 		},
 		prices: map[common.Hash]*big.Int{id: onchain},
-		quotes: map[common.Hash]AdapterQuote{
-			id: newQuote("1780000000000000000000", mustBig("100000000000")),
-		},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{
 			id: {common.Address{1}: goldenBorrower()},
 		},
@@ -34,17 +51,53 @@ func TestCandidatePriceSource(t *testing.T) {
 		Prices: []types.AuctionPrice{{Oracle: oracle, Price: framePx}},
 	}
 
-	apiCands := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
-	if len(apiCands) != 1 || apiCands[0].price.Cmp(framePx) != 0 {
-		t.Fatalf("auction path price = %+v, want %v", apiCands, framePx)
-	}
-
+	apiMon := &apiMonitor{log: logr.Discard()}
+	apiMon.snap.Store(snap)
 	var testMon testMonitor
 	testMon.log = logr.Discard()
 	testMon.snap.Store(snap)
-	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
-	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
-		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
+
+	tests := []struct {
+		name string
+		mon  monitorSource
+		want *big.Int
+	}{
+		{name: "production API monitor uses settlement frame", mon: apiMon, want: framePx},
+		{name: "Sepolia test monitor uses cached on-chain oracle", mon: &testMon, want: onchain},
+	}
+	adapter := monitorAdapterSnapshot(collateral)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.mon.candidates(auction, snap.markets[id].State.LastUpdate, adapter)
+			if len(got) != 1 || got[0].price.Cmp(test.want) != 0 {
+				t.Fatalf("candidate price = %+v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTestMonitorCandidatePriceDoesNotRequireAuctionFrame(t *testing.T) {
+	id := common.HexToHash("0x01")
+	collateral := common.HexToAddress("0x00000000000000000000000000000000000000cc")
+	onchain := mustBig("1000000000000000000000000000000000000")
+	snap := &snapshot{
+		markets: map[common.Hash]MarketInfo{
+			id: {Params: MarketParams{
+				Oracle: common.HexToAddress("0x00000000000000000000000000000000000000aa"), CollateralToken: collateral,
+			}, State: goldenMarket()},
+		},
+		prices: map[common.Hash]*big.Int{id: onchain},
+		positions: map[common.Hash]map[common.Address]morpho.PositionState{
+			id: {common.Address{1}: goldenBorrower()},
+		},
+	}
+	var mon testMonitor
+	mon.log = logr.Discard()
+	mon.snap.Store(snap)
+
+	got := mon.candidates(types.AuctionSnapshot{}, snap.markets[id].State.LastUpdate, monitorAdapterSnapshot(collateral))
+	if len(got) != 1 || got[0].price.Cmp(onchain) != 0 {
+		t.Fatalf("candidate price without auction frame = %+v, want %v", got, onchain)
 	}
 }
 
@@ -67,12 +120,10 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 	id := common.HexToHash("0x01")
 	oracle := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	otherOracle := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	collateral := common.HexToAddress("0x00000000000000000000000000000000000000cc")
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
-		},
-		quotes: map[common.Hash]AdapterQuote{
-			id: newQuote("1780000000000000000000", mustBig("100000000000")),
+			id: {Params: MarketParams{Oracle: oracle, CollateralToken: collateral}, State: goldenMarket()},
 		},
 		positions: map[common.Hash]map[common.Address]morpho.PositionState{
 			id: {common.Address{1}: goldenBorrower()},
@@ -83,7 +134,7 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 		{Oracle: oracle, Price: big.NewInt(0)},
 	}}
 
-	got := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
+	got := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, monitorAdapterSnapshot(collateral))
 	if len(got) != 0 {
 		t.Fatalf("market without positive auction price for its oracle must not produce candidates: %+v", got)
 	}
@@ -129,7 +180,7 @@ func TestMarketInfoFromAPI(t *testing.T) {
 	oracle := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	irm := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	lltv := mustBig("860000000000000000")
-	id, err := deriveMarketID(abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
+	id, err := deriveMarketID(MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
 	if err != nil {
 		t.Fatalf("deriveMarketID: %v", err)
 	}
@@ -178,7 +229,7 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 	coll := common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78")
 	lltv := mustBig("860000000000000000")
 	mk := func(oracle common.Address, block, ts string) morphoMarket {
-		params := abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
+		params := MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
 		id, err := deriveMarketID(params)
 		if err != nil {
 			t.Fatalf("deriveMarketID: %v", err)

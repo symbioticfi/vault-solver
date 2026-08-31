@@ -58,7 +58,7 @@ func do(t *testing.T, h http.Handler, method, path, secret string, body any) *ht
 	}
 	req := httptest.NewRequestWithContext(t.Context(), method, path, r)
 	if secret != "" {
-		req.Header.Set(sharedSecretHeader, secret)
+		req.Header.Set("x-rfq-shared-secret", secret)
 	}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

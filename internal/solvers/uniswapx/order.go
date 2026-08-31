@@ -165,16 +165,6 @@ func mustV2HashArguments() v2HashABIs {
 	}
 }
 
-func parseAndResolveOrder(
-	entry orderEntry,
-	source orderSource,
-	cfg *Config,
-	chainID int64,
-	now time.Time,
-) (*resolvedOrder, error) {
-	return parseAndResolveV2Order(entry, source, cfg, chainID, now)
-}
-
 func exclusiveObligationFromEntry(
 	entry orderEntry,
 	cfg *Config,
@@ -217,6 +207,21 @@ func exclusiveObligationFromEntry(
 	return exclusiveObligation{hash: hash, deadline: time.Unix(int64(deadline), 0)}, nil
 }
 
+type parsedV2Order struct {
+	encoded   []byte
+	signature []byte
+	order     v2Order
+}
+
+type resolvedV2Input struct {
+	deadline      uint32
+	decayStart    uint64
+	decayEnd      uint64
+	now           uint64
+	amountIn      *big.Int
+	applyOverride bool
+}
+
 func parseAndResolveV2Order(
 	entry orderEntry,
 	source orderSource,
@@ -230,111 +235,154 @@ func parseAndResolveV2Order(
 	if entry.ChainID != chainID {
 		return nil, errors.Errorf("order chain id %d does not match %d", entry.ChainID, chainID)
 	}
+	parsed, err := decodeV2Order(entry)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateV2OrderBasics(parsed.order, source, cfg); err != nil {
+		return nil, err
+	}
+	input, err := resolveV2OrderInput(parsed.order, source, cfg, now)
+	if err != nil {
+		return nil, err
+	}
+	tokenOut, amountOut, err := resolveV2OrderOutputs(parsed.order, input)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := authenticateV2Order(entry, parsed.order)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedOrder{
+		Encoded: parsed.encoded, Signature: parsed.signature, Hash: hash, QuoteID: entry.QuoteID,
+		Source: source, Executor: cfg.Executor,
+		TokenIn: parsed.order.BaseInput.Token, TokenOut: tokenOut,
+		AmountIn: input.amountIn, AmountOut: amountOut,
+		Deadline: input.deadline, ExclusiveUntil: input.decayStart,
+	}, nil
+}
+
+func decodeV2Order(entry orderEntry) (parsedV2Order, error) {
 	encoded, err := hexutil.Decode(entry.EncodedOrder)
 	if err != nil {
-		return nil, errors.Errorf("encodedOrder: %w", err)
+		return parsedV2Order{}, errors.Errorf("encodedOrder: %w", err)
 	}
 	signature, err := hexutil.Decode(entry.Signature)
 	if err != nil || len(signature) == 0 {
-		return nil, errors.New("signature is missing or malformed")
+		return parsedV2Order{}, errors.New("signature is missing or malformed")
 	}
 	decoded, err := v2OrderArguments.Unpack(encoded)
 	if err != nil || len(decoded) != 1 {
-		return nil, errors.Errorf("decode V2 order: %w", err)
+		return parsedV2Order{}, errors.Errorf("decode V2 order: %w", err)
 	}
 	order := *abi.ConvertType(decoded[0], new(v2Order)).(*v2Order)
+	return parsedV2Order{encoded: encoded, signature: signature, order: order}, nil
+}
+
+func validateV2OrderBasics(order v2Order, source orderSource, cfg *Config) error {
 	if order.Info.Reactor != cfg.Reactor {
-		return nil, errors.New("reactor mismatch")
+		return errors.New("reactor mismatch")
 	}
 	if order.Cosigner == (common.Address{}) {
-		return nil, errors.New("cosigner must be non-zero")
+		return errors.New("cosigner must be non-zero")
 	}
 	if source == orderSourceExclusiveV2 && order.CosignerData.ExclusiveFiller != cfg.Executor {
-		return nil, errors.Errorf("exclusive filler mismatch: got %s", order.CosignerData.ExclusiveFiller.Hex())
+		return errors.Errorf("exclusive filler mismatch: got %s", order.CosignerData.ExclusiveFiller.Hex())
 	}
 	if source == orderSourcePublicV2 && order.CosignerData.ExclusiveFiller == cfg.Executor {
-		return nil, errors.New("order belongs to the exclusive V2 source")
+		return errors.New("order belongs to the exclusive V2 source")
 	}
 	if len(order.Cosignature) != 65 || len(order.BaseOutputs) == 0 ||
 		len(order.CosignerData.OutputOverrides) != len(order.BaseOutputs) {
-		return nil, errors.New("order must have outputs, one override per output, and a 65-byte cosignature")
+		return errors.New("order must have outputs, one override per output, and a 65-byte cosignature")
 	}
 	if order.Info.Swapper == (common.Address{}) {
-		return nil, errors.New("swapper must be non-zero")
+		return errors.New("swapper must be non-zero")
 	}
 	if !cfg.TokenPolicy.Allows(order.BaseInput.Token) {
-		return nil, errors.New("input token rejected by token policy")
+		return errors.New("input token rejected by token policy")
 	}
+	return nil
+}
+
+func resolveV2OrderInput(order v2Order, source orderSource, cfg *Config, now time.Time) (resolvedV2Input, error) {
 	deadline, ok := uint32Value(order.Info.Deadline)
 	if !ok || int64(deadline) <= now.Unix() {
-		return nil, errors.New("order deadline is expired or exceeds uint32")
+		return resolvedV2Input{}, errors.New("order deadline is expired or exceeds uint32")
 	}
 	start, startOK := uint64Value(order.CosignerData.DecayStartTime)
 	end, endOK := uint64Value(order.CosignerData.DecayEndTime)
 	if !startOK || !endOK || end <= start || order.Info.Deadline.Cmp(order.CosignerData.DecayEndTime) < 0 {
-		return nil, errors.New("invalid decay window")
+		return resolvedV2Input{}, errors.New("invalid decay window")
 	}
 	if order.CosignerData.InputOverride != nil && order.CosignerData.InputOverride.Sign() > 0 &&
 		order.CosignerData.InputOverride.Cmp(order.BaseInput.StartAmount) > 0 {
-		return nil, errors.New("cosigner input override exceeds base start amount")
+		return resolvedV2Input{}, errors.New("cosigner input override exceeds base start amount")
 	}
 	inputStart := originalIfZero(order.CosignerData.InputOverride, order.BaseInput.StartAmount)
 	if inputStart.Sign() <= 0 || order.BaseInput.EndAmount.Sign() <= 0 || inputStart.Cmp(order.BaseInput.EndAmount) > 0 {
-		return nil, errors.New("order input must be positive and ascend or remain fixed")
+		return resolvedV2Input{}, errors.New("order input must be positive and ascend or remain fixed")
 	}
-	amountIn := decay(inputStart, order.BaseInput.EndAmount, start, end, uint64(now.Unix()))
+	nowUnix := uint64(now.Unix())
 	applyOverride := source == orderSourcePublicV2 && requiresExclusiveOverride(
 		order.CosignerData.ExclusiveFiller,
 		cfg.Executor,
 		start,
-		uint64(now.Unix()),
+		nowUnix,
 	)
-	if applyOverride {
-		if order.CosignerData.ExclusivityOverrideBps == nil || order.CosignerData.ExclusivityOverrideBps.Sign() == 0 {
-			return nil, errors.New("order has active strict exclusivity")
-		}
+	if applyOverride && (order.CosignerData.ExclusivityOverrideBps == nil ||
+		order.CosignerData.ExclusivityOverrideBps.Sign() == 0) {
+		return resolvedV2Input{}, errors.New("order has active strict exclusivity")
 	}
+	return resolvedV2Input{
+		deadline: deadline, decayStart: start, decayEnd: end, now: nowUnix,
+		amountIn:      decay(inputStart, order.BaseInput.EndAmount, start, end, nowUnix),
+		applyOverride: applyOverride,
+	}, nil
+}
+
+func resolveV2OrderOutputs(order v2Order, input resolvedV2Input) (common.Address, *big.Int, error) {
 	tokenOut := order.BaseOutputs[0].Token
 	if tokenOut == (common.Address{}) || tokenOut == order.BaseInput.Token {
-		return nil, errors.New("native and identical output tokens are unsupported")
+		return common.Address{}, nil, errors.New("native and identical output tokens are unsupported")
 	}
 	amountOut := new(big.Int)
 	for i, output := range order.BaseOutputs {
-		if override := order.CosignerData.OutputOverrides[i]; override != nil && override.Sign() > 0 &&
-			override.Cmp(output.StartAmount) < 0 {
-			return nil, errors.Errorf("cosigner output override %d is below base start amount", i)
+		override := order.CosignerData.OutputOverrides[i]
+		if override != nil && override.Sign() > 0 && override.Cmp(output.StartAmount) < 0 {
+			return common.Address{}, nil, errors.Errorf("cosigner output override %d is below base start amount", i)
 		}
-		outputStart := originalIfZero(order.CosignerData.OutputOverrides[i], output.StartAmount)
+		outputStart := originalIfZero(override, output.StartAmount)
 		if output.Token != tokenOut || output.Recipient == (common.Address{}) ||
 			outputStart.Sign() <= 0 || outputStart.Cmp(output.EndAmount) < 0 {
-			return nil, errors.New("outputs must use one token, non-zero recipients, and descend or remain fixed")
+			return common.Address{}, nil, errors.New("outputs must use one token, non-zero recipients, and descend or remain fixed")
 		}
-		resolved := decay(outputStart, output.EndAmount, start, end, uint64(now.Unix()))
-		if applyOverride {
+		resolved := decay(outputStart, output.EndAmount, input.decayStart, input.decayEnd, input.now)
+		if input.applyOverride {
 			resolved = applyExclusiveOverride(resolved, order.CosignerData.ExclusivityOverrideBps)
 		}
 		amountOut.Add(amountOut, resolved)
 	}
+	return tokenOut, amountOut, nil
+}
+
+func authenticateV2Order(entry orderEntry, order v2Order) (common.Hash, error) {
 	if !sameOrderEnvelope(entry, order) {
-		return nil, errors.New("order envelope does not match encoded order")
+		return common.Hash{}, errors.New("order envelope does not match encoded order")
 	}
 	hash, err := v2OrderHash(order)
 	if err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
 	backendHash, err := parseHash(entry.OrderHash)
 	if err != nil || backendHash != hash {
-		return nil, errors.New("orderHash does not match encoded order")
+		return common.Hash{}, errors.New("orderHash does not match encoded order")
 	}
 	if err := validateCosignature(order, hash); err != nil {
-		return nil, err
+		return common.Hash{}, err
 	}
-	return &resolvedOrder{
-		Encoded: encoded, Signature: signature, Hash: hash, QuoteID: entry.QuoteID,
-		Source: source, Executor: cfg.Executor,
-		TokenIn: order.BaseInput.Token, TokenOut: tokenOut,
-		AmountIn: amountIn, AmountOut: amountOut, Deadline: deadline, ExclusiveUntil: start,
-	}, nil
+	return hash, nil
 }
 
 func originalIfZero(override, original *big.Int) *big.Int {

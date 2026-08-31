@@ -40,7 +40,7 @@ type fakeLifiReader struct {
 	governanceFeeErr error
 }
 
-func (f fakeLifiReader) resolveRoutes(context.Context, []common.Address) ([]route, error) {
+func (f fakeLifiReader) ResolveRoutes(context.Context, []common.Address) ([]route, error) {
 	return f.routes, nil
 }
 
@@ -58,13 +58,13 @@ func (f fakeLifiReader) validateDirectAuthorization(context.Context, common.Addr
 	return f.directAuthErr
 }
 
-func (f fakeLifiReader) validateGasTokens([]route) error { return nil }
+func (f fakeLifiReader) ValidateGasTokens([]route) error { return nil }
 
-func (f fakeLifiReader) quoteSnapshots(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
+func (f fakeLifiReader) Quote(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
 	return quoteSnapshotSet{}, nil
 }
 
-func (f fakeLifiReader) fillSnapshots(
+func (f fakeLifiReader) Fill(
 	context.Context, []route, common.Address, common.Address, *big.Int, time.Time,
 ) (fillSnapshotSet, error) {
 	if f.fillSetFn != nil {
@@ -119,10 +119,6 @@ func (f fakeLifiReader) orderStatus(_ context.Context, _ common.Address, orderID
 
 func (f fakeLifiReader) latestBlockNumber(context.Context) (uint64, error) {
 	return f.latestBlock, f.latestBlockErr
-}
-
-func (f fakeLifiReader) latestBlockTime(context.Context) (time.Time, error) {
-	return time.Unix(1_700_000_000, 0), nil
 }
 
 func unpackFinaliseCalldata(t *testing.T, calldata []byte) (

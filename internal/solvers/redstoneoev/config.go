@@ -10,7 +10,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
@@ -22,6 +22,7 @@ type rawConfig struct {
 	LiquidityLens    string                   `yaml:"liquidityLens"`
 	Gas              *liquidlanegas.RawConfig `yaml:"gas"`
 	Strategy         rawStrategyConfig        `yaml:"strategy"`
+	DryRun           bool                     `yaml:"dryRun"`
 	MaxTxGasPriceWei string                   `yaml:"maxTxGasPriceWei"`
 	MaxBidWei        string                   `yaml:"maxBidWei"`
 	Breaker          rawBreaker               `yaml:"breaker"`
@@ -65,6 +66,7 @@ type Config struct {
 	Gas           *liquidlanegas.OracleConfig
 
 	Strategy StrategyConfig
+	DryRun   bool
 
 	MaxTxGasPrice *big.Int
 	MaxBidWei     *big.Int
@@ -159,6 +161,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
 		},
+		DryRun:              raw.DryRun,
 		BreakerMaxFailures:  parse.OrDefault(raw.Breaker.MaxFailures, defaultBreakerFails),
 		BreakerWindow:       breakerWindow,
 		OpsPoll:             opsPoll,
@@ -178,7 +181,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
 	}
-	if strategies.RequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
+	if cfg.Strategy.Name == webhookstrategy.Name && cfg.MaxBidWei == nil {
 		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil

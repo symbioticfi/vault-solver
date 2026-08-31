@@ -32,7 +32,6 @@ type Terms struct {
 
 // Resolved is the fresh signed discount returned at fill time.
 type Resolved struct {
-	RequestID         string
 	DiscountID        string
 	Discount          Terms
 	SignerSignature   string
@@ -56,8 +55,6 @@ type ListItem struct {
 
 // List is the GET /discounts response projected into solver-owned types.
 type List struct {
-	RequestID string
-	Protocol  string
 	Discounts []ListItem
 }
 
@@ -122,14 +119,13 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 		if len(items) != 1 {
 			return nil, errors.Errorf("private discounts: resolve: expected a single discount, got %d", len(items))
 		}
-		return resolvedFromBatchItem(batch.GetRequestId(), &items[0]), nil
+		return resolvedFromBatchItem(&items[0]), nil
 	}
 	return nil, errors.New("private discounts: resolve: response matched neither discount shape")
 }
 
 func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *Resolved {
 	return &Resolved{
-		RequestID:         s.GetRequestId(),
 		DiscountID:        s.GetDiscountId(),
 		Discount:          termsFromModel(s.GetDiscount()),
 		SignerSignature:   s.GetSignerSignature(),
@@ -138,9 +134,8 @@ func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *Resolved {
 	}
 }
 
-func resolvedFromBatchItem(requestID string, it *rfqbackend.ResolveDiscountResponseAnyOf1DiscountsInner) *Resolved {
+func resolvedFromBatchItem(it *rfqbackend.ResolveDiscountResponseAnyOf1DiscountsInner) *Resolved {
 	return &Resolved{
-		RequestID:         requestID,
 		DiscountID:        it.GetDiscountId(),
 		Discount:          termsFromModel(it.GetDiscount()),
 		SignerSignature:   it.GetSignerSignature(),
@@ -172,8 +167,6 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 	if resp == nil {
 		return out, nil
 	}
-	out.RequestID = resp.GetRequestId()
-	out.Protocol = resp.GetProtocol()
 	gen := resp.GetDiscounts()
 	out.Discounts = make([]ListItem, 0, len(gen))
 	for i := range gen {

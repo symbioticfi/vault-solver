@@ -1,6 +1,12 @@
-# vault-solver — RedStone OEV solver (plan)
+# RedStone OEV
 
-The **`redstone-oev`** solver: an off-chain bidder for RedStone Atom OEV auctions. The built-in
+> **Role:** maintained integration contract for `redstone-oev`: protocol ground truth, design decisions,
+> deployment prerequisites, and live open work.
+>
+> **Code/config:** `internal/solvers/redstoneoev` ·
+> [`config/redstone-oev.example.yaml`](../config/redstone-oev.example.yaml)
+
+The **`redstone-oev`** solver is an off-chain bidder for RedStone Atom OEV auctions. The built-in
 `default` strategy captures price-driven liquidations on **Morpho Blue** and exits the seized RWA
 collateral through **one** Symbiotic LiquidLane adapter (one vault) in the same atomic transaction. The
 solver boundary itself is generic: the solver owns the callback address, a strategy returns bid amount
@@ -101,7 +107,7 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   ops loop. It joins every background loop on shutdown (`sync.WaitGroup`) so no goroutine outlives `Run`.
   Caches are immutable snapshots swapped atomically (`atomic.Pointer`), read lock-free on the hot path.
 - **The solver sends no transactions** — RedStone's auctioneer submits the settlement tx; Executor deposit
-  management is out-of-band. The solver returns false from `RequiresTxManager`, so an OEV-only process does
+  management is out-of-band. The command descriptor marks it externally submitted, so an OEV-only process does
   not require `txManager.maxFeeGwei` and neither initializes nor starts the nonce lane. `deps.TxManager` remains
   unused and the example needs no `txManager` section; a mixed process still starts the one shared manager for
   its transaction-sending solvers.
@@ -154,13 +160,15 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 
 | File | Responsibility |
 |---|---|
-| `solver.go` | `Register`, factory, `Run` (loops + join), `handleAuction` → `buildBid`, ops loop, the head-stable Executor cache (`cachedState`/`stateCache`), Executor deposit floor, and outer EXECUTOR_V6 signing |
-| `strategy.go` | OEV strategy factory/construction, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
-| `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register with policy metadata (for example, whether a solver bid cap is required), and custom strategies can register by name |
+| `solver.go` | solver-owned dependencies/state and runtime name |
+| `factory.go` | pure config validation, dependency construction, and WebSocket topic selection |
+| `runtime.go` | `Run`, ops refresh loop, head-stable Executor/adapter cache, and state publication |
+| `auction.go` | wire-message routing, auction deadline/staleness gates, `handleAuction` → `buildBid`, deposit/bid-cap checks, and outer EXECUTOR_V6 solve response |
+| `strategy.go` | explicit `default`/`webhook` construction and validation selection, webhook bid-cap policy, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
 | `strategies/webhook/` | OEV webhook strategy adapter over the shared `internal/webhook` JSON client |
-| `strategies/default/candidates.go` | auction frame → `[]evalItem` (production and Sepolia test monitor both use the auctioned frame price) + default strategy candidate sizing (`candidates` → `sizeLeg`); the candidate set is our own tracked positions (`workerCandidates`) — the frame's pushed positions are not consumed |
+| `strategies/default/candidates.go` | settlement-price selection → `[]evalItem` (production uses the auctioned frame price; the Sepolia test monitor uses its cached on-chain oracle price because dev settlement does not apply the frame) + default strategy candidate sizing (`candidates` → `sizeLeg`); the candidate set is our own tracked positions (`workerCandidates`) — the frame's pushed positions are not consumed |
 | `strategies/default/bundle.go` | single-token bounded bundle selection: after-cost net search with `gas:`, gross loan-profit search without it, plus route-aware gas limits in both modes |
 | `strategies/default/sizing.go` | adapter pricing primitives (`swapOutFor`/`collForBudget`) and `sizeLeg`, the per-candidate single-swap leg sizing/decision over the shared Morpho math |
 | `strategies/default/chainreader.go` | default-strategy Morpho/test-state and callback-balance reads; gas feeds are solver-owned shared facts |
@@ -228,10 +236,10 @@ exchange snapshot instead: `paused`, per-collateral `getMaxRate`/`getMaxAssets`,
 `freeAssets`/`withdrawable`, and acquire balances. That lets any strategy price and capacity-check the
 configured LiquidLane route without doing its own adapter reads on the bid path.
 
-`strategy.config.morphoApiUrl` is a production hard requirement for the default strategy. The Sepolia harness is the only exception: with
-`OEV_TEST_MONITOR=true`, the bot reads a fixed seed set from `OEV_TEST_MARKETS`/`OEV_TEST_POSITIONS` and
-reads Morpho `market`/`position` state on-chain from the callback's `MORPHO()` getter. Public
-`api.morpho.org` does not index the custom Sepolia deployment.
+`strategy.config.morphoApiUrl` is a production hard requirement for the default strategy. The Sepolia
+harness is the only exception: `strategy.config.testMonitor.markets` and `.positions` provide a fixed
+seed set, and the bot reads Morpho `market`/`position` state on-chain from the callback's `MORPHO()`
+getter. Public `api.morpho.org` does not index the custom Sepolia deployment.
 
 ### 3.3 Snapshot concurrency model
 
@@ -442,7 +450,7 @@ The payBid native pool is owner-funded (`receive`) and owner-withdrawable (`with
 `minBundleProfit` gate; otherwise (gate failed, or no matching authorized liquidation) it emits
 `PayBidResult(..., false)` and pays nothing — which the Executor records as `BidUnderpaid`, an event
 RedStone counts toward deposit slashing / blacklisting. A skipped leg in a multi-leg bundle can therefore
-convert a profitable settlement into a `BidUnderpaid` strike (see §10).
+convert a profitable settlement into a `BidUnderpaid` strike (see §8).
 
 Settlement events emitted on-chain (`LegResult` and `PayBidResult`; the Executor's
 `LiquidationFailed(solver indexed, nonce)`) document settlement and post-mortem reasons. The generic solver
@@ -452,6 +460,9 @@ is still fed by the WS `liquidation-result` push (§2).
 ---
 
 ## 6. Verified ground truth
+
+This section preserves implementation evidence and captured protocol behavior, not a live deployment registry.
+Revalidate mutable addresses, API access, and operational limits with RedStone before deployment.
 
 Primary sources: the RedStone OEV docs; `redstone-finance/redstone-evm-examples/oev`; the **verified
 Executor source** (Blockscout Sepolia, impl behind proxy `0xfdFB1862…EBd`); Morpho Blue
@@ -556,8 +567,8 @@ The single-adapter stack settles real OEV liquidations end-to-end:
 - **Fork rehearsal** — on a Sepolia fork, the `SymbioticOevSolver` deployed + wired, the price dropped, and
   a real liquidation settled through real Morpho + the real LiquidLane adapter (status 1, collateral
   seized, profit retained = swap proceeds − repayment, matching callback settlement events).
-- **Live** — under `OEV_TEST_MONITOR=true` (and `OEV_DRY_RUN` unset → real bidding), the bot won a live RedStone auction and settled
-  a **two-leg** liquidation through the callback (both borrowers seized, **+61.66 TLOAN** retained
+- **Live** — with the Sepolia test monitor configured and `dryRun: false`, the bot won a live RedStone
+  auction and settled a **two-leg** liquidation through the callback (both borrowers seized, **+61.66 TLOAN** retained
   on-chain), paying `payBid` from callback native and debiting the deposit by the gas liability. Earlier
   single-leg runs proved +17.55 and +30.83 TLOAN. A deliberate unfunded revert confirmed the failure path
   (`LiquidationFailed`, nonce consumed, deposit debited the gas liability per §6.2).
@@ -567,9 +578,10 @@ The single-adapter stack settles real OEV liquidations end-to-end:
 
 **Dev-settlement caveat.** On the dev endpoint the auctioneer passes `priceAdapter=address(0)` with a
 frozen `priceUpdate`, so settlement does **not** write the auctioned price — every settlement reverts
-`HEALTHY_POSITION` unless the feed is moved out-of-band first. Hence `OEV_TEST_MONITOR=true` on dev
-testbeds that move the feed directly (size against cached `oracle.price()`) and production unset (the
-auctioneer applies the frame price atomically). The Sepolia profile also uses the test monitor because
+`HEALTHY_POSITION` unless the feed is moved out-of-band first. Hence dev testbeds configure
+`strategy.config.testMonitor` and move the feed directly (size against cached `oracle.price()`), while
+production omits that block because the auctioneer applies the frame price atomically. The Sepolia
+profile also uses the test monitor because
 public `api.morpho.org` does not index RedStone's custom test Morpho.
 
 ### 6.7 Test harness & money model
@@ -617,9 +629,11 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `executor` | Executor proxy |
 | `adapter` | solver-owned single LiquidLane adapter |
 | `callback` | solver-owned callback passed to RedStone Executor and into strategy input |
+| `dryRun` | when true, sign and log would-bids without sending solve frames; default false |
 | `strategy.name` | `default` for the built-in strategy backed by Morpho state, or `webhook` for an external decider |
 | `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve only while constructing the HTTP client; OEV route is `POST /decide-bid` |
 | `strategy.config.morphoApiUrl` / `discoveryMaxHealthFactor` | default-strategy production Morpho snapshot endpoint and API health-factor band |
+| `strategy.config.testMonitor.{markets[],positions[]}` | Sepolia-only fixed market and borrower seeds for the on-chain harness monitor; omit in production |
 | `strategy.config.maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
 | `gas.{nativeUsdFeed,nativeMaxAge,tokenUsdFeeds[]}` | optional shared token/native gas conversion; the token entry must cover the adapter loan asset |
 | `strategy.config.bid.{bidEth,authTtlMs,totalBundleProfitBps,minBundleProfitBidBps}` | default-strategy minimum bid, callback-auth replay window, optional gross-profit bid share, and optional bundle margin after gas + bid; the bps fields require `gas:` |
@@ -631,32 +645,9 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `intervals.opsPollMs` | solver Executor-state refresh cadence |
 | `intervals.executorStateMaxAgeMs` | max age of solver Executor cache before `executor_state_stale` (§3.3) |
 
-Hard cutovers already applied:
-
-- OEV strategy fields moved under `strategy.config`: `morphoApiUrl`, discovery/monitor settings, `bid`,
-  and `sizing`. Solver-owned `maxTxGasPriceWei` is top-level. The old unified
-  `intervals.maxStateAgeMs` split into `intervals.executorStateMaxAgeMs` for solver state and
-  `strategy.config.maxStateAgeMs` for default-strategy state. Unknown legacy keys fail strict decoding.
-- Static `bid.loanPerEth`, `bid.minBundleProfitLoan`, and `sizing.minLegProfitLoan` are removed. The former
-  `strategy.config.loanEthFeed` moved to the optional common `gas:` block; when enabled, the strategy converts
-  predicted gas, bid, and margin into signed loan-denominated profit floors before bidding. The old key is
-  rejected: map `ethUsd`/`maxAgeMs` to `gas.nativeUsdFeed`/duration-valued `gas.nativeMaxAge`, and map
-  `loanUsd` to a `gas.tokenUsdFeeds[]` entry for the adapter's actual loan asset with its own `maxAge`.
-- configurable `bid.gasBase` / `bid.gasPerLeg` is removed. Gas is route-aware from code constants plus
-  cached adapter/vault state.
-- configurable `bid.maxLegsPerBid` is removed. Bundle depth is derived from the cached latest header gas
-  limit, the observed RedStone settlement cap, and the route-aware gas prediction.
-- `sizing.maxSeizeFractionBps` is removed. Use `strategy.config.sizing.allowFullLiquidation`.
-
-Dev/test env knobs are not config fields:
-
-| Env | Meaning |
-|---|---|
-| `OEV_TEST_MONITOR=true|1` | use the Sepolia harness monitor instead of Morpho API |
-| `OEV_TEST_MARKETS` / `OEV_TEST_POSITIONS` | comma/space-separated Sepolia harness seeds for `OEV_TEST_MONITOR` |
-| `OEV_DRY_RUN=true|1` | sign and log would-bids, never send solves |
-
-Production leaves `OEV_TEST_MONITOR` unset and requires `strategy.config.morphoApiUrl` for the default strategy.
+Production sets `dryRun` according to the approved rollout, omits `strategy.config.testMonitor`, and
+requires `strategy.config.morphoApiUrl` for the default strategy. Non-secret `${VAR}` expansion may be
+used inside the YAML; environment variables are not read as a separate operational-config channel.
 
 Sepolia harness operation and deployed-address manifests live outside this repo. The solver only needs
 the config values for the selected environment plus the runtime secrets referenced by env-var name.
@@ -679,7 +670,7 @@ conservative fallback because no cached route state means the solver cannot pric
 
 ---
 
-## 10. TODO / refinements
+## 8. Open work
 
 - **Keep calibrating predictor constants from real settlements.** The default strategy logs predicted
   route/gas; tune constants above worst observed successful settlements.

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — RedStone OEV solver (`redstone-oev`), annotated example.
 #
 # An off-chain bidder for RedStone Atom OEV auctions: when a price update makes a Morpho Blue position
@@ -49,10 +50,9 @@ solvers:
       strategy:
         name: default
         config:
-          # Morpho GraphQL endpoint polled for market state + at-risk positions (required by the prod monitor).
-          # Public api.morpho.org does not index this custom Sepolia Morpho, so the Sepolia harness leaves it
-          # empty and uses OEV_TEST_MONITOR=true + OEV_TEST_MARKETS/OEV_TEST_POSITIONS instead.
-          morphoApiUrl: ""
+          # Morpho GraphQL endpoint indexing the configured Morpho deployment. Public api.morpho.org
+          # does not index RedStone's custom Sepolia Morpho, so provide the appropriate endpoint.
+          morphoApiUrl: ${OEV_MORPHO_API_URL}
           # discoveryMaxHealthFactor: 1.30  # only snapshot positions with health factor <= this (default 1.30);
           #                                 # local Morpho math then decides real liquidatability at the auction price
           # maxTrackedPositions: 10000      # Morpho API page size + in-memory at-risk position cap (default 10000)
@@ -68,7 +68,7 @@ solvers:
             allowFullLiquidation: true       # seize full collateral when profitable (default true); false forces fixed 90% partial mode
             swapHaircutBps: 100              # extra safety margin on the adapter's discounted rate for slippage/staleness (default 200 = 2%)
 
-          monitorPollMs: 10000               # default strategy monitor snapshot poll (API in prod, testMonitor on Sepolia)
+          monitorPollMs: 10000               # default strategy monitor snapshot poll
           maxStateAgeMs: 90000               # max default-strategy cache age before stale_state
 
       maxTxGasPriceWei: "20000000000"        # signed tx.gasprice ceiling + native deposit/gas-reservation assumption;

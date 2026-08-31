@@ -1,7 +1,22 @@
 # CLAUDE.md — working agreement for this repo
 
 This file is the source of truth for how code is written here. Read it before making changes.
-It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
+It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file. The root `README.md`
+is operator-facing; [`docs/README.md`](docs/README.md) is the bounded-context development map.
+
+## Agent quick start
+
+1. Run `git status --short --branch`; preserve unrelated work and never rewrite it to make the tree clean.
+2. Classify the change through [`docs/README.md`](docs/README.md) and read only the linked contract, owning
+   package, local tests, and example config before widening scope.
+3. Search `internal/`, `cmd/`, `config/`, and `docs/` first. Include `api/` only to trace a generated type or
+   change its vendored ABI/spec/schema.
+4. Never hand-edit generated Go. Change the vendored external artifact and regenerate through `make`.
+5. Iterate with `make verify-fast TARGET=...` or `make verify-race TARGET=...`; add risk-specific tests for
+   concurrency, signing, wire contracts, or funds-moving logic.
+6. Update the canonical documentation owner from the matrix below; do not duplicate a detailed contract into
+   another overview.
+7. Finish with `make format && make verify`, then inspect the complete diff and report any check not run.
 
 ## Purpose
 
@@ -9,35 +24,37 @@ It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 pluggable **solver** strategy against them. A "solver" is an off-chain integration with some external
 protocol that sources or prices liquidity on top of a Symbiotic vault adapter.
 
-The first implementation is the **3F (Grunt) Bridge Facilitator**. The repository is explicitly
-structured so additional integrations — **RFQ, Redstone/OEV, and others** — can be added *without
-touching the generic framework*. Keeping that boundary clean is the single most important design goal.
+The first implementation was the **3F (Grunt) Bridge Facilitator**. The service now also implements
+**RFQ, RedStone OEV, LI.FI, and UniswapX** without coupling those integrations to the generic framework.
+Keeping that boundary clean is the single most important design goal.
 
-See the per-solver plans under `docs/` (`docs/3F-PLAN.md`, `docs/RFQ-PLAN.md`) for the architecture,
-decisions, and the live TODO lists (§10).
+Start at [`docs/README.md`](docs/README.md) for bounded task routes, the package-to-plan map, and shared
+architecture contracts; focused commands live in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## The modularity rule (most important)
 
 Two layers, and code lives in exactly one:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
-  `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
-  Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
-- **Integration packages** (fully self-contained): `internal/solvers/<name>/`
-  (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
-  live here.
+  `internal/{config,chain,signer,txmanager,solver,observability,version}` and the command lifecycle.
+  `cmd/vault-solver/composition.go` is the sole integration-aware boundary: it imports solver packages only
+  to bind their names, validators, factories, and submission metadata. Protocol behavior stays out of `cmd/`.
+- **Integration packages** (fully self-contained): `internal/solvers/<name>/` — currently
+  `bridgefacilitator/`, `rfq/`, `redstoneoev/`, `lifi/`, and `uniswapx/`. All protocol-specific logic,
+  types, ABIs usage, pricing, and config live here.
 
 **Shared protocol code** used by ≥2 solvers lives in its own shared package or generated binding — e.g.
 Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/morphographql`, or neutral
 contract bindings like `api/bindings/liquidlane/adapter` / `api/bindings/erc4626` (shared by redstone-oev +
 rfq). Hand-written domain adapters stay inside the solver that owns the workflow unless a second solver
-actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
-helper package — `internal/parse`.
+actually reuses them. Neutral, protocol-agnostic helpers live in small focused packages such as `internal/parse`,
+`internal/tokenpolicy`, `internal/webhook`, and `internal/tenderly`.
 
-To add a new integration (e.g. `rfq`):
-1. Create `internal/solvers/rfq/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
-   `Factory(raw yaml.Node, deps solver.Deps) (Solver, error)`.
-2. Self-register in `init()` via `solver.Register(Name, factory)`; blank-import the package from `main`.
+To add a new integration:
+1. Create `internal/solvers/<name>/` implementing `solver.Solver` (`Name()`, `Run(ctx)`) and exporting
+   `Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error)` plus pure `ValidateConfig(raw yaml.Node)`.
+2. Add one immutable descriptor to `cmd/vault-solver/composition.go`; mark it externally submitted only when
+   an upstream auctioneer submits settlement.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).
 4. Decode your own config from the deferred `solvers[].config` YAML node — no framework edits.
@@ -53,7 +70,10 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - Config lists solvers under `solvers:` (one or more, at most one per type). The generic layer decodes
   only `chain`, `signer`, `txManager`, `observability`, and each `solvers[].name`, and keeps each
   `solvers[].config` as an opaque `yaml.Node` (two-stage decode); each solver decodes that node into
-  its own typed, **validated** struct in `parseConfig`. All solvers run in one process and share the
+  its own typed, **validated** struct in `parseConfig`. Each integration exports a pure validator wired by
+  the command composition root, so `vault-solver config validate` checks the same integration and strategy
+  semantics without network I/O. All
+  solvers run in one process and share the
   chain client, signer, and the single nonce-serialized `txManager` — which is why multiple solvers on
   one EOA never race on nonces.
 - **Prefer values from the upstream source over constants.** When the 3F API (or any integration's
@@ -87,21 +107,26 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 
 ## Testing, linting, formatting — required for every change
 
-Nothing merges red. Before considering a change done, all of these must pass:
+Nothing merges red. Install the pinned local tools once with `make tools`. During implementation run
+`make verify-fast TARGET=./internal/<package>` (or `make verify-race` for concurrency-sensitive work).
+Before considering a change done, run:
 
 ```
-GOTOOLCHAIN=go1.26.5 golangci-lint run --fix   # make format — formats + lints + autofixes
-GOTOOLCHAIN=go1.26.5 go build ./...
-GOTOOLCHAIN=go1.26.5 go test -race -cover ./...  # make test
-GOTOOLCHAIN=go1.26.5 golangci-lint run            # make lint — must report 0 issues
+make format   # mutating formatter/autofix step
+make verify   # read-only: format check, build all packages, uncached race+coverage tests, final lint
 ```
+
+The Makefile forces `GOTOOLCHAIN=go1.26.5` and invokes the pinned linter from `.tools/bin`, so local,
+agent, and CI commands cannot silently use a different Go or lint version. `make doctor` diagnoses a
+missing or mismatched toolchain.
 
 - **Unit-test all new logic.** Pure logic (pricing/sizing, EIP-712 digests, config parsing/validation)
   must have table-driven tests. EIP-712 signing has golden + `apitypes` parity tests — keep them green
   and extend them when you touch the digest. HTTP/on-chain paths should be tested against an
   `httptest` server / a simulated or forked chain backend.
-- Generated code (`api/bindings/**`, `api/threef`, `api/rfqbackend`) is committed for hermetic builds;
-  regenerate via the `make` targets, never hand-edit (see **Code generation** below).
+- Generated code (`api/bindings/**`, `api/{threef,rfqbackend,lifiorder,uniswapxservice,morphographql}`)
+  is committed for hermetic builds; regenerate via the `make` targets, never hand-edit (see
+  **Code generation** below).
 
 ## Code generation: vendor the source, then generate
 
@@ -129,7 +154,8 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   overload) is hand-vendored into `api/abi/` with a comment saying why — still generated from, never
   hand-bound.
 - **API clients (OpenAPI spec → openapi-generator).** Vendor the spec under `openapi/` (`make
-  refresh-*-openapi` pulls it), then `make refresh-{3f,rfq}-client` runs the **Java openapi-generator**
+  refresh-*-openapi` pulls it), then `make refresh-{3f,rfq,lifi,uniswapx}-client` runs the
+  **Java openapi-generator**
   (via `hack/openapi-generator-cli.sh`, which downloads the pinned jar on demand — needs a JRE) into
   `api/<client>/`. `OPENAPI_GENERATOR_VERSION` is pinned and is the **floor**: it must ingest the spec
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
@@ -182,42 +208,34 @@ Commit titles follow [Conventional Commits](https://www.conventionalcommits.org)
 - Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
 - Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
 
-## Keep the docs in sync — required
+## Documentation ownership (required)
 
-Two audiences, two docs, kept current **in the same change** as the code:
+Keep documentation current, scoped, and non-duplicative. The canonical ownership map is
+[`docs/README.md`](docs/README.md#sources-of-truth); apply these update rules in the same change as the
+implementation:
 
-**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md`) are the source of truth
-for **internal architecture, design decisions, and the live TODO list** — write for a future
-maintainer.
+- A user-observable capability, CLI/config field, default, requirement, or safety behavior updates `README.md`
+  and the affected example/schema as applicable.
+- A shared dependency boundary, lifecycle, or invariant updates its shared contract. An integration-specific
+  design or external-protocol decision updates only that integration's plan.
+- Starting, finishing, dropping, or discovering durable open work updates the owning plan's live section.
+  Preserve resolved work only when it is durable design rationale, verified protocol evidence, or current
+  implementation status; transient execution history belongs in Git.
+- Adding, renaming, or removing a durable document updates `docs/README.md`; command changes update
+  `docs/DEVELOPMENT.md`.
+- Overview documents summarize and link. Do not copy detailed protocol, transaction, or strategy contracts
+  into multiple files.
 
-- **Whenever you change the high-level architecture or a design decision** — a new layer or boundary,
-  a changed data flow, a new/removed integration, an interface or external-contract change, a
-  deliberate deviation from an upstream reference — **update the relevant plan in the same change.**
-- **Whenever the TODO work changes** — an item is started, finished, dropped, or added — **update the
-  TODO list (§10 of the relevant solver plan)** so it always reflects reality.
-- A code change that alters architecture/design but leaves a plan stale is **incomplete**.
-
-**README** (`README.md`) is the **external, user-facing** entry point — write for an operator or
-integrator running the bot, not a maintainer of it. Keep internal design out of it; keep runtime and
-integration surface in it.
-
-- **Whenever you change something a user observes or configures** — a new or renamed CLI flag or
-  subcommand, a config knob or its default, a new/removed solver or a change to what a solver does, a
-  new strategy or integration surface, quickstart/build/run steps, or requirements — **update the
-  README in the same change.**
-- A user-facing change (flag, config field, solver capability) that lands without a README update is
-  **incomplete**.
-
-If a change is purely internal (a bug fix or refactor with no design impact and nothing a user
-observes), neither doc needs an update — use judgement, but err toward recording anything a future
-reader or operator would be surprised to discover.
+Do not add task journals, generated refactor summaries, agent handoff artifacts, or a `docs/developer/`
+hierarchy. Those are transient execution history and belong in commits or pull requests. A purely internal
+bug fix or refactor needs no docs change unless it changes a documented invariant or operator-visible behavior.
 
 ## Quick reference
 
-- Run gate: `make format && make test && make lint && go build ./...`
-- Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
-  `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
+- Run gate: `make format && make verify` (`make verify` itself is read-only).
+- Context map: [`docs/README.md`](docs/README.md); commands and checks: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+- Add an integration: new `internal/solvers/<name>/` + one command descriptor + bindings under
+  `api/bindings/<name>/` + a `solvers[]` entry. No generic framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
-- Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
-  user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
+- Keep the canonical documentation owner current in the same change; use the map in `docs/README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).

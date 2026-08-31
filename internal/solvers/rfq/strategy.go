@@ -7,13 +7,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
-
-func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	return strategies.New(spec.Name, spec.Config)
-}
 
 // solverInventory is one LiquidLane candidate leg; RFQ maps backend adapter snapshots and fill-time
 // recovery reads into the shared LiquidLane inventory shape.
@@ -55,17 +50,6 @@ func newQuoteInput(
 	}
 }
 
-func newFillInput(
-	chainID int64,
-	executor common.Address,
-	req strategyRequest,
-	candidates []liquidlane.QuoteCandidate,
-	required *big.Int,
-	requireSingleRoute bool,
-	now time.Time,
-) types.FillInput {
-	return newQuoteInput(chainID, executor, req, candidates, required, requireSingleRoute, now)
-}
 func validateSingleRoute(requireSingleRoute bool, legCount int) error {
 	if requireSingleRoute && legCount != 1 {
 		return errors.Errorf("single-route input requires exactly one leg, got %d", legCount)

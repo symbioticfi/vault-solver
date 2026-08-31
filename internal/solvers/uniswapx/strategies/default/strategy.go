@@ -8,8 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -19,8 +17,6 @@ const (
 	bpsDenominator         = 10_000
 	defaultExecutionBuffer = 12 * time.Second
 )
-
-var defaultMinAmount = big.NewInt(1)
 
 type Config struct {
 	PriceBufferBps          int    `yaml:"priceBufferBps"`
@@ -36,14 +32,14 @@ type Strategy struct {
 	executionBuffer time.Duration
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
+func ValidateConfig(raw yaml.Node) error {
+	_, err := NewFromConfig(raw)
+	return err
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
 	var cfg Config
-	if err := decodeConfig(raw, &cfg); err != nil {
+	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
 	return New(cfg)
@@ -59,7 +55,7 @@ func New(cfg Config) (*Strategy, error) {
 	if cfg.InventoryReserveBps < 0 || cfg.InventoryReserveBps >= bpsDenominator {
 		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d), got %d", bpsDenominator, cfg.InventoryReserveBps)
 	}
-	minAmount := new(big.Int).Set(defaultMinAmount)
+	minAmount := big.NewInt(1)
 	if cfg.MinAmount != "" {
 		var err error
 		minAmount, err = parse.Big(cfg.MinAmount, "minAmount")
@@ -79,11 +75,4 @@ func New(cfg Config) (*Strategy, error) {
 	return &Strategy{
 		cfg: cfg, minAmount: minAmount, executionBuffer: executionBuffer,
 	}, nil
-}
-
-func decodeConfig(node yaml.Node, out any) error {
-	if node.Kind == 0 {
-		node = yaml.Node{Kind: yaml.MappingNode}
-	}
-	return solver.DecodeStrict(node, out)
 }

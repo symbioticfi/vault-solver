@@ -56,22 +56,19 @@ func TestWebhookStrategyDelegatesOneQuoteAndCurrentFill(t *testing.T) {
 	}
 }
 
-func TestValidateQuotePreservesRequestedSide(t *testing.T) {
-	tests := []struct {
-		name  string
-		input types.QuoteInput
-		quote *types.Quote
-	}{
-		{name: "invalid amounts", input: types.QuoteInput{AmountIn: big.NewInt(1)}, quote: &types.Quote{}},
-		{name: "changed exact input", input: types.QuoteInput{AmountIn: big.NewInt(10)}, quote: &types.Quote{AmountIn: big.NewInt(9), AmountOut: big.NewInt(8)}},
-		{name: "changed exact output", input: types.QuoteInput{AmountOut: big.NewInt(10)}, quote: &types.Quote{AmountIn: big.NewInt(11), AmountOut: big.NewInt(9)}},
+func TestDecideFillNullResponseDeclines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(nil)
+	}))
+	defer server.Close()
+
+	plan, err := newWebhookTestStrategy(t, server.URL).DecideFill(t.Context(), types.FillInput{})
+	if err != nil {
+		t.Fatalf("DecideFill() error = %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := validateQuote(tt.input, tt.quote); err == nil {
-				t.Fatal("error = nil")
-			}
-		})
+	if plan != nil {
+		t.Fatalf("DecideFill() plan = %+v, want nil", plan)
 	}
 }
 

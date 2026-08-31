@@ -24,8 +24,6 @@ type MarketParams struct {
 	Lltv            *big.Int
 }
 
-type abiMarketParams = MarketParams
-
 // MarketInfo is a Morpho market's params plus its state snapshot.
 type MarketInfo struct {
 	Params MarketParams
@@ -60,8 +58,14 @@ type legHint struct {
 	ExpectedLoanOut *big.Int
 }
 
+type TestMonitorConfig struct {
+	Markets   []common.Hash
+	Positions []common.Address
+}
+
 type Config struct {
 	MorphoAPIURL             string
+	TestMonitor              *TestMonitorConfig
 	DiscoveryMaxHealthFactor float64
 	MaxTrackedPositions      int
 	BidWei                   *big.Int
@@ -82,11 +86,9 @@ type Deps struct {
 	Callback            common.Address
 	LoadAdapterSnapshot func() (types.AdapterSnapshot, bool)
 	GasAccounting       bool
-	TestMonitor         bool
 }
 
 type signer interface {
-	Address() common.Address
 	SignHash(common.Hash) ([]byte, error)
 }
 

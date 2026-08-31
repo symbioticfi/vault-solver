@@ -45,9 +45,8 @@ func (t *offerTracker) liveEntries(now time.Time) []offerKey {
 	return keys
 }
 
-// reconcileAdapter replaces all of this adapter's cached offers with the API's current live set. The
-// 1-2 minute poll is authoritative — it always reflects our own just-submitted offers as well as any
-// made out of band — so anything not in `live` is gone and dropped.
+// reconcileAdapter replaces this adapter's cache from the authoritative API response, including
+// offers submitted by this or another process.
 func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]offerState) {
 	for k := range t.offers {
 		if k.adapter == adapter {
@@ -80,15 +79,6 @@ func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 		}
 	}
 	return total
-}
-
-// pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
-func (t *offerTracker) pruneExpired(now time.Time) {
-	for k, st := range t.offers {
-		if !st.expiry.After(now) {
-			delete(t.offers, k)
-		}
-	}
 }
 
 // parseUnixTime parses a uint256 unix-seconds string (as the API encodes expirations).

@@ -7,25 +7,46 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
-func newStrategy(cfg *Config, deps strategies.Deps) (types.Strategy, error) {
-	name := cfg.Strategy.Name
-	if name == "" {
-		name = defaultStrategyName
+func newStrategy(cfg *Config, deps defaultstrategy.FactoryDeps) (types.Strategy, error) {
+	switch cfg.Strategy.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(cfg.Strategy.Config, deps)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(cfg.Strategy.Config)
+	default:
+		return nil, unknownStrategyError(cfg.Strategy.Name)
 	}
-	return strategies.New(name, cfg.Strategy.Config, deps)
+}
+
+func validateStrategyConfig(spec StrategyConfig, gasAccounting bool) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config, gasAccounting)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf(
+		"unknown OEV strategy %q (registered: %v)",
+		name,
+		[]string{defaultstrategy.Name, webhookstrategy.Name},
+	)
 }
 
 func (s *Solver) bidInput(
 	a AuctionMessage,
 	now time.Time,
 	st cachedState,
-	inFlight inFlightState,
+	pendingAuctions []types.PendingAuction,
 	gasPrice *big.Int,
 ) types.BidInput {
 	return types.BidInput{
@@ -37,7 +58,7 @@ func (s *Solver) bidInput(
 			RawPriceCount: len(a.Payload.Prices),
 			Prices:        auctionPricesForStrategy(a),
 		},
-		Adapter: cloneAdapterSnapshot(st.Adapter),
+		Adapter: st.Adapter,
 		Context: types.BidContext{
 			ChainID:            cloneBig(s.chainID),
 			Executor:           s.cfg.Executor,
@@ -49,7 +70,7 @@ func (s *Solver) bidInput(
 			GasPrices:          st.GasPrices,
 			GasLimit:           st.GasLimit,
 		},
-		PendingAuctions: pendingAuctionsForStrategy(inFlight.pending, now),
+		PendingAuctions: pendingAuctions,
 	}
 }
 
@@ -67,36 +88,6 @@ func auctionPricesForStrategy(a AuctionMessage) []types.AuctionPrice {
 	}
 	slices.SortFunc(out, func(a, b types.AuctionPrice) int {
 		return a.Oracle.Cmp(b.Oracle)
-	})
-	return out
-}
-
-func pendingAuctionsForStrategy(in []pendingAuction, now time.Time) []types.PendingAuction {
-	out := make([]types.PendingAuction, 0, len(in))
-	for _, a := range in {
-		if a.ID == "" {
-			continue
-		}
-		expiresAt := a.SentAt.Add(reservationTTL)
-		if !expiresAt.After(now) {
-			continue
-		}
-		out = append(out, types.PendingAuction{
-			ID:        a.ID,
-			SentAt:    a.SentAt,
-			Won:       a.Won,
-			ExpiresAt: expiresAt,
-		})
-	}
-	slices.SortFunc(out, func(a, b types.PendingAuction) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		default:
-			return 0
-		}
 	})
 	return out
 }

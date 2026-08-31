@@ -1,6 +1,6 @@
 // Package rfq implements the Symbiotic RFQ filler solver: it serves backend quote requests off the
-// on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. It
-// self-registers with the solver framework via init(). See docs/RFQ-PLAN.md.
+// on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. See
+// docs/RFQ-PLAN.md.
 package rfq
 
 import (
@@ -11,24 +11,19 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 const (
-	// Name is the registry key that selects this solver from config.
+	// Name identifies this solver in config.
 	Name                       = "rfq-filler"
 	quoteServerShutdownTimeout = 5 * time.Second
 )
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
@@ -39,7 +34,48 @@ type Solver struct {
 	reportFatal func(error)
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func ValidateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if err := validateStrategyConfig(cfg.Strategy); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
+}
+
+func validateStrategyConfig(spec StrategyConfig) error {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.ValidateConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.ValidateConfig(spec.Config)
+	default:
+		return unknownStrategyError(spec.Name)
+	}
+}
+
+func newStrategy(spec StrategyConfig) (types.Strategy, error) {
+	switch spec.Name {
+	case defaultstrategy.Name:
+		return defaultstrategy.NewFromConfig(spec.Config)
+	case webhookstrategy.Name:
+		return webhookstrategy.NewFromConfig(spec.Config)
+	default:
+		return nil, unknownStrategyError(spec.Name)
+	}
+}
+
+func unknownStrategyError(name string) error {
+	return errors.Errorf("unknown RFQ strategy %q (registered: %v)", name, strategyNames())
+}
+
+func strategyNames() []string {
+	return []string{defaultstrategy.Name, webhookstrategy.Name}
+}
+
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -82,9 +118,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}, nil
 }
 
-// buildServices wires the quote and execution services from the parsed config and shared deps.
-// Split from factory so the config → service wiring (notably the adapter whitelist reaching both
-// services) is unit-testable without a chain client.
 func buildServices(
 	cfg *Config,
 	chainID int64,
@@ -130,7 +163,6 @@ func buildServices(
 		txm:              txm,
 		log:              log,
 		now:              time.Now,
-		inflight:         make(map[string]bool),
 	}
 	return quotes, exec
 }

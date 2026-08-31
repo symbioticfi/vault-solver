@@ -1,14 +1,12 @@
 // Package bridgefacilitator implements the 3F (Grunt) Bridge Facilitator solver: it discovers
 // bridge-loan auctions via the 3F API, snapshots adapter state for a trusted strategy, signs the
-// returned offers, and realizes repaid loans back into the vault. It self-registers with the solver
-// framework via init().
+// returned offers, and realizes repaid loans back into the vault.
 package bridgefacilitator
 
 import (
 	"context"
 	"math/big"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,13 +29,8 @@ var offerStatusIgnored = map[string]bool{
 	"CANCELED":     true,
 }
 
-// Name is the registry key that selects this solver from config.
+// Name identifies this solver in config.
 const Name = "3f-bridge-facilitator"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
@@ -48,11 +41,11 @@ type Solver struct {
 	strategy   types.Strategy
 	log        logr.Logger
 	laneReady  func() bool    // shared txmanager lane state; safe for the single Run goroutine
-	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
-	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
-	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
-	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	signerAddr common.Address // the solver's signer address for diagnostics
+	probe      signerProbe    // one-time offer-signer authorization probe
+	nonceSeq   uint64         // wall-clock-seeded offer nonce; owned exclusively by the Run goroutine
+	offers     *offerTracker  // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets    []Target       // current resolved snapshot; owned exclusively by the Run goroutine
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -68,13 +61,24 @@ func deduplicateAdapters(adapters []common.Address) []common.Address {
 	return unique
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func ValidateConfig(raw yaml.Node) error {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if err := validateStrategyConfig(cfg.Strategy); err != nil {
+		return errors.Errorf("strategy: %w", err)
+	}
+	return nil
+}
+
+func Factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout, deps.Log.WithName(Name))
+	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout)
 	offerStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
@@ -98,7 +102,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		offers:     newOfferTracker(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
-	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
+	s.nonceSeq = uint64(time.Now().UnixNano())
 	return s, nil
 }
 
@@ -233,8 +237,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 
 	now := time.Now()
-	s.offers.pruneExpired(now) // keep the dedup map bounded
-	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	input, auctionByID := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {
 		return // no open, offerable auctions this pass
 	}
@@ -243,21 +246,18 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Error(err, "offer: strategy")
 		return
 	}
-	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
-	// not just the default strategy's pricing, against the adapter's exact on-chain minYieldPerRequest.
-	minYieldByAdapter := make(map[common.Address]*big.Int, len(offerings))
+	exposureByAdapter := make(map[common.Address]exposureState, len(offerings))
 	for _, o := range offerings {
-		minYieldByAdapter[o.target.Adapter] = o.st.minYieldPpm
+		exposureByAdapter[o.target.Adapter] = o.st
 	}
 
-	auctionByID := auctionViewsByID(auctions)
 	for _, offer := range out.Offers {
 		av, ok := auctionByID[offer.AuctionID]
 		if !ok {
 			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
 			continue
 		}
-		floor, known := minYieldByAdapter[offer.Maker]
+		exposure, known := exposureByAdapter[offer.Maker]
 		if !known {
 			s.log.Error(errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex()),
 				"offer: unknown maker; skipping", "auctionId", offer.AuctionID)
@@ -269,9 +269,13 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 				"offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
 			continue
 		}
-		// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
-		// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
-		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
+		if err := types.ValidateYield(
+			offer.ExpectedReturn,
+			offer.Principal,
+			exposure.minAssets,
+			exposure.minYieldPpm,
+			maxRate,
+		); err != nil {
 			s.log.Error(err, "offer: yield out of bounds; skipping",
 				"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 			continue
@@ -292,7 +296,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		}
 		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
-			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
+			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn,
+			"strategyReason", offer.Reason)
 	}
 }
 
@@ -335,7 +340,8 @@ func (s *Solver) reconcile(ctx context.Context) {
 
 // nextNonce returns a strictly-increasing offer nonce.
 func (s *Solver) nextNonce() uint64 {
-	return s.nonceSeq.Add(1)
+	s.nonceSeq++
+	return s.nonceSeq
 }
 
 // refreshTargets builds and validates a complete adapter snapshot before installing it. A returned

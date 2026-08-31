@@ -3,6 +3,8 @@ package liquidlane
 import (
 	"math/big"
 	"testing"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 func mustBig(t *testing.T, raw string) *big.Int {
@@ -115,7 +117,7 @@ func TestConservativeAdvertisedRateNeverExceedsAdapter(t *testing.T) {
 		for _, discount := range discounts {
 			rate := advertisedRate(price, discount)
 			for step := int64(1); step <= 500; step++ {
-				amountIn := new(big.Int).Mul(big.NewInt(step*7_919), pow10(max(inDec-6, 0)))
+				amountIn := new(big.Int).Mul(big.NewInt(step*7_919), chain.Exp10(max(inDec-6, 0)))
 				safeRate := ConservativeAdvertisedRate(amountIn, rate, inDec, outDec)
 				if safeRate.Sign() <= 0 {
 					continue // not quotable at this size; the caller drops the leg

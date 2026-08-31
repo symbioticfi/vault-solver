@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
@@ -56,20 +55,6 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 	}
 }
 
-func TestStrategyRegistryUsesBuiltIns(t *testing.T) {
-	got, err := newStrategy(StrategyConfig{Name: "default"})
-	if err != nil {
-		t.Fatalf("newStrategy default: %v", err)
-	}
-	if got == nil {
-		t.Fatal("newStrategy default returned nil")
-	}
-	names := strategies.Registered()
-	if len(names) != 2 || names[0] != "default" || names[1] != "webhook" {
-		t.Fatalf("registered strategies = %v, want [default webhook]", names)
-	}
-}
-
 func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	now := time.Unix(100, 0)
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000001")
@@ -77,8 +62,8 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	offers := newOfferTracker()
 	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
-	input := buildStrategyInput(
-		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
+	input, _ := buildStrategyInput(
+		[]threef.AuctionDto{testAuctionDto(10, collateral)},
 		[]*adapterOffering{{
 			target: Target{
 				Adapter:    adapter,
@@ -144,9 +129,17 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}
 }
 
-func testAuctionDto(id int64, depositAsset common.Address, amountRequested string) threef.AuctionDto {
+func testAuctionDto(id int64, depositAsset common.Address) threef.AuctionDto {
+	amountRequested := "100"
 	maxRate := float32(200)
+	chainID := float32(11155111)
+	name, version := "Grunt", OfferDomainVersion
 	request := common.HexToAddress("0x0000000000000000000000000000000000000010")
+	domain := threef.NewAuctionEip712DomainDto(
+		*threef.NewNullableString(&name),
+		*threef.NewNullableString(&version),
+		*threef.NewNullableFloat32(&chainID),
+	)
 	return threef.AuctionDto{
 		Id:              float32(id),
 		RequestId:       request.Hex(),
@@ -156,5 +149,6 @@ func testAuctionDto(id int64, depositAsset common.Address, amountRequested strin
 		DepositAsset: *threef.NewNullableAuctionDepositAssetDto(
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),
 		),
+		Eip712Domain: *threef.NewNullableAuctionEip712DomainDto(domain),
 	}
 }

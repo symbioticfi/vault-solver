@@ -10,7 +10,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
-func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
+func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	if len(input.Candidates) == 0 {
 		return decline(), nil
 	}
@@ -24,7 +24,7 @@ func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types
 	return *out, nil
 }
 
-func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
+func (s *Strategy) BuildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if len(input.Candidates) == 0 {
 		return nil, nil
 	}
@@ -55,14 +55,10 @@ func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*typ
 		}
 		legs = append(legs, types.FillLeg{
 			Adapter: source.Route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
-			MaxRate: liquidlane.CloneBig(source.Rate), DiscountID: liquidlane.CloneHash(source.DiscountID),
+			DiscountID: liquidlane.CloneHash(source.DiscountID),
 		})
 	}
-	return &types.FillPlan{
-		QuoteID: input.QuoteID, RequestID: input.RequestID,
-		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
-		QuotedAmountOut: quotedAmountOut, Legs: legs,
-	}, nil
+	return &types.FillPlan{Legs: legs}, nil
 }
 
 func decline() types.QuoteOutput {

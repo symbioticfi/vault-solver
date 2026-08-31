@@ -6,11 +6,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/uniswapxservice"
@@ -28,7 +26,7 @@ const (
 type orderClient struct {
 	client *uniswapxservice.APIClient
 
-	requestMu   sync.Mutex
+	// Run calls the client during startup before handing sole ownership to orderLoop.
 	lastRequest time.Time
 	requestGap  time.Duration
 }
@@ -118,11 +116,6 @@ func (c *orderClient) ordersByHash(
 		end := min(start+maxOrderHashBatch, len(hashes))
 		if err := c.fetchOrderHashBatch(ctx, chainID, hashes[start:end], terminals); err != nil {
 			return nil, err
-		}
-	}
-	for hash := range requested {
-		if _, ok := terminals[hash]; !ok {
-			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
 		}
 	}
 	return terminals, nil
@@ -278,7 +271,7 @@ func orderTerminalFromAPI(
 			chainID,
 		)
 	}
-	orderHash, err := decodeHash(order.OrderHash)
+	orderHash, err := parseHash(order.OrderHash)
 	if err != nil || orderHash == (common.Hash{}) {
 		return common.Hash{}, orderTerminal{}, errors.Errorf("invalid order hash %q", order.OrderHash)
 	}
@@ -289,7 +282,7 @@ func orderTerminalFromAPI(
 	terminal := orderTerminal{Status: string(order.OrderStatus)}
 	txHashValue, hasTxHash := order.GetTxHashOk()
 	if hasTxHash {
-		txHash, decodeErr := decodeHash(*txHashValue)
+		txHash, decodeErr := parseHash(*txHashValue)
 		if decodeErr != nil || txHash == (common.Hash{}) {
 			return common.Hash{}, orderTerminal{}, errors.Errorf("invalid transaction hash %q", *txHashValue)
 		}
@@ -306,17 +299,6 @@ func orderTerminalFromAPI(
 		)
 	}
 	return orderHash, terminal, nil
-}
-
-func decodeHash(value string) (common.Hash, error) {
-	decoded, err := hexutil.Decode(value)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if len(decoded) != common.HashLength {
-		return common.Hash{}, errors.Errorf("got %d bytes, want %d", len(decoded), common.HashLength)
-	}
-	return common.BytesToHash(decoded), nil
 }
 
 func orderEntryFromAPI(order *uniswapxservice.DutchV2OrderEntity) (orderEntry, error) {
@@ -390,8 +372,6 @@ func (r *errorLimitReader) Read(data []byte) (int, error) {
 }
 
 func (c *orderClient) waitForRequestSlot(ctx context.Context) error {
-	c.requestMu.Lock()
-	defer c.requestMu.Unlock()
 	if c.requestGap <= 0 {
 		return nil
 	}

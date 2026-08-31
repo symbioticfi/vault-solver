@@ -15,7 +15,7 @@ func TestAllocateExactInputUsesBestRatesAcrossSources(t *testing.T) {
 	result := newAllocator([]Candidate{
 		candidate("worse", "route-2", 90, 100),
 		candidate("better", "route-1", 100, 60),
-	}).allocateExactInput(big.NewInt(100), 2)
+	}).allocateExactInputWithPolicy(big.NewInt(100), 2, false)
 
 	if result.Remaining.Sign() != 0 || result.TotalAmountOut.Int64() != 96 {
 		t.Fatalf("result = %+v, want complete allocation with output 96", result)
@@ -32,7 +32,7 @@ func TestAllocateExactInputUsesCoveringAlternative(t *testing.T) {
 	private.DiscountID = &discountID
 	direct := candidate("direct", "route-1", 100, 100)
 
-	result := newAllocator([]Candidate{private, direct}).allocateExactInput(big.NewInt(80), 1)
+	result := newAllocator([]Candidate{private, direct}).allocateExactInputWithPolicy(big.NewInt(80), 1, false)
 
 	if result.Remaining.Sign() != 0 || len(result.Allocations) != 1 ||
 		result.Allocations[0].Candidate.ID != "direct" || result.TotalAmountOut.Int64() != 80 {
@@ -46,7 +46,7 @@ func TestAllocateExactInputDoesNotReusePhysicalRoute(t *testing.T) {
 	private.DiscountID = &discountID
 	direct := candidate("direct", "route-1", 100, 100)
 
-	result := newAllocator([]Candidate{private, direct}).allocateExactInput(big.NewInt(120), 2)
+	result := newAllocator([]Candidate{private, direct}).allocateExactInputWithPolicy(big.NewInt(120), 2, false)
 
 	if len(result.Allocations) != 1 || result.Remaining.Int64() != 20 {
 		t.Fatalf("result = %+v, want one physical route and 20 input remaining", result)
@@ -60,7 +60,7 @@ func TestAllocateExactInputPrefersDirectCandidateOnTie(t *testing.T) {
 	private.ValidUntil = time.Unix(100, 0)
 	direct := candidate("z-direct", "route-1", 100, 100)
 
-	result := newAllocator([]Candidate{private, direct}).allocateExactInput(big.NewInt(50), 1)
+	result := newAllocator([]Candidate{private, direct}).allocateExactInputWithPolicy(big.NewInt(50), 1, false)
 
 	if len(result.Allocations) != 1 || result.Allocations[0].Candidate.ID != "z-direct" {
 		t.Fatalf("allocations = %+v, want direct candidate", result.Allocations)
@@ -75,7 +75,7 @@ func TestAllocateExactInputChoosesBestCoveringRouteBeforeApplyingLimit(t *testin
 	betterCovering := candidate("covering", "route-2", 100, 1_000)
 
 	result := newAllocator([]Candidate{narrowPrivate, wideDirect, betterCovering}).
-		allocateExactInput(big.NewInt(100), 1)
+		allocateExactInputWithPolicy(big.NewInt(100), 1, false)
 
 	if result.Remaining.Sign() != 0 || len(result.Allocations) != 1 ||
 		result.Allocations[0].Candidate.ID != "covering" || result.TotalAmountOut.Int64() != 100 {
@@ -84,7 +84,7 @@ func TestAllocateExactInputChoosesBestCoveringRouteBeforeApplyingLimit(t *testin
 }
 
 func TestAllocateExactInputRejectsInvalidRequestWithoutNilAmounts(t *testing.T) {
-	result := newAllocator(nil).allocateExactInput(nil, 0)
+	result := newAllocator(nil).allocateExactInputWithPolicy(nil, 0, false)
 	if result.TotalAmountOut == nil || result.Remaining == nil ||
 		result.TotalAmountOut.Sign() != 0 || result.Remaining.Sign() != 0 {
 		t.Fatalf("result = %+v, want non-nil zero amounts", result)
@@ -106,7 +106,7 @@ func FuzzAllocateExactInputInvariants(f *testing.F) {
 			candidate("route-4", "route-4", rate+3, capacity+3),
 		}
 
-		result := newAllocator(candidates).allocateExactInput(amount, maxRoutes)
+		result := newAllocator(candidates).allocateExactInputWithPolicy(amount, maxRoutes, false)
 		if len(result.Allocations) > maxRoutes {
 			t.Fatalf("allocations = %d, maxRoutes = %d", len(result.Allocations), maxRoutes)
 		}

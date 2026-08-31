@@ -2,6 +2,7 @@ package uniswapx
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,8 +32,15 @@ type exclusiveObligation struct {
 
 type trackedExclusive struct {
 	deadline         time.Time
+	terminalAt       time.Time
 	recoveredAtStart bool
 }
+
+func (t trackedExclusive) pending() bool {
+	return !t.deadline.IsZero() && t.terminalAt.IsZero()
+}
+
+func (t trackedExclusive) terminal() bool { return !t.terminalAt.IsZero() }
 
 type exclusiveDecision struct {
 	exclusiveObligation
@@ -44,9 +52,6 @@ type exclusiveDecision struct {
 }
 
 func (s *Solver) requestQuoteRefresh() {
-	if s.refreshCh == nil {
-		return
-	}
 	select {
 	case s.refreshCh <- struct{}{}:
 	default:
@@ -89,7 +94,7 @@ func (s *Solver) clearPendingReservations(hash common.Hash) {
 }
 
 func (s *Solver) recordFillFailure(now time.Time) {
-	s.stateMu.Lock()
+	s.failureMu.Lock()
 	cutoff := now.Add(-s.cfg.Breaker.Window)
 	kept := s.failureTimes[:0]
 	for _, failure := range s.failureTimes {
@@ -103,7 +108,7 @@ func (s *Solver) recordFillFailure(now time.Time) {
 		s.failureTimes = nil
 		s.localBlockUntil.Store(now.Add(s.cfg.Breaker.Window).Unix())
 	}
-	s.stateMu.Unlock()
+	s.failureMu.Unlock()
 	if tripped {
 		s.invalidateQuotes()
 		s.updateBlockUntilMetric()
@@ -112,10 +117,10 @@ func (s *Solver) recordFillFailure(now time.Time) {
 }
 
 func (s *Solver) recordFillSuccess() {
-	s.stateMu.Lock()
+	s.failureMu.Lock()
 	hadFailures := len(s.failureTimes) > 0
 	s.failureTimes = nil
-	s.stateMu.Unlock()
+	s.failureMu.Unlock()
 	blockedUntil := s.localBlockUntil.Swap(0)
 	s.updateBlockUntilMetric()
 	if hadFailures || blockedUntil != 0 {
@@ -146,24 +151,27 @@ func (s *Solver) trackExclusiveObligation(
 	quoteID string,
 	now time.Time,
 ) {
-	s.stateMu.Lock()
+	s.exclusiveMu.Lock()
 	s.cleanupExclusiveLocked(now)
+	current, exists := s.exclusiveState[obligation.hash]
 	updated := false
-	if _, terminal := s.exclusiveTerminal[obligation.hash]; !terminal {
-		current, exists := s.exclusiveUntil[obligation.hash]
-		if !exists || obligation.deadline.Before(current.deadline) {
+	if !exists {
+		current = trackedExclusive{
+			deadline: obligation.deadline, recoveredAtStart: obligation.recoveredAtStart,
+		}
+		updated = true
+	} else if current.pending() {
+		if obligation.deadline.Before(current.deadline) {
 			current.deadline = obligation.deadline
 			updated = true
 		}
-		if !exists {
-			current.recoveredAtStart = obligation.recoveredAtStart
-		} else if !obligation.recoveredAtStart {
-			// A live observation or runtime recovery takes precedence over startup history.
-			current.recoveredAtStart = false
-		}
-		s.exclusiveUntil[obligation.hash] = current
+		// A live observation or runtime recovery takes precedence over startup history.
+		current.recoveredAtStart = current.recoveredAtStart && obligation.recoveredAtStart
 	}
-	s.stateMu.Unlock()
+	if current.pending() {
+		s.exclusiveState[obligation.hash] = current
+	}
+	s.exclusiveMu.Unlock()
 	if updated {
 		s.log.V(1).Info(
 			"exclusive obligation tracked",
@@ -175,19 +183,17 @@ func (s *Solver) trackExclusiveObligation(
 }
 
 func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
-	s.stateMu.Lock()
+	s.exclusiveMu.Lock()
 	s.cleanupExclusiveLocked(now)
-	expired := make([]exclusiveObligation, 0, len(s.exclusiveUntil))
-	for hash, tracked := range s.exclusiveUntil {
-		if now.After(tracked.deadline) {
+	expired := make([]exclusiveObligation, 0, len(s.exclusiveState))
+	for hash, tracked := range s.exclusiveState {
+		if tracked.pending() && now.After(tracked.deadline) {
 			expired = append(expired, exclusiveObligation{
-				hash:             hash,
-				deadline:         tracked.deadline,
-				recoveredAtStart: tracked.recoveredAtStart,
+				hash: hash, deadline: tracked.deadline, recoveredAtStart: tracked.recoveredAtStart,
 			})
 		}
 	}
-	s.stateMu.Unlock()
+	s.exclusiveMu.Unlock()
 	if len(expired) == 0 {
 		return nil
 	}
@@ -259,18 +265,17 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		decisions = append(decisions, decision)
 	}
 
-	var missed, historicalMissed []exclusiveDecision
-	var settled []exclusiveDecision
-	s.stateMu.Lock()
+	var missed, historicalMissed, settled []exclusiveDecision
+	s.exclusiveMu.Lock()
 	s.cleanupExclusiveLocked(now)
 	for _, decision := range decisions {
-		tracked, ok := s.exclusiveUntil[decision.hash]
-		if !ok || !tracked.deadline.Equal(decision.deadline) {
+		tracked, ok := s.exclusiveState[decision.hash]
+		if !ok || !tracked.pending() || !tracked.deadline.Equal(decision.deadline) {
 			continue
 		}
 		decision.recoveredAtStart = tracked.recoveredAtStart
-		delete(s.exclusiveUntil, decision.hash)
-		s.exclusiveTerminal[decision.hash] = now
+		tracked.terminalAt = now
+		s.exclusiveState[decision.hash] = tracked
 		if decision.settledInTime {
 			settled = append(settled, decision)
 		} else if decision.recoveredAtStart {
@@ -279,7 +284,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 			missed = append(missed, decision)
 		}
 	}
-	s.stateMu.Unlock()
+	s.exclusiveMu.Unlock()
 
 	for _, decision := range settled {
 		s.observeFill("exclusive-settled-in-time")
@@ -333,17 +338,12 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 }
 
 func (s *Solver) cleanupExclusiveLocked(now time.Time) {
-	if s.exclusiveUntil == nil {
-		s.exclusiveUntil = make(map[common.Hash]trackedExclusive)
+	if s.exclusiveState == nil {
+		s.exclusiveState = make(map[common.Hash]trackedExclusive)
 	}
-	if s.exclusiveTerminal == nil {
-		s.exclusiveTerminal = make(map[common.Hash]time.Time)
-	}
-	for hash, terminalAt := range s.exclusiveTerminal {
-		if now.Sub(terminalAt) > time.Hour {
-			delete(s.exclusiveTerminal, hash)
-		}
-	}
+	maps.DeleteFunc(s.exclusiveState, func(_ common.Hash, tracked trackedExclusive) bool {
+		return tracked.terminal() && now.Sub(tracked.terminalAt) > time.Hour
+	})
 }
 
 func (s *Solver) invalidateQuotes() {

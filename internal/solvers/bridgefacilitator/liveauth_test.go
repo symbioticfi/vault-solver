@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -38,7 +36,7 @@ func TestLiveListOffers(t *testing.T) {
 	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
 		chainID, _ = new(big.Int).SetString(v, 10)
 	}
-	ac := newAPIClient(baseURL, sgnr, chainID, 30*time.Second, logr.Discard())
+	ac := newAPIClient(baseURL, sgnr, chainID, 30*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

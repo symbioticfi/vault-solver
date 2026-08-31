@@ -2,7 +2,6 @@ package lifi
 
 import (
 	"context"
-	"math/big"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -17,13 +16,12 @@ import (
 	liquidsnapshot "github.com/symbioticfi/vault-solver/internal/liquidlane/snapshot"
 )
 
-var (
-	lifiInputSettler = inputsettler.NewILifiInputSettler()
-)
+var lifiInputSettler = inputsettler.NewILifiInputSettler()
 
 type reader struct {
-	chain     *chain.Client
-	snapshots *liquidsnapshot.Reader
+	*liquidsnapshot.Reader
+
+	chain *chain.Client
 }
 
 type route = liquidlane.Route
@@ -36,35 +34,7 @@ func newReader(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleCon
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, snapshots: snapshots}, nil
-}
-
-func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error) {
-	return r.snapshots.ResolveRoutes(ctx, adapters)
-}
-
-func (r *reader) validateGasTokens(routes []route) error {
-	return r.snapshots.ValidateGasTokens(routes)
-}
-
-func (r *reader) quoteSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	chainTime time.Time,
-) (quoteSnapshotSet, error) {
-	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
-}
-
-func (r *reader) fillSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	tokenIn common.Address,
-	amountIn *big.Int,
-	chainTime time.Time,
-) (fillSnapshotSet, error) {
-	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
+	return &reader{chain: c, Reader: snapshots}, nil
 }
 
 func (r *reader) validateExecutor(
@@ -127,7 +97,7 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
+	direct, err := r.FilterAuthorizedRoutes(ctx, routes, executorAddr)
 	if err != nil {
 		return err
 	}

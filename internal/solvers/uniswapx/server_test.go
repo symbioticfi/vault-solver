@@ -3,6 +3,7 @@ package uniswapx
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -92,6 +93,14 @@ func TestQuoteRejectsStrategyThatChangesRequestedSide(t *testing.T) {
 
 	if _, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut)); err == nil {
 		t.Fatal("quote error = nil, want changed exact-input rejection")
+	}
+
+	request := validQuoteRequest(tokenIn, tokenOut)
+	request.Type = quoteTypeExactOutput
+	request.Amount = "90"
+	strategy.quote = &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(89)}
+	if _, err := solver.quote(t.Context(), request); err == nil {
+		t.Fatal("quote error = nil, want changed exact-output rejection")
 	}
 }
 
@@ -211,6 +220,39 @@ func TestQuoteDeclinesNativeOutput(t *testing.T) {
 	response, err := solver.quote(t.Context(), request)
 	if err != nil || response.AmountOut != "0" || len(strategy.inputs) != 0 {
 		t.Fatalf("native quote = %+v, inputs = %d, err %v", response, len(strategy.inputs), err)
+	}
+}
+
+func TestQuoteHandlerDeclinesInvalidatedFillStateUntilRefreshed(t *testing.T) {
+	fixture := newUniswapLifecycleFixture(t, "direct", false)
+	requestBody, err := json.Marshal(validQuoteRequest(fixture.route.TokenIn, fixture.route.TokenOut))
+	if err != nil {
+		t.Fatalf("marshal quote request: %v", err)
+	}
+	fixture.solver.setPendingReservations(
+		fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+	)
+
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", bytes.NewReader(requestBody))
+	response := httptest.NewRecorder()
+	fixture.solver.quoteHandler(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("invalidated quote response = %d, want 204", response.Code)
+	}
+
+	fixture.solver.clearPendingReservations(fixture.order.Hash)
+	if fixture.solver.quoteState.Load() != nil {
+		t.Fatal("reservation release made the invalidated state quotable")
+	}
+	if err := fixture.solver.refreshQuoteState(t.Context(), fixture.routes); err != nil {
+		t.Fatalf("refresh quote state: %v", err)
+	}
+	request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", bytes.NewReader(requestBody))
+	response = httptest.NewRecorder()
+	fixture.solver.quoteHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("refreshed quote response = %d body=%s, want 200", response.Code, response.Body.String())
 	}
 }
 
