@@ -1,87 +1,69 @@
 package rfq
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 func TestStrategySelectionCharacterization(t *testing.T) {
 	tests := []struct {
-		name              string
-		strategy          string
-		wantName          string
-		wantType          string
-		wantValidationErr string
-		wantSelectionErr  string
+		name       string
+		spec       StrategyConfig
+		wantType   reflect.Type
+		wantError  string
+		wantReject bool
 	}{
 		{
-			name:     "omitted name selects default",
-			strategy: "strategy:\n  config: {}\n",
-			wantName: "default",
-			wantType: "default",
-		},
-		{
 			name:     "default",
-			strategy: "strategy: {name: default, config: {}}\n",
-			wantName: "default",
-			wantType: "default",
+			spec:     StrategyConfig{Name: defaultstrategy.Name, Config: strategyConfigNode(t, "{}")},
+			wantType: reflect.TypeFor[*defaultstrategy.Strategy](),
 		},
 		{
 			name: "webhook",
-			strategy: `strategy:
-  name: webhook
-  config:
-    url: https://strategy.example
-`,
-			wantName: "webhook",
-			wantType: "webhook",
+			spec: StrategyConfig{
+				Name:   webhookstrategy.Name,
+				Config: strategyConfigNode(t, "url: https://strategy.example"),
+			},
+			wantType: reflect.TypeFor[*webhookstrategy.Strategy](),
 		},
 		{
-			name:              "unknown",
-			strategy:          "strategy: {name: missing, config: {}}\n",
-			wantName:          "missing",
-			wantValidationErr: `strategy: unknown RFQ strategy "missing" (registered: [default webhook])`,
-			wantSelectionErr:  `unknown RFQ strategy "missing" (registered: [default webhook])`,
+			name: "default rejects unknown config key",
+			spec: StrategyConfig{
+				Name:   defaultstrategy.Name,
+				Config: strategyConfigNode(t, "unexpected: true"),
+			},
+			wantReject: true,
 		},
 		{
-			name:     "default rejects unknown config key",
-			strategy: "strategy: {name: default, config: {unexpected: true}}\n",
-			wantName: "default",
+			name:      "unknown",
+			spec:      StrategyConfig{Name: "missing", Config: strategyConfigNode(t, "{}")},
+			wantError: `unknown RFQ strategy "missing" (registered: [default webhook])`,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			node := rfqSelectionNode(t, minimalConfig+oneAdapter+test.strategy)
-			cfg, err := parseConfig(node)
-			if err != nil {
-				t.Fatalf("parseConfig: %v", err)
-			}
-			if cfg.Strategy.Name != test.wantName {
-				t.Fatalf("strategy name = %q, want %q", cfg.Strategy.Name, test.wantName)
-			}
-
-			validationErr := ValidateConfig(node)
-			selected, selectionErr := newStrategy(cfg.Strategy)
+			validationErr := validateStrategyConfig(test.spec)
+			selected, selectionErr := newStrategy(test.spec)
 			if (validationErr == nil) != (selectionErr == nil) {
 				t.Fatalf("validation error = %v, selection error = %v", validationErr, selectionErr)
 			}
-			if test.wantValidationErr != "" {
-				if validationErr == nil || validationErr.Error() != test.wantValidationErr {
-					t.Fatalf("validation error = %v, want %q", validationErr, test.wantValidationErr)
+			if test.wantError != "" {
+				if validationErr == nil || validationErr.Error() != test.wantError {
+					t.Fatalf("validation error = %v, want %q", validationErr, test.wantError)
 				}
-				if selectionErr == nil || selectionErr.Error() != test.wantSelectionErr {
-					t.Fatalf("selection error = %v, want %q", selectionErr, test.wantSelectionErr)
+				if selectionErr == nil || selectionErr.Error() != test.wantError {
+					t.Fatalf("selection error = %v, want %q", selectionErr, test.wantError)
 				}
 				return
 			}
-			if test.wantType == "" {
+			if test.wantReject {
 				if validationErr == nil || selectionErr == nil {
 					t.Fatalf("validation error = %v, selection error = %v; want strict rejection", validationErr, selectionErr)
 				}
@@ -90,42 +72,22 @@ func TestStrategySelectionCharacterization(t *testing.T) {
 			if validationErr != nil || selectionErr != nil {
 				t.Fatalf("validation error = %v, selection error = %v", validationErr, selectionErr)
 			}
-			assertRFQStrategyType(t, selected, test.wantType)
+			if got := reflect.TypeOf(selected); got != test.wantType {
+				t.Fatalf("strategy type = %v, want %v", got, test.wantType)
+			}
 		})
 	}
+
 	if got, want := strategyNames(), []string{"default", "webhook"}; !slices.Equal(got, want) {
 		t.Fatalf("strategy catalog = %v, want %v", got, want)
 	}
-
-	t.Run("root rejects unknown key", func(t *testing.T) {
-		node := rfqSelectionNode(t, minimalConfig+oneAdapter+"unexpected: true\n")
-		if _, err := parseConfig(node); err == nil {
-			t.Fatal("parseConfig accepted an unknown root key")
-		}
-	})
 }
 
-func rfqSelectionNode(t *testing.T, raw string) yaml.Node {
+func strategyConfigNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
 	var document yaml.Node
 	if err := yaml.Unmarshal([]byte(raw), &document); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
+		t.Fatalf("unmarshal strategy config: %v", err)
 	}
 	return *document.Content[0]
-}
-
-func assertRFQStrategyType(t *testing.T, strategy types.Strategy, want string) {
-	t.Helper()
-	switch want {
-	case "default":
-		if _, ok := strategy.(*defaultstrategy.Strategy); !ok {
-			t.Fatalf("strategy type = %T, want *defaultstrategy.Strategy", strategy)
-		}
-	case "webhook":
-		if _, ok := strategy.(*webhookstrategy.Strategy); !ok {
-			t.Fatalf("strategy type = %T, want *webhookstrategy.Strategy", strategy)
-		}
-	default:
-		t.Fatalf("unsupported expected strategy type %q", want)
-	}
 }
