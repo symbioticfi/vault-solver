@@ -164,6 +164,3 @@ func first(orders []backendOrder) *backendOrder {
 	}
 	return &orders[0]
 }
-
-type resolveDiscountResponse = discounts.Resolved
-type discountsResponse = discounts.List

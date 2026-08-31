@@ -25,8 +25,8 @@ type fakeBackend struct {
 	open         []backendOrder
 	executable   *backendOrder
 	order        *backendOrder
-	discount     *resolveDiscountResponse
-	discounts    *discountsResponse
+	discount     *discounts.Resolved
+	discounts    *discounts.List
 	resolveCalls int
 	listCalls    int
 }
@@ -39,15 +39,15 @@ func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*back
 }
 func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
 
-func (f *fakeBackend) Resolve(context.Context, string) (*resolveDiscountResponse, error) {
+func (f *fakeBackend) Resolve(context.Context, string) (*discounts.Resolved, error) {
 	f.resolveCalls++
 	return f.discount, nil
 }
 
-func (f *fakeBackend) ListDiscounts(context.Context) (*discountsResponse, error) {
+func (f *fakeBackend) ListDiscounts(context.Context) (*discounts.List, error) {
 	f.listCalls++
 	if f.discounts == nil {
-		return &discountsResponse{}, nil
+		return &discounts.List{}, nil
 	}
 	return f.discounts, nil
 }
@@ -316,7 +316,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 	be.executable.EncodedOrder = new(hexutil.Encode(encoded))
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
 		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: signedTokenIn.Hex(), Discount: "500",
@@ -367,13 +367,13 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
-	be.discounts = &discountsResponse{Discounts: []discounts.ListItem{{
+	be.discounts = &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
 		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -411,7 +411,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
 		Discount: discounts.Terms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
@@ -457,7 +457,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	listedID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
 	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discounts.ListItem{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
@@ -486,7 +486,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discounts.ListItem{{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,

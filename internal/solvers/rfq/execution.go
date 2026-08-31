@@ -29,8 +29,8 @@ type orderBackend interface {
 	listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error)
 	getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error)
 	getOrder(ctx context.Context, orderID string) (*backendOrder, error)
-	Resolve(ctx context.Context, discountID string) (*resolveDiscountResponse, error)
-	ListDiscounts(ctx context.Context) (*discountsResponse, error)
+	Resolve(ctx context.Context, discountID string) (*discounts.Resolved, error)
+	ListDiscounts(ctx context.Context) (*discounts.List, error)
 }
 
 // executable is the resolved, typed payload needed to build a fill (from the backend executable view).
