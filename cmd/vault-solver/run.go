@@ -125,7 +125,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if err != nil {
 		return err
 	}
-	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health, log)
+	return runSolverLifecycle(runCtx, configPath, cfg, txm, solvers, requiresTxManager, health.SetReady, log)
 }
 
 func constructConfiguredSolvers(
@@ -157,10 +157,6 @@ type runtimeTransactionManager interface {
 	LaneReady() bool
 }
 
-type readinessSetter interface {
-	SetReady(bool)
-}
-
 var _ runtimeTransactionManager = (*txmanager.Manager)(nil)
 
 func runSolverLifecycle(
@@ -170,7 +166,7 @@ func runSolverLifecycle(
 	txm runtimeTransactionManager,
 	solvers []solver.Solver,
 	requiresTxManager bool,
-	health readinessSetter,
+	setReady func(bool),
 	log logr.Logger,
 ) error {
 	if requiresTxManager {
@@ -202,7 +198,7 @@ func runSolverLifecycle(
 		}()
 	}
 
-	health.SetReady(true)
+	setReady(true)
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
@@ -221,7 +217,7 @@ func runSolverLifecycle(
 		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
 		background.Go(func() {
 			defer unsubscribe()
-			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
+			watchReadiness(gctx, laneStateChanged, txm.LaneReady, setReady)
 		})
 	}
 	for _, slv := range solvers {

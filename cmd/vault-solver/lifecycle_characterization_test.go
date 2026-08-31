@@ -184,7 +184,7 @@ func testSolverLifecycleSelection(t *testing.T, solverNames []string, requiresMa
 	go func() {
 		returned <- runSolverLifecycle(
 			ctx, "characterization.yaml", lifecycleConfig(), runtimeManager,
-			solvers, requiresManager, health, logr.Discard(),
+			solvers, requiresManager, health.SetReady, logr.Discard(),
 		)
 	}()
 	expectReadyState(t, health.updates, true)
@@ -262,7 +262,7 @@ func TestSolverLifecycleShutdownTrace(t *testing.T) {
 	go func() {
 		err := runSolverLifecycle(
 			t.Context(), "characterization.yaml", lifecycleConfig(), manager,
-			[]solver.Solver{accepted, fatal}, true, health, logr.Discard(),
+			[]solver.Solver{accepted, fatal}, true, health.SetReady, logr.Discard(),
 		)
 		trace.add("command return")
 		returned <- err
@@ -323,7 +323,7 @@ func TestSolverLifecycleTimeoutStopsManagerWithoutAbandoningSolverJoin(t *testin
 	go func() {
 		returned <- runSolverLifecycle(
 			ctx, "characterization.yaml", timeoutLifecycleConfig(), manager,
-			[]solver.Solver{blocking}, true, health, log,
+			[]solver.Solver{blocking}, true, health.SetReady, log,
 		)
 	}()
 	expectReadyState(t, health.updates, true)
@@ -398,7 +398,7 @@ func TestSolverLifecycleManagerStartupFailuresDoNotStartRuntime(t *testing.T) {
 				[]solver.Solver{characterizationSolver{name: "must-not-run", run: func(context.Context) error {
 					solverCalls.Add(1)
 					return nil
-				}}}, true, health, logr.Discard(),
+				}}}, true, health.SetReady, logr.Discard(),
 			)
 			if err == nil || err.Error() != test.want {
 				t.Fatalf("error = %v, want %q", err, test.want)
