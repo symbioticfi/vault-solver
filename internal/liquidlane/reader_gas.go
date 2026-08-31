@@ -50,9 +50,7 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	if len(acquireResults) != len(acquireCalls) {
 		return nil, errors.Errorf("liquidlane: gas state acquire multicall: got %d results, want %d", len(acquireResults), len(acquireCalls))
 	}
-	if err := applyGasAcquireResults(states, reads, acquireResults); err != nil {
-		return nil, err
-	}
+	applyGasAcquireResults(states, reads, acquireResults)
 	return gasSnapshot(states, vaultStates), nil
 }
 
@@ -171,7 +169,7 @@ func applyGasAcquireResults(
 	states map[common.Address]*gasAdapterState,
 	reads []gasAcquireRead,
 	results []chain.CallResult,
-) error {
+) {
 	for i, read := range reads {
 		result := results[i]
 		if !result.Success {
@@ -182,15 +180,11 @@ func applyGasAcquireResults(
 			continue
 		}
 		state := states[read.adapter]
-		if state == nil {
-			return errors.Errorf("liquidlane: missing gas state for adapter %s", read.adapter.Hex())
-		}
 		if state.state.Acquire[read.token] == nil {
 			state.state.Acquire[read.token] = new(big.Int)
 		}
 		state.state.Acquire[read.token].Add(state.state.Acquire[read.token], amount)
 	}
-	return nil
 }
 
 func gasSnapshot(
