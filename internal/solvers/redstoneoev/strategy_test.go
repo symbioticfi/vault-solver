@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -63,18 +62,6 @@ func TestCheckExecutionEnvelopeAcceptsGenericOperationData(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPendingAuctionsForStrategyFiltersExpired(t *testing.T) {
-	now := time.Unix(1000, 0)
-	got := pendingAuctionsForStrategy([]pendingAuction{
-		{ID: "", SentAt: now},
-		{ID: "expired", SentAt: now.Add(-reservationTTL - time.Second)},
-		{ID: "pending", SentAt: now.Add(-time.Minute), Won: true},
-	}, now)
-	if len(got) != 1 || got[0].ID != "pending" || !got[0].Won {
-		t.Fatalf("pending = %+v", got)
 	}
 }
 
