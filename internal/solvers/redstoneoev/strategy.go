@@ -34,16 +34,12 @@ func validateStrategyConfig(spec StrategyConfig, gasAccounting bool) error {
 	}
 }
 
-func strategyRequiresBidCap(name string) bool {
-	return name == webhookstrategy.Name
-}
-
 func unknownStrategyError(name string) error {
-	return errors.Errorf("unknown OEV strategy %q (registered: %v)", name, strategyNames())
-}
-
-func strategyNames() []string {
-	return []string{defaultstrategy.Name, webhookstrategy.Name}
+	return errors.Errorf(
+		"unknown OEV strategy %q (registered: %v)",
+		name,
+		[]string{defaultstrategy.Name, webhookstrategy.Name},
+	)
 }
 
 func (s *Solver) bidInput(

@@ -1,7 +1,6 @@
 package redstoneoev
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -115,10 +114,6 @@ maxBidWei: "1"
 			assertOEVStrategyType(t, selected, test.wantType)
 		})
 	}
-	if got, want := strategyNames(), []string{"default", "webhook"}; !slices.Equal(got, want) {
-		t.Fatalf("strategy catalog = %v, want %v", got, want)
-	}
-
 	t.Run("root rejects unknown key", func(t *testing.T) {
 		raw := oevSelectionBase + "strategy:" + oevDefaultStrategyConfig + "unexpected: true\n"
 		if _, err := parseConfig(oevSelectionNode(t, raw)); err == nil {
