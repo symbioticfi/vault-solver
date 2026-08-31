@@ -123,7 +123,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.applyDefaults()
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, errors.Errorf("invalid config %q: %w", path, err)
 	}
 	return &cfg, nil
@@ -153,8 +153,8 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// Validate checks required fields and mutually-exclusive options.
-func (c *Config) Validate() error {
+// validate checks required fields and mutually-exclusive options.
+func (c *Config) validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("chain.rpcUrl is required")
 	}
