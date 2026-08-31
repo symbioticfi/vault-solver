@@ -84,22 +84,22 @@ type SolverConfig struct {
 	Config yaml.Node `yaml:"config"`
 }
 
-// DefaultConfirmations is used when TxManager.Confirmations is unset.
-const DefaultConfirmations = 2
+// defaultConfirmations is used when TxManager.Confirmations is unset.
+const defaultConfirmations = 2
 
 const (
-	DefaultBroadcastTimeoutMs    = 5_000
-	DefaultReplacementIntervalMs = 30_000
-	DefaultPendingTimeoutMs      = 300_000
-	DefaultShutdownTimeoutMs     = 60_000
+	defaultBroadcastTimeoutMs    = 5_000
+	defaultReplacementIntervalMs = 30_000
+	defaultPendingTimeoutMs      = 300_000
+	defaultShutdownTimeoutMs     = 60_000
 )
 
-// DefaultObservabilityAddr is used when Observability.Addr is unset.
-const DefaultObservabilityAddr = ":9090"
+// defaultObservabilityAddr is used when Observability.Addr is unset.
+const defaultObservabilityAddr = ":9090"
 
-// DefaultMulticallAddress is the canonical Multicall3 deployment (same address on most chains,
+// defaultMulticallAddress is the canonical Multicall3 deployment (same address on most chains,
 // including Ethereum mainnet and Sepolia). Used when Chain.MulticallAddress is unset.
-const DefaultMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
+const defaultMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
 
 // Load reads, parses, defaults, and validates the config at path.
 func Load(path string) (*Config, error) {
@@ -131,25 +131,25 @@ func Load(path string) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	if c.TxManager.Confirmations == 0 {
-		c.TxManager.Confirmations = DefaultConfirmations
+		c.TxManager.Confirmations = defaultConfirmations
 	}
 	if c.TxManager.BroadcastTimeoutMs == 0 {
-		c.TxManager.BroadcastTimeoutMs = DefaultBroadcastTimeoutMs
+		c.TxManager.BroadcastTimeoutMs = defaultBroadcastTimeoutMs
 	}
 	if c.TxManager.ReplacementIntervalMs == 0 {
-		c.TxManager.ReplacementIntervalMs = DefaultReplacementIntervalMs
+		c.TxManager.ReplacementIntervalMs = defaultReplacementIntervalMs
 	}
 	if c.TxManager.PendingTimeoutMs == 0 {
-		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
+		c.TxManager.PendingTimeoutMs = defaultPendingTimeoutMs
 	}
 	if c.TxManager.ShutdownTimeoutMs == 0 {
-		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
+		c.TxManager.ShutdownTimeoutMs = defaultShutdownTimeoutMs
 	}
 	if c.Observability.Addr == "" {
-		c.Observability.Addr = DefaultObservabilityAddr
+		c.Observability.Addr = defaultObservabilityAddr
 	}
 	if c.Chain.MulticallAddress == "" {
-		c.Chain.MulticallAddress = DefaultMulticallAddress
+		c.Chain.MulticallAddress = defaultMulticallAddress
 	}
 }
 

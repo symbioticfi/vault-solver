@@ -36,17 +36,17 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.TxManager.Confirmations != DefaultConfirmations {
-		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
+	if cfg.TxManager.Confirmations != defaultConfirmations {
+		t.Fatalf("expected default confirmations %d, got %d", defaultConfirmations, cfg.TxManager.Confirmations)
 	}
-	if cfg.TxManager.BroadcastTimeoutMs != DefaultBroadcastTimeoutMs ||
-		cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
-		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs ||
-		cfg.TxManager.ShutdownTimeoutMs != DefaultShutdownTimeoutMs {
+	if cfg.TxManager.BroadcastTimeoutMs != defaultBroadcastTimeoutMs ||
+		cfg.TxManager.ReplacementIntervalMs != defaultReplacementIntervalMs ||
+		cfg.TxManager.PendingTimeoutMs != defaultPendingTimeoutMs ||
+		cfg.TxManager.ShutdownTimeoutMs != defaultShutdownTimeoutMs {
 		t.Fatalf("unexpected tx replacement defaults: %+v", cfg.TxManager)
 	}
-	if cfg.Observability.Addr != DefaultObservabilityAddr {
-		t.Fatalf("expected default addr %q, got %q", DefaultObservabilityAddr, cfg.Observability.Addr)
+	if cfg.Observability.Addr != defaultObservabilityAddr {
+		t.Fatalf("expected default addr %q, got %q", defaultObservabilityAddr, cfg.Observability.Addr)
 	}
 }
 
