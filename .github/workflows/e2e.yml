@@ -38,7 +38,7 @@ jobs:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: symbioticfi
-          repositories: rfq-integration
+          repositories: rfq-integration,rfq-backend,rfq-indexer
           permission-contents: read
 
       - name: Initialize pinned E2E sources
@@ -49,8 +49,8 @@ jobs:
           auth_config="$(mktemp "$RUNNER_TEMP/e2e-git-auth.XXXXXX")"
           trap 'rm -f "$auth_config"' EXIT
           git config --file "$auth_config" \
-            url."https://x-access-token:${E2E_GITHUB_TOKEN}@github.com/symbioticfi/rfq-integration.git".insteadOf \
-            "https://github.com/symbioticfi/rfq-integration.git"
+            url."https://x-access-token:${E2E_GITHUB_TOKEN}@github.com/symbioticfi/".insteadOf \
+            "https://github.com/symbioticfi/"
           export GIT_CONFIG_GLOBAL="$auth_config"
 
           make e2e-init

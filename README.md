@@ -398,20 +398,19 @@ make test-e2e-harness         # Go package + infrastructure unit tests (Node 24 
 ```
 
 The Make targets initialize the exact pinned infrastructure revision automatically. No private submodule
-is registered, so normal and recursive clones of this public repository remain public-only. The full
-runner requires Docker Compose and Git read access only to `rfq-integration`; its contract dependencies
-are public, while the RFQ API and chain indexer run from the infrastructure checkout. It does not clone
-`rfq-backend` or `rfq-indexer` and does not use the internal `gprptest` npm registry. No live keys or RPC
-endpoints are required. The runner tears stacks down on success, captures generated configs and test
-artifacts under `/tmp/vault-solver-e2e/<profile>`, and can retain a failed stack with
-`VAULT_SOLVER_E2E_KEEP_STACK=1`.
+is registered in this public repository, so normal and recursive clones remain public-only. The private
+harness pins `rfq-backend` and `rfq-indexer`, builds both locally, and runs them with Postgres. Its backend
+overlay replaces the private devkit surface and installs only from npmjs; no internal package registry,
+prebuilt service image, live key, or live RPC endpoint is required. The runner tears stacks down on
+success, captures generated configs and test artifacts under `/tmp/vault-solver-e2e/<profile>`, and can
+retain a failed stack with `VAULT_SOLVER_E2E_KEEP_STACK=1`.
 
 Pull requests targeting `stage` or `main` run the five profiles in parallel. Because this repository is
 public, its repository-scoped `GITHUB_TOKEN` cannot clone the private harness. The workflow requests a
-read-only GitHub App token scoped only to `rfq-integration`. Configure the `Integration tests` Actions
-environment with its client ID in the `APP_CLIENT_ID` variable and its private key in the
-`APP_PRIVATE_KEY` secret. Secrets are not exposed to fork or Dependabot pull requests, so the private E2E
-jobs are skipped for those events.
+read-only GitHub App token scoped to `rfq-integration`, `rfq-backend`, and `rfq-indexer`. Configure the
+`Integration tests` Actions environment with its client ID in the `APP_CLIENT_ID` variable and its
+private key in the `APP_PRIVATE_KEY` secret. Secrets are not exposed to fork or Dependabot pull
+requests, so the private E2E jobs are skipped for those events.
 
 ## Configuration
 
