@@ -132,7 +132,7 @@ func TestAPIMonitorPublishesInitialAndPreservesLastGoodDecision(t *testing.T) {
 		t.Fatalf("decision after failed API refresh = %+v, err=%v", afterFailure, err)
 	}
 	cancel()
-	awaitSignal(t, done, "API strategy shutdown")
+	characterizationAwaitSignal(t, done, "API strategy shutdown")
 }
 
 type testLifecycleReader struct {
@@ -223,7 +223,7 @@ func TestTestMonitorPublishesInitialAndPreservesLastGoodDecision(t *testing.T) {
 		t.Fatalf("decision after failed test-monitor refresh = %+v, err=%v", afterFailure, err)
 	}
 	cancel()
-	awaitSignal(t, done, "test-monitor strategy shutdown")
+	characterizationAwaitSignal(t, done, "test-monitor strategy shutdown")
 }
 
 type strategyLivenessReader struct {
@@ -305,12 +305,12 @@ func TestStrategyRunKeepsRefreshLoopsIndependentAndJoinsOnCancellation(t *testin
 		close(done)
 	}()
 
-	awaitSignal(t, reader.blocked, "periodic monitor read to block")
+	characterizationAwaitSignal(t, reader.blocked, "periodic monitor read to block")
 	callsWhileBlocked := reader.nativeCalls.Load()
 	characterizationAwaitCount(t, &reader.nativeCalls, callsWhileBlocked+1, "callback-state refresh while monitor is blocked")
 
 	cancel()
-	awaitSignal(t, done, "Strategy.Run cancellation join")
+	characterizationAwaitSignal(t, done, "Strategy.Run cancellation join")
 }
 
 func characterizationAdapterSnapshot(maxAssets *big.Int) types.AdapterSnapshot {
@@ -366,16 +366,5 @@ func awaitCharacterizationBid(t *testing.T, strategy *Strategy, input types.BidI
 			t.Fatalf("timed out waiting for bid; last output = %+v", out)
 		}
 		time.Sleep(time.Millisecond)
-	}
-}
-
-func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
-	t.Helper()
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-	select {
-	case <-signal:
-	case <-timer.C:
-		t.Fatalf("timed out waiting for %s", description)
 	}
 }
