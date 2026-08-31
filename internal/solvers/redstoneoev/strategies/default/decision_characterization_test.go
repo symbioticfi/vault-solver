@@ -480,27 +480,45 @@ func TestDefaultStrategySeededCorpusOrderingReservationsAndReplay(t *testing.T) 
 	}
 }
 
-func TestDefaultStrategyFramePriceOverridesAPICacheAndTestMonitorCache(t *testing.T) {
-	for _, monitorType := range []string{"api", "test"} {
-		t.Run(monitorType, func(t *testing.T) {
-			strategy, input := newCorpusCharacterizationFixture(t)
-			if monitorType == "test" {
-				monitor := &testMonitor{log: logr.Discard()}
-				monitor.snap.Store(cloneSnapshot(strategy.mon.snapshot()))
-				strategy.mon = monitor
-			}
-			out, err := strategy.DecideBid(t.Context(), input)
-			if err != nil || out.Decision != types.DecisionBid {
-				t.Fatalf("frame-price decision = %+v, err=%v", out, err)
-			}
-			input.Auction.ID += "-without-frame"
-			input.Auction.Prices = nil
-			out, err = strategy.DecideBid(t.Context(), input)
-			if err != nil || out.Decision != types.DecisionSkip || out.Reason != skipNoLegs {
-				t.Fatalf("cached monitor price substituted for absent frame price: out=%+v err=%v", out, err)
-			}
-		})
-	}
+func TestDefaultStrategyMonitorPricePoliciesAtDecisionBoundary(t *testing.T) {
+	t.Run("production API monitor requires auction frame price", func(t *testing.T) {
+		strategy, input := newCorpusCharacterizationFixture(t)
+		out, err := strategy.DecideBid(t.Context(), input)
+		if err != nil || out.Decision != types.DecisionBid {
+			t.Fatalf("frame-price decision = %+v, err=%v", out, err)
+		}
+		input.Auction.ID += "-without-frame"
+		input.Auction.Prices = nil
+		out, err = strategy.DecideBid(t.Context(), input)
+		if err != nil || out.Decision != types.DecisionSkip || out.Reason != skipNoLegs {
+			t.Fatalf("production cache substituted for absent frame price: out=%+v err=%v", out, err)
+		}
+	})
+
+	t.Run("Sepolia test monitor ignores frame and uses cached oracle price", func(t *testing.T) {
+		strategy, input := newCorpusCharacterizationFixture(t)
+		snap := cloneSnapshot(strategy.mon.snapshot())
+		for id := range snap.prices {
+			snap.prices[id] = mustBig("1550000000000000000000000000")
+		}
+		monitor := &testMonitor{log: logr.Discard()}
+		monitor.snap.Store(snap)
+		strategy.mon = monitor
+		for i := range input.Auction.Prices {
+			input.Auction.Prices[i].Price = mustBig("5000000000000000000000000000")
+		}
+
+		out, err := strategy.DecideBid(t.Context(), input)
+		if err != nil || out.Decision != types.DecisionBid {
+			t.Fatalf("cached-oracle decision with conflicting frame = %+v, err=%v", out, err)
+		}
+		input.Auction.ID += "-without-frame"
+		input.Auction.Prices = nil
+		out, err = strategy.DecideBid(t.Context(), input)
+		if err != nil || out.Decision != types.DecisionBid {
+			t.Fatalf("cached-oracle decision without frame = %+v, err=%v", out, err)
+		}
+	})
 }
 
 func assertCorpusReplaysSameMarket(t *testing.T, strategy *Strategy, input types.BidInput) {

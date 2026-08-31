@@ -12,7 +12,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-func TestCandidatePriceSource(t *testing.T) {
+func TestMonitorCandidatePricePolicy(t *testing.T) {
 	id := common.HexToHash("0x01")
 	oracle := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	onchain := mustBig("1000000000000000000000000000000000000")
@@ -34,17 +34,52 @@ func TestCandidatePriceSource(t *testing.T) {
 		Prices: []types.AuctionPrice{{Oracle: oracle, Price: framePx}},
 	}
 
-	apiCands := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
-	if len(apiCands) != 1 || apiCands[0].price.Cmp(framePx) != 0 {
-		t.Fatalf("auction path price = %+v, want %v", apiCands, framePx)
-	}
-
+	apiMon := &apiMonitor{log: logr.Discard()}
+	apiMon.snap.Store(snap)
 	var testMon testMonitor
 	testMon.log = logr.Discard()
 	testMon.snap.Store(snap)
-	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
-	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
-		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
+
+	tests := []struct {
+		name string
+		mon  monitorSource
+		want *big.Int
+	}{
+		{name: "production API monitor uses settlement frame", mon: apiMon, want: framePx},
+		{name: "Sepolia test monitor uses cached on-chain oracle", mon: &testMon, want: onchain},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.mon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
+			if len(got) != 1 || got[0].price.Cmp(test.want) != 0 {
+				t.Fatalf("candidate price = %+v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTestMonitorCandidatePriceDoesNotRequireAuctionFrame(t *testing.T) {
+	id := common.HexToHash("0x01")
+	onchain := mustBig("1000000000000000000000000000000000000")
+	snap := &snapshot{
+		markets: map[common.Hash]MarketInfo{
+			id: {Params: MarketParams{Oracle: common.HexToAddress("0x00000000000000000000000000000000000000aa")}, State: goldenMarket()},
+		},
+		prices: map[common.Hash]*big.Int{id: onchain},
+		quotes: map[common.Hash]AdapterQuote{
+			id: newQuote("1780000000000000000000", mustBig("100000000000")),
+		},
+		positions: map[common.Hash]map[common.Address]morpho.PositionState{
+			id: {common.Address{1}: goldenBorrower()},
+		},
+	}
+	var mon testMonitor
+	mon.log = logr.Discard()
+	mon.snap.Store(snap)
+
+	got := mon.candidates(types.AuctionSnapshot{}, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
+	if len(got) != 1 || got[0].price.Cmp(onchain) != 0 {
+		t.Fatalf("candidate price without auction frame = %+v, want %v", got, onchain)
 	}
 }
 

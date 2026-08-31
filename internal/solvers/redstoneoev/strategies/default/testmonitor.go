@@ -138,8 +138,11 @@ func verifyAdapterPair(params map[common.Hash]MarketParams, adapterLoan common.A
 	return out
 }
 
-func (m *testMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
+func (m *testMonitor) candidates(_ types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
+	snap := m.snapshot()
+	return candidatesFromSnapshot(snap, nowTs, adapter, func(id common.Hash, _ MarketInfo) *big.Int {
+		return snap.prices[id]
+	})
 }
 
 func (m *testMonitor) snapshot() *snapshot {
