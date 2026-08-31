@@ -52,9 +52,6 @@ type exclusiveDecision struct {
 }
 
 func (s *Solver) requestQuoteRefresh() {
-	if s.refreshCh == nil {
-		return
-	}
 	select {
 	case s.refreshCh <- struct{}{}:
 	default:
