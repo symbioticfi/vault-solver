@@ -20,8 +20,6 @@ const (
 	defaultExecutionBuffer = 12 * time.Second
 )
 
-var defaultMinAmount = big.NewInt(1)
-
 type Config struct {
 	PriceBufferBps          int    `yaml:"priceBufferBps"`
 	MinAmount               string `yaml:"minAmount"`
@@ -68,7 +66,7 @@ func New(cfg Config) (*Strategy, error) {
 	if rangeCount < 1 || rangeCount > types.MaxQuoteRanges {
 		return nil, errors.Errorf("rangeCount: must be in [1,%d], got %d", types.MaxQuoteRanges, cfg.RangeCount)
 	}
-	minAmount := new(big.Int).Set(defaultMinAmount)
+	minAmount := big.NewInt(1)
 	if cfg.MinAmount != "" {
 		var err error
 		minAmount, err = parse.Big(cfg.MinAmount, "minAmount")
