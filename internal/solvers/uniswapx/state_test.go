@@ -282,20 +282,32 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 
 func TestClearPendingReservationsInvalidatesQuoteState(t *testing.T) {
 	hash := common.HexToHash("0x1234")
-	solver := &Solver{}
-	if !solver.capacity.Set(hash.Hex(), liquidlane.CapacityReservations{"capacity-1": big.NewInt(1)}) {
-		t.Fatal("set reservation")
-	}
-	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
+	t.Run("before releasing existing capacity", func(t *testing.T) {
+		solver := &Solver{}
+		if !solver.capacity.Set(hash.Hex(), liquidlane.CapacityReservations{"capacity-1": big.NewInt(1)}) {
+			t.Fatal("set reservation")
+		}
+		solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
 
-	solver.clearPendingReservations(hash)
+		solver.clearPendingReservations(hash)
 
-	if solver.quoteState.Load() != nil {
-		t.Fatal("released capacity remained quotable through the old snapshot")
-	}
-	if solver.capacity.Len() != 0 {
-		t.Fatal("reservation was not released")
-	}
+		if solver.quoteState.Load() != nil {
+			t.Fatal("released capacity remained quotable through the old snapshot")
+		}
+		if solver.capacity.Len() != 0 {
+			t.Fatal("reservation was not released")
+		}
+	})
+	t.Run("even when reservation is already absent", func(t *testing.T) {
+		solver := &Solver{}
+		solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
+
+		solver.clearPendingReservations(hash)
+
+		if solver.quoteState.Load() != nil {
+			t.Fatal("clear attempted ledger deletion before invalidating quote state")
+		}
+	})
 }
 
 func TestClaimTracksInflightAndBackoff(t *testing.T) {

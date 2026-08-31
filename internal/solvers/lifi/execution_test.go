@@ -997,6 +997,10 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	}
 }
 
+func TestOrderWorkerReleasesReservationWhenResultChannelCloses(t *testing.T) {
+	runLifiFillReservationLifecycle(t, "direct", "closed")
+}
+
 func TestAwaitFillTreatsClosedResultChannelAsFailure(t *testing.T) {
 	results := make(chan txmanager.Result)
 	close(results)
