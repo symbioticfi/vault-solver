@@ -170,9 +170,6 @@ func (s *adapterState) full() bool {
 }
 
 func (s *adapterState) remainingBudget() *big.Int {
-	if s.snapshot.Fundable == nil {
-		return new(big.Int)
-	}
 	return new(big.Int).Sub(s.snapshot.Fundable, s.committed)
 }
 

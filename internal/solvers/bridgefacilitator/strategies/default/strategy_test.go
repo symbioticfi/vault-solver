@@ -144,6 +144,24 @@ func TestStrategyRejectsZeroAdapterCapacity(t *testing.T) {
 	}
 }
 
+func TestStrategySkipsAdapterWithNilFundable(t *testing.T) {
+	adapter := testAdapter(1, 1000)
+	adapter.Fundable = nil
+	input := types.OfferInput{
+		Now:      time.Unix(0, 0),
+		Adapters: []types.AdapterSnapshot{adapter},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 500)},
+	}
+
+	got, err := New().DecideOffers(t.Context(), input)
+	if err != nil {
+		t.Fatalf("DecideOffers: %v", err)
+	}
+	if len(got.Offers) != 0 {
+		t.Fatalf("offers = %+v, want none because adapter fundable is nil", got.Offers)
+	}
+}
+
 func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 	a1 := testAdapter(1, 100_000_000)
 	a1.MaxAssets = big.NewInt(80_000_000)
