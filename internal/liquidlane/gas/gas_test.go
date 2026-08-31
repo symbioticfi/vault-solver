@@ -7,6 +7,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+func TestUnknownRouteFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		route     Route
+		first     bool
+		wantUnits uint64
+	}{
+		{name: "unknown first", route: RouteUnknown, first: true, wantUnits: firstUnknownSwap},
+		{name: "unknown additional", route: RouteUnknown, wantUnits: additionalUnknownSwap},
+		{name: "out of range first", route: Route(255), first: true, wantUnits: firstUnknownSwap},
+		{name: "out of range additional", route: Route(255), wantUnits: additionalUnknownSwap},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := UnitsForRouteAt(tc.route, tc.first); got != tc.wantUnits {
+				t.Fatalf("UnitsForRouteAt(%d, %t) = %d, want %d", tc.route, tc.first, got, tc.wantUnits)
+			}
+			if got := tc.route.String(); got != "unknown" {
+				t.Fatalf("Route(%d).String() = %q, want unknown", tc.route, got)
+			}
+		})
+	}
+}
+
 func TestPredictionForRoutes(t *testing.T) {
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000ca")
 	demands := demandsFor(coll, 100)
