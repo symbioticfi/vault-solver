@@ -38,7 +38,7 @@ observability:
   # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
 
 solvers:
-  - name: 3f-bridge-facilitator    # registry key selecting the implementation
+  - name: 3f-bridge-facilitator    # solver name selecting the implementation
     config:                        # opaque to the framework; typed by the 3F solver
       apiBaseUrl: https://bf.dev.gcp.3f.xyz   # 3F Bridge Facilitator API base URL (no API key — auth is by signature)
       # httpTimeout: 30s               # per-call timeout for 3F API requests (default 30s)
