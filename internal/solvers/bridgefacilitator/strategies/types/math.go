@@ -81,3 +81,34 @@ func MeetsMinYield(expectedReturn, principal, minYieldPpm *big.Int) bool {
 	rhs := new(big.Int).Mul(principal, minYieldPpm)
 	return lhs.Cmp(rhs) >= 0
 }
+
+// bigTwo is the minimum partial-consumption pricing margin (see PartialSafeMinYieldReturn).
+var bigTwo = big.NewInt(2)
+
+// PartialSafeMinYieldReturn prices an offer above MinYieldReturn by a margin that keeps PARTIAL
+// consumptions clear of the floor. The Request contract pro-rates a partially consumed offer's return
+// with floor division — yt = expectedReturn*pt/principal — and requires ceil(pt*minYieldPpm/1e6), so an
+// offer priced exactly at MinYieldReturn carries under one base unit of slack and most partial amounts
+// truncate one unit below the floor, reverting TooLowYield. (Mainnet tx 0xc637…8386: 30,000.035000 USDC
+// offered at the 190 ppm floor was consumed at 29,946.365238 and delivered 5,689,809 against the
+// required 5,689,810.)
+//
+// The margin is max(2, ceil(principal/1e6)) — one ppm of principal, floored at two base units. Since
+// margin*pt >= principal implies the pro-rated return exceeds the requirement by at least a full unit,
+// this guarantees floor(return*pt/principal) >= ceil(pt*minYieldPpm/1e6) for every pt >=
+// principal/margin: every consumption of at least half the offer and, for principals above 2e6 base
+// units, everything down to the ppm quantum (1e6 base units) — for any floor ppm and any token scale.
+// The rate cost is ~1 ppm (two base units on dust principals). Returns 0 when there is no floor, like
+// MinYieldReturn.
+func PartialSafeMinYieldReturn(principal, minYieldPpm *big.Int) *big.Int {
+	ret := MinYieldReturn(principal, minYieldPpm)
+	if ret.Sign() <= 0 {
+		return ret
+	}
+	margin := new(big.Int).Add(principal, bigCeilBias)
+	margin.Quo(margin, bigYieldPpmScale)
+	if margin.Cmp(bigTwo) < 0 {
+		margin.Set(bigTwo)
+	}
+	return ret.Add(ret, margin)
+}
