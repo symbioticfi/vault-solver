@@ -2,7 +2,6 @@ package discounts
 
 import (
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -125,7 +124,7 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := parseUint256Hex(resolved.Discount.Nonce, "nonce")
+	nonce, err := parseUint256Decimal(resolved.Discount.Nonce, "nonce")
 	if err != nil {
 		return nil, err
 	}
@@ -196,19 +195,18 @@ func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
 	return out, nil
 }
 
-func parseUint256Hex(raw, field string) (*big.Int, error) {
-	digits, ok := strings.CutPrefix(raw, "0x")
-	if !ok || len(digits) == 0 || len(digits) > 64 {
-		return nil, errors.Errorf("%s: invalid uint256 hex %q", field, raw)
+func parseUint256Decimal(raw, field string) (*big.Int, error) {
+	if raw == "" {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
-	// Discount nonces are EIP-712 uint256 values, not JSON-RPC quantities, so leading zeroes are valid.
-	digits = strings.TrimLeft(digits, "0")
-	if digits == "" {
-		digits = "0"
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+		}
 	}
-	out, err := hexutil.DecodeBig("0x" + digits)
-	if err != nil {
-		return nil, errors.Errorf("%s: %w", field, err)
+	out, ok := new(big.Int).SetString(raw, 10)
+	if !ok || out.BitLen() > 256 {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
 	return out, nil
 }

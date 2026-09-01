@@ -872,7 +872,8 @@
               },
               "nonce": {
                 "type": "string",
-                "pattern": "^0x[a-fA-F0-9]+$"
+                "pattern": "^\\d+$",
+                "description": "Base-10 uint256 string."
               },
               "deadline": {
                 "type": "integer",
@@ -937,7 +938,8 @@
                   },
                   "nonce": {
                     "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
+                    "pattern": "^\\d+$",
+                    "description": "Base-10 uint256 string."
                   },
                   "deadline": {
                     "type": "integer",
@@ -1017,7 +1019,8 @@
                         },
                         "nonce": {
                           "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]+$"
+                          "pattern": "^\\d+$",
+                          "description": "Base-10 uint256 string."
                         },
                         "deadline": {
                           "type": "integer",
