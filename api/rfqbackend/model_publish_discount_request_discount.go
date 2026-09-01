@@ -26,8 +26,9 @@ type PublishDiscountRequestDiscount struct {
 	Discount      string `json:"discount" validate:"regexp=^\\\\d+$"`
 	Signer        string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Protocol      string `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Nonce         string `json:"nonce" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Deadline      int32  `json:"deadline"`
+	// Base-10 uint256 string.
+	Nonce    string `json:"nonce" validate:"regexp=^\\\\d+$"`
+	Deadline int32  `json:"deadline"`
 }
 
 type _PublishDiscountRequestDiscount PublishDiscountRequestDiscount

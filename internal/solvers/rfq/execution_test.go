@@ -314,7 +314,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_700,
+			Nonce:    "1", Deadline: 4_102_444_700,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_750, ProtocolSignature: "0xbb",
 	}
@@ -360,7 +360,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_750,
+			Nonce:    "1", Deadline: 4_102_444_750,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_700, ProtocolSignature: "0xbb",
 	}
@@ -399,7 +399,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 			TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_800,
+			Nonce:    "1", Deadline: 4_102_444_800,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
