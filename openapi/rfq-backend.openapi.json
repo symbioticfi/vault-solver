@@ -351,7 +351,7 @@
                   },
                   "nonce": {
                     "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
+                    "pattern": "^\\d+$"
                   }
                 },
                 "required": [
@@ -514,7 +514,7 @@
                         },
                         "nonce": {
                           "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]+$"
+                          "pattern": "^\\d+$"
                         }
                       },
                       "required": [
@@ -1169,7 +1169,7 @@
                   },
                   "nonce": {
                     "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
+                    "pattern": "^\\d+$"
                   }
                 },
                 "required": [
@@ -1247,7 +1247,8 @@
                   "pattern": "^0x[a-fA-F0-9]+$"
                 },
                 "nonce": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^\\d+$"
                 },
                 "input": {
                   "type": "object",
