@@ -2,6 +2,7 @@ package discounts
 
 import (
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -124,12 +125,9 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := hexutil.DecodeBig(resolved.Discount.Nonce)
+	nonce, err := parseUint256Hex(resolved.Discount.Nonce, "nonce")
 	if err != nil {
-		return nil, errors.Errorf("nonce: %w", err)
-	}
-	if nonce.Sign() < 0 {
-		return nil, errors.New("nonce: must be non-negative")
+		return nil, err
 	}
 	signerSignature, err := hexutil.Decode(resolved.SignerSignature)
 	if err != nil {
@@ -194,6 +192,23 @@ func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
 	out, ok := new(big.Int).SetString(raw, 10)
 	if !ok || out.Sign() < 0 {
 		return nil, errors.Errorf("%s: invalid non-negative decimal %q", field, raw)
+	}
+	return out, nil
+}
+
+func parseUint256Hex(raw, field string) (*big.Int, error) {
+	digits, ok := strings.CutPrefix(raw, "0x")
+	if !ok || len(digits) == 0 || len(digits) > 64 {
+		return nil, errors.Errorf("%s: invalid uint256 hex %q", field, raw)
+	}
+	// Discount nonces are EIP-712 uint256 values, not JSON-RPC quantities, so leading zeroes are valid.
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		digits = "0"
+	}
+	out, err := hexutil.DecodeBig("0x" + digits)
+	if err != nil {
+		return nil, errors.Errorf("%s: %w", field, err)
 	}
 	return out, nil
 }
