@@ -95,6 +95,43 @@ func TestParseSigned(t *testing.T) {
 	}
 }
 
+func TestParseSignedAcceptsPaddedUint256Nonce(t *testing.T) {
+	for _, nonce := range []string{
+		"0x02",
+		"0x" + strings.Repeat("0", 63) + "2",
+	} {
+		t.Run(nonce, func(t *testing.T) {
+			parsed, err := ParseSigned(&Resolved{
+				DiscountID: "0x" + hash64,
+				Discount: Terms{
+					Adapter:       "0x0000000000000000000000000000000000000abc",
+					TokenToRedeem: "0x0000000000000000000000000000000000000def",
+					Discount:      "123",
+					Signer:        "0x0000000000000000000000000000000000000aaa",
+					Protocol:      "0x0000000000000000000000000000000000000bbb",
+					Nonce:         nonce,
+					Deadline:      1_900_000_000,
+				},
+				SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
+			})
+			if err != nil {
+				t.Fatalf("ParseSigned nonce %q: %v", nonce, err)
+			}
+			if parsed.Terms.Nonce.String() != "2" {
+				t.Fatalf("nonce = %s, want 2", parsed.Terms.Nonce)
+			}
+		})
+	}
+}
+
+func TestParseUint256HexRejectsSigns(t *testing.T) {
+	for _, nonce := range []string{"0x+2", "0x-2"} {
+		if _, err := parseUint256Hex(nonce, "nonce"); err == nil {
+			t.Fatalf("parseUint256Hex(%q) succeeded, want error", nonce)
+		}
+	}
+}
+
 func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 	resolved := &Resolved{
 		DiscountID: "0x" + hash64,
