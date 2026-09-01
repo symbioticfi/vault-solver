@@ -25,7 +25,7 @@ type PublicQuoteResponseQuoteOrderInfo struct {
 	AmountIn string                                          `json:"amountIn" validate:"regexp=^\\\\d+$"`
 	Outputs  []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs"`
 	Deadline int32                                           `json:"deadline"`
-	Nonce    string                                          `json:"nonce" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Nonce    string                                          `json:"nonce" validate:"regexp=^\\\\d+$"`
 }
 
 type _PublicQuoteResponseQuoteOrderInfo PublicQuoteResponseQuoteOrderInfo

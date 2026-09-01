@@ -24,7 +24,7 @@ func TestBackendClient_ListOpenOrders(t *testing.T) {
 		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
 			`"orders":[{"type":"Priority","orderId":"00000000-0000-0000-0000-0000000000a1","orderStatus":"open",` +
 			`"quoteId":"00000000-0000-0000-0000-0000000000b1",` +
-			`"swapper":"0x0000000000000000000000000000000000000099","txHash":null,"nonce":"0x1",` +
+			`"swapper":"0x0000000000000000000000000000000000000099","txHash":null,"nonce":"1",` +
 			`"input":{"token":"0x0000000000000000000000000000000000000001","amount":"1000"},` +
 			`"outputs":[],"settledAmounts":[]}],"cursor":null}`))
 	}))
@@ -41,7 +41,8 @@ func TestBackendClient_ListOpenOrders(t *testing.T) {
 	}
 	if len(orders) != 1 ||
 		orders[0].OrderID != "00000000-0000-0000-0000-0000000000a1" ||
-		orders[0].QuoteID != "00000000-0000-0000-0000-0000000000b1" {
+		orders[0].QuoteID != "00000000-0000-0000-0000-0000000000b1" ||
+		orders[0].Nonce != "1" {
 		t.Fatalf("orders = %+v", orders)
 	}
 	// txHash was an explicit null; it must round-trip as a nil pointer, not a garbage string.
