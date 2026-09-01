@@ -466,6 +466,46 @@ func TestBroadcastRejectsExpiredRequest(t *testing.T) {
 	}
 }
 
+func TestBroadcastRejectsObsoleteRequestBeforeSigning(t *testing.T) {
+	b := newMockBackend()
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	checks := 0
+
+	_, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "obsolete",
+		Obsolete: func(context.Context) (bool, error) {
+			checks++
+			return true, nil
+		},
+	})
+	if !errors.Is(err, errRequestObsolete) {
+		t.Fatalf("broadcast error = %v, want obsolete request", err)
+	}
+	if checks != 1 {
+		t.Fatalf("obsolescence checks = %d, want 1", checks)
+	}
+	if attempted := b.attemptedTransactions(); len(attempted) != 0 {
+		t.Fatalf("obsolete request broadcast %d transactions", len(attempted))
+	}
+}
+
+func TestBroadcastContinuesWhenObsolescenceIsUnknown(t *testing.T) {
+	b := newMockBackend()
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	checkErr := errors.New("status RPC unavailable")
+
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "unknown",
+		Obsolete: func(context.Context) (bool, error) { return false, checkErr },
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	if pending == nil || len(b.attemptedTransactions()) != 1 {
+		t.Fatalf("unknown obsolescence result = pending %v, attempts %d", pending != nil, len(b.attemptedTransactions()))
+	}
+}
+
 func TestBroadcastTimeout(t *testing.T) {
 	for name, test := range map[string]struct {
 		configured time.Duration
@@ -1328,6 +1368,103 @@ func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing
 	later := b.lastSent()
 	if later == nil || later.Nonce() != 8 || b.isCancellation(later) {
 		t.Fatalf("later transaction = %v, want non-cancellation nonce 8", later)
+	}
+}
+
+func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T) {
+	sgnr := mustSigner(t)
+	b := &replacementBackend{
+		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
+	}
+	m := New(
+		b, sgnr, big.NewInt(11155111),
+		Config{
+			MaxFeeGwei:          50,
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: time.Hour,
+			PendingTimeout:      time.Hour,
+		},
+		logr.Discard(),
+	)
+	startTestManager(t, m)
+
+	var mode atomic.Int32
+	unknownChecked := make(chan struct{})
+	var unknownOnce sync.Once
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000, Label: "fillable-order",
+		Obsolete: func(context.Context) (bool, error) {
+			switch mode.Load() {
+			case 1:
+				unknownOnce.Do(func() { close(unknownChecked) })
+				return false, errors.New("status RPC unavailable")
+			case 2:
+				return true, nil
+			default:
+				return false, nil
+			}
+		},
+	})
+	if !accepted {
+		t.Fatal("SendAsync was not accepted")
+	}
+	waitForSentTransactions(t, b.mockBackend, 1)
+
+	mode.Store(1)
+	select {
+	case <-unknownChecked:
+	case <-time.After(time.Second):
+		t.Fatal("pending obsolescence error was not observed")
+	}
+	if cancellation := b.cancellationTransaction(); cancellation != nil {
+		t.Fatalf("unknown order status cancelled transaction %s", cancellation.Hash())
+	}
+
+	mode.Store(2)
+	select {
+	case got := <-result:
+		if got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
+			t.Fatalf("obsolete request result = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("obsolete request did not cancel promptly")
+	}
+	cancellation := b.cancellationTransaction()
+	if cancellation == nil || cancellation.Nonce() != 7 {
+		t.Fatalf("same-nonce cancellation = %v", cancellation)
+	}
+
+	later := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xdef"), Data: []byte{0x02}, GasLimit: 21_000, Label: "later",
+	})
+	if later.Err != nil {
+		t.Fatalf("later transaction: %v", later.Err)
+	}
+	last := b.lastSent()
+	if last == nil || last.Nonce() != 8 || b.isCancellation(last) {
+		t.Fatalf("later transaction = %v, want non-cancellation nonce 8", last)
+	}
+}
+
+func TestValidRequestReceiptWinsBeforePendingObsolescenceCheck(t *testing.T) {
+	b := newMockBackend()
+	m := newTestManager(t, b)
+	var checks atomic.Int64
+
+	result := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "valid",
+		Obsolete: func(context.Context) (bool, error) {
+			return checks.Add(1) > 1, nil
+		},
+	})
+	if result.Err != nil {
+		t.Fatalf("valid request result: %v", result.Err)
+	}
+	if got := checks.Load(); got != 1 {
+		t.Fatalf("obsolescence checks = %d, want only pre-sign check before owned receipt", got)
+	}
+	if attempted := b.attemptedTransactions(); len(attempted) != 1 {
+		t.Fatalf("valid request attempts = %d, want 1", len(attempted))
 	}
 }
 
