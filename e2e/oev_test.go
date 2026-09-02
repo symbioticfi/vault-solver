@@ -524,16 +524,32 @@ func decodeOEVEvents(
 
 func verifyOEVMetrics(t *testing.T, testEnv *testEnvironment, baseline string) {
 	t.Helper()
-	for _, name := range []string{"oev_auctions_total", "oev_bids_total", "oev_wins_total", "oev_hotpath_seconds_count"} {
-		initial := metricValue(baseline, name, map[string]string{"strategy": "default"})
-		eventually(t, name+" metric", 90*time.Second, 2*time.Second, func() error {
-			value := metricValue(getMetrics(t, testEnv), name, map[string]string{"strategy": "default"})
+	workflowLabels := []map[string]string{
+		{"solver": "redstone-oev", "strategy": "default", "event": "auction", "outcome": "enqueued"},
+		{"solver": "redstone-oev", "strategy": "default", "event": "bid", "outcome": "enqueued"},
+		{"solver": "redstone-oev", "strategy": "default", "event": "bid", "outcome": "won"},
+		{"solver": "redstone-oev", "strategy": "default", "event": "bid", "outcome": "settled_success"},
+	}
+	for _, labels := range workflowLabels {
+		initial := metricValue(baseline, "solver_bot_workflow_events_total", labels)
+		description := labels["event"] + "/" + labels["outcome"] + " workflow metric"
+		eventually(t, description, 90*time.Second, 2*time.Second, func() error {
+			value := metricValue(getMetrics(t, testEnv), "solver_bot_workflow_events_total", labels)
 			if value-initial < 1 {
 				return errors.Errorf("metric delta is %v", value-initial)
 			}
 			return nil
 		})
 	}
+	hotPathLabels := map[string]string{"strategy": "default"}
+	initialHotPath := metricValue(baseline, "oev_hotpath_seconds_count", hotPathLabels)
+	eventually(t, "oev hot path metric", 90*time.Second, 2*time.Second, func() error {
+		value := metricValue(getMetrics(t, testEnv), "oev_hotpath_seconds_count", hotPathLabels)
+		if value-initialHotPath < 1 {
+			return errors.Errorf("metric delta is %v", value-initialHotPath)
+		}
+		return nil
+	})
 	metrics := getMetrics(t, testEnv)
 	if metricValue(metrics, "oev_deposit_wei", map[string]string{"strategy": "default"}) <= 0 ||
 		metricValue(metrics, "oev_deposit_below_floor", map[string]string{"strategy": "default"}) != 0 {

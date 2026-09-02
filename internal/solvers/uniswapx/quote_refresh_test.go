@@ -13,6 +13,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
 type quoteModeReader struct {
@@ -233,9 +234,12 @@ func TestResolveAdvertisedRoutesIsolatesInvalidAdapter(t *testing.T) {
 		testDiscountOffer(bad, now.Add(time.Minute), "100", "100"),
 	}}
 
-	routes := solver.resolveAdvertisedRoutes(t.Context(), listed, nil, now, advertisedRouteFilter{})
+	routes, complete := solver.resolveAdvertisedRoutes(t.Context(), listed, nil, now, advertisedRouteFilter{})
 	if len(routes) != 1 || routes[0].ID != good.ID {
 		t.Fatalf("resolved routes = %+v, want only good adapter", routes)
+	}
+	if complete {
+		t.Fatal("partial advertised adapter resolution reported complete")
 	}
 }
 
@@ -243,6 +247,8 @@ func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyUnreadyState(t *tes
 	now := time.Unix(1_000, 0)
 	reader := &quoteModeReader{now: now}
 	solver := quoteModeSolver(reader, &fakeDiscountProvider{list: &liquiddiscounts.List{}})
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.operations = metrics.operations
 
 	if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
 		t.Fatalf("refreshQuoteState: %v", err)
@@ -255,6 +261,7 @@ func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyUnreadyState(t *tes
 	if solver.ready() {
 		t.Fatal("solver with empty quote inventory should not be ready")
 	}
+	metricstest.RequireExternalOperationCount(t, reg, Name, quoteRefreshOperation, "success", 1)
 }
 
 func TestRefreshQuoteStateSkipsDynamicRouteWithoutGasFeed(t *testing.T) {

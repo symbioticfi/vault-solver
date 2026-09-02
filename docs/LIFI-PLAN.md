@@ -68,6 +68,20 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 - **Config, secrets** — order-server URL + `apiKeyEnv`, settler/executor/adapter addresses via
   `solver.config`; the LI.FI API key via `*Env` indirection. `solverMode` mirrors RFQ: `external` is
   direct-only, while `internal` enables the shared private-discounts backend.
+- **Observability** — `lifi_order_feed_connected` is `1` only while the feed loop owns an established
+  WebSocket. `lifi_active_quotes` is a process-local last-successful reconciliation count, not a live
+  backend inventory: it may remain nonzero after remote quotes expire at `quoteTtl`, so operators pair
+  it with `lifi_last_successful_refresh_timestamp`. Successful quote suspension publishes the actual
+  zero active count and advances the same freshness timestamp. Bounded counters classify every worker
+  attempt and count only actual inbox, capacity-retry, and deposit-retry queue overflows; recovery
+  backpressure, retry expiry, and shutdown are excluded. Scrape-time gauges expose the current waiting
+  backlog and nearest protocol order deadline for the bounded inbox and capacity/deposit queues, plus a
+  distinct `recovery_retry` stage for REST-recovery convergence work; actively processing work is outside
+  the snapshots. The generic external-operation histogram times
+  fixed `quote_refresh`, `quote_suspend`, and `order_recovery` boundaries. A refresh timer ends before a
+  lane-triggered suspension starts, and
+  one recovery sample spans all sweeps/backoffs until that connection generation converges or is
+  cancelled. Published fallback inventory is `degraded`; lane gates and cancellation are `skipped`.
 - **Pluggable strategy** — both the standing-quote curve and the fill decision are a strategy
   (`DecideQuotes` + `DecideFill`; `default` in-process or `webhook` external), per
   [`strategy-plan.md`](strategy-plan.md). See §5.2.
@@ -311,7 +325,8 @@ another sweep before recovery can end. On disconnect the solver
 retries expiry of its known active curves until acknowledged and resumes only after the next barrier. This closes the local
 publish-before-recovery race, but cannot revoke a match the remote server already made against a stale quote
 while the process was down. Live overflow still drops the newest message rather than growing memory without
-bound. A reconnect may re-evaluate an order that remains active; every attempt repeats the canonical on-chain
+bound and records workflow event `queue_drop/inbox`. A reconnect may re-evaluate an order that
+remains active; every attempt repeats the canonical on-chain
 status check. Each status query is bounded by the generated API's maximum offset: at most 1050 rows per status
 can be fenced; exceeding that limit fails closed and retries instead of publishing quotes. Eight non-converging
 sweeps likewise enter bounded backoff and restart convergence. Graceful process cancellation stops renewal first
@@ -468,9 +483,19 @@ deliveries. Each reservation release advances a generation and
 re-evaluates
 every older retry once against fresh order status, deadlines, inventory, gas, and routing. A still-blocked order,
 including one whose fresh plan moved from capacity A to capacity B, returns to the FIFO tail at the current
-generation; a full queue deterministically logs and drops the newest retry. That reservation queue has no timer.
-A separate worker-owned deposit-propagation timer handles only OIF status `None` as described in §4; it does
-not re-run reservation-blocked decisions or accepted transactions.
+generation; a full queue deterministically logs and drops the newest retry and records workflow event
+`queue_drop/capacity_retry`. That reservation queue has no timer. A separate
+worker-owned deposit-propagation timer handles only OIF status `None` as described in §4; it does not re-run
+reservation-blocked decisions or accepted transactions. Each retained status-`None` attempt is classified as
+workflow event `order_processing/deposit_deferred`. Queue overflow and terminal key/deadline/retry-window
+expiry record `queue_drop/deposit_retry`; expiry is also `order_processing/not_actionable` whether detected
+while scheduling or when the timer pops the order.
+The feed loop registers the bounded inbox and its separate REST-recovery retry hold; the worker registers
+the capacity and deposit retry queues. The LI.FI metrics collector exposes
+`lifi_order_backlog{stage}` and `lifi_order_nearest_deadline_timestamp{stage}` without adding order IDs or
+other unbounded labels. `stage="recovery_retry"` is distinct from the bounded `stage="inbox"`, so operators
+do not mistake recovery convergence work for inbox utilization. Empty stages publish zero; the inbox excludes
+recovery barriers and every stage excludes the item currently being processed.
 A successful tx-manager admission immediately sends a coalesced refresh signal. During completion the worker
 keeps the completed fill's reservation visible globally while retry planning uses a snapshot excluding only that
 fill. Any accepted replacement reservation is therefore installed before the old reservation is removed; quote
@@ -479,7 +504,10 @@ removes the old reservation and emits one refresh after the eligible retry batch
 `CapacityLedger` is the source for
 both fill planning and quote refresh, and the quote coordinator does not keep a second copy of per-order
 reservations. When the feed becomes ready, any economic payload changes, or expiry enters
-the renewal window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. When a pair
+the renewal window, it submits the replacement curve directly; LI.FI overwrites the old quote for the pair. Each
+successful reconciliation publishes quote/range counts and per-pair maximum input ceilings (alternatives
+maxed, never summed) as one collector snapshot. Shared LiquidLane fill telemetry records successful
+fill count, last-fill freshness, and token-native input/output/planned-surplus amounts. When a pair
 stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
 the old server-side quote. Local state advances only after the response acknowledges every submitted range, so a
 partial acknowledgement leaves the replacement or expiry pending for retry. An unchanged pair is not reposted on
@@ -859,7 +887,10 @@ still requires the redeploy in phase 0.
    The new executor asks direct adapters for the buffered `amountOut`, executes private routes from signed
    terms, and delegates context resolution and output sufficiency to the OutputSettler. If the order is not
    executable at decision time, it is dropped.
-3. **Harden** — staleness/skip edge cases, revert handling, metrics on the shared observability server;
+   Quote-state, WebSocket connectivity, connection-scoped recovery readiness, per-attempt processing outcomes,
+   bounded queue drops, current queue backlog/deadlines, and shared fill-transaction collectors are listed in the
+   [README metrics table](../README.md#metrics).
+3. **Harden** — staleness/skip edge cases, revert handling;
    a repeatable green E2E on Sepolia (`order-dev`).
 4. **Mainnet** — deploy the executor per target chain, point config at `order.li.fi`, register each
    executor account through EIP-1271, and run.

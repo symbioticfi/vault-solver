@@ -9,9 +9,31 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
+
+func newUniswapXTestMetrics(t *testing.T, solver *Solver) *uniswapXMetrics {
+	t.Helper()
+	metrics, _ := newUniswapXTestMetricsWithRegistry(t, solver)
+	return metrics
+}
+
+func newUniswapXTestMetricsWithRegistry(
+	t *testing.T,
+	solver *Solver,
+) (*uniswapXMetrics, *prometheus.Registry) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	metrics, err := newUniswapXMetrics(reg, solver, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return metrics, reg
+}
 
 type stateTestOrderPoller struct {
 	terminals map[common.Hash]orderTerminal
@@ -87,6 +109,8 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 			hash: {Status: orderStatusExpired},
 		}},
 	}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
 	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(now.Add(time.Second).Unix()),
@@ -106,6 +130,10 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 	}
 	if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
 		t.Fatal("missed obligation was not marked terminal")
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, 1)
+	if got := testutil.ToFloat64(solver.metrics.exclusiveOutstanding); got != 0 {
+		t.Fatalf("outstanding obligations = %v, want 0", got)
 	}
 
 	// A later unrelated fill may reset the ordinary failure breaker, but never the fade breaker.
@@ -149,6 +177,30 @@ func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
 	}
 }
 
+func TestRuntimeRecoveredMissRecordsMetricAndOpensBreaker(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	hash := common.HexToHash("0x5678")
+	solver := &Solver{
+		cfg: &Config{Breaker: BreakerConfig{Window: time.Minute}}, log: logr.Discard(),
+		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
+			hash: {Status: orderStatusExpired},
+		}},
+	}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
+	solver.trackExclusiveObligation(exclusiveObligation{
+		hash: hash, deadline: now.Add(time.Second),
+	}, "", now)
+
+	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if solver.exclusiveBlockUntil.Load() == 0 {
+		t.Fatal("runtime-recovered miss did not open exclusive breaker")
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, 1)
+}
+
 func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	deadline := now.Add(time.Second)
@@ -165,6 +217,8 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 			txHash: deadline,
 		}},
 	}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
 	}, now)
@@ -183,6 +237,7 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	if reader.confirmations != 2 {
 		t.Fatalf("confirmation depth = %d, want 2", reader.confirmations)
 	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeSettledInTime, 1)
 }
 
 func TestAnyLateFillTripsExclusiveBreaker(t *testing.T) {
@@ -277,6 +332,30 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 				t.Fatal("unresolved obligation was removed instead of retried")
 			}
 		})
+	}
+}
+
+func TestExclusiveTerminalRetentionCoversRecoveryLookback(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	recent := common.HexToHash("0x1234")
+	old := common.HexToHash("0x5678")
+	solver := &Solver{
+		cfg: &Config{Breaker: BreakerConfig{Window: 2 * time.Hour}},
+		exclusiveTerminal: map[common.Hash]time.Time{
+			recent: now.Add(-3 * time.Hour),
+			old:    now.Add(-5 * time.Hour),
+		},
+	}
+
+	solver.stateMu.Lock()
+	solver.cleanupExclusiveLocked(now)
+	solver.stateMu.Unlock()
+
+	if _, retained := solver.exclusiveTerminal[recent]; !retained {
+		t.Fatal("terminal outcome inside recovery lookback was discarded")
+	}
+	if _, retained := solver.exclusiveTerminal[old]; retained {
+		t.Fatal("terminal outcome older than recovery lookback was retained")
 	}
 }
 

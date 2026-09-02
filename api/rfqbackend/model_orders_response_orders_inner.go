@@ -27,7 +27,7 @@ type OrdersResponseOrdersInner struct {
 	QuoteId           string                                          `json:"quoteId"`
 	Swapper           string                                          `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TxHash            NullableString                                  `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Nonce             string                                          `json:"nonce"`
+	Nonce             string                                          `json:"nonce" validate:"regexp=^\\\\d+$"`
 	Input             PublicQuoteResponseQuoteAggregatedOutputsInner  `json:"input"`
 	Outputs           []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs"`
 	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner  `json:"settledAmounts"`

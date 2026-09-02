@@ -11,6 +11,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestPongFor(t *testing.T) {
@@ -198,6 +200,100 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("feed did not stop")
+	}
+}
+
+func TestOrderFeedMetricsLifecycle(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	upgraded := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		close(upgraded)
+		<-release
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
+		t.Fatalf("initial connected = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
+		t.Fatalf("initial recovery ready = %v, want 0", got)
+	}
+
+	result := make(chan error, 1)
+	recoveryStarted := make(chan struct{})
+	allowRecovery := make(chan struct{})
+	go func() {
+		_, watchErr := feed.watchOnce(
+			t.Context(),
+			orderFeedConnectionHooks{whileConnected: func(connectionCtx context.Context) {
+				close(recoveryStarted)
+				select {
+				case <-allowRecovery:
+					feed.markRecoveryReady(connectionCtx)
+				case <-connectionCtx.Done():
+					return
+				}
+				<-connectionCtx.Done()
+			}},
+			func(context.Context, orderMessage) {},
+		)
+		result <- watchErr
+	}()
+	<-upgraded
+	expectSignal(t, recoveryStarted)
+	assertGaugeEventually(t, metrics.orderFeedConnected, 1)
+	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
+		t.Fatalf("recovery ready before convergence = %v, want 0", got)
+	}
+
+	close(allowRecovery)
+	assertGaugeEventually(t, metrics.orderRecoveryReady, 1)
+
+	close(release)
+	if err := <-result; err == nil {
+		t.Fatal("expected read error after server closed the connection")
+	}
+	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
+		t.Fatalf("disconnected = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
+		t.Fatalf("recovery ready after disconnect = %v, want 0", got)
+	}
+}
+
+func TestOrderRecoveryReadyMetricNilFeed(t *testing.T) {
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
+		t.Fatalf("recovery ready with nil feed = %v, want 0", got)
+	}
+}
+
+func assertGaugeEventually(t *testing.T, collector prometheus.Collector, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if got := testutil.ToFloat64(collector); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gauge did not reach %v", want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

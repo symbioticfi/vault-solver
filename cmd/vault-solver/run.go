@@ -66,17 +66,32 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
-	metrics := observability.NewMetrics()
+	metrics, health := observability.NewMetrics()
 	metrics.SetBuildInfo(version.Version, version.Commit)
-	health := &observability.Health{}
-	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
-	go observability.ServeUntil(ctx, httpSrv, log)
+	metrics.SetSolvers(solverNames)
+	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics)
+	observabilityCtx, stopObservability := context.WithCancel(context.WithoutCancel(ctx))
+	observabilityDone := make(chan struct{})
+	go func() {
+		defer close(observabilityDone)
+		observability.ServeUntil(observabilityCtx, httpSrv, log)
+	}()
+	defer func() {
+		stopObservability()
+		<-observabilityDone
+	}()
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
+	rpcMetrics, err := chain.NewRPCMetrics(metrics.Registerer())
+	if err != nil {
+		return err
+	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
-	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
+	chainClient, err := chain.DialWithMetrics(
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics, log,
+	)
 	if err != nil {
 		return err
 	}
@@ -93,15 +108,20 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
 	// Shared, nonce-serialized transaction sender.
-	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
+	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
+	if err != nil {
+		return err
+	}
+	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
 		TipGwei:             cfg.TxManager.TipGwei,
 		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
+		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-	}, log)
+	}, txMetrics, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 

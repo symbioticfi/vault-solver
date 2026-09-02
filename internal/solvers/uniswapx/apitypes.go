@@ -15,6 +15,20 @@ type quoteRequest struct {
 	Protocol            string `json:"protocol"`
 }
 
+// quoteDeclineReason is an internal, bounded decision enum. Keeping it typed prevents request data,
+// strategy messages, or arbitrary errors from becoming Prometheus label values.
+type quoteDeclineReason string
+
+const (
+	quoteDeclineBlocked               quoteDeclineReason = "blocked"
+	quoteDeclineInvalidRequest        quoteDeclineReason = "invalid-request"
+	quoteDeclinePairOutOfScope        quoteDeclineReason = "pair-out-of-scope"
+	quoteDeclineInvalidAmount         quoteDeclineReason = "invalid-amount"
+	quoteDeclineQuoteStateUnavailable quoteDeclineReason = "quote-state-unavailable"
+	quoteDeclineStrategy              quoteDeclineReason = "strategy-declined"
+	quoteDeclineStateChanged          quoteDeclineReason = "state-changed"
+)
+
 type quoteResponse struct {
 	ChainID   int64  `json:"chainId"`
 	RequestID string `json:"requestId"`
@@ -26,7 +40,8 @@ type quoteResponse struct {
 	Filler    string `json:"filler"`
 	QuoteID   string `json:"quoteId"`
 
-	declineReason string
+	declineReason     quoteDeclineReason
+	quotedPairBounded bool
 }
 
 type orderPage struct {

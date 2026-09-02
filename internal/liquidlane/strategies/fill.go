@@ -23,6 +23,17 @@ type FillRoute struct {
 	DiscountID        *common.Hash           `json:"discountId"`
 }
 
+// PlannedSurplus returns the positive expected output above the required output.
+func PlannedSurplus(routes []FillRoute, requiredOutput *big.Int) *big.Int {
+	expectedOutput := new(big.Int)
+	for _, route := range routes {
+		if route.ExpectedAmountOut != nil {
+			expectedOutput.Add(expectedOutput, route.ExpectedAmountOut)
+		}
+	}
+	return liquidlane.PlannedSurplus(expectedOutput, requiredOutput)
+}
+
 // FillValidation contains the solver-owned facts used to validate an external fill decision.
 type FillValidation struct {
 	TokenIn            common.Address

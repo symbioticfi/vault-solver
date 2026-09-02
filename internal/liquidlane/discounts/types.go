@@ -124,12 +124,9 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := hexutil.DecodeBig(resolved.Discount.Nonce)
+	nonce, err := parseUint256Decimal(resolved.Discount.Nonce, "nonce")
 	if err != nil {
-		return nil, errors.Errorf("nonce: %w", err)
-	}
-	if nonce.Sign() < 0 {
-		return nil, errors.New("nonce: must be non-negative")
+		return nil, err
 	}
 	signerSignature, err := hexutil.Decode(resolved.SignerSignature)
 	if err != nil {
@@ -194,6 +191,22 @@ func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
 	out, ok := new(big.Int).SetString(raw, 10)
 	if !ok || out.Sign() < 0 {
 		return nil, errors.Errorf("%s: invalid non-negative decimal %q", field, raw)
+	}
+	return out, nil
+}
+
+func parseUint256Decimal(raw, field string) (*big.Int, error) {
+	if raw == "" {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+	}
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+		}
+	}
+	out, ok := new(big.Int).SetString(raw, 10)
+	if !ok || out.BitLen() > 256 {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
 	return out, nil
 }

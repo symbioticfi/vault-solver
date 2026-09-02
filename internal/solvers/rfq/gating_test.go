@@ -234,20 +234,20 @@ func TestQuoteMinAmountIn(t *testing.T) {
 			request := validQuoteBody()
 			request.Amount = amountIn
 
-			response, err := srv.quotes.quote(t.Context(), &request)
+			decision, err := srv.quotes.quote(t.Context(), &request)
 			if err != nil {
 				t.Fatalf("quote: %v", err)
 			}
 			if !tc.wantQuote {
-				if response != nil {
-					t.Fatalf("quote = %+v, want no quote (204)", response)
+				if decision.response != nil {
+					t.Fatalf("quote = %+v, want no quote (204)", decision.response)
 				}
 				if strategy.quoteCalls != 0 {
 					t.Fatalf("strategy consulted %d times for a below-minimum request", strategy.quoteCalls)
 				}
 				return
 			}
-			if response == nil {
+			if decision.response == nil {
 				t.Fatal("quote declined, want a quote")
 			}
 			if strategy.quoteCalls != 1 {
@@ -302,11 +302,11 @@ func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	request := validQuoteBody()
 	request.TokenIn = permissionedToken.Hex()
 
-	response, err := srv.quotes.quote(t.Context(), &request)
+	decision, err := srv.quotes.quote(t.Context(), &request)
 	if err != nil {
 		t.Fatalf("quote: %v", err)
 	}
-	if response == nil {
+	if decision.response == nil {
 		t.Fatal("quote declined, want response")
 	}
 	if !strategy.quoteInput.RequireSingleRoute {
@@ -332,9 +332,9 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
 	request.Adapters[0].DiscountID = &discountID
 
-	response, err := srv.quotes.quote(t.Context(), &request)
-	if err != nil || response != nil {
-		t.Fatalf("quote = %+v, err %v; want strategy decline", response, err)
+	decision, err := srv.quotes.quote(t.Context(), &request)
+	if err != nil || decision.response != nil {
+		t.Fatalf("quote = %+v, err %v; want strategy decline", decision.response, err)
 	}
 	if len(strategy.quoteInput.Candidates) != 1 {
 		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))

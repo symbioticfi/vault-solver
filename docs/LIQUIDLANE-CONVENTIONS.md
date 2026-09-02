@@ -163,16 +163,18 @@ reservations are then subtracted from every curve sharing that `CapacityID`.
 
 For signed discounts:
 
-1. List and validate advertised offers for quote construction.
-2. Never apply `discount` to backend `maxRate` a second time — but do re-derive the rate for the
+1. Treat HTTP `nonce` values as base-10 uint256 strings, parse them into `*big.Int`, and reject hex,
+   signs, non-digits, and values wider than 256 bits. The EIP-712 value remains the same uint256.
+2. List and validate advertised offers for quote construction.
+3. Never apply `discount` to backend `maxRate` a second time — but do re-derive the rate for the
    concrete `amountIn` with `ConservativeAdvertisedRate`. The backend floors the discount into the
    rate while the adapter floors `getAmountOut` first, so the raw rate can price a unit above what the
    adapter pays, and an over-predicted leg leaves the filler short of the order's signed outputs.
-3. Resolve signatures again immediately before fill.
-4. Recheck id, adapter, tokens, current discount bounds, and deadlines.
-5. Reserve capacity for upward price movement: discount swaps release their full computed output and
+4. Resolve signatures again immediately before fill.
+5. Recheck id, adapter, tokens, current discount bounds, and deadlines.
+6. Reserve capacity for upward price movement: discount swaps release their full computed output and
    cannot be reduced to a requested amount.
-6. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
+7. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
 
 Discount discovery, parsing, physical-route matching, cap/rate clipping, advertised fill-quote
 construction, and fresh signed-term binding/deadline/output validation are shared. Solvers still own when
