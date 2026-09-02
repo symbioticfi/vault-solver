@@ -88,7 +88,7 @@ func TestResolveSelectedBindsFreshTermsToExactPhysicalQuote(t *testing.T) {
 			Adapter: base.Adapter.Hex(), TokenToRedeem: base.TokenIn.Hex(), Discount: "100000",
 			Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 			Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-			Nonce:    "0x1", Deadline: now.Add(time.Minute).Unix(),
+			Nonce:    "1", Deadline: now.Add(time.Minute).Unix(),
 		},
 		SignerSignature: "0x1234", ProtocolDeadline: now.Add(time.Minute).Unix(),
 		ProtocolSignature: "0x5678",

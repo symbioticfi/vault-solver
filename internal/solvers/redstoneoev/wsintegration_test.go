@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // wsintegration_test.go drives the REAL wsClient (connect → subscribe → read → reconnect-safe) end to
@@ -18,6 +20,75 @@ import (
 // snapshot/state). The end-to-end solve + breaker path through handleMessage is covered by
 // TestFullAuctionLifecycle (solver_test.go); here we pin the reconnect hygiene that the in-memory path
 // can't exercise.
+
+func TestWSConnectionMetricTracksFullySubscribedLifetime(t *testing.T) {
+	topics := []string{"topic-a", "topic-b"}
+	allSubscriptionsRead := make(chan struct{})
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close() //nolint:errcheck // test teardown
+		for range topics {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+		close(allSubscriptionsRead)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	m, err := newMetrics(prometheus.NewRegistry(), defaultStrategyName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newWSClient(wsConfig{
+		URL: "ws" + strings.TrimPrefix(srv.URL, "http"), APIKey: "k", Topics: topics,
+		PingInterval: time.Hour, MsgTimeout: time.Hour, RotateAfter: time.Hour,
+	}, logr.Discard(), func(context.Context, []byte) {}, m.setFeedConnected)
+	if got := testutil.ToFloat64(m.feedConnected); got != 0 {
+		t.Fatalf("feed connected before Run = %v, want 0", got)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	select {
+	case <-allSubscriptionsRead:
+	case <-time.After(time.Second):
+		t.Fatal("client did not send all subscriptions")
+	}
+	waitForMetricValue(t, m.feedConnected, 1)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("client did not stop after cancellation")
+	}
+	if got := testutil.ToFloat64(m.feedConnected); got != 0 {
+		t.Fatalf("feed connected after teardown = %v, want 0", got)
+	}
+}
+
+func waitForMetricValue(t *testing.T, gauge prometheus.Gauge, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if testutil.ToFloat64(gauge) == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("metric value = %v, want %v", testutil.ToFloat64(gauge), want)
+}
 
 // TestWSIntegrationDropsStaleSolveAcrossReconnect proves the reconnect hygiene fix (#6): a solve
 // buffered while the connection is down is NOT replayed to the next connection (a stale auction has
@@ -57,7 +128,7 @@ func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 	s.ws = newWSClient(wsConfig{
 		URL: "ws" + strings.TrimPrefix(srv.URL, "http"), APIKey: "k",
 		Topics: []string{"t"}, BackoffInitial: 10 * time.Millisecond,
-	}, logr.Discard(), s.handleMessage)
+	}, logr.Discard(), s.handleMessage, nil)
 	// Pre-load a solve into the send buffer as if a prior auction had queued it during the downtime.
 	s.ws.Send([]byte(`{"op":"solve","id":"stale","data":{}}`))
 

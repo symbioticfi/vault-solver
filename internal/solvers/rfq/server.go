@@ -29,7 +29,7 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
-	metrics      *httpMetrics // nil disables HTTP instrumentation (e.g. in tests)
+	metrics      *rfqMetrics // nil disables instrumentation (e.g. in tests)
 	log          logr.Logger
 }
 
@@ -95,19 +95,24 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		s.log.V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
 	}
-	resp, err := s.quotes.quote(ctx, &in.Body)
+	decision, err := s.quotes.quote(ctx, &in.Body)
+	var bad *badRequestError
+	if errors.As(err, &bad) {
+		decision.outcome = quoteDecisionBadRequest
+	}
+	s.metrics.observeQuoteDecision(decision.outcome)
+	s.metrics.observeQuotedAmounts(decision.observation)
 	if err != nil {
-		var bad *badRequestError
-		if errors.As(err, &bad) {
+		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
 		s.log.Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
 		return nil, huma.Error502BadGateway("quote failed")
 	}
-	if resp == nil {
+	if decision.response == nil {
 		return &quoteOutput{Status: http.StatusNoContent}, nil // well-formed, nothing to quote
 	}
-	return &quoteOutput{Status: http.StatusOK, Body: resp}, nil
+	return &quoteOutput{Status: http.StatusOK, Body: decision.response}, nil
 }
 
 // authorized constant-time-compares the shared secret header.

@@ -13,9 +13,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -52,12 +55,18 @@ func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
 	cfg := testLifiConfig()
 	cfg.Gas = nil
 	strategy := &recordingQuoteStrategy{}
+	reg := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(reg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	feeReads := 0
 	solver := &Solver{
 		cfg: cfg, reader: fakeLifiReader{}, strategy: strategy, log: logr.Discard(),
 		now:         func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		wallNow:     func() time.Time { return time.Unix(1_700_000_001, 0) },
 		txLaneState: alwaysReadyTransactionLane(),
+		metrics:     metrics,
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			feeReads++
 			return big.NewInt(7), nil
@@ -79,6 +88,7 @@ func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
 	if input.GasSnapshot != nil || input.GasPrices != nil {
 		t.Fatalf("strategy gas facts = snapshot %v prices %v, want nil", input.GasSnapshot, input.GasPrices)
 	}
+	metricstest.RequireExternalOperationCount(t, reg, Name, quoteRefreshOperation, "success", 1)
 }
 
 func TestFilterQuoteInventoryAppliesTokenScope(t *testing.T) {
@@ -324,6 +334,101 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 	}
 	if len(expiries) != 3 || int64(expiries[1]) >= now.Unix() || int64(expiries[2]) >= now.Unix() {
 		t.Fatalf("submitted expiries = %v, want both retry attempts expired", expiries)
+	}
+}
+
+func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(reg, newOrderFeed("", "", logr.Discard()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoteRoute := testQuoteRoute()
+	state := newQuoteState(time.Minute)
+	state.active = indexQuotePairs([]types.Quote{
+		testStandingQuote(quoteRoute, 1_000),
+		testStandingQuote(quoteRoute, 2_000),
+		testStandingQuote(quoteRoute, 3_000),
+	})
+	(&Solver{metrics: metrics}).observeQuoteRefresh(state)
+	if _, err := reg.Gather(); err != nil {
+		t.Fatalf("gather quote metrics: %v", err)
+	}
+
+	maxInput := metrics.quotes.pairMaxInput.WithLabelValues(
+		strings.ToLower(quoteRoute.TokenIn.Hex()), strings.ToLower(quoteRoute.TokenOut.Hex()), "6", "6",
+	)
+	firstRefresh := testutil.ToFloat64(metrics.quotes.lastRefreshAt)
+	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 3 ||
+		testutil.ToFloat64(metrics.quotes.activeRanges) != 3 ||
+		testutil.ToFloat64(maxInput) != 3_000 || firstRefresh <= 0 {
+		t.Fatal("unexpected quote metrics")
+	}
+
+	(&Solver{metrics: metrics}).observeQuoteRefresh(newQuoteState(time.Minute))
+	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 0 ||
+		testutil.ToFloat64(metrics.quotes.activeRanges) != 0 ||
+		testutil.CollectAndCount(metrics.quotes.pairMaxInput) != 0 ||
+		testutil.ToFloat64(metrics.quotes.lastRefreshAt) < firstRefresh {
+		t.Fatal("unexpected empty quote metrics")
+	}
+}
+
+func TestSuspendQuotesPublishesRetiredQuoteMetrics(t *testing.T) {
+	var submissions int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var dto lifiorder.SubmitQuotesDto
+		if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+			t.Errorf("decode submit quotes: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		ranges := 0
+		for _, quote := range dto.Quotes {
+			ranges += len(quote.Ranges)
+		}
+		submissions++
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status": "success", "quotesAdded": ranges,
+		}); err != nil {
+			t.Errorf("encode submit response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+	state := newQuoteState(30 * time.Second)
+	if _, err := state.reconcile(
+		t.Context(),
+		client,
+		[]types.Quote{testStandingQuote(testQuoteRoute(), 1_000)},
+		now,
+	); err != nil {
+		t.Fatalf("publish quote: %v", err)
+	}
+	metrics.quotes.observe(state)
+	metrics.quotes.lastRefreshAt.Set(1)
+	solver := &Solver{
+		orders: client, metrics: metrics, wallNow: func() time.Time { return now }, log: logr.Discard(),
+	}
+
+	solver.suspendQuotes(t.Context(), state)
+
+	if submissions != 2 {
+		t.Fatalf("quote submissions = %d, want publish plus suspension", submissions)
+	}
+	if got := state.activeQuoteCount(); got != 0 {
+		t.Fatalf("active quote state = %d, want 0", got)
+	}
+	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 0 ||
+		testutil.ToFloat64(metrics.quotes.lastRefreshAt) <= 1 {
+		t.Fatal("unexpected suspended quote metrics")
 	}
 }
 

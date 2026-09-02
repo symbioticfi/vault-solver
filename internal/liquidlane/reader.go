@@ -677,14 +677,21 @@ func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler c
 	return out, nil
 }
 
+// FilterAuthorizedRoutes filters by the adapter-wide marketMaker/owner/isFiller authorization and
+// preserves every non-zero-adapter input route. It intentionally accepts adapter-only projections so
+// startup validation does not depend on whether a solver has already resolved token-pair metadata.
 func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, filler common.Address) ([]Route, error) {
-	routes = compactRoutes(routes)
 	if len(routes) == 0 {
 		return nil, nil
 	}
 	adapters := make([]common.Address, 0, len(routes))
 	for _, route := range routes {
-		adapters = append(adapters, route.Adapter)
+		if route.Adapter != (common.Address{}) {
+			adapters = append(adapters, route.Adapter)
+		}
+	}
+	if len(adapters) == 0 {
+		return nil, nil
 	}
 	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
 	if err != nil {
@@ -692,7 +699,7 @@ func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, fil
 	}
 	out := make([]Route, 0, len(routes))
 	for _, route := range routes {
-		if authorized[route.Adapter] {
+		if route.Adapter != (common.Address{}) && authorized[route.Adapter] {
 			out = append(out, route)
 		}
 	}

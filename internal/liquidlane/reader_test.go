@@ -610,6 +610,25 @@ func TestReaderFilterAuthorizedRoutesDropsUnauthorizedAdapters(t *testing.T) {
 	}
 }
 
+func TestReaderFilterAuthorizedRoutesAcceptsAdapterOnlyEntries(t *testing.T) {
+	filler := common.HexToAddress("0x0000000000000000000000000000000000000f11")
+	owner := common.HexToAddress("0x0000000000000000000000000000000000000b11")
+	adapterAddress := common.HexToAddress("0x0000000000000000000000000000000000000011")
+	route := Route{Adapter: adapterAddress}
+	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{{
+		successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
+	}}}
+	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
+
+	got, err := r.FilterAuthorizedRoutes(t.Context(), []Route{route}, filler)
+	if err != nil {
+		t.Fatalf("FilterAuthorizedRoutes: %v", err)
+	}
+	if len(got) != 1 || got[0].Adapter != adapterAddress {
+		t.Fatalf("authorized routes = %+v", got)
+	}
+}
+
 func testReaderRoute(index byte) Route {
 	return NewRoute(
 		11155111,

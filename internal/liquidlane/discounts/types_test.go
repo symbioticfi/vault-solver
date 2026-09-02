@@ -1,6 +1,7 @@
 package discounts
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,7 @@ func TestParseSigned(t *testing.T) {
 			Discount:      "123",
 			Signer:        "0x0000000000000000000000000000000000000aaa",
 			Protocol:      "0x0000000000000000000000000000000000000bbb",
-			Nonce:         "0x2",
+			Nonce:         "2",
 			Deadline:      1_900_000_000,
 		},
 		SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
@@ -95,10 +96,10 @@ func TestParseSigned(t *testing.T) {
 	}
 }
 
-func TestParseSignedAcceptsPaddedUint256Nonce(t *testing.T) {
+func TestParseSignedAcceptsDecimalUint256Nonce(t *testing.T) {
 	for _, nonce := range []string{
-		"0x02",
-		"0x" + strings.Repeat("0", 63) + "2",
+		"0002",
+		new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)).String(),
 	} {
 		t.Run(nonce, func(t *testing.T) {
 			parsed, err := ParseSigned(&Resolved{
@@ -117,17 +118,19 @@ func TestParseSignedAcceptsPaddedUint256Nonce(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseSigned nonce %q: %v", nonce, err)
 			}
-			if parsed.Terms.Nonce.String() != "2" {
-				t.Fatalf("nonce = %s, want 2", parsed.Terms.Nonce)
+			want, ok := new(big.Int).SetString(nonce, 10)
+			if !ok || parsed.Terms.Nonce.Cmp(want) != 0 {
+				t.Fatalf("nonce = %s, want %s", parsed.Terms.Nonce, nonce)
 			}
 		})
 	}
 }
 
-func TestParseUint256HexRejectsSigns(t *testing.T) {
-	for _, nonce := range []string{"0x+2", "0x-2"} {
-		if _, err := parseUint256Hex(nonce, "nonce"); err == nil {
-			t.Fatalf("parseUint256Hex(%q) succeeded, want error", nonce)
+func TestParseUint256DecimalRejectsInvalidValues(t *testing.T) {
+	overflow := new(big.Int).Lsh(big.NewInt(1), 256).String()
+	for _, nonce := range []string{"0x2", "+2", "-2", "2.0", overflow} {
+		if _, err := parseUint256Decimal(nonce, "nonce"); err == nil {
+			t.Fatalf("parseUint256Decimal(%q) succeeded, want error", nonce)
 		}
 	}
 }
@@ -139,7 +142,7 @@ func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 			Adapter:       "0x0000000000000000000000000000000000000abc",
 			TokenToRedeem: "0x0000000000000000000000000000000000000def",
 			Discount:      "0", Signer: "0x0000000000000000000000000000000000000aaa",
-			Protocol: "0x0000000000000000000000000000000000000bbb", Nonce: "0x2", Deadline: 1_900_000_000,
+			Protocol: "0x0000000000000000000000000000000000000bbb", Nonce: "2", Deadline: 1_900_000_000,
 		},
 		SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
 	}
