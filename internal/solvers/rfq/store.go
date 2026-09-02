@@ -89,11 +89,12 @@ func (s *store) sweep() {
 // the order is live, and a deterministic one just re-fails cheaply via the pre-submit guards
 // (deadline / strategy-binding / filler checks fail before any tx is sent). In-flight and terminal
 // states (submitting / submitted / filled / expired) are left untouched so we never regress them.
-func (s *store) upsertQueued(in queuedOrder) {
+func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	rec, ok := s.orders[in.OrderID]
+	inserted := !ok
 	if !ok {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
@@ -104,6 +105,7 @@ func (s *store) upsertQueued(in queuedOrder) {
 	}
 	rec.QuoteID = parse.OrDefault(in.QuoteID, rec.QuoteID)
 	rec.UpdatedAt = now
+	return inserted
 }
 
 func (s *store) order(orderID string) *orderRecord {
@@ -123,6 +125,22 @@ func (s *store) activeOrders() []*orderRecord {
 		}
 	}
 	return out
+}
+
+func (s *store) activeOrderMetrics() (int, time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	count := 0
+	var oldest time.Duration
+	for _, rec := range s.orders {
+		if !rec.Status.active() {
+			continue
+		}
+		count++
+		oldest = max(oldest, now.Sub(rec.CreatedAt))
+	}
+	return count, oldest
 }
 
 // markStatus sets the status and optional txHash/lastError.

@@ -23,6 +23,7 @@ const (
 	// Name is the registry key that selects this solver from config.
 	Name                       = "rfq-filler"
 	quoteServerShutdownTimeout = 5 * time.Second
+	orderPollOperation         = "order_poll"
 )
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
@@ -58,9 +59,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 
-	var metrics *httpMetrics
+	var metrics *rfqMetrics
 	if deps.Metrics != nil {
-		if metrics, err = newHTTPMetrics(deps.Metrics.Registerer()); err != nil {
+		if metrics, err = newRFQMetrics(deps.Metrics.Registerer(), st, cfg.Strategy.Name); err != nil {
 			return nil, err
 		}
 	}
@@ -68,6 +69,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.LaneReady, quoteStrategy, log,
 	)
+	exec.metrics = metrics
+	if metrics != nil {
+		exec.orderPollObserver = metrics.orderPollObserver
+	}
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,

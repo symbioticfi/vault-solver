@@ -10,8 +10,10 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
 type orderPollerFunc func(context.Context, int64, *common.Address) ([]orderEntry, error)
@@ -271,18 +273,29 @@ func TestPollSourceTracksRejectedExclusiveOrder(t *testing.T) {
 			return []orderEntry{entry}, nil
 		}),
 	)
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
 
-	if _, err := solver.pollSource(
-		t.Context(),
-		orderSourceExclusiveV2,
-		&cfg.Executor,
-		make(chan *resolvedOrder, 1),
-	); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if _, err := solver.pollSource(
+			t.Context(),
+			orderSourceExclusiveV2,
+			&cfg.Executor,
+			make(chan *resolvedOrder, 1),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	hash := common.HexToHash(entry.OrderHash)
 	if tracked, ok := solver.exclusiveUntil[hash]; !ok || !tracked.deadline.Equal(now) {
 		t.Fatalf("rejected exclusive obligation = %v, tracked=%v", tracked.deadline, ok)
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", "won", 1)
+	if got := testutil.ToFloat64(solver.metrics.exclusiveOutstanding); got != 1 {
+		t.Fatalf("outstanding obligations = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(solver.metrics.exclusiveDeadline); got != float64(now.Unix()) {
+		t.Fatalf("nearest deadline = %v, want %d", got, now.Unix())
 	}
 }
 
@@ -304,6 +317,7 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			)
 			otherFiller.OrderStatus = orderStatusExpired
 			cfg.Breaker.Window = time.Minute
+			cfg.OrderServer.Sources.PublicV2 = true
 			hash := common.HexToHash(entry.OrderHash)
 			var logs []string
 			solver := newPollingTestSolver(
@@ -317,6 +331,9 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			)
 			solver.reader = &countingChainReader{now: time.Unix(1_001, 0)}
 			solver.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+			metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+			solver.metrics = metrics
+			solver.operations = metrics.operations
 			solver.quoteState.Store(&quoteState{})
 			solver.exclusiveStateUnknown.Store(true)
 			if !tc.startup {
@@ -347,6 +364,14 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			if tc.startup && strings.Contains(logged, `"error"`) {
 				t.Fatalf("startup-recovered miss was logged as an error: %s", logged)
 			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", "won", 0)
+			wantMissed := float64(0)
+			if !tc.startup {
+				wantMissed = 1
+			}
+			metricstest.RequireWorkflowEventCount(
+				t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, wantMissed,
+			)
 
 			initialLogCount := strings.Count(logged, "historical exclusive obligation missed")
 			solver.exclusiveStateUnknown.Store(true)
@@ -359,6 +384,8 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 			); got != initialLogCount {
 				t.Fatalf("historical miss log repeated: got %d entries, want %d", got, initialLogCount)
 			}
+			metricstest.RequireExternalOperationCount(t, reg, Name, exclusiveOrderPollOperation, "success", 2)
+			metricstest.RequireExternalOperationCount(t, reg, Name, publicOrderPollOperation, "success", 2)
 		})
 	}
 }
@@ -373,6 +400,8 @@ func TestPollOrdersStopsQuotesWhenExclusiveHistoryIsUnknown(t *testing.T) {
 	)
 	solver.exclusiveStateUnknown.Store(true)
 	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.operations = metrics.operations
 
 	err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1))
 	if err == nil || !strings.Contains(err.Error(), "poll recent exclusive orders") {
@@ -381,6 +410,7 @@ func TestPollOrdersStopsQuotesWhenExclusiveHistoryIsUnknown(t *testing.T) {
 	if !solver.exclusiveStateUnknown.Load() || solver.quoteState.Load() != nil {
 		t.Fatal("unknown recovery history did not stop quotes")
 	}
+	metricstest.RequireExternalOperationCount(t, reg, Name, exclusiveOrderPollOperation, "error", 1)
 }
 
 func newPollingTestSolver(cfg *Config, orders orderPoller) *Solver {

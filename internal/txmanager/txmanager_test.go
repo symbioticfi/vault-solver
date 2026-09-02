@@ -203,7 +203,7 @@ func (b *mockBackend) lastSent() *types.Transaction {
 	return b.sent[len(b.sent)-1]
 }
 
-func startTestManager(t *testing.T, m *Manager) {
+func startManagerForTest(t *testing.T, m *Manager) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -228,7 +228,7 @@ func newTestManager(t *testing.T, b Backend) *Manager {
 		t.Fatalf("signer: %v", err)
 	}
 	m := New(b, s, big.NewInt(11155111), Config{Confirmations: 0, PollInterval: time.Millisecond}, logr.Discard())
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 	return m
 }
 
@@ -243,7 +243,6 @@ func TestSend_HappyPath(t *testing.T) {
 	if res.Receipt == nil || res.Receipt.Status != types.ReceiptStatusSuccessful {
 		t.Fatalf("expected successful receipt, got %+v", res.Receipt)
 	}
-
 	tx := b.lastSent()
 	if tx == nil {
 		t.Fatal("no transaction sent")
@@ -622,7 +621,7 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 	if !m.Idle() {
 		t.Fatal("new manager is not idle")
 	}
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	first, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "first",
@@ -792,7 +791,7 @@ func TestSendAsyncWaitsForNonceConflictToClear(t *testing.T) {
 	b := newMockBackend()
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
 	m.markNonceConflict(7, common.HexToHash("0x1234"))
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	type submission struct {
 		result   <-chan Result
@@ -972,7 +971,7 @@ func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxFeePerGas: %v", err)
 	}
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000,
@@ -1323,7 +1322,7 @@ func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing
 		},
 		logr.Discard(),
 	)
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	first, accepted := m.SendAsync(t.Context(), Request{
 		To:           common.HexToAddress("0xabc"),
@@ -1386,7 +1385,7 @@ func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T
 		},
 		logr.Discard(),
 	)
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	var mode atomic.Int32
 	unknownChecked := make(chan struct{})
@@ -1482,7 +1481,7 @@ func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
 		},
 		logr.Discard(),
 	)
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	first, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "lower nonce",
@@ -1536,7 +1535,7 @@ func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 		},
 		logr.Discard(),
 	)
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000,
@@ -1660,7 +1659,7 @@ func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 }
 
 func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), failures: 1}
+	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 1}
 	m := New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{
@@ -1671,7 +1670,7 @@ func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
 		},
 		logr.Discard(),
 	)
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "receipt retry",
@@ -1754,6 +1753,34 @@ func TestMalformedReceiptDoesNotCompleteLifecycle(t *testing.T) {
 	}
 }
 
+func TestTransientConfirmationHeadErrorKeepsTrackingPendingTransaction(t *testing.T) {
+	b := &transientHeadErrorBackend{mockBackend: newMockBackend()}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 2, PollInterval: time.Millisecond},
+		logr.Discard(),
+	)
+	startManagerForTest(t, m)
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "confirmation retry",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	waitForSentTransactions(t, b.mockBackend, 1)
+	b.errorMu.Lock()
+	b.blockFailures = 1
+	b.errorMu.Unlock()
+	b.mu.Lock()
+	b.head = 102
+	b.mu.Unlock()
+
+	if got := <-result; got.Err != nil || got.Outcome != OutcomeConfirmed {
+		t.Fatalf("confirmation retry result: %+v", got)
+	}
+}
+
 func waitForSentTransactions(t *testing.T, b *mockBackend, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -1784,8 +1811,15 @@ func waitForAdmissionDemand(t *testing.T, m *Manager, want int64) {
 type receiptErrorBackend struct {
 	*mockBackend
 
-	receiptMu sync.Mutex
-	failures  int
+	errorMu         sync.Mutex
+	receiptFailures int
+}
+
+type transientHeadErrorBackend struct {
+	*mockBackend
+
+	errorMu       sync.Mutex
+	blockFailures int
 }
 
 type blockedReceiptHashBackend struct {
@@ -2039,14 +2073,25 @@ func (b *blockedReceiptHashBackend) TransactionReceipt(
 }
 
 func (b *receiptErrorBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	b.receiptMu.Lock()
-	if b.failures > 0 {
-		b.failures--
-		b.receiptMu.Unlock()
+	b.errorMu.Lock()
+	if b.receiptFailures > 0 {
+		b.receiptFailures--
+		b.errorMu.Unlock()
 		return nil, errors.New("temporary receipt failure")
 	}
-	b.receiptMu.Unlock()
+	b.errorMu.Unlock()
 	return b.mockBackend.TransactionReceipt(ctx, hash)
+}
+
+func (b *transientHeadErrorBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	b.errorMu.Lock()
+	if b.blockFailures > 0 {
+		b.blockFailures--
+		b.errorMu.Unlock()
+		return nil, errors.New("temporary head failure")
+	}
+	b.errorMu.Unlock()
+	return b.mockBackend.HeaderByNumber(ctx, number)
 }
 
 type replacementBackend struct {
@@ -2104,6 +2149,7 @@ func successfulReceipt(tx *types.Transaction, block uint64) *types.Receipt {
 		TxHash:      tx.Hash(),
 		BlockHash:   receiptTestHeader(block).Hash(),
 		BlockNumber: new(big.Int).SetUint64(block),
+		GasUsed:     tx.Gas(),
 	}
 }
 
@@ -2322,7 +2368,7 @@ func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 	)
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 	firstResult, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "accepted before nonce error",
 	})
@@ -2508,6 +2554,104 @@ func TestSend_RevertedReceiptIsError(t *testing.T) {
 	}
 }
 
+type cancelOnConfirmationHeadBackend struct {
+	*mockBackend
+
+	armed  bool
+	cancel func()
+}
+
+func (b *cancelOnConfirmationHeadBackend) HeaderByNumber(
+	ctx context.Context,
+	number *big.Int,
+) (*types.Header, error) {
+	if b.armed && b.cancel != nil {
+		b.cancel()
+		b.cancel = nil
+	}
+	return b.mockBackend.HeaderByNumber(ctx, number)
+}
+
+func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		cancellation bool
+	}{
+		{name: "normal transaction"},
+		{name: "cancellation transaction", cancellation: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := newMockBackend()
+			to := common.HexToAddress("0xabc")
+			tx := types.NewTx(&types.DynamicFeeTx{
+				ChainID: big.NewInt(11155111), Nonce: 7, Gas: 21_000, To: &to,
+				GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
+			})
+			receipt := successfulReceipt(tx, backend.head)
+			receipt.Status = types.ReceiptStatusFailed
+			backend.receipts[tx.Hash()] = receipt
+
+			confirmationCtx, cancelConfirmation := context.WithCancelCause(t.Context())
+			interruptingBackend := &cancelOnConfirmationHeadBackend{
+				mockBackend: backend,
+				armed:       true,
+				cancel:      func() { cancelConfirmation(context.Canceled) },
+			}
+			manager := New(
+				interruptingBackend,
+				mustSigner(t),
+				big.NewInt(11155111),
+				Config{Confirmations: 1, PollInterval: time.Millisecond},
+				logr.Discard(),
+			)
+			pending := &pendingTransaction{
+				req:   Request{To: to, Label: "failed receipt"},
+				nonce: 7,
+				attempts: []txAttempt{{
+					hash: tx.Hash(), tx: tx, cancellation: test.cancellation,
+				}},
+			}
+
+			result, done := manager.receiptResult(confirmationCtx, pending)
+			if !done {
+				t.Fatal("failed receipt did not complete the lifecycle")
+			}
+			if result.Outcome != OutcomeReverted {
+				t.Fatalf("outcome = %q, want %q", result.Outcome, OutcomeReverted)
+			}
+			if result.Receipt != receipt {
+				t.Fatalf("receipt = %+v, want failed receipt %+v", result.Receipt, receipt)
+			}
+			if !errors.Is(result.Err, context.Canceled) {
+				t.Fatalf("error = %v, want interrupted confirmation cause", result.Err)
+			}
+			if result.Outcome.Included() {
+				t.Fatal("reverted receipt was classified as a successful inclusion")
+			}
+		})
+	}
+}
+
+func TestOutcomeIncluded(t *testing.T) {
+	tests := []struct {
+		outcome Outcome
+		want    bool
+	}{
+		{outcome: OutcomeConfirmed, want: true},
+		{outcome: OutcomeIncludedUnconfirmed, want: true},
+		{outcome: OutcomeReverted},
+		{outcome: OutcomeCancelled},
+		{outcome: OutcomeSubmissionError},
+		{outcome: OutcomeTrackingStopped},
+		{outcome: ""},
+	}
+	for _, test := range tests {
+		if got := test.outcome.Included(); got != test.want {
+			t.Fatalf("%q.Included() = %t, want %t", test.outcome, got, test.want)
+		}
+	}
+}
+
 // revertingBackend records a failed receipt instead of a successful one.
 type revertingBackend struct{ *mockBackend }
 
@@ -2555,7 +2699,7 @@ func (b *blockingEstimateBackend) EstimateGas(ctx context.Context, _ ethereum.Ca
 func TestSend_CallerCancelAfterEnqueueStillReturnsResult(t *testing.T) {
 	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
 	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
-	startTestManager(t, m) // manager context lives until test cleanup; the caller's is cancelled below
+	startManagerForTest(t, m) // manager context lives until test cleanup; the caller's is cancelled below
 
 	callerCtx, cancelCaller := context.WithCancel(context.Background())
 	resCh := make(chan Result, 1)
@@ -2939,7 +3083,7 @@ func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
 func TestTrySendRejectsWhileTransactionIsActive(t *testing.T) {
 	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
 	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
-	startTestManager(t, m)
+	startManagerForTest(t, m)
 
 	type tryResult struct {
 		result   Result

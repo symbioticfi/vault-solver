@@ -40,7 +40,22 @@ type orderProcessingResult struct {
 	depositNotVisible    bool
 	retryable            bool
 	recoveryAttemptLimit int
+	outcome              orderProcessingOutcome
 }
+
+type orderProcessingOutcome string
+
+const (
+	orderProcessingSubmitted        orderProcessingOutcome = "submitted"
+	orderProcessingDepositDeferred  orderProcessingOutcome = "deposit_deferred"
+	orderProcessingCapacityDeferred orderProcessingOutcome = "capacity_deferred"
+	orderProcessingCapacityDropped  orderProcessingOutcome = "capacity_dropped"
+	orderProcessingNotActionable    orderProcessingOutcome = "not_actionable"
+	orderProcessingStrategyDeclined orderProcessingOutcome = "strategy_declined"
+	orderProcessingInvalidPlan      orderProcessingOutcome = "invalid_plan"
+	orderProcessingRetryableError   orderProcessingOutcome = "retryable_error"
+	orderProcessingOther            orderProcessingOutcome = "other"
+)
 
 var (
 	errOrderDepositNotVisible = errors.New("order deposit is not visible")
@@ -78,26 +93,32 @@ func (s *Solver) processOrderUsingReservations(
 		s.log.V(1).Info("order skipped: input token out of scope",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(), "scope", s.cfg.TokenPolicy.Scope())
-		return orderProcessingResult{}
+		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
 		s.log.Error(err, "order skipped: governance fee invariant failed",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"inputSettler", s.cfg.InputSettler.Hex())
-		return orderProcessingResult{retryable: true}
+		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError}
 	}
 	orderID, err := s.openedOrderID(ctx, order)
 	if err != nil {
 		if errors.Is(err, errOrderDepositNotVisible) {
-			return orderProcessingResult{depositNotVisible: true}
+			return orderProcessingResult{
+				depositNotVisible: true,
+				outcome:           orderProcessingDepositDeferred,
+			}
 		}
-		return orderProcessingResult{retryable: !errors.Is(err, errOrderNotFillable)}
+		if errors.Is(err, errOrderNotFillable) {
+			return orderProcessingResult{outcome: orderProcessingNotActionable}
+		}
+		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError}
 	}
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
 		s.log.V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
-		return orderProcessingResult{}
+		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
 	s.log.V(1).Info(
 		"order fill planning started",
@@ -112,20 +133,21 @@ func (s *Solver) processOrderUsingReservations(
 	prepared, err := s.prepareFill(ctx, routes, order, orderID, reservations)
 	if err != nil {
 		s.log.Error(err, "order fill: prepare current state", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return orderProcessingResult{retryable: true}
+		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError}
 	}
 	if prepared == nil {
-		return orderProcessingResult{}
+		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
 	plan, err := s.strategy.DecideFill(ctx, prepared.input)
 	if err != nil {
 		s.log.Error(err, "order fill: strategy", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		if types.IsPermanentFillDecisionError(err) {
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		return orderProcessingResult{
 			retryable:            true,
 			recoveryAttemptLimit: maximumStrategyRecoveryAttempts,
+			outcome:              orderProcessingRetryableError,
 		}
 	}
 	if plan == nil {
@@ -141,7 +163,7 @@ func (s *Solver) processOrderUsingReservations(
 		)
 		prober, probeOK := s.strategy.(reservationRetryProber)
 		if !probeOK || len(prepared.input.Reservations) == 0 {
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		unreservedInput := prepared.input
 		unreservedInput.Reservations = nil
@@ -155,30 +177,35 @@ func (s *Solver) processOrderUsingReservations(
 		if err != nil {
 			s.log.Error(err, "order fill: strategy without pending reservations",
 				"orderId", order.OrderID, "quoteId", order.QuoteID)
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		if unreservedPlan == nil {
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		if err := validateFillPlan(unreservedInput, unreservedPlan); err != nil {
 			s.log.Error(err, "order fill: reject strategy plan without pending reservations",
 				"orderId", order.OrderID, "quoteId", order.QuoteID)
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingInvalidPlan}
+		}
+		blockedOn := blockedPlanCapacityIDs(prepared.input.Reservations, unreservedPlan)
+		if len(blockedOn) == 0 {
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		return orderProcessingResult{
-			blockedOn: blockedPlanCapacityIDs(prepared.input.Reservations, unreservedPlan),
+			blockedOn: blockedOn,
+			outcome:   orderProcessingCapacityDeferred,
 		}
 	}
 	if err := validateFillPlan(prepared.input, plan); err != nil {
 		s.log.Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
 			"quoteId", order.QuoteID)
-		return orderProcessingResult{}
+		return orderProcessingResult{outcome: orderProcessingInvalidPlan}
 	}
 	s.logFillPlan(order, orderID, plan)
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
 		s.log.Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return orderProcessingResult{}
+		return orderProcessingResult{outcome: orderProcessingInvalidPlan}
 	}
 	fill, err := s.submitFill(
 		ctx,
@@ -191,15 +218,21 @@ func (s *Solver) processOrderUsingReservations(
 	)
 	if err != nil {
 		if errors.Is(err, errOrderDepositNotVisible) {
-			return orderProcessingResult{depositNotVisible: true}
+			return orderProcessingResult{
+				depositNotVisible: true,
+				outcome:           orderProcessingDepositDeferred,
+			}
 		}
 		if errors.Is(err, errOrderNotFillable) {
-			return orderProcessingResult{}
+			return orderProcessingResult{outcome: orderProcessingNotActionable}
 		}
 		s.log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return orderProcessingResult{retryable: true}
+		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError}
 	}
-	return orderProcessingResult{fill: fill}
+	if fill == nil {
+		return orderProcessingResult{outcome: orderProcessingNotActionable}
+	}
+	return orderProcessingResult{fill: fill, outcome: orderProcessingSubmitted}
 }
 
 func blockedPlanCapacityIDs(

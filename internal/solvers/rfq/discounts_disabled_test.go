@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // External-solver path (discountsEnabled false, the default): the solver never touches the discounts API.
@@ -23,7 +21,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", MaxAssets: "10000000", MaxRate: "1000000000000000000",
 	}}}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.discountsEnabled = false // external solver; no vaults configured
 	e.strategy = fixedFillStrategy{}
@@ -48,7 +46,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.discountsEnabled = false
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}

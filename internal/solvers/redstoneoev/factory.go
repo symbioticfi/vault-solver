@@ -32,30 +32,34 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	log := deps.Log.WithName(Name)
-	var mx *metrics
-	if deps.Metrics != nil {
-		if mx, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name); err != nil {
-			return nil, err
-		}
-	}
-	reader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
+	chainReader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
 	if err != nil {
 		return nil, errors.Errorf("%s: gas reader: %w", Name, err)
 	}
 
 	s := &Solver{
-		cfg:            cfg,
-		deps:           deps,
-		chainID:        chainID,
-		dryRun:         dryRun,
-		strategyName:   cfg.Strategy.Name,
-		reader:         reader,
+		cfg:          cfg,
+		deps:         deps,
+		chainID:      chainID,
+		dryRun:       dryRun,
+		strategyName: cfg.Strategy.Name,
+		stateSource: &coherentStateSource{
+			heads: deps.Chain, reader: chainReader,
+			executor: cfg.Executor, adapter: cfg.Adapter, callback: cfg.Callback,
+			signer: deps.Signer.Address(),
+		},
 		nonces:         &nonceStore{},
 		breaker:        newBreaker(cfg.BreakerMaxFailures, cfg.BreakerWindow),
-		metrics:        mx,
 		seen:           newSeenAuctions(maxSeenAuctions),
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
+	}
+	if deps.Metrics != nil {
+		s.metrics, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name, s.wonReservationMetrics)
+		if err != nil {
+			return nil, err
+		}
+		s.stateRefreshObserver = s.metrics.workflow.Operation(stateRefreshOperation)
 	}
 	strategy, err := newStrategy(cfg, strategies.Deps{
 		Chain:               deps.Chain,
@@ -71,7 +75,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.Errorf("%s: %w", Name, err)
 	}
 	s.strategy = strategy
-	s.ws = newWSClient(wsConfig{URL: cfg.WSURL, APIKey: apiKey, Topics: wsTopics(cfg.Callback)}, log, s.handleMessage)
+	s.ws = newWSClient(
+		wsConfig{URL: cfg.WSURL, APIKey: apiKey, Topics: wsTopics(cfg.Callback)},
+		log,
+		s.handleMessage,
+		s.metrics.setFeedConnected,
+	)
 	return s, nil
 }
 
