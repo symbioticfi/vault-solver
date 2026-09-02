@@ -143,7 +143,7 @@ func TestResolveDiscountRevalidatesSelectedTerms(t *testing.T) {
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
 				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-				Nonce:    "0x1", Deadline: deadline,
+				Nonce:    "1", Deadline: deadline,
 			},
 			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
 		}

@@ -185,7 +185,7 @@ func testResolvedDiscount(
 			Adapter: direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Discount: big.NewInt(discount).String(),
 			Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 			Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-			Nonce:    "0x1", Deadline: deadline.Unix(),
+			Nonce:    "1", Deadline: deadline.Unix(),
 		},
 		SignerSignature: "0x1234", ProtocolDeadline: deadline.Unix(), ProtocolSignature: "0x5678",
 	}
