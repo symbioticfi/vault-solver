@@ -64,9 +64,22 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 			scope.SetContext("log", enc.Fields)
 		}
 		scope.SetLevel(sentryLevel(e.Level))
-		sentry.CaptureMessage(e.Message)
+		// Group by the static log message, not the title: the title carries the error text so the
+		// issue stream shows the cause, while one log site still maps to one issue.
+		scope.SetFingerprint([]string{e.Message})
+		sentry.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
+}
+
+// eventTitle is the log message followed by the logged error, when there is one. logr's
+// Error(err, msg) reaches zap as the static msg plus an "error" field, so without this the issue
+// stream only ever shows the message.
+func eventTitle(message string, fields map[string]any) string {
+	if errText, ok := fields["error"].(string); ok && errText != "" {
+		return message + ": " + errText
+	}
+	return message
 }
 
 func (c *sentryCore) Sync() error { sentry.Flush(sentryFlushTimeout); return nil }

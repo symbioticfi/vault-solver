@@ -42,3 +42,25 @@ func TestSentryCore_ForwardsOnlyErrorAndAbove(t *testing.T) {
 		}
 	}
 }
+
+// The issue stream shows only the event title, so the logged error belongs in it. Grouping stays
+// on the static message (see the fingerprint in Write), so this cannot split one log site into
+// one issue per address or hash.
+func TestEventTitleAppendsLoggedError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+		want   string
+	}{
+		{name: "with error", fields: map[string]any{"error": "adapter.offerSigner() returned zero address", "adapter": "0xd8f6"}, want: "skipping adapter: resolution failed: adapter.offerSigner() returned zero address"},
+		{name: "no error field", fields: map[string]any{"adapter": "0xd8f6"}, want: "skipping adapter: resolution failed"},
+		{name: "empty error", fields: map[string]any{"error": ""}, want: "skipping adapter: resolution failed"},
+		{name: "non-string error", fields: map[string]any{"error": 42}, want: "skipping adapter: resolution failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eventTitle("skipping adapter: resolution failed", tc.fields); got != tc.want {
+				t.Fatalf("eventTitle = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
