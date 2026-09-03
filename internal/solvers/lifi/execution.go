@@ -560,6 +560,10 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 			s.log.Info("order feed: ignored order for another chain", "event", msg.Event, "reason", err.Error())
 			return nil
 		}
+		if errors.Is(err, errOrderUnsupported) {
+			s.log.V(1).Info("order feed: ignored unsupported order", "event", msg.Event, "reason", err.Error())
+			return nil
+		}
 		s.log.Error(err, "order feed: ignored order", "event", msg.Event)
 		return nil
 	}
