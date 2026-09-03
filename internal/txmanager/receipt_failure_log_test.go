@@ -63,3 +63,55 @@ func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
 		}
 	}
 }
+
+// An outage that never recovers must not go quiet after its first error: the streak is re-raised at
+// error level every receiptFailureReminderInterval with how long it has lasted.
+func TestReceiptReadFailuresRemindWhileUnrecovered(t *testing.T) {
+	previous := receiptFailureReminderInterval
+	receiptFailureReminderInterval = 0
+	t.Cleanup(func() { receiptFailureReminderInterval = previous })
+
+	var logs []string
+	logger := funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 4}
+	m := New(
+		b, mustSigner(t), big.NewInt(11155111),
+		Config{
+			MaxFeeGwei:          100,
+			PollInterval:        time.Millisecond,
+			ReplacementInterval: time.Second,
+			PendingTimeout:      time.Second,
+		},
+		logger,
+	)
+	startManagerForTest(t, m)
+
+	result, accepted := m.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "receipt reminder",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	if got := <-result; got.Err != nil {
+		t.Fatalf("result: %v", got.Err)
+	}
+
+	first, reminders := 0, 0
+	for _, entry := range logs {
+		if !strings.Contains(entry, `"error"`) {
+			continue
+		}
+		switch {
+		case strings.Contains(entry, `"pending transaction receipt unavailable"`):
+			first++
+		case strings.Contains(entry, `"pending transaction receipt still unavailable"`):
+			reminders++
+			if !strings.Contains(entry, `"since"`) {
+				t.Fatalf("reminder should say how long the streak has lasted: %s", entry)
+			}
+		}
+	}
+	if first != 1 || reminders != 3 {
+		t.Fatalf("error-level lines: first=%d reminders=%d, want 1 and 3; logs:\n%s", first, reminders, strings.Join(logs, "\n"))
+	}
+}

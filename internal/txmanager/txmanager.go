@@ -130,15 +130,18 @@ type pendingTransaction struct {
 	nonceConflictHash common.Hash
 	originalHash      common.Hash
 	// receiptReadFailures counts consecutive failed receipt lookups. The first failure of a streak
-	// is logged at error and the rest at debug, so a stuck RPC produces one alert per pending
-	// transaction rather than one per poll.
-	receiptReadFailures int
-	receiptReadFailedAt time.Time
-	result              chan<- Result
-	resultOnce          sync.Once
-	cancelDeadline      time.Time
-	cancelRequested     chan struct{}
-	cancelOnce          sync.Once
+	// is logged at error, the rest at debug, and the error repeats every
+	// receiptFailureReminderInterval while the streak lasts, so a stuck RPC produces one alert per
+	// pending transaction plus a periodic reminder rather than one per poll, and an outage that
+	// never recovers cannot go quiet.
+	receiptReadFailures    int
+	receiptReadFailedAt    time.Time
+	receiptReadLastAlertAt time.Time
+	result                 chan<- Result
+	resultOnce             sync.Once
+	cancelDeadline         time.Time
+	cancelRequested        chan struct{}
+	cancelOnce             sync.Once
 }
 
 type txAttempt struct {
@@ -894,13 +897,24 @@ func (m *Manager) noteReceiptReadFailed(pending *pendingTransaction, attempt txA
 		"rpcTimeout", m.receiptReadTimeout().String(),
 		"consecutiveFailures", pending.receiptReadFailures,
 	)
+	now := time.Now()
 	if pending.receiptReadFailures == 1 {
-		pending.receiptReadFailedAt = time.Now()
+		pending.receiptReadFailedAt, pending.receiptReadLastAlertAt = now, now
 		m.log.Error(err, "pending transaction receipt unavailable", fields...)
+		return
+	}
+	if now.Sub(pending.receiptReadLastAlertAt) >= receiptFailureReminderInterval {
+		pending.receiptReadLastAlertAt = now
+		m.log.Error(err, "pending transaction receipt still unavailable",
+			append(fields, "since", now.Sub(pending.receiptReadFailedAt).Round(time.Second).String())...)
 		return
 	}
 	m.log.V(1).Info("pending transaction receipt still unavailable", append(fields, "error", err.Error())...)
 }
+
+// receiptFailureReminderInterval is how often an unrecovered receipt read streak is re-raised at
+// error level. A variable so tests can shorten it.
+var receiptFailureReminderInterval = 5 * time.Minute
 
 // noteReceiptReadRecovered closes a failure streak, if one was open, with how long it lasted.
 func (m *Manager) noteReceiptReadRecovered(pending *pendingTransaction) {
