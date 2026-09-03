@@ -37,3 +37,6 @@ __pycache__/
 
 # Build intermediate written by make refresh-uniswapx-client
 openapi/.*.normalized.openapi.json
+
+# Written by hack/check-schema-drift.py (and the schema-drift CI job) in the working tree
+drift-report.md

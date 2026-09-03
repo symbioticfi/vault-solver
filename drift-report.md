@@ -1,2 +1,0 @@
-- RFQ backend (OpenAPI): up to date
-- RFQ backend internal (OpenAPI): up to date
