@@ -789,8 +789,30 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 
 	cancelling := false
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
-	startCancellation := func() {
+	startCancellation := func(reason string) {
+		if cancelling {
+			return
+		}
+		if reason == "" {
+			select {
+			case <-pending.cancelRequested:
+				reason = "shutdown"
+			default:
+				reason = "pending_timeout"
+				if pending.cancelDeadline.Equal(pending.req.CancelAt) {
+					reason = "request_deadline"
+				}
+			}
+		}
 		cancelling, cancelRequested, timeoutC = true, nil, nil
+		m.log.Info("pending transaction cancellation requested",
+			"label", pending.req.Label,
+			"hash", pending.originalHash.Hex(),
+			"nonce", pending.nonce,
+			"reason", reason,
+			"deadline", pending.cancelDeadline.UTC().Format(time.RFC3339Nano),
+			"pendingTimeout", m.cfg.PendingTimeout.String(),
+		)
 	}
 	for {
 		if receiptResult, done := m.receiptResult(ctx, pending); done {
@@ -804,7 +826,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				Err:     context.Cause(ctx),
 			}
 		case <-cancelRequested:
-			startCancellation()
+			startCancellation("shutdown")
 			m.tryReplace(ctx, pending, true)
 		case <-poll.C:
 			if cancelling || pending.req.Obsolete == nil {
@@ -822,25 +844,19 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			if !obsolete {
 				continue
 			}
-			startCancellation()
-			m.log.Info("pending transaction became obsolete; cancelling nonce",
-				"label", pending.req.Label,
-				"hash", pending.originalHash.Hex(),
-				"nonce", pending.nonce,
-			)
+			startCancellation("obsolete")
 			m.tryReplace(ctx, pending, true)
 		case <-replace.C:
 			if !cancelling && pending.cancellationDue(time.Now()) {
-				startCancellation()
+				startCancellation("")
 			}
-			m.tryReplace(ctx, pending, cancelling)
+			if m.tryReplace(ctx, pending, cancelling) {
+				// A fee lookup can cross the deadline and promote this replacement to
+				// cancellation. Disarm the expired timer before the next select.
+				startCancellation("")
+			}
 		case <-timeoutC:
-			startCancellation()
-			m.log.Info("pending transaction timed out; cancelling nonce",
-				"label", pending.req.Label,
-				"nonce", pending.nonce,
-				"timeout", m.cfg.PendingTimeout.String(),
-			)
+			startCancellation("")
 			m.tryReplace(ctx, pending, true)
 		}
 	}
@@ -882,7 +898,10 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 			m.log.Error(err, "pending transaction receipt unavailable",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
+				"originalHash", pending.originalHash.Hex(),
 				"nonce", pending.nonce,
+				"cancellation", attempt.cancellation,
+				"rpcTimeout", m.receiptReadTimeout().String(),
 			)
 			continue
 		}
@@ -972,13 +991,14 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 	return Result{}, false
 }
 
-func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, cancellation bool) {
+// tryReplace reports whether cancellation mode was entered, even if submission fails.
+func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, cancellation bool) bool {
 	if m.hasNonceConflict(pending.nonce) {
-		return
+		return cancellation
 	}
 	cancellation = cancellation || pending.cancellationDue(time.Now())
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
-		return
+		return false
 	}
 	limit := m.normalFeeLimit(pending.req)
 	if cancellation {
@@ -986,20 +1006,19 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		m.tryReplace(ctx, pending, true)
-		return
+		return m.tryReplace(ctx, pending, true)
 	}
 	if err != nil {
 		if errors.Is(err, errReplacementLimitReached) &&
 			m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
-			return
+			return cancellation
 		}
 		m.log.Error(err, "cannot replace pending transaction",
 			"label", pending.req.Label,
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return
+		return cancellation
 	}
 	to := pending.req.To
 	data := pending.req.Data
@@ -1012,8 +1031,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		gas = cancellationGasLimit
 	}
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		m.tryReplace(ctx, pending, true)
-		return
+		return m.tryReplace(ctx, pending, true)
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
 	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true)
@@ -1024,7 +1042,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return
+		return cancellation
 	}
 	hash := signed.Hash()
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
@@ -1043,7 +1061,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return
+		return cancellation
 	}
 	if sendErr != nil {
 		m.log.Info("replacement already known by write RPC",
@@ -1053,7 +1071,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"cancellation", cancellation,
 			"rpcResult", sendErr.Error(),
 		)
-		return
+		return cancellation
 	}
 	kind := replacementKindReplacement
 	if cancellation {
@@ -1068,6 +1086,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		"maxFeePerGas", fees.maxFee.String(),
 		"maxPriorityFeePerGas", fees.tip.String(),
 	)
+	return cancellation
 }
 
 // rebroadcastUncertainAttempt gives a transport-ambiguous normal submission one exact-byte retry
