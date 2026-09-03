@@ -37,16 +37,36 @@ jobs:
         run: |
           set -euo pipefail
           title="schemas: vendored third-party schemas have drifted"
+
+          # Drift often persists for days (an upstream change nobody has adopted yet), so the report
+          # carries a fingerprint of its own content: an unchanged state is not re-posted, and the
+          # issue stays a running log of distinct states rather than a daily heartbeat.
+          fingerprint="$(sha256sum drift-report.md | cut -c1-16)"
+          cp drift-report.md issue-body.md
           {
             echo
             echo "Each drifted entry above names the \`make\` target that refreshes it. After refreshing,"
             echo "regenerate the client and check whether any field we actually read changed shape or meaning."
             echo
-            echo "_Opened automatically by .github/workflows/schema-drift.yml (run $GITHUB_RUN_ID)._"
-          } >> drift-report.md
-          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body-file drift-report.md
-          else
-            gh issue create --title "$title" --body-file drift-report.md
+            echo "_Posted automatically by .github/workflows/schema-drift.yml (run $GITHUB_RUN_ID)._"
+            echo "<!-- drift-fingerprint: $fingerprint -->"
+          } >> issue-body.md
+
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            gh issue create --title "$title" --body-file issue-body.md \
+              --assignee oxsteins --assignee alrxy
+            exit 0
           fi
+
+          # Keep the assignees in place even if the issue was reassigned or they were cleared.
+          gh issue edit "$existing" --add-assignee oxsteins --add-assignee alrxy >/dev/null
+
+          latest="$(gh issue view "$existing" --json body,comments \
+            --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')"
+          if printf '%s' "$latest" | grep -qF "drift-fingerprint: $fingerprint"; then
+            echo "Drift unchanged since the last report on issue #$existing; not commenting again."
+            exit 0
+          fi
+
+          gh issue comment "$existing" --body-file issue-body.md
