@@ -465,7 +465,12 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 		r := resolved[i]
 		if r.err != nil {
 			resolutionComplete = false
-			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+			if errors.Is(r.err, errAdapterUnconfigured) {
+				s.log.V(1).Info("skipping adapter: not configured on-chain",
+					"adapter", adapterAddr.Hex(), "reason", r.err.Error())
+			} else {
+				s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+			}
 			continue
 		}
 		if !r.authorized {

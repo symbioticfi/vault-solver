@@ -20,7 +20,12 @@ const (
 	exclusiveDutchAuctionContextType byte = 0xe1
 )
 
-var errOrderForDifferentChain = errors.New("order is for a different chain")
+var (
+	errOrderForDifferentChain = errors.New("order is for a different chain")
+	// errOrderUnsupported marks order kinds the feed carries but this solver never fills (non-EVM
+	// submissions, non-fillable statuses). Expected traffic, not a malformed message.
+	errOrderUnsupported = errors.New("unsupported order")
+)
 
 type submittedOrderEvent struct {
 	OrderType    string                        `json:"orderType"`
@@ -85,13 +90,13 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	}
 
 	if !isFillableOrderStatus(event.Meta.OrderStatus) {
-		return nil, errors.Errorf("unsupported order status %q", event.Meta.OrderStatus)
+		return nil, errors.Errorf("unsupported order status %q: %w", event.Meta.OrderStatus, errOrderUnsupported)
 	}
 	if !isOnChainOrderEvent(event) {
 		if event.OrderType == "" {
 			return nil, errors.New("missing orderType requires onChainOrderId and inputSettler")
 		}
-		return nil, errors.Errorf("unsupported non-onchain order type %q", event.OrderType)
+		return nil, errors.Errorf("unsupported non-onchain order type %q: %w", event.OrderType, errOrderUnsupported)
 	}
 
 	inputSettler, err := parseAddress(event.InputSettler, "inputSettler")
