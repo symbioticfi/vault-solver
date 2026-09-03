@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInnerQuote{}
 
 // PublicQuoteResponseQuotesInnerQuote struct for PublicQuoteResponseQuotesInnerQuote
 type PublicQuoteResponseQuotesInnerQuote struct {
-	QuoteId           string                                          `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
-	AggregatedOutputs []CreateOrderRequestQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
-	OrderInfo         PublicQuoteResponseQuotesInnerQuoteOrderInfo    `json:"orderInfo"`
+	QuoteId              string                                          `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	AggregatedOutputs    []CreateOrderRequestQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
+	OrderInfo            PublicQuoteResponseQuotesInnerQuoteOrderInfo    `json:"orderInfo"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInnerQuote PublicQuoteResponseQuotesInnerQuote
@@ -132,6 +132,11 @@ func (o PublicQuoteResponseQuotesInnerQuote) ToMap() (map[string]interface{}, er
 	toSerialize["quoteId"] = o.QuoteId
 	toSerialize["aggregatedOutputs"] = o.AggregatedOutputs
 	toSerialize["orderInfo"] = o.OrderInfo
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -142,16 +147,22 @@ func (o *PublicQuoteResponseQuotesInnerQuote) UnmarshalJSON(data []byte) (err er
 
 	varPublicQuoteResponseQuotesInnerQuote := _PublicQuoteResponseQuotesInnerQuote{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInnerQuote)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInnerQuote)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInnerQuote(varPublicQuoteResponseQuotesInnerQuote)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "aggregatedOutputs")
+		delete(additionalProperties, "orderInfo")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

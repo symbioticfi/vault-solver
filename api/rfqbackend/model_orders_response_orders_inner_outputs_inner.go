@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,10 +19,11 @@ var _ MappedNullable = &OrdersResponseOrdersInnerOutputsInner{}
 
 // OrdersResponseOrdersInnerOutputsInner struct for OrdersResponseOrdersInnerOutputsInner
 type OrdersResponseOrdersInnerOutputsInner struct {
-	Token      string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Recipient  string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount     string `json:"amount" validate:"regexp=^\\d+$"`
-	PortionBps *int32 `json:"portionBps,omitempty"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Recipient            string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
+	PortionBps           *int32 `json:"portionBps,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrdersResponseOrdersInnerOutputsInner OrdersResponseOrdersInnerOutputsInner
@@ -168,6 +168,11 @@ func (o OrdersResponseOrdersInnerOutputsInner) ToMap() (map[string]interface{}, 
 	if !IsNil(o.PortionBps) {
 		toSerialize["portionBps"] = o.PortionBps
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -178,16 +183,23 @@ func (o *OrdersResponseOrdersInnerOutputsInner) UnmarshalJSON(data []byte) (err 
 
 	varOrdersResponseOrdersInnerOutputsInner := _OrdersResponseOrdersInnerOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varOrdersResponseOrdersInnerOutputsInner)
+	err = json.Unmarshal(data, &varOrdersResponseOrdersInnerOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrdersResponseOrdersInnerOutputsInner(varOrdersResponseOrdersInnerOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "recipient")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "portionBps")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

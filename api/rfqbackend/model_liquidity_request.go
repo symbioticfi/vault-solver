@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,8 +19,9 @@ var _ MappedNullable = &LiquidityRequest{}
 
 // LiquidityRequest struct for LiquidityRequest
 type LiquidityRequest struct {
-	TokenIn   string   `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	SolverIds []string `json:"solverIds,omitempty"`
+	TokenIn              string   `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	SolverIds            []string `json:"solverIds,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LiquidityRequest LiquidityRequest
@@ -114,6 +114,11 @@ func (o LiquidityRequest) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SolverIds) {
 		toSerialize["solverIds"] = o.SolverIds
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -124,16 +129,21 @@ func (o *LiquidityRequest) UnmarshalJSON(data []byte) (err error) {
 
 	varLiquidityRequest := _LiquidityRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLiquidityRequest)
+	err = json.Unmarshal(data, &varLiquidityRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityRequest(varLiquidityRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "solverIds")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

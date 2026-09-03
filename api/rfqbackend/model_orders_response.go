@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &OrdersResponse{}
 
 // OrdersResponse struct for OrdersResponse
 type OrdersResponse struct {
-	RequestId string                      `json:"requestId"`
-	Orders    []OrdersResponseOrdersInner `json:"orders"`
-	Cursor    NullableString              `json:"cursor"`
+	RequestId            string                      `json:"requestId"`
+	Orders               []OrdersResponseOrdersInner `json:"orders"`
+	Cursor               NullableString              `json:"cursor"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrdersResponse OrdersResponse
@@ -134,6 +134,11 @@ func (o OrdersResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["orders"] = o.Orders
 	toSerialize["cursor"] = o.Cursor.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -144,16 +149,22 @@ func (o *OrdersResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varOrdersResponse := _OrdersResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varOrdersResponse)
+	err = json.Unmarshal(data, &varOrdersResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrdersResponse(varOrdersResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "orders")
+		delete(additionalProperties, "cursor")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

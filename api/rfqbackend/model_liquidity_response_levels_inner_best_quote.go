@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -28,6 +27,7 @@ type LiquidityResponseLevelsInnerBestQuote struct {
 	PriceImpactAmountOut          NullableString `json:"priceImpactAmountOut" validate:"regexp=^-?\\d+$"`
 	FormattedPriceImpactAmountOut NullableString `json:"formattedPriceImpactAmountOut" validate:"regexp=^-?\\d+(\\.\\d+)?$"`
 	PriceImpactBps                NullableInt32  `json:"priceImpactBps"`
+	AdditionalProperties          map[string]interface{}
 }
 
 type _LiquidityResponseLevelsInnerBestQuote LiquidityResponseLevelsInnerBestQuote
@@ -273,6 +273,11 @@ func (o LiquidityResponseLevelsInnerBestQuote) ToMap() (map[string]interface{}, 
 	toSerialize["priceImpactAmountOut"] = o.PriceImpactAmountOut.Get()
 	toSerialize["formattedPriceImpactAmountOut"] = o.FormattedPriceImpactAmountOut.Get()
 	toSerialize["priceImpactBps"] = o.PriceImpactBps.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -283,16 +288,27 @@ func (o *LiquidityResponseLevelsInnerBestQuote) UnmarshalJSON(data []byte) (err 
 
 	varLiquidityResponseLevelsInnerBestQuote := _LiquidityResponseLevelsInnerBestQuote{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLiquidityResponseLevelsInnerBestQuote)
+	err = json.Unmarshal(data, &varLiquidityResponseLevelsInnerBestQuote)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityResponseLevelsInnerBestQuote(varLiquidityResponseLevelsInnerBestQuote)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "solverId")
+		delete(additionalProperties, "solverName")
+		delete(additionalProperties, "filler")
+		delete(additionalProperties, "amountOut")
+		delete(additionalProperties, "formattedAmountOut")
+		delete(additionalProperties, "priceImpactAmountOut")
+		delete(additionalProperties, "formattedPriceImpactAmountOut")
+		delete(additionalProperties, "priceImpactBps")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

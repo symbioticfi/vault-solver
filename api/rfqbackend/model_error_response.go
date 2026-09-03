@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,7 +19,8 @@ var _ MappedNullable = &ErrorResponse{}
 
 // ErrorResponse struct for ErrorResponse
 type ErrorResponse struct {
-	Error ErrorResponseError `json:"error"`
+	Error                ErrorResponseError `json:"error"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ErrorResponse ErrorResponse
@@ -78,6 +78,11 @@ func (o ErrorResponse) MarshalJSON() ([]byte, error) {
 func (o ErrorResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["error"] = o.Error
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -88,16 +93,20 @@ func (o *ErrorResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varErrorResponse := _ErrorResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varErrorResponse)
+	err = json.Unmarshal(data, &varErrorResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ErrorResponse(varErrorResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "error")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

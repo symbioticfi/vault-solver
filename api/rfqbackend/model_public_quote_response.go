@@ -144,8 +144,8 @@ func (o *PublicQuoteResponse) UnmarshalJSON(data []byte) (err error) {
 	varPublicQuoteResponse := _PublicQuoteResponse{}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
+	// Unknown fields tolerated (hack/openapi-relax-client.py): the schema declares
+	// additionalProperties: false, but upstream may add fields at any time.
 	err = decoder.Decode(&varPublicQuoteResponse)
 
 	if err != nil {

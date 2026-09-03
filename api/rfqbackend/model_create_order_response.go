@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &CreateOrderResponse{}
 
 // CreateOrderResponse struct for CreateOrderResponse
 type CreateOrderResponse struct {
-	RequestId   string `json:"requestId"`
-	OrderId     string `json:"orderId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
-	OrderStatus string `json:"orderStatus"`
+	RequestId            string `json:"requestId"`
+	OrderId              string `json:"orderId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	OrderStatus          string `json:"orderStatus"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderResponse CreateOrderResponse
@@ -132,6 +132,11 @@ func (o CreateOrderResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["orderId"] = o.OrderId
 	toSerialize["orderStatus"] = o.OrderStatus
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -142,16 +147,22 @@ func (o *CreateOrderResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varCreateOrderResponse := _CreateOrderResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varCreateOrderResponse)
+	err = json.Unmarshal(data, &varCreateOrderResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderResponse(varCreateOrderResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "orderId")
+		delete(additionalProperties, "orderStatus")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

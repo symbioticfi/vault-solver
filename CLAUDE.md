@@ -161,7 +161,8 @@ auction feed entirely). `OPENAPI_TOLERANT_PROPS` passes `disallowAdditionalPrope
 (unknown fields are kept in `AdditionalProperties` instead of erroring) and `enumUnknownDefaultCase=true`
 (a new server-side enum value decodes to a fallback case). The generator has no flag for the third case —
 a required property upstream has since removed — so `hack/openapi-relax-client.py` strips those checks
-after generation; it runs automatically from the `make` recipes. It deliberately leaves `oneOf`/`anyOf`
+after generation (and the strict decoder from the few schemas that declare `additionalProperties: false`,
+which the flag does not reach); it runs automatically from the `make` recipes. It deliberately leaves `oneOf`/`anyOf`
 variants strict, because the generator discriminates between them by seeing which variant fails to decode.
 Tolerance is not a substitute for noticing: the daily drift check is what surfaces the change.
 

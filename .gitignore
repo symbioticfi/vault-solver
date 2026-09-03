@@ -34,3 +34,6 @@ dev-account.local.txt
 
 # Python bytecode from hack/ scripts
 __pycache__/
+
+# Build intermediate written by make refresh-uniswapx-client
+openapi/.*.normalized.openapi.json

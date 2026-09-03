@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,11 +19,12 @@ var _ MappedNullable = &ErrorResponseError{}
 
 // ErrorResponseError struct for ErrorResponseError
 type ErrorResponseError struct {
-	Code      string                 `json:"code"`
-	Message   string                 `json:"message"`
-	Status    float32                `json:"status"`
-	Timestamp string                 `json:"timestamp"`
-	Details   map[string]interface{} `json:"details,omitempty"`
+	Code                 string                 `json:"code"`
+	Message              string                 `json:"message"`
+	Status               float32                `json:"status"`
+	Timestamp            string                 `json:"timestamp"`
+	Details              map[string]interface{} `json:"details,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ErrorResponseError ErrorResponseError
@@ -195,6 +195,11 @@ func (o ErrorResponseError) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Details) {
 		toSerialize["details"] = o.Details
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -205,16 +210,24 @@ func (o *ErrorResponseError) UnmarshalJSON(data []byte) (err error) {
 
 	varErrorResponseError := _ErrorResponseError{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varErrorResponseError)
+	err = json.Unmarshal(data, &varErrorResponseError)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ErrorResponseError(varErrorResponseError)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "code")
+		delete(additionalProperties, "message")
+		delete(additionalProperties, "status")
+		delete(additionalProperties, "timestamp")
+		delete(additionalProperties, "details")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

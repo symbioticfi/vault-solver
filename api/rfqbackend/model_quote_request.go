@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,17 +19,18 @@ var _ MappedNullable = &QuoteRequest{}
 
 // QuoteRequest struct for QuoteRequest
 type QuoteRequest struct {
-	TokenInChainId    int32                      `json:"tokenInChainId"`
-	TokenOutChainId   int32                      `json:"tokenOutChainId"`
-	TokenIn           string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenOut          string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Type              string                     `json:"type"`
-	Amount            string                     `json:"amount" validate:"regexp=^\\d+$"`
-	Swapper           string                     `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	RoutingPreference *string                    `json:"routingPreference,omitempty"`
-	PermitAmount      *string                    `json:"permitAmount,omitempty"`
-	SolverIds         []string                   `json:"solverIds,omitempty"`
-	Outputs           []QuoteRequestOutputsInner `json:"outputs"`
+	TokenInChainId       int32                      `json:"tokenInChainId"`
+	TokenOutChainId      int32                      `json:"tokenOutChainId"`
+	TokenIn              string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenOut             string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Type                 string                     `json:"type"`
+	Amount               string                     `json:"amount" validate:"regexp=^\\d+$"`
+	Swapper              string                     `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	RoutingPreference    *string                    `json:"routingPreference,omitempty"`
+	PermitAmount         *string                    `json:"permitAmount,omitempty"`
+	SolverIds            []string                   `json:"solverIds,omitempty"`
+	Outputs              []QuoteRequestOutputsInner `json:"outputs"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteRequest QuoteRequest
@@ -379,6 +379,11 @@ func (o QuoteRequest) ToMap() (map[string]interface{}, error) {
 		toSerialize["solverIds"] = o.SolverIds
 	}
 	toSerialize["outputs"] = o.Outputs
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -389,16 +394,30 @@ func (o *QuoteRequest) UnmarshalJSON(data []byte) (err error) {
 
 	varQuoteRequest := _QuoteRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varQuoteRequest)
+	err = json.Unmarshal(data, &varQuoteRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteRequest(varQuoteRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenInChainId")
+		delete(additionalProperties, "tokenOutChainId")
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "tokenOut")
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "routingPreference")
+		delete(additionalProperties, "permitAmount")
+		delete(additionalProperties, "solverIds")
+		delete(additionalProperties, "outputs")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

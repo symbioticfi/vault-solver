@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &CreateOrderRequestQuote{}
 
 // CreateOrderRequestQuote struct for CreateOrderRequestQuote
 type CreateOrderRequestQuote struct {
-	QuoteId           string                                          `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
-	AggregatedOutputs []CreateOrderRequestQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
-	OrderInfo         CreateOrderRequestQuoteOrderInfo                `json:"orderInfo"`
+	QuoteId              string                                          `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	AggregatedOutputs    []CreateOrderRequestQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
+	OrderInfo            CreateOrderRequestQuoteOrderInfo                `json:"orderInfo"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuote CreateOrderRequestQuote
@@ -132,6 +132,11 @@ func (o CreateOrderRequestQuote) ToMap() (map[string]interface{}, error) {
 	toSerialize["quoteId"] = o.QuoteId
 	toSerialize["aggregatedOutputs"] = o.AggregatedOutputs
 	toSerialize["orderInfo"] = o.OrderInfo
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -142,16 +147,22 @@ func (o *CreateOrderRequestQuote) UnmarshalJSON(data []byte) (err error) {
 
 	varCreateOrderRequestQuote := _CreateOrderRequestQuote{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varCreateOrderRequestQuote)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuote)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuote(varCreateOrderRequestQuote)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "aggregatedOutputs")
+		delete(additionalProperties, "orderInfo")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

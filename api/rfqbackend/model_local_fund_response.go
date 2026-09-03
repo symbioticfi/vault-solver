@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,11 +19,12 @@ var _ MappedNullable = &LocalFundResponse{}
 
 // LocalFundResponse struct for LocalFundResponse
 type LocalFundResponse struct {
-	RequestId     string `json:"requestId"`
-	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	FundedEth     string `json:"fundedEth" validate:"regexp=^\\d+$"`
-	FundedToken   string `json:"fundedToken" validate:"regexp=^\\d+$"`
-	Token         string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	RequestId            string `json:"requestId"`
+	WalletAddress        string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	FundedEth            string `json:"fundedEth" validate:"regexp=^\\d+$"`
+	FundedToken          string `json:"fundedToken" validate:"regexp=^\\d+$"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFundResponse LocalFundResponse
@@ -186,6 +186,11 @@ func (o LocalFundResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["fundedEth"] = o.FundedEth
 	toSerialize["fundedToken"] = o.FundedToken
 	toSerialize["token"] = o.Token
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -196,16 +201,24 @@ func (o *LocalFundResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varLocalFundResponse := _LocalFundResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFundResponse)
+	err = json.Unmarshal(data, &varLocalFundResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFundResponse(varLocalFundResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "walletAddress")
+		delete(additionalProperties, "fundedEth")
+		delete(additionalProperties, "fundedToken")
+		delete(additionalProperties, "token")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,8 +19,9 @@ var _ MappedNullable = &PublishDiscountRequest{}
 
 // PublishDiscountRequest struct for PublishDiscountRequest
 type PublishDiscountRequest struct {
-	Discount  PublishDiscountRequestDiscount `json:"discount"`
-	Signature string                         `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Discount             PublishDiscountRequestDiscount `json:"discount"`
+	Signature            string                         `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublishDiscountRequest PublishDiscountRequest
@@ -105,6 +105,11 @@ func (o PublishDiscountRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["discount"] = o.Discount
 	toSerialize["signature"] = o.Signature
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -115,16 +120,21 @@ func (o *PublishDiscountRequest) UnmarshalJSON(data []byte) (err error) {
 
 	varPublishDiscountRequest := _PublishDiscountRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublishDiscountRequest)
+	err = json.Unmarshal(data, &varPublishDiscountRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublishDiscountRequest(varPublishDiscountRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "discount")
+		delete(additionalProperties, "signature")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

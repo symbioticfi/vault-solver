@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -27,14 +26,15 @@ type OrdersResponseOrdersInner struct {
 	Swapper     string         `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TxHash      NullableString `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
-	Nonce             string                                         `json:"nonce" validate:"regexp=^\\d+$"`
-	Input             CreateOrderRequestQuoteAggregatedOutputsInner  `json:"input"`
-	Outputs           []OrdersResponseOrdersInnerOutputsInner        `json:"outputs"`
-	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
-	EncodedOrder      *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	ProtocolSignature *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Deadline          *int32                                         `json:"deadline,omitempty"`
-	Filler            *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Nonce                string                                         `json:"nonce" validate:"regexp=^\\d+$"`
+	Input                CreateOrderRequestQuoteAggregatedOutputsInner  `json:"input"`
+	Outputs              []OrdersResponseOrdersInnerOutputsInner        `json:"outputs"`
+	SettledAmounts       []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
+	EncodedOrder         *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	ProtocolSignature    *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Deadline             *int32                                         `json:"deadline,omitempty"`
+	Filler               *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrdersResponseOrdersInner OrdersResponseOrdersInner
@@ -468,6 +468,11 @@ func (o OrdersResponseOrdersInner) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Filler) {
 		toSerialize["filler"] = o.Filler
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -478,16 +483,33 @@ func (o *OrdersResponseOrdersInner) UnmarshalJSON(data []byte) (err error) {
 
 	varOrdersResponseOrdersInner := _OrdersResponseOrdersInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varOrdersResponseOrdersInner)
+	err = json.Unmarshal(data, &varOrdersResponseOrdersInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrdersResponseOrdersInner(varOrdersResponseOrdersInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "orderId")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "settledAmounts")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "protocolSignature")
+		delete(additionalProperties, "deadline")
+		delete(additionalProperties, "filler")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

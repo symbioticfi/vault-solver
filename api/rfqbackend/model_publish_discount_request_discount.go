@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -26,8 +25,9 @@ type PublishDiscountRequestDiscount struct {
 	Signer        string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Protocol      string `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
-	Nonce    string `json:"nonce" validate:"regexp=^\\d+$"`
-	Deadline int32  `json:"deadline"`
+	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
+	Deadline             int32  `json:"deadline"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublishDiscountRequestDiscount PublishDiscountRequestDiscount
@@ -241,6 +241,11 @@ func (o PublishDiscountRequestDiscount) ToMap() (map[string]interface{}, error) 
 	toSerialize["protocol"] = o.Protocol
 	toSerialize["nonce"] = o.Nonce
 	toSerialize["deadline"] = o.Deadline
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -251,16 +256,26 @@ func (o *PublishDiscountRequestDiscount) UnmarshalJSON(data []byte) (err error) 
 
 	varPublishDiscountRequestDiscount := _PublishDiscountRequestDiscount{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublishDiscountRequestDiscount)
+	err = json.Unmarshal(data, &varPublishDiscountRequestDiscount)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublishDiscountRequestDiscount(varPublishDiscountRequestDiscount)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "adapter")
+		delete(additionalProperties, "tokenToRedeem")
+		delete(additionalProperties, "discount")
+		delete(additionalProperties, "signer")
+		delete(additionalProperties, "protocol")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "deadline")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

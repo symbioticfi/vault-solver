@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,8 +19,9 @@ var _ MappedNullable = &LocalFaucetResponse{}
 
 // LocalFaucetResponse struct for LocalFaucetResponse
 type LocalFaucetResponse struct {
-	RequestId string                                     `json:"requestId"`
-	Assets    []LocalFaucetFundResponseFundedAssetsInner `json:"assets"`
+	RequestId            string                                     `json:"requestId"`
+	Assets               []LocalFaucetFundResponseFundedAssetsInner `json:"assets"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFaucetResponse LocalFaucetResponse
@@ -105,6 +105,11 @@ func (o LocalFaucetResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["assets"] = o.Assets
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -115,16 +120,21 @@ func (o *LocalFaucetResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varLocalFaucetResponse := _LocalFaucetResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFaucetResponse)
+	err = json.Unmarshal(data, &varLocalFaucetResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFaucetResponse(varLocalFaucetResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "assets")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

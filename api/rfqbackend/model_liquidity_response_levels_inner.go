@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -26,6 +25,7 @@ type LiquidityResponseLevelsInner struct {
 	FormattedReferenceAmountOut NullableString                                  `json:"formattedReferenceAmountOut" validate:"regexp=^\\d+(\\.\\d+)?$"`
 	BestQuote                   NullableLiquidityResponseLevelsInnerBestQuote   `json:"bestQuote"`
 	SolverQuotes                []LiquidityResponseLevelsInnerSolverQuotesInner `json:"solverQuotes"`
+	AdditionalProperties        map[string]interface{}
 }
 
 type _LiquidityResponseLevelsInner LiquidityResponseLevelsInner
@@ -219,6 +219,11 @@ func (o LiquidityResponseLevelsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize["formattedReferenceAmountOut"] = o.FormattedReferenceAmountOut.Get()
 	toSerialize["bestQuote"] = o.BestQuote.Get()
 	toSerialize["solverQuotes"] = o.SolverQuotes
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -229,16 +234,25 @@ func (o *LiquidityResponseLevelsInner) UnmarshalJSON(data []byte) (err error) {
 
 	varLiquidityResponseLevelsInner := _LiquidityResponseLevelsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLiquidityResponseLevelsInner)
+	err = json.Unmarshal(data, &varLiquidityResponseLevelsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityResponseLevelsInner(varLiquidityResponseLevelsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "amountIn")
+		delete(additionalProperties, "formattedAmountIn")
+		delete(additionalProperties, "referenceAmountOut")
+		delete(additionalProperties, "formattedReferenceAmountOut")
+		delete(additionalProperties, "bestQuote")
+		delete(additionalProperties, "solverQuotes")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,10 +19,11 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInnerSolver{}
 
 // PublicQuoteResponseQuotesInnerSolver struct for PublicQuoteResponseQuotesInnerSolver
 type PublicQuoteResponseQuotesInnerSolver struct {
-	Id       string                                       `json:"id"`
-	Name     string                                       `json:"name"`
-	Filler   string                                       `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Metadata PublicQuoteResponseQuotesInnerSolverMetadata `json:"metadata"`
+	Id                   string                                       `json:"id"`
+	Name                 string                                       `json:"name"`
+	Filler               string                                       `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Metadata             PublicQuoteResponseQuotesInnerSolverMetadata `json:"metadata"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInnerSolver PublicQuoteResponseQuotesInnerSolver
@@ -159,6 +159,11 @@ func (o PublicQuoteResponseQuotesInnerSolver) ToMap() (map[string]interface{}, e
 	toSerialize["name"] = o.Name
 	toSerialize["filler"] = o.Filler
 	toSerialize["metadata"] = o.Metadata
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -169,16 +174,23 @@ func (o *PublicQuoteResponseQuotesInnerSolver) UnmarshalJSON(data []byte) (err e
 
 	varPublicQuoteResponseQuotesInnerSolver := _PublicQuoteResponseQuotesInnerSolver{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInnerSolver)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInnerSolver)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInnerSolver(varPublicQuoteResponseQuotesInnerSolver)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "filler")
+		delete(additionalProperties, "metadata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInner{}
 
 // PublicQuoteResponseQuotesInner struct for PublicQuoteResponseQuotesInner
 type PublicQuoteResponseQuotesInner struct {
-	Solver        PublicQuoteResponseQuotesInnerSolver        `json:"solver"`
-	Quote         PublicQuoteResponseQuotesInnerQuote         `json:"quote"`
-	SignatureData PublicQuoteResponseQuotesInnerSignatureData `json:"signatureData"`
+	Solver               PublicQuoteResponseQuotesInnerSolver        `json:"solver"`
+	Quote                PublicQuoteResponseQuotesInnerQuote         `json:"quote"`
+	SignatureData        PublicQuoteResponseQuotesInnerSignatureData `json:"signatureData"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInner PublicQuoteResponseQuotesInner
@@ -132,6 +132,11 @@ func (o PublicQuoteResponseQuotesInner) ToMap() (map[string]interface{}, error) 
 	toSerialize["solver"] = o.Solver
 	toSerialize["quote"] = o.Quote
 	toSerialize["signatureData"] = o.SignatureData
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -142,16 +147,22 @@ func (o *PublicQuoteResponseQuotesInner) UnmarshalJSON(data []byte) (err error) 
 
 	varPublicQuoteResponseQuotesInner := _PublicQuoteResponseQuotesInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInner)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInner(varPublicQuoteResponseQuotesInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "solver")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "signatureData")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

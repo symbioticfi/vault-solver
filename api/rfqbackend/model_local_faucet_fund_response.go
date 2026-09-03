@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &LocalFaucetFundResponse{}
 
 // LocalFaucetFundResponse struct for LocalFaucetFundResponse
 type LocalFaucetFundResponse struct {
-	RequestId     string                                     `json:"requestId"`
-	WalletAddress string                                     `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	FundedAssets  []LocalFaucetFundResponseFundedAssetsInner `json:"fundedAssets"`
+	RequestId            string                                     `json:"requestId"`
+	WalletAddress        string                                     `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	FundedAssets         []LocalFaucetFundResponseFundedAssetsInner `json:"fundedAssets"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFaucetFundResponse LocalFaucetFundResponse
@@ -132,6 +132,11 @@ func (o LocalFaucetFundResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["walletAddress"] = o.WalletAddress
 	toSerialize["fundedAssets"] = o.FundedAssets
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -142,16 +147,22 @@ func (o *LocalFaucetFundResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varLocalFaucetFundResponse := _LocalFaucetFundResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFaucetFundResponse)
+	err = json.Unmarshal(data, &varLocalFaucetFundResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFaucetFundResponse(varLocalFaucetFundResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "walletAddress")
+		delete(additionalProperties, "fundedAssets")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

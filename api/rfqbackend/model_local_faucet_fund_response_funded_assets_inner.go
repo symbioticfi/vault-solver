@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,12 +19,13 @@ var _ MappedNullable = &LocalFaucetFundResponseFundedAssetsInner{}
 
 // LocalFaucetFundResponseFundedAssetsInner struct for LocalFaucetFundResponseFundedAssetsInner
 type LocalFaucetFundResponseFundedAssetsInner struct {
-	Token    string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Symbol   string `json:"symbol"`
-	Name     string `json:"name"`
-	Decimals int32  `json:"decimals"`
-	Amount   string `json:"amount" validate:"regexp=^\\d+$"`
-	Kind     string `json:"kind"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Symbol               string `json:"symbol"`
+	Name                 string `json:"name"`
+	Decimals             int32  `json:"decimals"`
+	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
+	Kind                 string `json:"kind"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFaucetFundResponseFundedAssetsInner LocalFaucetFundResponseFundedAssetsInner
@@ -213,6 +213,11 @@ func (o LocalFaucetFundResponseFundedAssetsInner) ToMap() (map[string]interface{
 	toSerialize["decimals"] = o.Decimals
 	toSerialize["amount"] = o.Amount
 	toSerialize["kind"] = o.Kind
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -223,16 +228,25 @@ func (o *LocalFaucetFundResponseFundedAssetsInner) UnmarshalJSON(data []byte) (e
 
 	varLocalFaucetFundResponseFundedAssetsInner := _LocalFaucetFundResponseFundedAssetsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFaucetFundResponseFundedAssetsInner)
+	err = json.Unmarshal(data, &varLocalFaucetFundResponseFundedAssetsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFaucetFundResponseFundedAssetsInner(varLocalFaucetFundResponseFundedAssetsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "symbol")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "decimals")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "kind")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

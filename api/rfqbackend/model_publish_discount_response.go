@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,8 +19,9 @@ var _ MappedNullable = &PublishDiscountResponse{}
 
 // PublishDiscountResponse struct for PublishDiscountResponse
 type PublishDiscountResponse struct {
-	RequestId  string `json:"requestId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
-	DiscountId string `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
+	RequestId            string `json:"requestId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	DiscountId           string `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublishDiscountResponse PublishDiscountResponse
@@ -105,6 +105,11 @@ func (o PublishDiscountResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["discountId"] = o.DiscountId
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -115,16 +120,21 @@ func (o *PublishDiscountResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varPublishDiscountResponse := _PublishDiscountResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublishDiscountResponse)
+	err = json.Unmarshal(data, &varPublishDiscountResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublishDiscountResponse(varPublishDiscountResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "discountId")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

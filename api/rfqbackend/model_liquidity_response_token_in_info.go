@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,10 +19,11 @@ var _ MappedNullable = &LiquidityResponseTokenInInfo{}
 
 // LiquidityResponseTokenInInfo struct for LiquidityResponseTokenInInfo
 type LiquidityResponseTokenInInfo struct {
-	Address  string `json:"address" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Symbol   string `json:"symbol"`
-	Name     string `json:"name"`
-	Decimals int32  `json:"decimals"`
+	Address              string `json:"address" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Symbol               string `json:"symbol"`
+	Name                 string `json:"name"`
+	Decimals             int32  `json:"decimals"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LiquidityResponseTokenInInfo LiquidityResponseTokenInInfo
@@ -159,6 +159,11 @@ func (o LiquidityResponseTokenInInfo) ToMap() (map[string]interface{}, error) {
 	toSerialize["symbol"] = o.Symbol
 	toSerialize["name"] = o.Name
 	toSerialize["decimals"] = o.Decimals
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -169,16 +174,23 @@ func (o *LiquidityResponseTokenInInfo) UnmarshalJSON(data []byte) (err error) {
 
 	varLiquidityResponseTokenInInfo := _LiquidityResponseTokenInInfo{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLiquidityResponseTokenInInfo)
+	err = json.Unmarshal(data, &varLiquidityResponseTokenInInfo)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityResponseTokenInInfo(varLiquidityResponseTokenInInfo)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "address")
+		delete(additionalProperties, "symbol")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "decimals")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

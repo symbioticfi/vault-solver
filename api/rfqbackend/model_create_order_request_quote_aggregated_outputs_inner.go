@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,8 +19,9 @@ var _ MappedNullable = &CreateOrderRequestQuoteAggregatedOutputsInner{}
 
 // CreateOrderRequestQuoteAggregatedOutputsInner struct for CreateOrderRequestQuoteAggregatedOutputsInner
 type CreateOrderRequestQuoteAggregatedOutputsInner struct {
-	Token  string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount string `json:"amount" validate:"regexp=^\\d+$"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuoteAggregatedOutputsInner CreateOrderRequestQuoteAggregatedOutputsInner
@@ -105,6 +105,11 @@ func (o CreateOrderRequestQuoteAggregatedOutputsInner) ToMap() (map[string]inter
 	toSerialize := map[string]interface{}{}
 	toSerialize["token"] = o.Token
 	toSerialize["amount"] = o.Amount
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -115,16 +120,21 @@ func (o *CreateOrderRequestQuoteAggregatedOutputsInner) UnmarshalJSON(data []byt
 
 	varCreateOrderRequestQuoteAggregatedOutputsInner := _CreateOrderRequestQuoteAggregatedOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varCreateOrderRequestQuoteAggregatedOutputsInner)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuoteAggregatedOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuoteAggregatedOutputsInner(varCreateOrderRequestQuoteAggregatedOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

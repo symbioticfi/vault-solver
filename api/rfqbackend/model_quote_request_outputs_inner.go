@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -22,8 +21,9 @@ var _ MappedNullable = &QuoteRequestOutputsInner{}
 type QuoteRequestOutputsInner struct {
 	Token string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Defaults to swapper when omitted for backward compatibility.
-	Recipient  *string `json:"recipient,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	PortionBps *int32  `json:"portionBps,omitempty"`
+	Recipient            *string `json:"recipient,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	PortionBps           *int32  `json:"portionBps,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteRequestOutputsInner QuoteRequestOutputsInner
@@ -151,6 +151,11 @@ func (o QuoteRequestOutputsInner) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.PortionBps) {
 		toSerialize["portionBps"] = o.PortionBps
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -161,16 +166,22 @@ func (o *QuoteRequestOutputsInner) UnmarshalJSON(data []byte) (err error) {
 
 	varQuoteRequestOutputsInner := _QuoteRequestOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varQuoteRequestOutputsInner)
+	err = json.Unmarshal(data, &varQuoteRequestOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteRequestOutputsInner(varQuoteRequestOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "recipient")
+		delete(additionalProperties, "portionBps")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

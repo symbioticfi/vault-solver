@@ -17,6 +17,11 @@ removes those loops after generation.
 Field types are left alone, so required fields keep their non-pointer Go types and simply
 zero-value when absent; callers already guard with the generated Get*Ok() accessors.
 
+Unknown fields are mostly the generator flag's job (disallowAdditionalPropertiesIfNotPresent=false),
+but that flag only sets the default for schemas silent on additionalProperties. A schema that
+declares `additionalProperties: false` still gets DisallowUnknownFields, so this also strips that
+from plain models; oneOf/anyOf variants keep it, since it is part of how they are told apart.
+
 oneOf/anyOf variants are deliberately left strict: the generator discriminates
 between them by trying each variant and seeing which one fails to decode, so
 relaxing a variant makes the wrong branch match. Variant types, and every type
@@ -85,6 +90,9 @@ def prune_unused_imports(text: str) -> str:
     return text
 
 
+UNKNOWN_FIELDS_CHECK = re.compile(r"[ \t]*decoder\.DisallowUnknownFields\(\)\n")
+
+
 def relax(text: str) -> tuple[str, int, int]:
     text, dropped_required = REQUIRED_BLOCK.subn(
         "\n\t// Required-property validation removed by hack/openapi-relax-client.py:\n"
@@ -92,14 +100,15 @@ def relax(text: str) -> tuple[str, int, int]:
         "\t// failing the whole decode.\n",
         text,
     )
-    text, dropped_unknown = re.subn(
-        r"[ \t]*decoder\.DisallowUnknownFields\(\)\n",
-        "\t// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add\n"
-        "\t// fields at any time without breaking us.\n",
+    # disallowAdditionalPropertiesIfNotPresent=false only changes the default for schemas that say
+    # nothing about additionalProperties; a schema declaring `additionalProperties: false` still gets
+    # a strict decoder, which would reject a field upstream adds later.
+    text, dropped_unknown = UNKNOWN_FIELDS_CHECK.subn(
+        "\t// Unknown fields tolerated (hack/openapi-relax-client.py): the schema declares\n"
+        "\t// additionalProperties: false, but upstream may add fields at any time.\n",
         text,
     )
-    text = prune_unused_imports(text)
-    return text, dropped_required, dropped_unknown
+    return prune_unused_imports(text), dropped_required, dropped_unknown
 
 
 def main(target: str) -> int:
@@ -115,15 +124,15 @@ def main(target: str) -> int:
         if declares_strict_type(original, strict):
             skipped += 1
             continue
-        relaxed, n_req, n_unk = relax(original)
+        relaxed, n_required, n_unknown = relax(original)
         if relaxed != original:
             path.write_text(relaxed)
             touched += 1
-            total_required += n_req
-            total_unknown += n_unk
+            total_required += n_required
+            total_unknown += n_unknown
     print(
         f"openapi-relax-client: {root}: relaxed {touched} file(s) "
-        f"({total_required} required-property checks, {total_unknown} residual DisallowUnknownFields; "
+        f"({total_required} required-property checks, {total_unknown} explicit-strict unknown-field checks; "
         f"{skipped} kept strict for oneOf/anyOf discrimination)"
     )
     return 0

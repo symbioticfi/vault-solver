@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,9 +19,10 @@ var _ MappedNullable = &ApprovalCheckResponse{}
 
 // ApprovalCheckResponse struct for ApprovalCheckResponse
 type ApprovalCheckResponse struct {
-	RequestId string                                `json:"requestId"`
-	Approval  NullableApprovalCheckResponseApproval `json:"approval"`
-	Cancel    interface{}                           `json:"cancel"`
+	RequestId            string                                `json:"requestId"`
+	Approval             NullableApprovalCheckResponseApproval `json:"approval"`
+	Cancel               interface{}                           `json:"cancel"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ApprovalCheckResponse ApprovalCheckResponse
@@ -134,6 +134,11 @@ func (o ApprovalCheckResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["approval"] = o.Approval.Get()
 	toSerialize["cancel"] = o.Cancel
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -144,16 +149,22 @@ func (o *ApprovalCheckResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varApprovalCheckResponse := _ApprovalCheckResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varApprovalCheckResponse)
+	err = json.Unmarshal(data, &varApprovalCheckResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ApprovalCheckResponse(varApprovalCheckResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "approval")
+		delete(additionalProperties, "cancel")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -25,7 +24,8 @@ type CreateOrderRequestQuoteOrderInfo struct {
 	Outputs  []CreateOrderRequestQuoteOrderInfoOutputsInner `json:"outputs"`
 	Deadline int32                                          `json:"deadline"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
-	Nonce string `json:"nonce" validate:"regexp=^\\d+$"`
+	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuoteOrderInfo CreateOrderRequestQuoteOrderInfo
@@ -187,6 +187,11 @@ func (o CreateOrderRequestQuoteOrderInfo) ToMap() (map[string]interface{}, error
 	toSerialize["outputs"] = o.Outputs
 	toSerialize["deadline"] = o.Deadline
 	toSerialize["nonce"] = o.Nonce
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -197,16 +202,24 @@ func (o *CreateOrderRequestQuoteOrderInfo) UnmarshalJSON(data []byte) (err error
 
 	varCreateOrderRequestQuoteOrderInfo := _CreateOrderRequestQuoteOrderInfo{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varCreateOrderRequestQuoteOrderInfo)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuoteOrderInfo)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuoteOrderInfo(varCreateOrderRequestQuoteOrderInfo)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "amountIn")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "deadline")
+		delete(additionalProperties, "nonce")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

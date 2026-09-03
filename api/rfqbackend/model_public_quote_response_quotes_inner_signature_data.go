@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,10 +19,11 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInnerSignatureData{}
 
 // PublicQuoteResponseQuotesInnerSignatureData struct for PublicQuoteResponseQuotesInnerSignatureData
 type PublicQuoteResponseQuotesInnerSignatureData struct {
-	Domain      map[string]*interface{}        `json:"domain"`
-	Types       map[string][]map[string]string `json:"types"`
-	PrimaryType string                         `json:"primaryType"`
-	Value       map[string]*interface{}        `json:"value"`
+	Domain               map[string]*interface{}        `json:"domain"`
+	Types                map[string][]map[string]string `json:"types"`
+	PrimaryType          string                         `json:"primaryType"`
+	Value                map[string]*interface{}        `json:"value"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInnerSignatureData PublicQuoteResponseQuotesInnerSignatureData
@@ -159,6 +159,11 @@ func (o PublicQuoteResponseQuotesInnerSignatureData) ToMap() (map[string]interfa
 	toSerialize["types"] = o.Types
 	toSerialize["primaryType"] = o.PrimaryType
 	toSerialize["value"] = o.Value
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -169,16 +174,23 @@ func (o *PublicQuoteResponseQuotesInnerSignatureData) UnmarshalJSON(data []byte)
 
 	varPublicQuoteResponseQuotesInnerSignatureData := _PublicQuoteResponseQuotesInnerSignatureData{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInnerSignatureData)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInnerSignatureData)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInnerSignatureData(varPublicQuoteResponseQuotesInnerSignatureData)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "domain")
+		delete(additionalProperties, "types")
+		delete(additionalProperties, "primaryType")
+		delete(additionalProperties, "value")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,7 +19,8 @@ var _ MappedNullable = &LocalFundRequest{}
 
 // LocalFundRequest struct for LocalFundRequest
 type LocalFundRequest struct {
-	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	WalletAddress        string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFundRequest LocalFundRequest
@@ -78,6 +78,11 @@ func (o LocalFundRequest) MarshalJSON() ([]byte, error) {
 func (o LocalFundRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["walletAddress"] = o.WalletAddress
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -88,16 +93,20 @@ func (o *LocalFundRequest) UnmarshalJSON(data []byte) (err error) {
 
 	varLocalFundRequest := _LocalFundRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFundRequest)
+	err = json.Unmarshal(data, &varLocalFundRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFundRequest(varLocalFundRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "walletAddress")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

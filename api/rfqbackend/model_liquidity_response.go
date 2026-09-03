@@ -11,7 +11,6 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,11 +19,12 @@ var _ MappedNullable = &LiquidityResponse{}
 
 // LiquidityResponse struct for LiquidityResponse
 type LiquidityResponse struct {
-	TokenIn      string                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenOut     string                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenInInfo  LiquidityResponseTokenInInfo   `json:"tokenInInfo"`
-	TokenOutInfo LiquidityResponseTokenInInfo   `json:"tokenOutInfo"`
-	Levels       []LiquidityResponseLevelsInner `json:"levels"`
+	TokenIn              string                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenOut             string                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenInInfo          LiquidityResponseTokenInInfo   `json:"tokenInInfo"`
+	TokenOutInfo         LiquidityResponseTokenInInfo   `json:"tokenOutInfo"`
+	Levels               []LiquidityResponseLevelsInner `json:"levels"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LiquidityResponse LiquidityResponse
@@ -186,6 +186,11 @@ func (o LiquidityResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["tokenInInfo"] = o.TokenInInfo
 	toSerialize["tokenOutInfo"] = o.TokenOutInfo
 	toSerialize["levels"] = o.Levels
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -196,16 +201,24 @@ func (o *LiquidityResponse) UnmarshalJSON(data []byte) (err error) {
 
 	varLiquidityResponse := _LiquidityResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
-	// fields at any time without breaking us.
-	err = decoder.Decode(&varLiquidityResponse)
+	err = json.Unmarshal(data, &varLiquidityResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityResponse(varLiquidityResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "tokenOut")
+		delete(additionalProperties, "tokenInInfo")
+		delete(additionalProperties, "tokenOutInfo")
+		delete(additionalProperties, "levels")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }
