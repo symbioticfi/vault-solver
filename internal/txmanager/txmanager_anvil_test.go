@@ -5,11 +5,18 @@ package txmanager
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,13 +25,156 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
 func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("fee bump replacement", testAnvilReplacement)
 	t.Run("timeout cancellation unblocks later nonce", testAnvilCancellation)
+}
+
+func TestAnvilTxManagerRecoversFromReceiptTimeoutAfterWriteRPCBroadcast(t *testing.T) {
+	rpcClient, _, upstreamURL := startAnvilWithoutMiningWithURL(t)
+	sgnr := anvilSigner(t)
+
+	var receiptFaultArmed atomic.Bool
+	var readBroadcasts atomic.Int64
+	var readReceiptLookups atomic.Int64
+	var writeBroadcasts atomic.Int64
+	var writeReceiptLookups atomic.Int64
+	receiptBlocked := make(chan struct{}, 1)
+
+	readRPC := newAnvilRPCProxy(t, upstreamURL, func(r *http.Request, method string) bool {
+		switch method {
+		case "eth_sendRawTransaction":
+			readBroadcasts.Add(1)
+		case "eth_getTransactionReceipt":
+			readReceiptLookups.Add(1)
+			if receiptFaultArmed.CompareAndSwap(true, false) {
+				select {
+				case receiptBlocked <- struct{}{}:
+				default:
+				}
+				<-r.Context().Done()
+				return true
+			}
+		}
+		return false
+	})
+	writeRPC := newAnvilRPCProxy(t, upstreamURL, func(_ *http.Request, method string) bool {
+		switch method {
+		case "eth_sendRawTransaction":
+			writeBroadcasts.Add(1)
+			receiptFaultArmed.Store(true)
+		case "eth_getTransactionReceipt":
+			writeReceiptLookups.Add(1)
+		}
+		return false
+	})
+
+	client, err := chain.Dial(
+		t.Context(),
+		[]string{readRPC.URL},
+		writeRPC.URL,
+		"0xcA11bde05977b3631167028862bE2a173976CA11",
+		logr.Discard(),
+	)
+	if err != nil {
+		t.Fatalf("dial proxied chain clients: %v", err)
+	}
+	t.Cleanup(client.Close)
+
+	core, logs := observer.New(zapcore.ErrorLevel)
+	manager := New(
+		client,
+		sgnr,
+		big.NewInt(31337),
+		Config{
+			MaxFeeGwei:          100,
+			TipGwei:             1,
+			PollInterval:        20 * time.Millisecond,
+			ReplacementInterval: 5 * time.Second,
+			PendingTimeout:      10 * time.Second,
+		},
+		zapr.NewLogger(zap.New(core)),
+	)
+	go manager.Start(t.Context())
+
+	result, accepted := manager.SendAsync(t.Context(), Request{
+		To:       common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
+		GasLimit: 21_000,
+		Label:    "rfq-fill",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	select {
+	case <-receiptBlocked:
+	case early := <-result:
+		t.Fatalf(
+			"transaction completed before injected receipt timeout: outcome %q, error %v; rpc counts write broadcasts %d, read broadcasts %d, read receipts %d",
+			early.Outcome,
+			early.Err,
+			writeBroadcasts.Load(),
+			readBroadcasts.Load(),
+			readReceiptLookups.Load(),
+		)
+	case <-time.After(5 * time.Second):
+		t.Fatalf(
+			"txmanager did not reach the injected receipt timeout; rpc counts write broadcasts %d, read broadcasts %d, read receipts %d",
+			writeBroadcasts.Load(),
+			readBroadcasts.Load(),
+			readReceiptLookups.Load(),
+		)
+	}
+	// Mine while the read proxy is still holding the first receipt lookup. That lookup must fail on
+	// its deadline; the next poll should see the same transaction confirmed instead of losing it.
+	mineAnvilBlock(t, rpcClient)
+
+	got := waitForTxResult(t, result)
+	if got.Err != nil || got.Outcome != OutcomeConfirmed {
+		t.Fatalf("transaction result = outcome %q, error %v; want confirmed", got.Outcome, got.Err)
+	}
+	if writeBroadcasts.Load() != 1 || readBroadcasts.Load() != 0 {
+		t.Fatalf(
+			"broadcast routing = write %d, read %d; want write 1, read 0",
+			writeBroadcasts.Load(),
+			readBroadcasts.Load(),
+		)
+	}
+	if readReceiptLookups.Load() < 2 || writeReceiptLookups.Load() != 0 {
+		t.Fatalf(
+			"receipt routing = read %d, write %d; want at least two read lookups and no write lookups",
+			readReceiptLookups.Load(),
+			writeReceiptLookups.Load(),
+		)
+	}
+
+	entries := logs.FilterMessage("pending transaction receipt unavailable").All()
+	if len(entries) != 1 {
+		t.Fatalf("receipt timeout logs = %d, want 1", len(entries))
+	}
+	errorText, ok := entries[0].ContextMap()["error"].(string)
+	if !ok {
+		t.Fatalf("receipt timeout error field = %#v, want string", entries[0].ContextMap()["error"])
+	}
+	if !strings.Contains(errorText, "rpc fallback: all 1 endpoints failed") ||
+		!strings.Contains(errorText, "context deadline exceeded") {
+		t.Fatalf("receipt timeout error = %q, want fallback deadline error", errorText)
+	}
+	t.Logf(
+		"reproduced receipt failure %q; recovered after %d read receipt lookups (broadcasts: write %d, read %d)",
+		errorText,
+		readReceiptLookups.Load(),
+		writeBroadcasts.Load(),
+		readBroadcasts.Load(),
+	)
 }
 
 func testAnvilReplacement(t *testing.T) {
@@ -36,6 +186,7 @@ func testAnvilReplacement(t *testing.T) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
+			TipGwei:             1,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 200 * time.Millisecond,
 			PendingTimeout:      5 * time.Second,
@@ -84,6 +235,7 @@ func testAnvilCancellation(t *testing.T) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
+			TipGwei:             1,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 5 * time.Second,
 			PendingTimeout:      300 * time.Millisecond,
@@ -280,6 +432,12 @@ func anvilSigner(t *testing.T) signer.Signer {
 
 func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	t.Helper()
+	rpcClient, ethClient, _ := startAnvilWithoutMiningWithURL(t)
+	return rpcClient, ethClient
+}
+
+func startAnvilWithoutMiningWithURL(t *testing.T) (*rpc.Client, *ethclient.Client, string) {
+	t.Helper()
 	anvil, err := exec.LookPath("anvil")
 	if err != nil {
 		t.Skip("anvil is not installed")
@@ -331,7 +489,7 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 			if callErr := client.CallContext(t.Context(), &chainID, "eth_chainId"); callErr == nil {
 				ethClient := ethclient.NewClient(client)
 				t.Cleanup(ethClient.Close)
-				return client, ethClient
+				return client, ethClient, url
 			}
 			client.Close()
 		}
@@ -343,5 +501,42 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("anvil did not become ready:\n%s", output.String())
-	return nil, nil
+	return nil, nil, ""
+}
+
+func newAnvilRPCProxy(
+	t *testing.T,
+	upstreamURL string,
+	intercept func(*http.Request, string) bool,
+) *httptest.Server {
+	t.Helper()
+	upstream, err := url.Parse(upstreamURL)
+	if err != nil {
+		t.Fatalf("parse anvil upstream url: %v", err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read proxied rpc request: %v", err)
+			http.Error(w, "read request", http.StatusInternalServerError)
+			return
+		}
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var request struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Errorf("decode proxied rpc request: %v", err)
+			http.Error(w, "decode request", http.StatusBadRequest)
+			return
+		}
+		if intercept(r, request.Method) {
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
