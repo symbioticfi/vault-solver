@@ -20,8 +20,8 @@ var _ MappedNullable = &LocalFaucetResponse{}
 
 // LocalFaucetResponse struct for LocalFaucetResponse
 type LocalFaucetResponse struct {
-	RequestId string                           `json:"requestId"`
-	Assets    []LocalFaucetResponseAssetsInner `json:"assets"`
+	RequestId string                                     `json:"requestId"`
+	Assets    []LocalFaucetFundResponseFundedAssetsInner `json:"assets"`
 }
 
 type _LocalFaucetResponse LocalFaucetResponse
@@ -30,7 +30,7 @@ type _LocalFaucetResponse LocalFaucetResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetResponse(requestId string, assets []LocalFaucetResponseAssetsInner) *LocalFaucetResponse {
+func NewLocalFaucetResponse(requestId string, assets []LocalFaucetFundResponseFundedAssetsInner) *LocalFaucetResponse {
 	this := LocalFaucetResponse{}
 	this.RequestId = requestId
 	this.Assets = assets
@@ -70,9 +70,9 @@ func (o *LocalFaucetResponse) SetRequestId(v string) {
 }
 
 // GetAssets returns the Assets field value
-func (o *LocalFaucetResponse) GetAssets() []LocalFaucetResponseAssetsInner {
+func (o *LocalFaucetResponse) GetAssets() []LocalFaucetFundResponseFundedAssetsInner {
 	if o == nil {
-		var ret []LocalFaucetResponseAssetsInner
+		var ret []LocalFaucetFundResponseFundedAssetsInner
 		return ret
 	}
 
@@ -81,7 +81,7 @@ func (o *LocalFaucetResponse) GetAssets() []LocalFaucetResponseAssetsInner {
 
 // GetAssetsOk returns a tuple with the Assets field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetResponseAssetsInner, bool) {
+func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetFundResponseFundedAssetsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -89,7 +89,7 @@ func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetResponseAssetsInner, b
 }
 
 // SetAssets sets field value
-func (o *LocalFaucetResponse) SetAssets(v []LocalFaucetResponseAssetsInner) {
+func (o *LocalFaucetResponse) SetAssets(v []LocalFaucetFundResponseFundedAssetsInner) {
 	o.Assets = v
 }
 

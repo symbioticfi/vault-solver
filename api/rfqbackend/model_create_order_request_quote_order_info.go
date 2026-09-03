@@ -21,10 +21,11 @@ var _ MappedNullable = &CreateOrderRequestQuoteOrderInfo{}
 // CreateOrderRequestQuoteOrderInfo struct for CreateOrderRequestQuoteOrderInfo
 type CreateOrderRequestQuoteOrderInfo struct {
 	TokenIn  string                                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	AmountIn string                                         `json:"amountIn" validate:"regexp=^\\\\d+$"`
+	AmountIn string                                         `json:"amountIn" validate:"regexp=^\\d+$"`
 	Outputs  []CreateOrderRequestQuoteOrderInfoOutputsInner `json:"outputs"`
 	Deadline int32                                          `json:"deadline"`
-	Nonce    string                                         `json:"nonce" validate:"regexp=^\\\\d+$"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce string `json:"nonce" validate:"regexp=^\\d+$"`
 }
 
 type _CreateOrderRequestQuoteOrderInfo CreateOrderRequestQuoteOrderInfo

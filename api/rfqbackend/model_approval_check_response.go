@@ -20,9 +20,9 @@ var _ MappedNullable = &ApprovalCheckResponse{}
 
 // ApprovalCheckResponse struct for ApprovalCheckResponse
 type ApprovalCheckResponse struct {
-	RequestId string                        `json:"requestId"`
-	Approval  ApprovalCheckResponseApproval `json:"approval"`
-	Cancel    interface{}                   `json:"cancel"`
+	RequestId string                                `json:"requestId"`
+	Approval  NullableApprovalCheckResponseApproval `json:"approval"`
+	Cancel    interface{}                           `json:"cancel"`
 }
 
 type _ApprovalCheckResponse ApprovalCheckResponse
@@ -31,7 +31,7 @@ type _ApprovalCheckResponse ApprovalCheckResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewApprovalCheckResponse(requestId string, approval ApprovalCheckResponseApproval, cancel interface{}) *ApprovalCheckResponse {
+func NewApprovalCheckResponse(requestId string, approval NullableApprovalCheckResponseApproval, cancel interface{}) *ApprovalCheckResponse {
 	this := ApprovalCheckResponse{}
 	this.RequestId = requestId
 	this.Approval = approval
@@ -72,27 +72,29 @@ func (o *ApprovalCheckResponse) SetRequestId(v string) {
 }
 
 // GetApproval returns the Approval field value
+// If the value is explicit nil, the zero value for ApprovalCheckResponseApproval will be returned
 func (o *ApprovalCheckResponse) GetApproval() ApprovalCheckResponseApproval {
-	if o == nil {
+	if o == nil || o.Approval.Get() == nil {
 		var ret ApprovalCheckResponseApproval
 		return ret
 	}
 
-	return o.Approval
+	return *o.Approval.Get()
 }
 
 // GetApprovalOk returns a tuple with the Approval field value
 // and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *ApprovalCheckResponse) GetApprovalOk() (*ApprovalCheckResponseApproval, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.Approval, true
+	return o.Approval.Get(), o.Approval.IsSet()
 }
 
 // SetApproval sets field value
 func (o *ApprovalCheckResponse) SetApproval(v ApprovalCheckResponseApproval) {
-	o.Approval = v
+	o.Approval.Set(&v)
 }
 
 // GetCancel returns the Cancel field value
@@ -132,7 +134,7 @@ func (o ApprovalCheckResponse) MarshalJSON() ([]byte, error) {
 func (o ApprovalCheckResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
-	toSerialize["approval"] = o.Approval
+	toSerialize["approval"] = o.Approval.Get()
 	if o.Cancel != nil {
 		toSerialize["cancel"] = o.Cancel
 	}

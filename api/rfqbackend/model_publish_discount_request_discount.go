@@ -13,7 +13,6 @@ package rfqbackend
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PublishDiscountRequestDiscount type satisfies the MappedNullable interface at compile time
@@ -23,11 +22,11 @@ var _ MappedNullable = &PublishDiscountRequestDiscount{}
 type PublishDiscountRequestDiscount struct {
 	Adapter       string `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenToRedeem string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Discount      string `json:"discount" validate:"regexp=^\\\\d+$"`
+	Discount      string `json:"discount" validate:"regexp=^\\d+$"`
 	Signer        string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Protocol      string `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	// Base-10 uint256 string.
-	Nonce    string `json:"nonce" validate:"regexp=^\\\\d+$"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce    string `json:"nonce" validate:"regexp=^\\d+$"`
 	Deadline int32  `json:"deadline"`
 }
 
@@ -246,37 +245,15 @@ func (o PublishDiscountRequestDiscount) ToMap() (map[string]interface{}, error) 
 }
 
 func (o *PublishDiscountRequestDiscount) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"adapter",
-		"tokenToRedeem",
-		"discount",
-		"signer",
-		"protocol",
-		"nonce",
-		"deadline",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPublishDiscountRequestDiscount := _PublishDiscountRequestDiscount{}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
+	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
+	// fields at any time without breaking us.
 	err = decoder.Decode(&varPublishDiscountRequestDiscount)
 
 	if err != nil {

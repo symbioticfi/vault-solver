@@ -32,7 +32,7 @@
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi.json",
       "refresh": "make refresh-rfq-openapi && make refresh-rfq-client",
-      "note": "Expected to report drift until this client can be regenerated: openapi-generator 7.24.0 emits `nil` as a Go type for this spec's `cancel: {type: null}`, so `make refresh-rfq-client` does not build. The deployed spec now carries named components again (symbioticfi/rfq-backend#350), so refreshing is safe for model naming once the generator issue is resolved."
+      "note": "Discount listing/resolution is NOT here \u2014 it lives on the internal surface (entry below). hack/rfq-openapi-normalize.py rewrites one construct before generation: a bare `{type: null}` property that openapi-generator 7.24.0 maps to the uncompilable Go type `nil`."
     },
     {
       "name": "RFQ backend internal (OpenAPI)",

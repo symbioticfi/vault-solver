@@ -21,7 +21,7 @@ var _ MappedNullable = &OrdersResponseOrdersInnerSettledAmountsInner{}
 // OrdersResponseOrdersInnerSettledAmountsInner struct for OrdersResponseOrdersInnerSettledAmountsInner
 type OrdersResponseOrdersInnerSettledAmountsInner struct {
 	Token     string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount    string `json:"amount" validate:"regexp=^\\\\d+$"`
+	Amount    string `json:"amount" validate:"regexp=^\\d+$"`
 	Recipient string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TxHash    string `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
 }

@@ -20,10 +20,10 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInnerSolver{}
 
 // PublicQuoteResponseQuotesInnerSolver struct for PublicQuoteResponseQuotesInnerSolver
 type PublicQuoteResponseQuotesInnerSolver struct {
-	Id       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Filler   string                 `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Metadata map[string]interface{} `json:"metadata"`
+	Id       string                                       `json:"id"`
+	Name     string                                       `json:"name"`
+	Filler   string                                       `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Metadata PublicQuoteResponseQuotesInnerSolverMetadata `json:"metadata"`
 }
 
 type _PublicQuoteResponseQuotesInnerSolver PublicQuoteResponseQuotesInnerSolver
@@ -32,7 +32,7 @@ type _PublicQuoteResponseQuotesInnerSolver PublicQuoteResponseQuotesInnerSolver
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublicQuoteResponseQuotesInnerSolver(id string, name string, filler string, metadata map[string]interface{}) *PublicQuoteResponseQuotesInnerSolver {
+func NewPublicQuoteResponseQuotesInnerSolver(id string, name string, filler string, metadata PublicQuoteResponseQuotesInnerSolverMetadata) *PublicQuoteResponseQuotesInnerSolver {
 	this := PublicQuoteResponseQuotesInnerSolver{}
 	this.Id = id
 	this.Name = name
@@ -122,9 +122,9 @@ func (o *PublicQuoteResponseQuotesInnerSolver) SetFiller(v string) {
 }
 
 // GetMetadata returns the Metadata field value
-func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() map[string]interface{} {
+func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() PublicQuoteResponseQuotesInnerSolverMetadata {
 	if o == nil {
-		var ret map[string]interface{}
+		var ret PublicQuoteResponseQuotesInnerSolverMetadata
 		return ret
 	}
 
@@ -133,15 +133,15 @@ func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() map[string]interfac
 
 // GetMetadataOk returns a tuple with the Metadata field value
 // and a boolean to check if the value has been set.
-func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadataOk() (map[string]interface{}, bool) {
+func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadataOk() (*PublicQuoteResponseQuotesInnerSolverMetadata, bool) {
 	if o == nil {
-		return map[string]interface{}{}, false
+		return nil, false
 	}
-	return o.Metadata, true
+	return &o.Metadata, true
 }
 
 // SetMetadata sets field value
-func (o *PublicQuoteResponseQuotesInnerSolver) SetMetadata(v map[string]interface{}) {
+func (o *PublicQuoteResponseQuotesInnerSolver) SetMetadata(v PublicQuoteResponseQuotesInnerSolverMetadata) {
 	o.Metadata = v
 }
 

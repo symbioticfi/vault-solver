@@ -20,20 +20,21 @@ var _ MappedNullable = &OrdersResponseOrdersInner{}
 
 // OrdersResponseOrdersInner struct for OrdersResponseOrdersInner
 type OrdersResponseOrdersInner struct {
-	Type              string                                          `json:"type"`
-	OrderId           string                                          `json:"orderId"`
-	OrderStatus       string                                          `json:"orderStatus"`
-	QuoteId           string                                          `json:"quoteId"`
-	Swapper           string                                          `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TxHash            NullableString                                  `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Nonce             string                                          `json:"nonce" validate:"regexp=^\\\\d+$"`
-	Input             PublicQuoteResponseQuoteAggregatedOutputsInner  `json:"input"`
-	Outputs           []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs"`
-	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner  `json:"settledAmounts"`
-	EncodedOrder      *string                                         `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	ProtocolSignature *string                                         `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Deadline          *int32                                          `json:"deadline,omitempty"`
-	Filler            *string                                         `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Type        string         `json:"type"`
+	OrderId     string         `json:"orderId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	OrderStatus string         `json:"orderStatus"`
+	QuoteId     string         `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	Swapper     string         `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TxHash      NullableString `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce             string                                         `json:"nonce" validate:"regexp=^\\d+$"`
+	Input             CreateOrderRequestQuoteAggregatedOutputsInner  `json:"input"`
+	Outputs           []OrdersResponseOrdersInnerOutputsInner        `json:"outputs"`
+	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
+	EncodedOrder      *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	ProtocolSignature *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Deadline          *int32                                         `json:"deadline,omitempty"`
+	Filler            *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 }
 
 type _OrdersResponseOrdersInner OrdersResponseOrdersInner
@@ -42,7 +43,7 @@ type _OrdersResponseOrdersInner OrdersResponseOrdersInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input PublicQuoteResponseQuoteAggregatedOutputsInner, outputs []PublicQuoteResponseQuoteOrderInfoOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
+func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input CreateOrderRequestQuoteAggregatedOutputsInner, outputs []OrdersResponseOrdersInnerOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
 	this := OrdersResponseOrdersInner{}
 	this.Type = type_
 	this.OrderId = orderId
@@ -236,9 +237,9 @@ func (o *OrdersResponseOrdersInner) SetNonce(v string) {
 }
 
 // GetInput returns the Input field value
-func (o *OrdersResponseOrdersInner) GetInput() PublicQuoteResponseQuoteAggregatedOutputsInner {
+func (o *OrdersResponseOrdersInner) GetInput() CreateOrderRequestQuoteAggregatedOutputsInner {
 	if o == nil {
-		var ret PublicQuoteResponseQuoteAggregatedOutputsInner
+		var ret CreateOrderRequestQuoteAggregatedOutputsInner
 		return ret
 	}
 
@@ -247,7 +248,7 @@ func (o *OrdersResponseOrdersInner) GetInput() PublicQuoteResponseQuoteAggregate
 
 // GetInputOk returns a tuple with the Input field value
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetInputOk() (*PublicQuoteResponseQuoteAggregatedOutputsInner, bool) {
+func (o *OrdersResponseOrdersInner) GetInputOk() (*CreateOrderRequestQuoteAggregatedOutputsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -255,14 +256,14 @@ func (o *OrdersResponseOrdersInner) GetInputOk() (*PublicQuoteResponseQuoteAggre
 }
 
 // SetInput sets field value
-func (o *OrdersResponseOrdersInner) SetInput(v PublicQuoteResponseQuoteAggregatedOutputsInner) {
+func (o *OrdersResponseOrdersInner) SetInput(v CreateOrderRequestQuoteAggregatedOutputsInner) {
 	o.Input = v
 }
 
 // GetOutputs returns the Outputs field value
-func (o *OrdersResponseOrdersInner) GetOutputs() []PublicQuoteResponseQuoteOrderInfoOutputsInner {
+func (o *OrdersResponseOrdersInner) GetOutputs() []OrdersResponseOrdersInnerOutputsInner {
 	if o == nil {
-		var ret []PublicQuoteResponseQuoteOrderInfoOutputsInner
+		var ret []OrdersResponseOrdersInnerOutputsInner
 		return ret
 	}
 
@@ -271,7 +272,7 @@ func (o *OrdersResponseOrdersInner) GetOutputs() []PublicQuoteResponseQuoteOrder
 
 // GetOutputsOk returns a tuple with the Outputs field value
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]PublicQuoteResponseQuoteOrderInfoOutputsInner, bool) {
+func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]OrdersResponseOrdersInnerOutputsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -279,7 +280,7 @@ func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]PublicQuoteResponseQuoteOr
 }
 
 // SetOutputs sets field value
-func (o *OrdersResponseOrdersInner) SetOutputs(v []PublicQuoteResponseQuoteOrderInfoOutputsInner) {
+func (o *OrdersResponseOrdersInner) SetOutputs(v []OrdersResponseOrdersInnerOutputsInner) {
 	o.Outputs = v
 }
 

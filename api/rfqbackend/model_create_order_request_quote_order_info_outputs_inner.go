@@ -21,7 +21,7 @@ var _ MappedNullable = &CreateOrderRequestQuoteOrderInfoOutputsInner{}
 // CreateOrderRequestQuoteOrderInfoOutputsInner struct for CreateOrderRequestQuoteOrderInfoOutputsInner
 type CreateOrderRequestQuoteOrderInfoOutputsInner struct {
 	Token     string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount    string `json:"amount" validate:"regexp=^\\\\d+$"`
+	Amount    string `json:"amount" validate:"regexp=^\\d+$"`
 	Recipient string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 }
 

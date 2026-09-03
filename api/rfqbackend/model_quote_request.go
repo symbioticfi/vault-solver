@@ -25,9 +25,8 @@ type QuoteRequest struct {
 	TokenIn           string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenOut          string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Type              string                     `json:"type"`
-	Amount            string                     `json:"amount" validate:"regexp=^\\\\d+$"`
+	Amount            string                     `json:"amount" validate:"regexp=^\\d+$"`
 	Swapper           string                     `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	SlippageTolerance float32                    `json:"slippageTolerance"`
 	RoutingPreference *string                    `json:"routingPreference,omitempty"`
 	PermitAmount      *string                    `json:"permitAmount,omitempty"`
 	SolverIds         []string                   `json:"solverIds,omitempty"`
@@ -40,7 +39,7 @@ type _QuoteRequest QuoteRequest
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string, tokenOut string, type_ string, amount string, swapper string, slippageTolerance float32, outputs []QuoteRequestOutputsInner) *QuoteRequest {
+func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string, tokenOut string, type_ string, amount string, swapper string, outputs []QuoteRequestOutputsInner) *QuoteRequest {
 	this := QuoteRequest{}
 	this.TokenInChainId = tokenInChainId
 	this.TokenOutChainId = tokenOutChainId
@@ -49,7 +48,6 @@ func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string
 	this.Type = type_
 	this.Amount = amount
 	this.Swapper = swapper
-	this.SlippageTolerance = slippageTolerance
 	var routingPreference string = "BEST_PRICE"
 	this.RoutingPreference = &routingPreference
 	this.Outputs = outputs
@@ -234,30 +232,6 @@ func (o *QuoteRequest) SetSwapper(v string) {
 	o.Swapper = v
 }
 
-// GetSlippageTolerance returns the SlippageTolerance field value
-func (o *QuoteRequest) GetSlippageTolerance() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.SlippageTolerance
-}
-
-// GetSlippageToleranceOk returns a tuple with the SlippageTolerance field value
-// and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetSlippageToleranceOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.SlippageTolerance, true
-}
-
-// SetSlippageTolerance sets field value
-func (o *QuoteRequest) SetSlippageTolerance(v float32) {
-	o.SlippageTolerance = v
-}
-
 // GetRoutingPreference returns the RoutingPreference field value if set, zero value otherwise.
 func (o *QuoteRequest) GetRoutingPreference() string {
 	if o == nil || IsNil(o.RoutingPreference) {
@@ -395,7 +369,6 @@ func (o QuoteRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize["type"] = o.Type
 	toSerialize["amount"] = o.Amount
 	toSerialize["swapper"] = o.Swapper
-	toSerialize["slippageTolerance"] = o.SlippageTolerance
 	if !IsNil(o.RoutingPreference) {
 		toSerialize["routingPreference"] = o.RoutingPreference
 	}

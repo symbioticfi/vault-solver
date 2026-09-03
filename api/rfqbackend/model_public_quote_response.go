@@ -20,11 +20,10 @@ var _ MappedNullable = &PublicQuoteResponse{}
 
 // PublicQuoteResponse struct for PublicQuoteResponse
 type PublicQuoteResponse struct {
-	RequestId     string                           `json:"requestId"`
-	Routing       string                           `json:"routing"`
-	Quote         PublicQuoteResponseQuote         `json:"quote"`
-	SignatureData PublicQuoteResponseSignatureData `json:"signatureData"`
-	Quotes        []PublicQuoteResponseQuotesInner `json:"quotes,omitempty"`
+	RequestId string `json:"requestId"`
+	Routing   string `json:"routing"`
+	// Quote options sorted by best price. Permissioned assets return selectable per-solver options; other assets return one best quote. Sign the selected option's signatureData and submit its quote with the signature to POST /order.
+	Quotes []PublicQuoteResponseQuotesInner `json:"quotes"`
 }
 
 type _PublicQuoteResponse PublicQuoteResponse
@@ -33,12 +32,11 @@ type _PublicQuoteResponse PublicQuoteResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublicQuoteResponse(requestId string, routing string, quote PublicQuoteResponseQuote, signatureData PublicQuoteResponseSignatureData) *PublicQuoteResponse {
+func NewPublicQuoteResponse(requestId string, routing string, quotes []PublicQuoteResponseQuotesInner) *PublicQuoteResponse {
 	this := PublicQuoteResponse{}
 	this.RequestId = requestId
 	this.Routing = routing
-	this.Quote = quote
-	this.SignatureData = signatureData
+	this.Quotes = quotes
 	return &this
 }
 
@@ -98,82 +96,26 @@ func (o *PublicQuoteResponse) SetRouting(v string) {
 	o.Routing = v
 }
 
-// GetQuote returns the Quote field value
-func (o *PublicQuoteResponse) GetQuote() PublicQuoteResponseQuote {
-	if o == nil {
-		var ret PublicQuoteResponseQuote
-		return ret
-	}
-
-	return o.Quote
-}
-
-// GetQuoteOk returns a tuple with the Quote field value
-// and a boolean to check if the value has been set.
-func (o *PublicQuoteResponse) GetQuoteOk() (*PublicQuoteResponseQuote, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Quote, true
-}
-
-// SetQuote sets field value
-func (o *PublicQuoteResponse) SetQuote(v PublicQuoteResponseQuote) {
-	o.Quote = v
-}
-
-// GetSignatureData returns the SignatureData field value
-func (o *PublicQuoteResponse) GetSignatureData() PublicQuoteResponseSignatureData {
-	if o == nil {
-		var ret PublicQuoteResponseSignatureData
-		return ret
-	}
-
-	return o.SignatureData
-}
-
-// GetSignatureDataOk returns a tuple with the SignatureData field value
-// and a boolean to check if the value has been set.
-func (o *PublicQuoteResponse) GetSignatureDataOk() (*PublicQuoteResponseSignatureData, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.SignatureData, true
-}
-
-// SetSignatureData sets field value
-func (o *PublicQuoteResponse) SetSignatureData(v PublicQuoteResponseSignatureData) {
-	o.SignatureData = v
-}
-
-// GetQuotes returns the Quotes field value if set, zero value otherwise.
+// GetQuotes returns the Quotes field value
 func (o *PublicQuoteResponse) GetQuotes() []PublicQuoteResponseQuotesInner {
-	if o == nil || IsNil(o.Quotes) {
+	if o == nil {
 		var ret []PublicQuoteResponseQuotesInner
 		return ret
 	}
+
 	return o.Quotes
 }
 
-// GetQuotesOk returns a tuple with the Quotes field value if set, nil otherwise
+// GetQuotesOk returns a tuple with the Quotes field value
 // and a boolean to check if the value has been set.
 func (o *PublicQuoteResponse) GetQuotesOk() ([]PublicQuoteResponseQuotesInner, bool) {
-	if o == nil || IsNil(o.Quotes) {
+	if o == nil {
 		return nil, false
 	}
 	return o.Quotes, true
 }
 
-// HasQuotes returns a boolean if a field has been set.
-func (o *PublicQuoteResponse) HasQuotes() bool {
-	if o != nil && !IsNil(o.Quotes) {
-		return true
-	}
-
-	return false
-}
-
-// SetQuotes gets a reference to the given []PublicQuoteResponseQuotesInner and assigns it to the Quotes field.
+// SetQuotes sets field value
 func (o *PublicQuoteResponse) SetQuotes(v []PublicQuoteResponseQuotesInner) {
 	o.Quotes = v
 }
@@ -190,11 +132,7 @@ func (o PublicQuoteResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["routing"] = o.Routing
-	toSerialize["quote"] = o.Quote
-	toSerialize["signatureData"] = o.SignatureData
-	if !IsNil(o.Quotes) {
-		toSerialize["quotes"] = o.Quotes
-	}
+	toSerialize["quotes"] = o.Quotes
 	return toSerialize, nil
 }
 

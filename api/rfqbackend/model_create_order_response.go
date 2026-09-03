@@ -21,7 +21,7 @@ var _ MappedNullable = &CreateOrderResponse{}
 // CreateOrderResponse struct for CreateOrderResponse
 type CreateOrderResponse struct {
 	RequestId   string `json:"requestId"`
-	OrderId     string `json:"orderId"`
+	OrderId     string `json:"orderId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
 	OrderStatus string `json:"orderStatus"`
 }
 

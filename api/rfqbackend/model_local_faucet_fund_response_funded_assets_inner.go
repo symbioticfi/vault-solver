@@ -15,27 +15,27 @@ import (
 	"encoding/json"
 )
 
-// checks if the LocalFaucetResponseAssetsInner type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &LocalFaucetResponseAssetsInner{}
+// checks if the LocalFaucetFundResponseFundedAssetsInner type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &LocalFaucetFundResponseFundedAssetsInner{}
 
-// LocalFaucetResponseAssetsInner struct for LocalFaucetResponseAssetsInner
-type LocalFaucetResponseAssetsInner struct {
+// LocalFaucetFundResponseFundedAssetsInner struct for LocalFaucetFundResponseFundedAssetsInner
+type LocalFaucetFundResponseFundedAssetsInner struct {
 	Token    string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Symbol   string `json:"symbol"`
 	Name     string `json:"name"`
 	Decimals int32  `json:"decimals"`
-	Amount   string `json:"amount" validate:"regexp=^\\\\d+$"`
+	Amount   string `json:"amount" validate:"regexp=^\\d+$"`
 	Kind     string `json:"kind"`
 }
 
-type _LocalFaucetResponseAssetsInner LocalFaucetResponseAssetsInner
+type _LocalFaucetFundResponseFundedAssetsInner LocalFaucetFundResponseFundedAssetsInner
 
-// NewLocalFaucetResponseAssetsInner instantiates a new LocalFaucetResponseAssetsInner object
+// NewLocalFaucetFundResponseFundedAssetsInner instantiates a new LocalFaucetFundResponseFundedAssetsInner object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetResponseAssetsInner(token string, symbol string, name string, decimals int32, amount string, kind string) *LocalFaucetResponseAssetsInner {
-	this := LocalFaucetResponseAssetsInner{}
+func NewLocalFaucetFundResponseFundedAssetsInner(token string, symbol string, name string, decimals int32, amount string, kind string) *LocalFaucetFundResponseFundedAssetsInner {
+	this := LocalFaucetFundResponseFundedAssetsInner{}
 	this.Token = token
 	this.Symbol = symbol
 	this.Name = name
@@ -45,16 +45,16 @@ func NewLocalFaucetResponseAssetsInner(token string, symbol string, name string,
 	return &this
 }
 
-// NewLocalFaucetResponseAssetsInnerWithDefaults instantiates a new LocalFaucetResponseAssetsInner object
+// NewLocalFaucetFundResponseFundedAssetsInnerWithDefaults instantiates a new LocalFaucetFundResponseFundedAssetsInner object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewLocalFaucetResponseAssetsInnerWithDefaults() *LocalFaucetResponseAssetsInner {
-	this := LocalFaucetResponseAssetsInner{}
+func NewLocalFaucetFundResponseFundedAssetsInnerWithDefaults() *LocalFaucetFundResponseFundedAssetsInner {
+	this := LocalFaucetFundResponseFundedAssetsInner{}
 	return &this
 }
 
 // GetToken returns the Token field value
-func (o *LocalFaucetResponseAssetsInner) GetToken() string {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetToken() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -65,7 +65,7 @@ func (o *LocalFaucetResponseAssetsInner) GetToken() string {
 
 // GetTokenOk returns a tuple with the Token field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetTokenOk() (*string, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetTokenOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -73,12 +73,12 @@ func (o *LocalFaucetResponseAssetsInner) GetTokenOk() (*string, bool) {
 }
 
 // SetToken sets field value
-func (o *LocalFaucetResponseAssetsInner) SetToken(v string) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetToken(v string) {
 	o.Token = v
 }
 
 // GetSymbol returns the Symbol field value
-func (o *LocalFaucetResponseAssetsInner) GetSymbol() string {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetSymbol() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -89,7 +89,7 @@ func (o *LocalFaucetResponseAssetsInner) GetSymbol() string {
 
 // GetSymbolOk returns a tuple with the Symbol field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetSymbolOk() (*string, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetSymbolOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -97,12 +97,12 @@ func (o *LocalFaucetResponseAssetsInner) GetSymbolOk() (*string, bool) {
 }
 
 // SetSymbol sets field value
-func (o *LocalFaucetResponseAssetsInner) SetSymbol(v string) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetSymbol(v string) {
 	o.Symbol = v
 }
 
 // GetName returns the Name field value
-func (o *LocalFaucetResponseAssetsInner) GetName() string {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetName() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -113,7 +113,7 @@ func (o *LocalFaucetResponseAssetsInner) GetName() string {
 
 // GetNameOk returns a tuple with the Name field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetNameOk() (*string, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetNameOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -121,12 +121,12 @@ func (o *LocalFaucetResponseAssetsInner) GetNameOk() (*string, bool) {
 }
 
 // SetName sets field value
-func (o *LocalFaucetResponseAssetsInner) SetName(v string) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetName(v string) {
 	o.Name = v
 }
 
 // GetDecimals returns the Decimals field value
-func (o *LocalFaucetResponseAssetsInner) GetDecimals() int32 {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimals() int32 {
 	if o == nil {
 		var ret int32
 		return ret
@@ -137,7 +137,7 @@ func (o *LocalFaucetResponseAssetsInner) GetDecimals() int32 {
 
 // GetDecimalsOk returns a tuple with the Decimals field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetDecimalsOk() (*int32, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimalsOk() (*int32, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -145,12 +145,12 @@ func (o *LocalFaucetResponseAssetsInner) GetDecimalsOk() (*int32, bool) {
 }
 
 // SetDecimals sets field value
-func (o *LocalFaucetResponseAssetsInner) SetDecimals(v int32) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetDecimals(v int32) {
 	o.Decimals = v
 }
 
 // GetAmount returns the Amount field value
-func (o *LocalFaucetResponseAssetsInner) GetAmount() string {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetAmount() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -161,7 +161,7 @@ func (o *LocalFaucetResponseAssetsInner) GetAmount() string {
 
 // GetAmountOk returns a tuple with the Amount field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetAmountOk() (*string, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetAmountOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -169,12 +169,12 @@ func (o *LocalFaucetResponseAssetsInner) GetAmountOk() (*string, bool) {
 }
 
 // SetAmount sets field value
-func (o *LocalFaucetResponseAssetsInner) SetAmount(v string) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetAmount(v string) {
 	o.Amount = v
 }
 
 // GetKind returns the Kind field value
-func (o *LocalFaucetResponseAssetsInner) GetKind() string {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetKind() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -185,7 +185,7 @@ func (o *LocalFaucetResponseAssetsInner) GetKind() string {
 
 // GetKindOk returns a tuple with the Kind field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponseAssetsInner) GetKindOk() (*string, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetKindOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -193,11 +193,11 @@ func (o *LocalFaucetResponseAssetsInner) GetKindOk() (*string, bool) {
 }
 
 // SetKind sets field value
-func (o *LocalFaucetResponseAssetsInner) SetKind(v string) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetKind(v string) {
 	o.Kind = v
 }
 
-func (o LocalFaucetResponseAssetsInner) MarshalJSON() ([]byte, error) {
+func (o LocalFaucetFundResponseFundedAssetsInner) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -205,7 +205,7 @@ func (o LocalFaucetResponseAssetsInner) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o LocalFaucetResponseAssetsInner) ToMap() (map[string]interface{}, error) {
+func (o LocalFaucetFundResponseFundedAssetsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["token"] = o.Token
 	toSerialize["symbol"] = o.Symbol
@@ -216,59 +216,59 @@ func (o LocalFaucetResponseAssetsInner) ToMap() (map[string]interface{}, error) 
 	return toSerialize, nil
 }
 
-func (o *LocalFaucetResponseAssetsInner) UnmarshalJSON(data []byte) (err error) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) UnmarshalJSON(data []byte) (err error) {
 	// Required-property validation removed by hack/openapi-relax-client.py:
 	// upstream may drop fields at any time; absent values zero-value instead of
 	// failing the whole decode.
 
-	varLocalFaucetResponseAssetsInner := _LocalFaucetResponseAssetsInner{}
+	varLocalFaucetFundResponseFundedAssetsInner := _LocalFaucetFundResponseFundedAssetsInner{}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	// Unknown fields tolerated (hack/openapi-relax-client.py): upstream may add
 	// fields at any time without breaking us.
-	err = decoder.Decode(&varLocalFaucetResponseAssetsInner)
+	err = decoder.Decode(&varLocalFaucetFundResponseFundedAssetsInner)
 
 	if err != nil {
 		return err
 	}
 
-	*o = LocalFaucetResponseAssetsInner(varLocalFaucetResponseAssetsInner)
+	*o = LocalFaucetFundResponseFundedAssetsInner(varLocalFaucetFundResponseFundedAssetsInner)
 
 	return err
 }
 
-type NullableLocalFaucetResponseAssetsInner struct {
-	value *LocalFaucetResponseAssetsInner
+type NullableLocalFaucetFundResponseFundedAssetsInner struct {
+	value *LocalFaucetFundResponseFundedAssetsInner
 	isSet bool
 }
 
-func (v NullableLocalFaucetResponseAssetsInner) Get() *LocalFaucetResponseAssetsInner {
+func (v NullableLocalFaucetFundResponseFundedAssetsInner) Get() *LocalFaucetFundResponseFundedAssetsInner {
 	return v.value
 }
 
-func (v *NullableLocalFaucetResponseAssetsInner) Set(val *LocalFaucetResponseAssetsInner) {
+func (v *NullableLocalFaucetFundResponseFundedAssetsInner) Set(val *LocalFaucetFundResponseFundedAssetsInner) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableLocalFaucetResponseAssetsInner) IsSet() bool {
+func (v NullableLocalFaucetFundResponseFundedAssetsInner) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableLocalFaucetResponseAssetsInner) Unset() {
+func (v *NullableLocalFaucetFundResponseFundedAssetsInner) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableLocalFaucetResponseAssetsInner(val *LocalFaucetResponseAssetsInner) *NullableLocalFaucetResponseAssetsInner {
-	return &NullableLocalFaucetResponseAssetsInner{value: val, isSet: true}
+func NewNullableLocalFaucetFundResponseFundedAssetsInner(val *LocalFaucetFundResponseFundedAssetsInner) *NullableLocalFaucetFundResponseFundedAssetsInner {
+	return &NullableLocalFaucetFundResponseFundedAssetsInner{value: val, isSet: true}
 }
 
-func (v NullableLocalFaucetResponseAssetsInner) MarshalJSON() ([]byte, error) {
+func (v NullableLocalFaucetFundResponseFundedAssetsInner) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableLocalFaucetResponseAssetsInner) UnmarshalJSON(src []byte) error {
+func (v *NullableLocalFaucetFundResponseFundedAssetsInner) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

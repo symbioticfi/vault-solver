@@ -23,7 +23,7 @@ type ApprovalCheckRequest struct {
 	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	ChainId       int32  `json:"chainId"`
 	Token         string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount        string `json:"amount" validate:"regexp=^\\\\d+$"`
+	Amount        string `json:"amount" validate:"regexp=^\\d+$"`
 }
 
 type _ApprovalCheckRequest ApprovalCheckRequest

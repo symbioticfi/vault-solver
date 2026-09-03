@@ -20,9 +20,9 @@ var _ MappedNullable = &LocalFaucetFundResponse{}
 
 // LocalFaucetFundResponse struct for LocalFaucetFundResponse
 type LocalFaucetFundResponse struct {
-	RequestId     string                           `json:"requestId"`
-	WalletAddress string                           `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	FundedAssets  []LocalFaucetResponseAssetsInner `json:"fundedAssets"`
+	RequestId     string                                     `json:"requestId"`
+	WalletAddress string                                     `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	FundedAssets  []LocalFaucetFundResponseFundedAssetsInner `json:"fundedAssets"`
 }
 
 type _LocalFaucetFundResponse LocalFaucetFundResponse
@@ -31,7 +31,7 @@ type _LocalFaucetFundResponse LocalFaucetFundResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetFundResponse(requestId string, walletAddress string, fundedAssets []LocalFaucetResponseAssetsInner) *LocalFaucetFundResponse {
+func NewLocalFaucetFundResponse(requestId string, walletAddress string, fundedAssets []LocalFaucetFundResponseFundedAssetsInner) *LocalFaucetFundResponse {
 	this := LocalFaucetFundResponse{}
 	this.RequestId = requestId
 	this.WalletAddress = walletAddress
@@ -96,9 +96,9 @@ func (o *LocalFaucetFundResponse) SetWalletAddress(v string) {
 }
 
 // GetFundedAssets returns the FundedAssets field value
-func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetResponseAssetsInner {
+func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetFundResponseFundedAssetsInner {
 	if o == nil {
-		var ret []LocalFaucetResponseAssetsInner
+		var ret []LocalFaucetFundResponseFundedAssetsInner
 		return ret
 	}
 
@@ -107,7 +107,7 @@ func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetResponseAssetsI
 
 // GetFundedAssetsOk returns a tuple with the FundedAssets field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetResponseAssetsInner, bool) {
+func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetFundResponseFundedAssetsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -115,7 +115,7 @@ func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetResponseAsse
 }
 
 // SetFundedAssets sets field value
-func (o *LocalFaucetFundResponse) SetFundedAssets(v []LocalFaucetResponseAssetsInner) {
+func (o *LocalFaucetFundResponse) SetFundedAssets(v []LocalFaucetFundResponseFundedAssetsInner) {
 	o.FundedAssets = v
 }
 

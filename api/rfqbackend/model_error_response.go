@@ -20,7 +20,7 @@ var _ MappedNullable = &ErrorResponse{}
 
 // ErrorResponse struct for ErrorResponse
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error ErrorResponseError `json:"error"`
 }
 
 type _ErrorResponse ErrorResponse
@@ -29,7 +29,7 @@ type _ErrorResponse ErrorResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewErrorResponse(error_ string) *ErrorResponse {
+func NewErrorResponse(error_ ErrorResponseError) *ErrorResponse {
 	this := ErrorResponse{}
 	this.Error = error_
 	return &this
@@ -44,9 +44,9 @@ func NewErrorResponseWithDefaults() *ErrorResponse {
 }
 
 // GetError returns the Error field value
-func (o *ErrorResponse) GetError() string {
+func (o *ErrorResponse) GetError() ErrorResponseError {
 	if o == nil {
-		var ret string
+		var ret ErrorResponseError
 		return ret
 	}
 
@@ -55,7 +55,7 @@ func (o *ErrorResponse) GetError() string {
 
 // GetErrorOk returns a tuple with the Error field value
 // and a boolean to check if the value has been set.
-func (o *ErrorResponse) GetErrorOk() (*string, bool) {
+func (o *ErrorResponse) GetErrorOk() (*ErrorResponseError, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -63,7 +63,7 @@ func (o *ErrorResponse) GetErrorOk() (*string, bool) {
 }
 
 // SetError sets field value
-func (o *ErrorResponse) SetError(v string) {
+func (o *ErrorResponse) SetError(v ErrorResponseError) {
 	o.Error = v
 }
 

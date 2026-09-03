@@ -22,8 +22,8 @@ var _ MappedNullable = &LocalFundResponse{}
 type LocalFundResponse struct {
 	RequestId     string `json:"requestId"`
 	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	FundedEth     string `json:"fundedEth" validate:"regexp=^\\\\d+$"`
-	FundedToken   string `json:"fundedToken" validate:"regexp=^\\\\d+$"`
+	FundedEth     string `json:"fundedEth" validate:"regexp=^\\d+$"`
+	FundedToken   string `json:"fundedToken" validate:"regexp=^\\d+$"`
 	Token         string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 }
 
