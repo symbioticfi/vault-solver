@@ -142,6 +142,28 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   is the shared binding; hand-written adapters that parse generated response types into domain types live in
   the owning integration until reuse proves they belong elsewhere.
 
+**Every new integration registers its schema for drift detection.** `hack/schema-sources.json` is the
+registry of every vendored contract-of-record; `hack/check-schema-drift.py` diffs each entry against its
+live source daily in CI (`.github/workflows/schema-drift.yml`) and **fails when a schema file under
+`openapi/` or `api/graphql/*/schema.graphql` is not registered**, so a new integration cannot silently
+escape monitoring. When you vendor a schema, in the same change: add the `make refresh-<name>-openapi`
+(or `-schema`) target that pulls it, add the `make refresh-<name>-client` target that generates from it,
+and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `graphql`,
+`text`), and the `refresh` command to run when it drifts. Use `mode: "manual"` when there is no public
+endpoint to diff (RedStone's zod, shared privately); the checker skips those but keeps them listed so the
+gap is recorded rather than rediscovered. Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per
+environment.
+
+**Generated clients are deliberately tolerant of upstream drift**, because a third-party API adding or
+removing a field must not blank a whole feed (3F dropping `cadence` from one nested schema stopped the
+auction feed entirely). `OPENAPI_TOLERANT_PROPS` passes `disallowAdditionalPropertiesIfNotPresent=false`
+(unknown fields are kept in `AdditionalProperties` instead of erroring) and `enumUnknownDefaultCase=true`
+(a new server-side enum value decodes to a fallback case). The generator has no flag for the third case —
+a required property upstream has since removed — so `hack/openapi-relax-client.py` strips those checks
+after generation; it runs automatically from the `make` recipes. It deliberately leaves `oneOf`/`anyOf`
+variants strict, because the generator discriminates between them by seeing which variant fails to decode.
+Tolerance is not a substitute for noticing: the daily drift check is what surfaces the change.
+
 Rules for every generated surface: the vendored artifact (ABI/spec/schema) is the **contract of record** — when upstream changes,
 re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps
 the generated client/binding behind a thin adapter so generated types (nullable pointers, response

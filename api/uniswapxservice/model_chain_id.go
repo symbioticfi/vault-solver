@@ -20,27 +20,28 @@ type ChainId float32
 
 // List of ChainId
 const (
-	_1        ChainId = 1
-	_10       ChainId = 10
-	_56       ChainId = 56
-	_130      ChainId = 130
-	_137      ChainId = 137
-	_143      ChainId = 143
-	_196      ChainId = 196
-	_480      ChainId = 480
-	_1301     ChainId = 1301
-	_1868     ChainId = 1868
-	_4217     ChainId = 4217
-	_4663     ChainId = 4663
-	_5042     ChainId = 5042
-	_8453     ChainId = 8453
-	_42161    ChainId = 42161
-	_42220    ChainId = 42220
-	_43114    ChainId = 43114
-	_81457    ChainId = 81457
-	_7777777  ChainId = 7777777
-	_11155111 ChainId = 11155111
-	_31337    ChainId = 31337
+	_1                                ChainId = 1
+	_10                               ChainId = 10
+	_56                               ChainId = 56
+	_130                              ChainId = 130
+	_137                              ChainId = 137
+	_143                              ChainId = 143
+	_196                              ChainId = 196
+	_480                              ChainId = 480
+	_1301                             ChainId = 1301
+	_1868                             ChainId = 1868
+	_4217                             ChainId = 4217
+	_4663                             ChainId = 4663
+	_5042                             ChainId = 5042
+	_8453                             ChainId = 8453
+	_42161                            ChainId = 42161
+	_42220                            ChainId = 42220
+	_43114                            ChainId = 43114
+	_81457                            ChainId = 81457
+	_7777777                          ChainId = 7777777
+	_11155111                         ChainId = 11155111
+	_31337                            ChainId = 31337
+	CHAINID__unknown_default_open_api ChainId = 11184809
 )
 
 // All allowed values of ChainId enum
@@ -66,6 +67,7 @@ var AllowedChainIdEnumValues = []ChainId{
 	7777777,
 	11155111,
 	31337,
+	11184809,
 }
 
 func (v *ChainId) UnmarshalJSON(src []byte) error {
@@ -82,7 +84,8 @@ func (v *ChainId) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid ChainId", value)
+	*v = CHAINID__unknown_default_open_api
+	return nil
 }
 
 // NewChainIdFromValue returns a pointer to a valid ChainId

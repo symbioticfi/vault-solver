@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OifQuotePreviewDto type satisfies the MappedNullable interface at compile time
@@ -24,7 +22,8 @@ type OifQuotePreviewDto struct {
 	// Inputs for the preview
 	Inputs []OifQuotePreviewDtoInputsInner `json:"inputs"`
 	// Outputs for the preview
-	Outputs []OifQuotePreviewDtoOutputsInner `json:"outputs"`
+	Outputs              []OifQuotePreviewDtoOutputsInner `json:"outputs"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifQuotePreviewDto OifQuotePreviewDto
@@ -108,43 +107,36 @@ func (o OifQuotePreviewDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["inputs"] = o.Inputs
 	toSerialize["outputs"] = o.Outputs
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OifQuotePreviewDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"inputs",
-		"outputs",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOifQuotePreviewDto := _OifQuotePreviewDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifQuotePreviewDto)
+	err = json.Unmarshal(data, &varOifQuotePreviewDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifQuotePreviewDto(varOifQuotePreviewDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "inputs")
+		delete(additionalProperties, "outputs")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -86,6 +86,7 @@ func (a *AuctionAPIService) AuctionControllerGetByIdV1Execute(r ApiAuctionContro
 		parameterAddToHeaderOrQuery(localVarQueryParams, "domain", r.domain, "form", "")
 	} else {
 		var defaultValue bool = false
+		parameterAddToHeaderOrQuery(localVarQueryParams, "domain", defaultValue, "form", "")
 		r.domain = &defaultValue
 	}
 	// to determine the Content-Type header
@@ -206,12 +207,14 @@ func (a *AuctionAPIService) AuctionControllerListV1Execute(r ApiAuctionControlle
 		parameterAddToHeaderOrQuery(localVarQueryParams, "scope", r.scope, "form", "")
 	} else {
 		var defaultValue string = "active"
+		parameterAddToHeaderOrQuery(localVarQueryParams, "scope", defaultValue, "form", "")
 		r.scope = &defaultValue
 	}
 	if r.domain != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "domain", r.domain, "form", "")
 	} else {
 		var defaultValue bool = false
+		parameterAddToHeaderOrQuery(localVarQueryParams, "domain", defaultValue, "form", "")
 		r.domain = &defaultValue
 	}
 	// to determine the Content-Type header

@@ -31,3 +31,6 @@ dev-account.local.txt
 
 # Local debug tooling (not part of the solver)
 /cmd/3f-debug/
+
+# Python bytecode from hack/ scripts
+__pycache__/

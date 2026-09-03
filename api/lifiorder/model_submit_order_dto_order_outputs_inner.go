@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SubmitOrderDtoOrderOutputsInner type satisfies the MappedNullable interface at compile time
@@ -36,7 +34,8 @@ type SubmitOrderDtoOrderOutputsInner struct {
 	// The remote call data
 	CallbackData NullableString `json:"callbackData,omitempty"`
 	// The fulfillment context
-	Context NullableString `json:"context,omitempty"`
+	Context              NullableString `json:"context,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SubmitOrderDtoOrderOutputsInner SubmitOrderDtoOrderOutputsInner
@@ -316,47 +315,42 @@ func (o SubmitOrderDtoOrderOutputsInner) ToMap() (map[string]interface{}, error)
 	if o.Context.IsSet() {
 		toSerialize["context"] = o.Context.Get()
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SubmitOrderDtoOrderOutputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"oracle",
-		"settler",
-		"token",
-		"amount",
-		"recipient",
-		"chainId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSubmitOrderDtoOrderOutputsInner := _SubmitOrderDtoOrderOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSubmitOrderDtoOrderOutputsInner)
+	err = json.Unmarshal(data, &varSubmitOrderDtoOrderOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SubmitOrderDtoOrderOutputsInner(varSubmitOrderDtoOrderOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "oracle")
+		delete(additionalProperties, "settler")
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "recipient")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "callbackData")
+		delete(additionalProperties, "context")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

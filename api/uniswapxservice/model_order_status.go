@@ -20,12 +20,13 @@ type OrderStatus string
 
 // List of OrderStatus
 const (
-	OPEN               OrderStatus = "open"
-	EXPIRED            OrderStatus = "expired"
-	ERROR              OrderStatus = "error"
-	CANCELLED          OrderStatus = "cancelled"
-	FILLED             OrderStatus = "filled"
-	INSUFFICIENT_FUNDS OrderStatus = "insufficient-funds"
+	OPEN                                 OrderStatus = "open"
+	EXPIRED                              OrderStatus = "expired"
+	ERROR                                OrderStatus = "error"
+	CANCELLED                            OrderStatus = "cancelled"
+	FILLED                               OrderStatus = "filled"
+	INSUFFICIENT_FUNDS                   OrderStatus = "insufficient-funds"
+	ORDERSTATUS_UNKNOWN_DEFAULT_OPEN_API OrderStatus = "unknown_default_open_api"
 )
 
 // All allowed values of OrderStatus enum
@@ -36,6 +37,7 @@ var AllowedOrderStatusEnumValues = []OrderStatus{
 	"cancelled",
 	"filled",
 	"insufficient-funds",
+	"unknown_default_open_api",
 }
 
 func (v *OrderStatus) UnmarshalJSON(src []byte) error {
@@ -52,7 +54,8 @@ func (v *OrderStatus) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	return fmt.Errorf("%+v is not a valid OrderStatus", value)
+	*v = ORDERSTATUS_UNKNOWN_DEFAULT_OPEN_API
+	return nil
 }
 
 // NewOrderStatusFromValue returns a pointer to a valid OrderStatus

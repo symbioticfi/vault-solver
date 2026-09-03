@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SupportedRouteV1Dto type satisfies the MappedNullable interface at compile time
@@ -32,7 +30,8 @@ type SupportedRouteV1Dto struct {
 	// Minimum amount for this route (in token base units, as string)
 	MinAmount string `json:"minAmount"`
 	// Maximum amount for this route (in token base units, as string)
-	MaxAmount string `json:"maxAmount"`
+	MaxAmount            string `json:"maxAmount"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SupportedRouteV1Dto SupportedRouteV1Dto
@@ -220,47 +219,40 @@ func (o SupportedRouteV1Dto) ToMap() (map[string]interface{}, error) {
 	toSerialize["toToken"] = o.ToToken
 	toSerialize["minAmount"] = o.MinAmount
 	toSerialize["maxAmount"] = o.MaxAmount
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SupportedRouteV1Dto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"fromChain",
-		"toChain",
-		"fromToken",
-		"toToken",
-		"minAmount",
-		"maxAmount",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSupportedRouteV1Dto := _SupportedRouteV1Dto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSupportedRouteV1Dto)
+	err = json.Unmarshal(data, &varSupportedRouteV1Dto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SupportedRouteV1Dto(varSupportedRouteV1Dto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "fromChain")
+		delete(additionalProperties, "toChain")
+		delete(additionalProperties, "fromToken")
+		delete(additionalProperties, "toToken")
+		delete(additionalProperties, "minAmount")
+		delete(additionalProperties, "maxAmount")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

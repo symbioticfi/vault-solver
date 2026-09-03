@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the QuoteDto type satisfies the MappedNullable interface at compile time
@@ -37,7 +35,8 @@ type QuoteDto struct {
 	// Whether the quote supports partial fills
 	PartialFill bool `json:"partialFill"`
 	// Metadata for the order, potentially contains provider specific data
-	Metadata QuoteMetadataDto `json:"metadata"`
+	Metadata             QuoteMetadataDto `json:"metadata"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteDto QuoteDto
@@ -321,48 +320,43 @@ func (o QuoteDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["failureHandling"] = o.FailureHandling
 	toSerialize["partialFill"] = o.PartialFill
 	toSerialize["metadata"] = o.Metadata
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *QuoteDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"order",
-		"quoteId",
-		"provider",
-		"preview",
-		"failureHandling",
-		"partialFill",
-		"metadata",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varQuoteDto := _QuoteDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varQuoteDto)
+	err = json.Unmarshal(data, &varQuoteDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteDto(varQuoteDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "order")
+		delete(additionalProperties, "validUntil")
+		delete(additionalProperties, "eta")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "provider")
+		delete(additionalProperties, "preview")
+		delete(additionalProperties, "failureHandling")
+		delete(additionalProperties, "partialFill")
+		delete(additionalProperties, "metadata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

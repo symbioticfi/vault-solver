@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the QuoteMetadataDto type satisfies the MappedNullable interface at compile time
@@ -22,7 +20,8 @@ var _ MappedNullable = &QuoteMetadataDto{}
 // QuoteMetadataDto struct for QuoteMetadataDto
 type QuoteMetadataDto struct {
 	// Exclusive for address (hex32) - solver address that can fill this quote, or null
-	ExclusiveFor NullableString `json:"exclusiveFor"`
+	ExclusiveFor         NullableString `json:"exclusiveFor"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteMetadataDto QuoteMetadataDto
@@ -82,42 +81,35 @@ func (o QuoteMetadataDto) MarshalJSON() ([]byte, error) {
 func (o QuoteMetadataDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["exclusiveFor"] = o.ExclusiveFor.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *QuoteMetadataDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"exclusiveFor",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varQuoteMetadataDto := _QuoteMetadataDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varQuoteMetadataDto)
+	err = json.Unmarshal(data, &varQuoteMetadataDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteMetadataDto(varQuoteMetadataDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "exclusiveFor")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

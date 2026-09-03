@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the RelayOrderEntity type satisfies the MappedNullable interface at compile time
@@ -36,8 +34,9 @@ type RelayOrderEntity struct {
 	// Unix timestamp (seconds) at which the order was recorded.
 	CreatedAt *float32 `json:"createdAt,omitempty"`
 	// Transaction hash of the fill. Defined once the order has been filled.
-	TxHash         *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
-	SettledAmounts []SettledAmount `json:"settledAmounts,omitempty"`
+	TxHash               *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	SettledAmounts       []SettledAmount `json:"settledAmounts,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _RelayOrderEntity RelayOrderEntity
@@ -426,48 +425,46 @@ func (o RelayOrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SettledAmounts) {
 		toSerialize["settledAmounts"] = o.SettledAmounts
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *RelayOrderEntity) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"type",
-		"encodedOrder",
-		"signature",
-		"orderHash",
-		"orderStatus",
-		"chainId",
-		"swapper",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varRelayOrderEntity := _RelayOrderEntity{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varRelayOrderEntity)
+	err = json.Unmarshal(data, &varRelayOrderEntity)
 
 	if err != nil {
 		return err
 	}
 
 	*o = RelayOrderEntity(varRelayOrderEntity)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "signature")
+		delete(additionalProperties, "orderHash")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "relayFee")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "settledAmounts")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

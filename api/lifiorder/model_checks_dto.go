@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -22,7 +21,8 @@ var _ MappedNullable = &ChecksDto{}
 // ChecksDto struct for ChecksDto
 type ChecksDto struct {
 	// Required allowances and balances. Each item asserts that user has at least required balance and allowance for spender on token.
-	Allowances []AllowanceCheckDto `json:"allowances"`
+	Allowances           []AllowanceCheckDto `json:"allowances"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ChecksDto ChecksDto
@@ -80,6 +80,11 @@ func (o ChecksDto) MarshalJSON() ([]byte, error) {
 func (o ChecksDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["allowances"] = o.Allowances
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -107,15 +112,20 @@ func (o *ChecksDto) UnmarshalJSON(data []byte) (err error) {
 
 	varChecksDto := _ChecksDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varChecksDto)
+	err = json.Unmarshal(data, &varChecksDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ChecksDto(varChecksDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "allowances")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

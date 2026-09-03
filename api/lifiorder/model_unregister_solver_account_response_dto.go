@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the UnregisterSolverAccountResponseDto type satisfies the MappedNullable interface at compile time
@@ -24,7 +22,8 @@ type UnregisterSolverAccountResponseDto struct {
 	// Indicates if the unregistration was successful
 	Success bool `json:"success"`
 	// Success message
-	Message string `json:"message"`
+	Message              string `json:"message"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _UnregisterSolverAccountResponseDto UnregisterSolverAccountResponseDto
@@ -108,43 +107,36 @@ func (o UnregisterSolverAccountResponseDto) ToMap() (map[string]interface{}, err
 	toSerialize := map[string]interface{}{}
 	toSerialize["success"] = o.Success
 	toSerialize["message"] = o.Message
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *UnregisterSolverAccountResponseDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"success",
-		"message",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varUnregisterSolverAccountResponseDto := _UnregisterSolverAccountResponseDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varUnregisterSolverAccountResponseDto)
+	err = json.Unmarshal(data, &varUnregisterSolverAccountResponseDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = UnregisterSolverAccountResponseDto(varUnregisterSolverAccountResponseDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "success")
+		delete(additionalProperties, "message")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OrderMetaDto type satisfies the MappedNullable interface at compile time
@@ -58,7 +56,8 @@ type OrderMetaDto struct {
 	// Solver address that filled the order
 	SolverAddress NullableString `json:"solverAddress,omitempty"`
 	// Integrator key hash identifying the integrator this order belongs to
-	IntegratorKeyHash *string `json:"integratorKeyHash,omitempty"`
+	IntegratorKeyHash    *string `json:"integratorKeyHash,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrderMetaDto OrderMetaDto
@@ -637,58 +636,53 @@ func (o OrderMetaDto) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.IntegratorKeyHash) {
 		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OrderMetaDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"submitTime",
-		"orderStatus",
-		"orderIdentifier",
-		"onChainOrderId",
-		"destinationAddress",
-		"orderInitiatedTxHash",
-		"orderDeliveredTxHash",
-		"orderVerifiedTxHash",
-		"orderSettledTxHash",
-		"refundTxHash",
-		"signedAt",
-		"expiredAt",
-		"deliveredAt",
-		"settledAt",
-		"refundedAt",
-		"lastCompactDepositBlockNumber",
-		"quoteId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOrderMetaDto := _OrderMetaDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOrderMetaDto)
+	err = json.Unmarshal(data, &varOrderMetaDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrderMetaDto(varOrderMetaDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "submitTime")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "orderIdentifier")
+		delete(additionalProperties, "onChainOrderId")
+		delete(additionalProperties, "destinationAddress")
+		delete(additionalProperties, "orderInitiatedTxHash")
+		delete(additionalProperties, "orderDeliveredTxHash")
+		delete(additionalProperties, "orderVerifiedTxHash")
+		delete(additionalProperties, "orderSettledTxHash")
+		delete(additionalProperties, "refundTxHash")
+		delete(additionalProperties, "signedAt")
+		delete(additionalProperties, "expiredAt")
+		delete(additionalProperties, "deliveredAt")
+		delete(additionalProperties, "settledAt")
+		delete(additionalProperties, "refundedAt")
+		delete(additionalProperties, "lastCompactDepositBlockNumber")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "solverAddress")
+		delete(additionalProperties, "integratorKeyHash")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PriorityOrderEntityInput type satisfies the MappedNullable interface at compile time
@@ -24,9 +22,10 @@ type PriorityOrderEntityInput struct {
 	// EIP-55 checksummed Ethereum address.
 	Token string `json:"token"`
 	// uint256 encoded as a base-10 string.
-	Amount string `json:"amount" validate:"regexp=^[0-9]{1,78}$"`
+	Amount string `json:"amount" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	MpsPerPriorityFeeWei string `json:"mpsPerPriorityFeeWei" validate:"regexp=^[0-9]{1,78}$"`
+	MpsPerPriorityFeeWei string `json:"mpsPerPriorityFeeWei" validate:"regexp=^[0-9]{1\\,78}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PriorityOrderEntityInput PriorityOrderEntityInput
@@ -136,44 +135,37 @@ func (o PriorityOrderEntityInput) ToMap() (map[string]interface{}, error) {
 	toSerialize["token"] = o.Token
 	toSerialize["amount"] = o.Amount
 	toSerialize["mpsPerPriorityFeeWei"] = o.MpsPerPriorityFeeWei
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *PriorityOrderEntityInput) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-		"amount",
-		"mpsPerPriorityFeeWei",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPriorityOrderEntityInput := _PriorityOrderEntityInput{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varPriorityOrderEntityInput)
+	err = json.Unmarshal(data, &varPriorityOrderEntityInput)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PriorityOrderEntityInput(varPriorityOrderEntityInput)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "mpsPerPriorityFeeWei")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

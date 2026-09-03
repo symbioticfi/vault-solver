@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OrderInput type satisfies the MappedNullable interface at compile time
@@ -24,9 +22,10 @@ type OrderInput struct {
 	// EIP-55 checksummed Ethereum address.
 	Token string `json:"token"`
 	// uint256 encoded as a base-10 string.
-	StartAmount *string `json:"startAmount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	StartAmount *string `json:"startAmount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	EndAmount *string `json:"endAmount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	EndAmount            *string `json:"endAmount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrderInput OrderInput
@@ -154,42 +153,37 @@ func (o OrderInput) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.EndAmount) {
 		toSerialize["endAmount"] = o.EndAmount
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OrderInput) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOrderInput := _OrderInput{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOrderInput)
+	err = json.Unmarshal(data, &varOrderInput)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrderInput(varOrderInput)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "startAmount")
+		delete(additionalProperties, "endAmount")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }
