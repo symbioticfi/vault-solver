@@ -129,11 +129,16 @@ type pendingTransaction struct {
 	receiptCursor     int
 	nonceConflictHash common.Hash
 	originalHash      common.Hash
-	result            chan<- Result
-	resultOnce        sync.Once
-	cancelDeadline    time.Time
-	cancelRequested   chan struct{}
-	cancelOnce        sync.Once
+	// receiptReadFailures counts consecutive failed receipt lookups. The first failure of a streak
+	// is logged at error and the rest at debug, so a stuck RPC produces one alert per pending
+	// transaction rather than one per poll.
+	receiptReadFailures int
+	receiptReadFailedAt time.Time
+	result              chan<- Result
+	resultOnce          sync.Once
+	cancelDeadline      time.Time
+	cancelRequested     chan struct{}
+	cancelOnce          sync.Once
 }
 
 type txAttempt struct {
@@ -875,6 +880,41 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 	return obsolete, nil
 }
 
+// noteReceiptReadFailed records a failed receipt lookup: the first failure of a streak is an error,
+// later ones are debug with the running count, since the condition is already reported.
+func (m *Manager) noteReceiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
+	pending.receiptReadFailures++
+	fields := []any{
+		"label", pending.req.Label,
+		"hash", attempt.hash.Hex(),
+		"originalHash", pending.originalHash.Hex(),
+		"nonce", pending.nonce,
+		"cancellation", attempt.cancellation,
+		"rpcTimeout", m.receiptReadTimeout().String(),
+		"consecutiveFailures", pending.receiptReadFailures,
+	}
+	if pending.receiptReadFailures == 1 {
+		pending.receiptReadFailedAt = time.Now()
+		m.log.Error(err, "pending transaction receipt unavailable", fields...)
+		return
+	}
+	m.log.V(1).Info("pending transaction receipt still unavailable", append(fields, "error", err.Error())...)
+}
+
+// noteReceiptReadRecovered closes a failure streak, if one was open, with how long it lasted.
+func (m *Manager) noteReceiptReadRecovered(pending *pendingTransaction) {
+	if pending.receiptReadFailures == 0 {
+		return
+	}
+	m.log.Info("pending transaction receipt reads recovered",
+		"label", pending.req.Label,
+		"nonce", pending.nonce,
+		"consecutiveFailures", pending.receiptReadFailures,
+		"outage", time.Since(pending.receiptReadFailedAt).Round(time.Millisecond).String(),
+	)
+	pending.receiptReadFailures = 0
+}
+
 func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, m.receiptReadTimeout())
 	defer cancelLookup()
@@ -892,19 +932,14 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		attempt := pending.attempts[i]
 		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
 		if errors.Is(err, ethereum.NotFound) {
+			m.noteReceiptReadRecovered(pending)
 			continue
 		}
 		if err != nil {
-			m.log.Error(err, "pending transaction receipt unavailable",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"originalHash", pending.originalHash.Hex(),
-				"nonce", pending.nonce,
-				"cancellation", attempt.cancellation,
-				"rpcTimeout", m.receiptReadTimeout().String(),
-			)
+			m.noteReceiptReadFailed(pending, attempt, err)
 			continue
 		}
+		m.noteReceiptReadRecovered(pending)
 		if err := validateReceipt(attempt.hash, receipt); err != nil {
 			m.log.Error(err, "invalid pending transaction receipt",
 				"label", pending.req.Label,
