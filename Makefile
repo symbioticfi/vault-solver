@@ -28,6 +28,10 @@ OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
 RFQ_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi.json
+# Discount listing/resolution lives on the backend's internal API. Its document is published from the
+# PUBLIC prefix (the endpoints stay unrouted there), so it can be vendored and drift-checked like any
+# other spec while the API itself remains unreachable from outside.
+RFQ_INTERNAL_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi-internal.json
 # LI.FI order-server OpenAPI spec (testnet/dev). The NestJS app serves a Scalar UI at /docs with NO raw
 # JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and
 # extracts it via hack/scalar-openapi-extract.py (see that target).
@@ -128,6 +132,12 @@ refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=..
 	curl -fsSL "$(RFQ_OPENAPI_URL)" | jq . > openapi/rfq-backend.openapi.json
 	@echo "vendored openapi/rfq-backend.openapi.json (verify field names — see docs/RFQ-PLAN.md)"
 
+.PHONY: refresh-rfq-internal-openapi
+refresh-rfq-internal-openapi: ## Re-pull the RFQ backend internal OpenAPI spec (RFQ_INTERNAL_OPENAPI_URL=...)
+	@mkdir -p openapi
+	curl -fsSL "$(RFQ_INTERNAL_OPENAPI_URL)" | jq . > openapi/rfq-backend-internal.openapi.json
+	@echo "vendored openapi/rfq-backend-internal.openapi.json"
+
 .PHONY: refresh-lifi-openapi
 refresh-lifi-openapi: ## Re-pull the LI.FI order-server OpenAPI spec (LIFI_OPENAPI_URL=...)
 	@mkdir -p openapi
@@ -206,6 +216,11 @@ refresh-rfq-client: OPENAPI_TOLERANT_PROPS = enumUnknownDefaultCase=true
 refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) from the vendored spec
 	@rm -f api/rfqbackend/*.go
 	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend)
+
+.PHONY: refresh-rfq-internal-client
+refresh-rfq-internal-client: ## Generate the RFQ backend internal client from the vendored spec
+	@rm -f api/rfqbackendinternal/*.go
+	$(call gen_openapi_client,openapi/rfq-backend-internal.openapi.json,api/rfqbackendinternal,rfqbackendinternal)
 
 .PHONY: refresh-lifi-client
 refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generator, Go) from the vendored spec

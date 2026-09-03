@@ -135,6 +135,7 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
   `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
   (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+- **Internal API surfaces get their own client.** The RFQ backend serves discount listing/resolution on `/api-internal/v1` and publishes that document from the public prefix, so it is vendored (`make refresh-rfq-internal-openapi`) and generated separately (`make refresh-rfq-internal-client` → `api/rfqbackendinternal`). Generate from the surface's own spec rather than rewriting paths at runtime: the client then addresses the real endpoints, and the spec is drift-checked like any other.
 - **GraphQL clients (schema SDL + operations → genqlient).** Vendor the upstream schema SDL under
   `api/graphql/<name>/` (`make refresh-morpho-graphql-schema` pulls Morpho's live schema), keep named
   operation documents under `operations/`, then `make refresh-morpho-graphql-client` runs pinned

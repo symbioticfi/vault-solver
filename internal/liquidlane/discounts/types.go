@@ -2,6 +2,7 @@ package discounts
 
 import (
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -124,7 +125,7 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := hexutil.DecodeBig(resolved.Discount.Nonce)
+	nonce, err := parseDiscountNonce(resolved.Discount.Nonce)
 	if err != nil {
 		return nil, errors.Errorf("nonce: %w", err)
 	}
@@ -157,6 +158,23 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 		SignerSignature: signerSignature, ProtocolDeadline: big.NewInt(resolved.ProtocolDeadline),
 		ProtocolSignature: protocolSignature,
 	}, nil
+}
+
+// parseDiscountNonce reads the backend's discount nonce. The contract is a base-10 uint256 string
+// with leading zeroes accepted (openapi/rfq-backend-internal.openapi.json); parsing it as hex is what
+// made every such discount fail to resolve. A 0x-prefixed value is still accepted so a backend on the
+// older hex contract keeps working; the prefix makes the two unambiguous.
+func parseDiscountNonce(raw string) (*big.Int, error) {
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		return hexutil.DecodeBig(raw)
+	}
+	// SetString accepts a leading sign; the contract is ^\d+$, so reject one here rather than
+	// relying on the caller's non-negative check.
+	nonce, ok := new(big.Int).SetString(raw, 10)
+	if !ok || nonce.Sign() < 0 {
+		return nil, errors.Errorf("not a base-10 uint256 string: %q", raw)
+	}
+	return nonce, nil
 }
 
 func parseAddress(raw, field string) (common.Address, error) {

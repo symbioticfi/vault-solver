@@ -32,7 +32,16 @@
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi.json",
       "refresh": "make refresh-rfq-openapi && make refresh-rfq-client",
-      "note": "Expected to report drift until symbioticfi/rfq-backend#350 ships: this deployment inlines every schema with no `components` section, while the vendored copy (from the previous deployment) has 19 named component schemas that the generated Go model names depend on. #350 restores components with those same names, so refresh once it is deployed."
+      "note": "Expected to report drift until this client can be regenerated: openapi-generator 7.24.0 emits `nil` as a Go type for this spec's `cancel: {type: null}`, so `make refresh-rfq-client` does not build. The deployed spec now carries named components again (symbioticfi/rfq-backend#350), so refreshing is safe for model naming once the generator issue is resolved."
+    },
+    {
+      "name": "RFQ backend internal (OpenAPI)",
+      "vendored": "openapi/rfq-backend-internal.openapi.json",
+      "mode": "auto",
+      "fetch": "json",
+      "url": "https://swap.symbiotic.fi/api/v1/openapi-internal.json",
+      "refresh": "make refresh-rfq-internal-openapi && make refresh-rfq-internal-client",
+      "note": "Discount listing/resolution lives on /api-internal/v1. The backend publishes this document from the PUBLIC prefix (the endpoints themselves stay unrouted there), so it can be vendored and drift-checked while the API remains unreachable from outside. Going unwatched is how the hex-to-decimal discount nonce change reached production unnoticed."
     },
     {
       "name": "LI.FI order server (OpenAPI)",

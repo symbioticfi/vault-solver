@@ -114,3 +114,41 @@ func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 		t.Fatal("expected out-of-range discount error")
 	}
 }
+
+// The backend's discount nonce is a base-10 uint256 string with leading zeroes accepted. Parsing it
+// as hex rejected every such value ("hex number with leading zero digits"), so discounts silently
+// stopped resolving in production. 0x-prefixed values stay accepted for a backend on the older
+// hex contract; the prefix keeps the two unambiguous.
+func TestParseDiscountNonceAcceptsBase10AndLegacyHex(t *testing.T) {
+	for _, test := range []struct {
+		raw     string
+		want    int64
+		wantErr bool
+	}{
+		{raw: "2", want: 2},
+		{raw: "0", want: 0},
+		{raw: "0123", want: 123},
+		{raw: "115792089237316195423570985008687907853269984665640564039457584007913129639935", want: -1},
+		{raw: "0x2", want: 2},
+		{raw: "0xff", want: 255},
+		{raw: "", wantErr: true},
+		{raw: "12ab", wantErr: true},
+		{raw: "-1", wantErr: true},
+	} {
+		t.Run(test.raw, func(t *testing.T) {
+			got, err := parseDiscountNonce(test.raw)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("parseDiscountNonce(%q) = %v; want an error", test.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDiscountNonce(%q): %v", test.raw, err)
+			}
+			if test.want >= 0 && got.Int64() != test.want {
+				t.Fatalf("parseDiscountNonce(%q) = %s; want %d", test.raw, got, test.want)
+			}
+		})
+	}
+}

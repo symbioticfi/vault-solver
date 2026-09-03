@@ -9,14 +9,10 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/api/rfqbackendinternal"
 )
 
-const (
-	defaultTimeout    = 10 * time.Second
-	publicAPIPrefix   = "/api/v1"
-	internalAPIPrefix = "/api-internal/v1"
-)
+const defaultTimeout = 10 * time.Second
 
 // Terms is the signed discount the LiquidLane adapter's discountSwap verifies.
 // Amounts/nonce stay as wire strings until a solver maps them into its executor-specific calldata.
@@ -61,42 +57,18 @@ type List struct {
 	Discounts []ListItem
 }
 
-// Client is a small adapter over the generated rfqbackend client for the shared signed-discount
-// endpoints. The generated client emits /api/v1/discount(s); rewriteTransport routes only those calls
-// to the backend's /api-internal/v1 path.
+// Client is a small adapter over the generated rfqbackendinternal client for the shared
+// signed-discount endpoints, which live on the backend's /api-internal/v1 surface. The client is
+// generated from that surface's own spec, so it addresses those paths directly.
 type Client struct {
-	api *rfqbackend.APIClient
+	api *rfqbackendinternal.APIClient
 }
 
 func NewClient(baseURL string) *Client {
-	cfg := rfqbackend.NewConfiguration()
-	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
-	cfg.HTTPClient = &http.Client{
-		Timeout:   defaultTimeout,
-		Transport: rewriteTransport{base: http.DefaultTransport},
-	}
-	return &Client{api: rfqbackend.NewAPIClient(cfg)}
-}
-
-// rewriteTransport routes private-discount requests to the backend's internal API prefix. Other
-// generated-client requests pass through unchanged.
-type rewriteTransport struct {
-	base http.RoundTripper
-}
-
-func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	if index := strings.LastIndex(req.URL.Path, publicAPIPrefix+"/discount"); index >= 0 {
-		req = req.Clone(req.Context())
-		req.URL.Path = req.URL.Path[:index] +
-			internalAPIPrefix +
-			strings.TrimPrefix(req.URL.Path[index:], publicAPIPrefix)
-		req.URL.RawPath = ""
-	}
-	return base.RoundTrip(req)
+	cfg := rfqbackendinternal.NewConfiguration()
+	cfg.Servers = rfqbackendinternal.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
+	cfg.HTTPClient = &http.Client{Timeout: defaultTimeout}
+	return &Client{api: rfqbackendinternal.NewAPIClient(cfg)}
 }
 
 // Resolve fetches a fresh signed discount for discountID.
@@ -104,9 +76,10 @@ func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // The backend response is an anyOf union of a single resolved discount and a batch. Solvers resolve one
 // discountId at a time, so a batch is accepted only when it has exactly one entry.
 func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, error) {
-	body := rfqbackend.NewApiV1DiscountsPostRequest()
-	body.SetDiscountId(discountID)
-	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsPost(ctx).ApiV1DiscountsPostRequest(*body).Execute()
+	body := rfqbackendinternal.ResolveDiscountRequest{
+		ResolveDiscountRequestOneOf: rfqbackendinternal.NewResolveDiscountRequestOneOf(discountID),
+	}
+	resp, httpResp, err := c.api.RFQAPI.ApiInternalV1DiscountsPost(ctx).ResolveDiscountRequest(body).Execute()
 	closeResp(httpResp)
 	if err != nil {
 		return nil, errors.Errorf("private discounts: resolve: %w", err)
@@ -114,10 +87,10 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 	if resp == nil {
 		return nil, errors.New("private discounts: resolve: empty response")
 	}
-	if single := resp.ResolveDiscountResponseAnyOf; single != nil {
+	if single := resp.ResolveDiscountResponseOneOf; single != nil {
 		return resolvedFromSingle(single), nil
 	}
-	if batch := resp.ResolveDiscountResponseAnyOf1; batch != nil {
+	if batch := resp.ResolveDiscountResponseOneOf1; batch != nil {
 		items := batch.GetDiscounts()
 		if len(items) != 1 {
 			return nil, errors.Errorf("private discounts: resolve: expected a single discount, got %d", len(items))
@@ -127,7 +100,7 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 	return nil, errors.New("private discounts: resolve: response matched neither discount shape")
 }
 
-func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *Resolved {
+func resolvedFromSingle(s *rfqbackendinternal.ResolveDiscountResponseOneOf) *Resolved {
 	return &Resolved{
 		RequestID:         s.GetRequestId(),
 		DiscountID:        s.GetDiscountId(),
@@ -138,7 +111,7 @@ func resolvedFromSingle(s *rfqbackend.ResolveDiscountResponseAnyOf) *Resolved {
 	}
 }
 
-func resolvedFromBatchItem(requestID string, it *rfqbackend.ResolveDiscountResponseAnyOf1DiscountsInner) *Resolved {
+func resolvedFromBatchItem(requestID string, it *rfqbackendinternal.ResolveDiscountResponseOneOf1DiscountsInner) *Resolved {
 	return &Resolved{
 		RequestID:         requestID,
 		DiscountID:        it.GetDiscountId(),
@@ -149,7 +122,7 @@ func resolvedFromBatchItem(requestID string, it *rfqbackend.ResolveDiscountRespo
 	}
 }
 
-func termsFromModel(d rfqbackend.PublishDiscountRequestDiscount) Terms {
+func termsFromModel(d rfqbackendinternal.ResolveDiscountResponseOneOfDiscount) Terms {
 	return Terms{
 		Adapter:       d.GetAdapter(),
 		TokenToRedeem: d.GetTokenToRedeem(),
@@ -163,7 +136,7 @@ func termsFromModel(d rfqbackend.PublishDiscountRequestDiscount) Terms {
 
 // ListDiscounts lists currently advertised private discounts.
 func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
-	resp, httpResp, err := c.api.RFQAPI.ApiV1DiscountsGet(ctx).Execute()
+	resp, httpResp, err := c.api.RFQAPI.ApiInternalV1DiscountsGet(ctx).Execute()
 	closeResp(httpResp)
 	if err != nil {
 		return nil, errors.Errorf("private discounts: list: %w", err)
