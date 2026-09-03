@@ -32,7 +32,7 @@
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi.json",
       "refresh": "make refresh-rfq-openapi && make refresh-rfq-client",
-      "note": "Discount listing/resolution is NOT here \u2014 it lives on the internal surface (entry below). hack/rfq-openapi-normalize.py rewrites one construct before generation: a bare `{type: null}` property that openapi-generator 7.24.0 maps to the uncompilable Go type `nil`."
+      "note": "Discount listing/resolution is NOT here \u2014 it lives on the internal surface (entry below). Generation passes `--type-mappings null=interface{}` because this spec has a property whose whole schema is `{type: null}`, which openapi-generator otherwise renders as the uncompilable Go type `nil`."
     },
     {
       "name": "RFQ backend internal (OpenAPI)",

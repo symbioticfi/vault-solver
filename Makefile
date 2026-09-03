@@ -209,21 +209,13 @@ refresh-3f-client: ## Generate the 3F API client (openapi-generator, Go) from th
 # disallowAdditionalPropertiesIfNotPresent=false is omitted here: with it, openapi-generator 7.24.0
 # renders this spec's nullable `approval` union as a Nullable wrapper it never defines. The relaxer
 # strips this client's DisallowUnknownFields instead, so it ends up equally tolerant.
-# hack/rfq-openapi-normalize.py handles the other 7.24.0 quirk (a bare `{type: null}` property
-# becoming the uncompilable Go type `nil`).
+# `--type-mappings null=interface{}` handles the other 7.24.0 quirk: this spec has a property whose
+# whole schema is `{type: null}` (zod's z.null()), which the generator otherwise renders as the
+# uncompilable Go type `nil`. interface{} is what earlier generator versions emitted for it.
 refresh-rfq-client: OPENAPI_TOLERANT_PROPS = enumUnknownDefaultCase=true
 refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) from the vendored spec
 	@rm -f api/rfqbackend/*.go
-	@tmpdir="$$(mktemp -d)"; \
-		trap 'rm -rf "$$tmpdir"' EXIT; \
-		tmp="$$tmpdir/rfq-normalized.json"; \
-		python3 hack/rfq-openapi-normalize.py < openapi/rfq-backend.openapi.json > "$$tmp"; \
-		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
-			generate --enable-post-process-file -i "$$tmp" -g go -o ./api/rfqbackend --package-name rfqbackend \
-			--additional-properties=$(OPENAPI_TOLERANT_PROPS)
-	cd api/rfqbackend && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
-	python3 hack/openapi-relax-client.py api/rfqbackend
-	gofmt -w api/rfqbackend
+	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend,--type-mappings null=interface{})
 
 .PHONY: refresh-rfq-internal-client
 refresh-rfq-internal-client: ## Generate the RFQ backend internal client from the vendored spec

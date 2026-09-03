@@ -98,7 +98,6 @@ func (o *ApprovalCheckResponse) SetApproval(v ApprovalCheckResponseApproval) {
 }
 
 // GetCancel returns the Cancel field value
-// If the value is explicit nil, the zero value for interface{} will be returned
 func (o *ApprovalCheckResponse) GetCancel() interface{} {
 	if o == nil {
 		var ret interface{}
@@ -110,9 +109,8 @@ func (o *ApprovalCheckResponse) GetCancel() interface{} {
 
 // GetCancelOk returns a tuple with the Cancel field value
 // and a boolean to check if the value has been set.
-// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *ApprovalCheckResponse) GetCancelOk() (*interface{}, bool) {
-	if o == nil || IsNil(o.Cancel) {
+	if o == nil {
 		return nil, false
 	}
 	return &o.Cancel, true
@@ -135,9 +133,7 @@ func (o ApprovalCheckResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["approval"] = o.Approval.Get()
-	if o.Cancel != nil {
-		toSerialize["cancel"] = o.Cancel
-	}
+	toSerialize["cancel"] = o.Cancel
 	return toSerialize, nil
 }
 
