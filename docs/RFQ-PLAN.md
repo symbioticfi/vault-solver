@@ -53,15 +53,30 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   Prometheus metrics belong to the generic `internal/observability` layer (one registry, one
   `/metrics` on `:9090`), so the RFQ server doesn't expose its own. Instead the solver **registers its
   collectors on the shared registry** via `deps.Metrics.Registerer()` in the factory: a Huma/HTTP
-  middleware records `rfq_filler_http_requests_total{method,route,status}` and
-  `rfq_filler_http_request_duration_seconds` (route is allowlisted to bound cardinality). The
-  framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
-  memory, goroutines, GC, and FDs. Net effect: the same metric names the filler exposed, surfaced on
-  the shared observability port rather than a per-solver endpoint.
+  middleware records `rfq_filler_http_request_duration_seconds{method,route,status}` (route is
+  allowlisted and method is normalized to `GET` / `POST` / `other` to bound cardinality, and the
+  histogram's `_count` is the canonical transport request counter). The deprecated
+  `rfq_filler_http_requests_total` remains for one compatibility release so existing alerts can migrate.
+  After authentication, the quote service returns a typed terminal decision alongside its optional
+  response and records exactly one bounded workflow `quote/<outcome>` event; malformed client input is
+  `bad_request`, distinct from dependency/strategy `error`. Responses selected for writing additionally record input/output
+  atomic-unit volume by asset; neither signal claims a win or fill. Workflow `order_poll/success`
+  freshness advances only after a complete successful `listOpenOrders` result has been processed,
+  including an empty list; failures retain the previous value. The same backend call is timed by the
+  external-operation histogram as the fixed `order_poll` operation: complete polls (including empty)
+  are `success`, live failures are `error`, and shutdown-cancelled polls are `skipped`. Order handling
+  and fill submission are outside that timer. The framework also registers the standard Go runtime +
+  process collectors, so `/metrics` carries CPU,
+  memory, goroutines, GC, and FDs. Successful receipts record `fill/success` and token-native amounts;
+  transaction failures and pre-admission rejections record `fill/failure` and `fill/not_admitted` without
+  amounts. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
+  awarded-but-unfinished orders and the quote→fill funnel visible without inventing realized PnL. The
+  canonical names, labels, and meanings are in the
+  [README metrics table](../README.md#metrics).
 - **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
   request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
-  metrics above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
+  request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
 - **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on

@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -140,10 +141,16 @@ func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
+	timer := observability.StartOperation(s.operationObservers().quoteSuspend)
+	outcome := observability.ExternalOperationError
+	defer func() { timer.Finish(ctx, outcome) }()
+
 	backoff := initialQuoteSuspensionBackoff
 	for {
 		removed, err := state.reconcile(ctx, s.orders, nil, s.wallNow())
 		if err == nil {
+			outcome = observability.ExternalOperationSuccess
+			s.observeQuoteRefresh(state)
 			if removed > 0 {
 				s.log.Info("quotes suspended", "removedPairs", removed)
 			}
@@ -178,12 +185,18 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
+	timer := observability.StartOperation(s.operationObservers().quoteRefresh)
+	outcome := observability.ExternalOperationError
+	defer func() { timer.Finish(ctx, outcome) }()
+
 	if !s.transactionLaneReady() {
+		outcome = observability.ExternalOperationSkipped
 		s.log.V(1).Info(
 			"quote refresh skipped: transaction lane unavailable",
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
+		timer.Finish(ctx, outcome)
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -208,7 +221,8 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
 	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
 	inventory := append([]liquidlane.Inventory(nil), direct...)
-	inventory = append(inventory, s.quoteDiscountInventories(ctx, discountBases, chainTime)...)
+	discountInventory, discountDegraded := s.quoteDiscountInventories(ctx, discountBases, chainTime)
+	inventory = append(inventory, discountInventory...)
 	reservations := s.capacity.Snapshot()
 	serverTime := s.wallNow()
 	out, err := s.strategy.DecideQuotes(ctx, types.QuoteInput{
@@ -249,11 +263,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		)
 	}
 	if !s.transactionLaneReady() {
+		outcome = observability.ExternalOperationSkipped
 		s.log.V(1).Info(
 			"quote plan discarded: transaction lane unavailable",
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
 		)
+		timer.Finish(ctx, outcome)
 		s.suspendQuotes(ctx, state)
 		return
 	}
@@ -261,6 +277,11 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if err != nil {
 		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
+	}
+	s.observeQuoteRefresh(state)
+	outcome = observability.ExternalOperationSuccess
+	if discountDegraded {
+		outcome = observability.ExternalOperationDegraded
 	}
 	s.log.Info(
 		"quotes reconciled",
@@ -332,6 +353,14 @@ func (s *quoteState) needsRenewal(now time.Time) bool {
 		}
 	}
 	return false
+}
+
+func (s *quoteState) activeQuoteCount() int {
+	count := 0
+	for _, pair := range s.active {
+		count += len(pair.quotes)
+	}
+	return count
 }
 
 func (s *quoteState) reconcile(

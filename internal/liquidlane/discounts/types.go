@@ -2,7 +2,6 @@ package discounts
 
 import (
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -125,12 +124,9 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := parseDiscountNonce(resolved.Discount.Nonce)
+	nonce, err := parseUint256Decimal(resolved.Discount.Nonce, "nonce")
 	if err != nil {
-		return nil, errors.Errorf("nonce: %w", err)
-	}
-	if nonce.Sign() < 0 {
-		return nil, errors.New("nonce: must be non-negative")
+		return nil, err
 	}
 	signerSignature, err := hexutil.Decode(resolved.SignerSignature)
 	if err != nil {
@@ -158,23 +154,6 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 		SignerSignature: signerSignature, ProtocolDeadline: big.NewInt(resolved.ProtocolDeadline),
 		ProtocolSignature: protocolSignature,
 	}, nil
-}
-
-// parseDiscountNonce reads the backend's discount nonce. The contract is a base-10 uint256 string
-// with leading zeroes accepted (openapi/rfq-backend-internal.openapi.json); parsing it as hex is what
-// made every such discount fail to resolve. A 0x-prefixed value is still accepted so a backend on the
-// older hex contract keeps working; the prefix makes the two unambiguous.
-func parseDiscountNonce(raw string) (*big.Int, error) {
-	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
-		return hexutil.DecodeBig(raw)
-	}
-	// SetString accepts a leading sign; the contract is ^\d+$, so reject one here rather than
-	// relying on the caller's non-negative check.
-	nonce, ok := new(big.Int).SetString(raw, 10)
-	if !ok || nonce.Sign() < 0 {
-		return nil, errors.Errorf("not a base-10 uint256 string: %q", raw)
-	}
-	return nonce, nil
 }
 
 func parseAddress(raw, field string) (common.Address, error) {
@@ -212,6 +191,22 @@ func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
 	out, ok := new(big.Int).SetString(raw, 10)
 	if !ok || out.Sign() < 0 {
 		return nil, errors.Errorf("%s: invalid non-negative decimal %q", field, raw)
+	}
+	return out, nil
+}
+
+func parseUint256Decimal(raw, field string) (*big.Int, error) {
+	if raw == "" {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+	}
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+		}
+	}
+	out, ok := new(big.Int).SetString(raw, 10)
+	if !ok || out.BitLen() > 256 {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
 	return out, nil
 }

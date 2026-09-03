@@ -132,25 +132,25 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	onlyRogue := validQuoteBody()
 	onlyRogue.QuoteID = "33333333-3333-4333-8333-333333333333"
 	onlyRogue.Adapters = []quoteAdapter{rogueAdapter}
-	resp, err := quotes.quote(t.Context(), &onlyRogue)
+	decision, err := quotes.quote(t.Context(), &onlyRogue)
 	if err != nil {
 		t.Fatalf("quote (only non-configured adapter): unexpected error %v", err)
 	}
-	if resp != nil {
-		t.Fatalf("quote (only non-configured adapter): got %+v, want nil (declined: out of adapter scope)", resp)
+	if decision.response != nil {
+		t.Fatalf("quote (only non-configured adapter): got %+v, want nil (declined: out of adapter scope)", decision.response)
 	}
 	// (2) Request offering the configured adapter alongside the rogue one ⇒ quoted through the configured
 	// adapter only (the rogue leg, despite a better rate, is filtered out before selection).
 	mixed := validQuoteBody() // validQuoteBody's single adapter is vlt (the configured one)
 	mixed.Adapters = append(mixed.Adapters, rogueAdapter)
-	resp, err = quotes.quote(t.Context(), &mixed)
+	decision, err = quotes.quote(t.Context(), &mixed)
 	if err != nil {
 		t.Fatalf("quote (configured + rogue): unexpected error %v", err)
 	}
-	if resp == nil {
+	if decision.response == nil {
 		t.Fatal("quote (configured + rogue): got nil, want a quote through the configured adapter")
 	}
-	if resp.AmountOut != "1000000" {
-		t.Fatalf("amountOut = %s, want quote through the configured adapter", resp.AmountOut)
+	if decision.response.AmountOut != "1000000" {
+		t.Fatalf("amountOut = %s, want quote through the configured adapter", decision.response.AmountOut)
 	}
 }

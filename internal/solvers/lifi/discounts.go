@@ -21,18 +21,18 @@ func (s *Solver) quoteDiscountInventories(
 	ctx context.Context,
 	bases []liquidlane.Inventory,
 	now time.Time,
-) []liquidlane.Inventory {
+) ([]liquidlane.Inventory, bool) {
 	if s.discounts == nil {
-		return nil
+		return nil, false
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
 		s.log.Error(err, "private discounts: list for quote")
-		return nil
+		return nil, true
 	}
 	inventory, issues := discounts.MatchInventories(listed, bases, discounts.MatchOptions{Now: now})
 	s.logDiscountIssues(issues)
-	return inventory
+	return inventory, len(issues) > 0
 }
 
 func (s *Solver) fillDiscountQuotes(

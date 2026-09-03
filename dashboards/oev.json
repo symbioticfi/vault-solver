@@ -1,0 +1,2125 @@
+{
+  "annotations": [
+    {
+      "kind": "AnnotationQuery",
+      "spec": {
+        "query": {
+          "kind": "DataQuery",
+          "group": "grafana",
+          "version": "v0",
+          "datasource": {
+            "name": "-- Grafana --"
+          },
+          "spec": {}
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "builtIn": true,
+        "legacyOptions": {
+          "type": "dashboard"
+        }
+      }
+    }
+  ],
+  "cursorSync": "Crosshair",
+  "description": "Single-instance RedStone OEV auction, bid economics, and settlement-health dashboard. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, pod, job, and instance. Requires the metric families documented in the repository README.",
+  "editable": true,
+  "elements": {
+    "panel-10": {
+      "kind": "Panel",
+      "spec": {
+        "id": 10,
+        "title": "Decision counts",
+        "description": "Every parsed auction contributes one bounded terminal decision.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"auction\"}[$__range]))) > 0",
+                      "instant": true,
+                      "legendFormat": "{{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "minVizHeight": 14,
+              "minVizWidth": 0,
+              "namePlacement": "top",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "displayName": "${__field.labels.outcome}",
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-11": {
+      "kind": "Panel",
+      "spec": {
+        "id": 11,
+        "title": "Hot-path latency",
+        "description": "Decision budget consumption before the auction deadline.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(oev_hotpath_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "legendFormat": "p50",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(oev_hotpath_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "legendFormat": "p95",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.99, sum by (le) (rate(oev_hotpath_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "legendFormat": "p99",
+                      "range": true
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-13": {
+      "kind": "Panel",
+      "spec": {
+        "id": 13,
+        "title": "Bid amount funnel",
+        "description": "Process-lifetime enqueued, won, and settled bid value; not revenue or realized profit.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (kind) (solver_bot_workflow_amount_atomic_units_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",asset=\"native\"}) / 1e18) > 0",
+                      "instant": true,
+                      "legendFormat": "{{kind}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "minVizHeight": 14,
+              "minVizWidth": 0,
+              "namePlacement": "top",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "displayName": "${__field.labels.stage}",
+                "unit": "suffix: ETH",
+                "decimals": 5,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "id": 14,
+        "title": "Count conversion",
+        "description": "Process-lifetime stage conversion; counters reset together on process restart.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"auction\",outcome=\"enqueued\"}) / sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"auction\"})",
+                      "instant": true,
+                      "legendFormat": "auction \u2192 bid",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"won\"}) / sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"enqueued\"})",
+                      "instant": true,
+                      "legendFormat": "bid \u2192 win",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"settled_success\"}) / sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"won\"})",
+                      "instant": true,
+                      "legendFormat": "win \u2192 settlement",
+                      "range": false
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "blue"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "auction \u2192 bid"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percentunit"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "bid \u2192 win"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percentunit"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "win \u2192 settlement"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "percentunit"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-16": {
+      "kind": "Panel",
+      "spec": {
+        "id": 16,
+        "title": "Feed connection history",
+        "description": "Feed continuity over the selected time range.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "oev_feed_connected{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "legendFormat": "{{strategy}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "state-timeline",
+          "version": "",
+          "spec": {
+            "options": {
+              "alignValue": "left",
+              "legend": {
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": false
+              },
+              "mergeValues": true,
+              "rowHeight": 0.8,
+              "showValue": "never",
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "mappings": [
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": -0.5,
+                      "to": 0.5,
+                      "result": {
+                        "text": "Down",
+                        "color": "dark-red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 0.5,
+                      "to": 1.5,
+                      "result": {
+                        "text": "Up",
+                        "color": "dark-green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "dark-red"
+                    },
+                    {
+                      "value": 1,
+                      "color": "dark-green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-17": {
+      "kind": "Panel",
+      "spec": {
+        "id": 17,
+        "title": "Activity ages",
+        "description": "Comparable state, bid, win, and settlement freshness.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"state_refresh\",outcome=\"success\"}), 0) * ((solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"state_refresh\",outcome=\"success\"}) > bool 0)",
+                      "instant": true,
+                      "legendFormat": "state refresh",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"enqueued\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"enqueued\"}[$__range])) > bool 0)",
+                      "instant": true,
+                      "legendFormat": "last bid",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"won\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"won\"}[$__range])) > bool 0)",
+                      "instant": true,
+                      "legendFormat": "last win",
+                      "range": false
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"settled_success\"}[$__range])), 0) * ((max_over_time(solver_bot_workflow_last_event_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"settled_success\"}[$__range])) > bool 0)",
+                      "instant": true,
+                      "legendFormat": "last settlement",
+                      "range": false
+                    }
+                  },
+                  "refId": "D",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "blue"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "state refresh"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "Not observed"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "last bid"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "Not observed"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "last win"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "Not observed"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "last settlement"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "Not observed"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-18": {
+      "kind": "Panel",
+      "spec": {
+        "id": 18,
+        "title": "Won obligations",
+        "description": "Winning reservations still awaiting settlement.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "oev_won_inflight{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": true,
+                      "legendFormat": "won inflight",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "oev_oldest_won_inflight_age_seconds{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": true,
+                      "legendFormat": "oldest win",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "dark-green"
+                    },
+                    {
+                      "value": 1,
+                      "color": "orange"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "won inflight"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "short"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 0
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "None"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "oldest win"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "gray",
+                              "index": 0,
+                              "text": "None"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-19": {
+      "kind": "Panel",
+      "spec": {
+        "id": 19,
+        "title": "Unresolved / failed / unsafe lifecycle",
+        "description": "Settlement timeouts, breaker failures, and failed settlements requiring attention. A timed-out win may later also be counted as settled.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"unresolved\"}[$__range])), \"signal\", \"unresolved_win\", \"\", \"\") or label_replace(sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"breaker\",outcome=\"failure\"}[$__range])), \"signal\", \"breaker_failure\", \"\", \"\") or label_replace(sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"settled_failed\"}[$__range])), \"signal\", \"failed_settlement\", \"\", \"\") or label_replace(max(oev_deposit_below_floor{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}), \"signal\", \"deposit_below_floor\", \"\", \"\")",
+                      "instant": true,
+                      "legendFormat": "{{signal}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "minVizHeight": 14,
+              "minVizWidth": 0,
+              "namePlacement": "top",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "displayName": "${__field.labels.signal}",
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "dark-green"
+                    },
+                    {
+                      "value": 1,
+                      "color": "orange"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-2": {
+      "kind": "Panel",
+      "spec": {
+        "id": 2,
+        "title": "Feed connected",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "oev_feed_connected{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": true,
+                      "legendFormat": "{{strategy}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "bool",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "dark-red"
+                    },
+                    {
+                      "value": 1,
+                      "color": "dark-green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-3": {
+      "kind": "Panel",
+      "spec": {
+        "id": 3,
+        "title": "Auctions processed",
+        "description": "Process-lifetime counter for this solver process; resets on restart.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"auction\"})",
+                      "instant": true,
+                      "legendFormat": "process lifetime",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-4": {
+      "kind": "Panel",
+      "spec": {
+        "id": 4,
+        "title": "Bids enqueued",
+        "description": "Process-lifetime counter for this solver process; resets on restart.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"auction\",outcome=\"enqueued\"})",
+                      "instant": true,
+                      "legendFormat": "process lifetime",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-5": {
+      "kind": "Panel",
+      "spec": {
+        "id": 5,
+        "title": "Wins",
+        "description": "Process-lifetime counter for this solver process; resets on restart.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"won\"})",
+                      "instant": true,
+                      "legendFormat": "process lifetime",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-6": {
+      "kind": "Panel",
+      "spec": {
+        "id": 6,
+        "title": "Settled successfully",
+        "description": "Process-lifetime counter for this solver process; resets on restart.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"redstone-oev\",event=\"bid\",outcome=\"settled_success\"})",
+                      "instant": true,
+                      "legendFormat": "process lifetime",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-7": {
+      "kind": "Panel",
+      "spec": {
+        "id": 7,
+        "title": "Executor deposit",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "oev_deposit_wei{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18",
+                      "instant": true,
+                      "legendFormat": "{{strategy}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "background_solid",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH",
+                "decimals": 5,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "blue"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    }
+  },
+  "layout": {
+    "kind": "RowsLayout",
+    "spec": {
+      "rows": [
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Key signals",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-2"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 4,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-3"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-4"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-5"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-6"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 20,
+                      "y": 0,
+                      "width": 4,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-7"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Auction decision path",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-10"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-11"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Bid economics",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-13"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-14"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Lifecycle health",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-16"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-17"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-18"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-19"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "links": [
+    {
+      "title": "Vault Solver dashboards",
+      "type": "dashboards",
+      "icon": "dashboard",
+      "tooltip": "",
+      "tags": [
+        "vault-solver-compact"
+      ],
+      "asDropdown": true,
+      "targetBlank": false,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "liveNow": false,
+  "preload": false,
+  "tags": [
+    "dashboard-schema-v2",
+    "kubernetes",
+    "single-instance",
+    "solver-metrics",
+    "vault-solver",
+    "vault-solver-compact"
+  ],
+  "timeSettings": {
+    "timezone": "browser",
+    "from": "now-1h",
+    "to": "now",
+    "autoRefresh": "15s",
+    "autoRefreshIntervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "hideTimepicker": false,
+    "fiscalYearStartMonth": 0
+  },
+  "title": "Vault Solver \u00b7 RedStone OEV",
+  "variables": [
+    {
+      "kind": "DatasourceVariable",
+      "spec": {
+        "name": "datasource",
+        "pluginId": "prometheus",
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "label": "Datasource",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "allowCustomValue": true
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "namespace",
+        "label": "Namespace",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{solver=\"redstone-oev\"}, namespace)",
+            "refId": "PrometheusVariableQueryEditor-namespace"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{solver=\"redstone-oev\"}, namespace)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "pod_regex",
+        "label": "Pods",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{solver=\"redstone-oev\",namespace=~\"${namespace:regex}\"}, pod)",
+            "refId": "PrometheusVariableQueryEditor-pod"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{solver=\"redstone-oev\",namespace=~\"${namespace:regex}\"}, pod)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "job",
+        "label": "Prometheus job",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"redstone-oev\"}, job)",
+            "refId": "PrometheusVariableQueryEditor-job"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"redstone-oev\"}, job)",
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "allowCustomValue": true,
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "instance",
+        "label": "Instance",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"redstone-oev\",job=~\"${job:regex}\"}, instance)",
+            "refId": "PrometheusVariableQueryEditor-instance"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"redstone-oev\",job=~\"${job:regex}\"}, instance)",
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "allowCustomValue": true,
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    }
+  ],
+  "uid": "vault-solver-oev"
+}

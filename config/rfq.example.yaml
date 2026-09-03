@@ -25,6 +25,7 @@ signer:
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
   maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
+  accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh
   replacementIntervalMs: 30000     # attempt a capped fee bump every 30s
   pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s

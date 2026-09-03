@@ -72,6 +72,7 @@ type Solver struct {
 	exclusiveTerminal map[common.Hash]time.Time
 	failureTimes      []time.Time
 	metrics           *uniswapXMetrics
+	operations        uniswapXOperationObservers
 }
 
 type chainReader interface {
@@ -177,10 +178,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		exclusiveTerminal: make(map[common.Hash]time.Time),
 	}
 	if deps.Metrics != nil {
-		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s.ready)
+		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s, cfg.Strategy.Name)
 		if err != nil {
 			return nil, err
 		}
+		s.operations = s.metrics.operations
 	}
 	return s, nil
 }

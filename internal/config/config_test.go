@@ -40,6 +40,7 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
 	if cfg.TxManager.BroadcastTimeoutMs != DefaultBroadcastTimeoutMs ||
+		cfg.TxManager.AccountPollIntervalMs != DefaultAccountPollIntervalMs ||
 		cfg.TxManager.ReplacementIntervalMs != DefaultReplacementIntervalMs ||
 		cfg.TxManager.PendingTimeoutMs != DefaultPendingTimeoutMs ||
 		cfg.TxManager.ShutdownTimeoutMs != DefaultShutdownTimeoutMs {
@@ -286,6 +287,12 @@ solvers: [{name: x}]
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, broadcastTimeoutMs: -1}
+solvers: [{name: x}]
+`,
+		"negative account poll interval": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, accountPollIntervalMs: -1}
 solvers: [{name: x}]
 `,
 		"timeout below replacement interval": `

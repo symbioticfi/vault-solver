@@ -130,8 +130,28 @@ assertion because the PR19 ABI has no getter.
   The framework observability server (`:9090`) stays separate.
 - **The quote server is a bounded strict-JSON stdlib handler.** The public quote schema is not available in
   the order-service OpenAPI and remains a hand-vendored, tested boundary (§4.1, §4.3).
-- **`/metrics`** is the framework's shared registry; the solver registers bounded quote, poll, fill,
-  readiness, and breaker collectors via `deps.Metrics.Registerer()`.
+- **`/metrics`** is the framework's shared registry; the solver registers bounded workflow events,
+  scrape-time readiness/breaker, pending-capacity, and exclusive-obligation collectors via
+  `deps.Metrics.Registerer()`. Fill results come from the shared txmanager rather than a coarser duplicate.
+  Quote declines use typed internal reasons mapped into workflow `quote/<outcome>`, rather than a
+  request-derived label. Quote responses selected for writing record input/output atomic-unit volume only
+  when the pair belongs to the same immutable bounded route snapshot used for that decision, so concurrent
+  cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
+  unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
+  `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
+  `fill/failure` and `fill/not_admitted`, while txmanager remains authoritative for detailed outcomes, gas,
+  fees, and lifecycle state.
+  The generic external-operation histogram separately times fixed `quote_refresh`,
+  `exclusive_order_poll`, and `public_order_poll` boundaries. Partial pagination or a safe, incomplete
+  discount fallback is `degraded`; exclusive reconciliation failures are `error` because they invalidate
+  readiness. An epoch/planning discard or cancellation is `skipped`. Fill planning and transaction
+  submission are outside these source timers.
+  Live polling records `exclusive_obligation/won`; outstanding count, nearest deadline, and terminal
+  workflow outcomes make won-but-not-delivered obligations visible. A timely terminal delivery may be by another
+  filler. Startup recovery restores safety state without replaying historical counters or opening the breaker;
+  later runtime recovery records each terminal outcome so a breaker-opening miss always has a matching metric.
+  Exact names and labels are in the
+  [README metrics table](../README.md#metrics).
 - **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). It keeps
   at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process
   cannot create a future transaction queued behind a missing lower nonce. `CancelAt` is the earliest order,
@@ -596,9 +616,10 @@ is economic, not just gas:
   reservation, and the released capacity remains unavailable until a post-fill chain refresh publishes the
   next epoch.
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
-  attempts are classified only by their tracked terminal reconciliation. A txmanager result produced before
-  admission is retried without incrementing the local breaker and is counted as
-  `uniswapx_fills_total{outcome="not-admitted"}`, not as a failed fill. Successful settlement resets it.
+  attempts are classified only by their tracked terminal reconciliation. A txmanager result rejected before
+  the worker lifecycle is retried without incrementing the local breaker and is counted by
+  `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}`, not as a terminal fill failure.
+  Successful settlement resets it.
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.

@@ -1,6 +1,7 @@
 package discounts
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,7 @@ func TestParseSigned(t *testing.T) {
 			Discount:      "123",
 			Signer:        "0x0000000000000000000000000000000000000aaa",
 			Protocol:      "0x0000000000000000000000000000000000000bbb",
-			Nonce:         "0x2",
+			Nonce:         "2",
 			Deadline:      1_900_000_000,
 		},
 		SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
@@ -95,6 +96,45 @@ func TestParseSigned(t *testing.T) {
 	}
 }
 
+func TestParseSignedAcceptsDecimalUint256Nonce(t *testing.T) {
+	for _, nonce := range []string{
+		"0002",
+		new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)).String(),
+	} {
+		t.Run(nonce, func(t *testing.T) {
+			parsed, err := ParseSigned(&Resolved{
+				DiscountID: "0x" + hash64,
+				Discount: Terms{
+					Adapter:       "0x0000000000000000000000000000000000000abc",
+					TokenToRedeem: "0x0000000000000000000000000000000000000def",
+					Discount:      "123",
+					Signer:        "0x0000000000000000000000000000000000000aaa",
+					Protocol:      "0x0000000000000000000000000000000000000bbb",
+					Nonce:         nonce,
+					Deadline:      1_900_000_000,
+				},
+				SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
+			})
+			if err != nil {
+				t.Fatalf("ParseSigned nonce %q: %v", nonce, err)
+			}
+			want, ok := new(big.Int).SetString(nonce, 10)
+			if !ok || parsed.Terms.Nonce.Cmp(want) != 0 {
+				t.Fatalf("nonce = %s, want %s", parsed.Terms.Nonce, nonce)
+			}
+		})
+	}
+}
+
+func TestParseUint256DecimalRejectsInvalidValues(t *testing.T) {
+	overflow := new(big.Int).Lsh(big.NewInt(1), 256).String()
+	for _, nonce := range []string{"0x2", "+2", "-2", "2.0", overflow} {
+		if _, err := parseUint256Decimal(nonce, "nonce"); err == nil {
+			t.Fatalf("parseUint256Decimal(%q) succeeded, want error", nonce)
+		}
+	}
+}
+
 func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 	resolved := &Resolved{
 		DiscountID: "0x" + hash64,
@@ -102,7 +142,7 @@ func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 			Adapter:       "0x0000000000000000000000000000000000000abc",
 			TokenToRedeem: "0x0000000000000000000000000000000000000def",
 			Discount:      "0", Signer: "0x0000000000000000000000000000000000000aaa",
-			Protocol: "0x0000000000000000000000000000000000000bbb", Nonce: "0x2", Deadline: 1_900_000_000,
+			Protocol: "0x0000000000000000000000000000000000000bbb", Nonce: "2", Deadline: 1_900_000_000,
 		},
 		SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
 	}
@@ -112,43 +152,5 @@ func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 	resolved.Discount.Discount = "1000001"
 	if _, err := ParseSigned(resolved); err == nil {
 		t.Fatal("expected out-of-range discount error")
-	}
-}
-
-// The backend's discount nonce is a base-10 uint256 string with leading zeroes accepted. Parsing it
-// as hex rejected every such value ("hex number with leading zero digits"), so discounts silently
-// stopped resolving in production. 0x-prefixed values stay accepted for a backend on the older
-// hex contract; the prefix keeps the two unambiguous.
-func TestParseDiscountNonceAcceptsBase10AndLegacyHex(t *testing.T) {
-	for _, test := range []struct {
-		raw     string
-		want    int64
-		wantErr bool
-	}{
-		{raw: "2", want: 2},
-		{raw: "0", want: 0},
-		{raw: "0123", want: 123},
-		{raw: "115792089237316195423570985008687907853269984665640564039457584007913129639935", want: -1},
-		{raw: "0x2", want: 2},
-		{raw: "0xff", want: 255},
-		{raw: "", wantErr: true},
-		{raw: "12ab", wantErr: true},
-		{raw: "-1", wantErr: true},
-	} {
-		t.Run(test.raw, func(t *testing.T) {
-			got, err := parseDiscountNonce(test.raw)
-			if test.wantErr {
-				if err == nil {
-					t.Fatalf("parseDiscountNonce(%q) = %v; want an error", test.raw, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseDiscountNonce(%q): %v", test.raw, err)
-			}
-			if test.want >= 0 && got.Int64() != test.want {
-				t.Fatalf("parseDiscountNonce(%q) = %s; want %d", test.raw, got, test.want)
-			}
-		})
 	}
 }

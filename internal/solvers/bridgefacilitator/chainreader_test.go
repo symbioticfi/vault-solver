@@ -17,9 +17,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-// TestCollectRequests covers the enumeration-prefix logic: the adapter's requests[] is dense (kept so
-// by finalizeRequest's swap-pop), and indices past the end revert, so collectRequests must take the
-// leading run of decodable successes and stop at the first gap.
+// TestCollectRequests covers best-effort request enumeration: every valid address is retained for safe
+// redemption, while any missing, failed, malformed, zero, or extra result makes the snapshot incomplete.
 func TestCollectRequests(t *testing.T) {
 	t.Parallel()
 
@@ -33,21 +32,29 @@ func TestCollectRequests(t *testing.T) {
 	bad := chain.CallResult{Success: true, ReturnData: []byte{0x01}} // undecodable as an address
 
 	tests := []struct {
-		name string
-		res  []chain.CallResult
-		want []common.Address
+		name         string
+		res          []chain.CallResult
+		expected     int
+		want         []common.Address
+		wantComplete bool
 	}{
-		{"empty", nil, nil},
-		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, []common.Address{a0, a1, a2}},
-		{"prefix then end-of-array gap", []chain.CallResult{ok(a0), ok(a1), fail, ok(a2)}, []common.Address{a0, a1}},
-		{"first slot reverts", []chain.CallResult{fail, ok(a0)}, nil},
-		{"undecodable slot ends the set", []chain.CallResult{ok(a0), bad, ok(a1)}, []common.Address{a0}},
+		{"empty", nil, 0, nil, true},
+		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, 3, []common.Address{a0, a1, a2}, true},
+		{"failed middle slot retains valid suffix", []chain.CallResult{ok(a0), fail, ok(a2)}, 3, []common.Address{a0, a2}, false},
+		{"failed first slot retains valid suffix", []chain.CallResult{fail, ok(a0)}, 2, []common.Address{a0}, false},
+		{"undecodable slot retains valid suffix", []chain.CallResult{ok(a0), bad, ok(a1)}, 3, []common.Address{a0, a1}, false},
+		{"zero address is malformed", []chain.CallResult{ok(a0), ok(common.Address{}), ok(a1)}, 3, []common.Address{a0, a1}, false},
+		{"missing result", []chain.CallResult{ok(a0)}, 2, []common.Address{a0}, false},
+		{"extra result is ignored", []chain.CallResult{ok(a0), ok(a1)}, 1, []common.Address{a0}, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := collectRequests(tc.res)
+			got, complete := collectRequests(tc.res, tc.expected)
+			if complete != tc.wantComplete {
+				t.Fatalf("complete = %v, want %v", complete, tc.wantComplete)
+			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("collectRequests = %v (len %d), want %v (len %d)", got, len(got), tc.want, len(tc.want))
 			}
@@ -126,10 +133,8 @@ func marshalID(id any) string {
 	return string(b)
 }
 
-// abiEncodeAggregate3Results ABI-encodes a Multicall3.aggregate3 return value: one Result per inner
-// payload, each Success=true with ReturnData=inner. This is the hex payload eth_call returns for a
-// successful aggregate3 with len(inners) sub-call results.
-func abiEncodeAggregate3Results(t *testing.T, inners ...[]byte) []byte {
+// abiEncodeAggregate3CallResults ABI-encodes a Multicall3.aggregate3 return value.
+func abiEncodeAggregate3CallResults(t *testing.T, calls []chain.CallResult) []byte {
 	t.Helper()
 	// aggregate3 returns (Result[] returnData) where Result = (bool success, bytes returnData).
 	resultTuple, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
@@ -143,15 +148,25 @@ func abiEncodeAggregate3Results(t *testing.T, inners ...[]byte) []byte {
 		Success    bool
 		ReturnData []byte
 	}
-	results := make([]result, len(inners))
-	for i, inner := range inners {
-		results[i] = result{Success: true, ReturnData: inner}
+	results := make([]result, len(calls))
+	for i, call := range calls {
+		results[i] = result{Success: call.Success, ReturnData: call.ReturnData}
 	}
 	encoded, err := abi.Arguments{{Type: resultTuple}}.Pack(results)
 	if err != nil {
 		t.Fatalf("abi args.Pack: %v", err)
 	}
 	return encoded
+}
+
+// abiEncodeAggregate3Results is the all-success convenience form used by most reader tests.
+func abiEncodeAggregate3Results(t *testing.T, inners ...[]byte) []byte {
+	t.Helper()
+	results := make([]chain.CallResult, len(inners))
+	for i, inner := range inners {
+		results[i] = chain.CallResult{Success: true, ReturnData: inner}
+	}
+	return abiEncodeAggregate3CallResults(t, results)
 }
 
 // abiEncodeAddress ABI-encodes a single address as a 32-byte left-padded word (the raw returnData
@@ -178,6 +193,19 @@ func abiEncodeUint256(t *testing.T, value int64) []byte {
 	enc, err := abi.Arguments{{Type: uintType}}.Pack(big.NewInt(value))
 	if err != nil {
 		t.Fatalf("abi uint256 Pack: %v", err)
+	}
+	return enc
+}
+
+func abiEncodeBool(t *testing.T, value bool) []byte {
+	t.Helper()
+	boolType, err := abi.NewType("bool", "", nil)
+	if err != nil {
+		t.Fatalf("abi.NewType bool: %v", err)
+	}
+	enc, err := abi.Arguments{{Type: boolType}}.Pack(value)
+	if err != nil {
+		t.Fatalf("abi bool Pack: %v", err)
 	}
 	return enc
 }

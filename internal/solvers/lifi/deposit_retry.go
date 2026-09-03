@@ -1,6 +1,7 @@
 package lifi
 
 import (
+	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -26,10 +27,12 @@ type orderDepositRetry struct {
 	readyAt   time.Time
 }
 
-// orderDepositRetryQueue is owned exclusively by the order worker. A state remains
-// indexed while its order is being retried, so a concurrent feed replay cannot reset
-// the backoff/window state between status reads.
+// orderDepositRetryQueue is mutated exclusively by the order worker; metrics may
+// take read-only snapshots concurrently. A state remains indexed while its order is
+// being retried, so a concurrent feed replay cannot reset the backoff/window state
+// between status reads.
 type orderDepositRetryQueue struct {
+	mu       sync.RWMutex
 	byKey    map[string]*orderDepositRetry
 	capacity int
 }
@@ -45,6 +48,9 @@ func newOrderDepositRetryQueue(capacity int) *orderDepositRetryQueue {
 }
 
 func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	key := orderInboxKey(order)
 	if key == "" {
 		return errOrderDepositRetryKey
@@ -90,12 +96,18 @@ func orderDepositRetryEnd(order *submittedOrder, startedAt time.Time) (time.Time
 }
 
 func (q *orderDepositRetryQueue) contains(order *submittedOrder) bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
 	_, ok := q.byKey[orderInboxKey(order)]
 	return ok
 }
 
 func (q *orderDepositRetryQueue) nextReadyAt() (time.Time, bool) {
-	state := q.next()
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	state := q.nextLocked()
 	if state == nil {
 		return time.Time{}, false
 	}
@@ -103,7 +115,10 @@ func (q *orderDepositRetryQueue) nextReadyAt() (time.Time, bool) {
 }
 
 func (q *orderDepositRetryQueue) popReady(now time.Time) (*submittedOrder, error) {
-	state := q.next()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	state := q.nextLocked()
 	if state == nil || state.readyAt.After(now) {
 		return nil, nil
 	}
@@ -116,7 +131,7 @@ func (q *orderDepositRetryQueue) popReady(now time.Time) (*submittedOrder, error
 	return state.order, nil
 }
 
-func (q *orderDepositRetryQueue) next() *orderDepositRetry {
+func (q *orderDepositRetryQueue) nextLocked() *orderDepositRetry {
 	var next *orderDepositRetry
 	for _, state := range q.byKey {
 		if state.readyAt.IsZero() {
@@ -130,13 +145,37 @@ func (q *orderDepositRetryQueue) next() *orderDepositRetry {
 }
 
 func (q *orderDepositRetryQueue) finish(order *submittedOrder) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	delete(q.byKey, orderInboxKey(order))
 }
 
 func (q *orderDepositRetryQueue) len() int {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
 	return len(q.byKey)
 }
 
 func (q *orderDepositRetryQueue) clear() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	clear(q.byKey)
+}
+
+func (q *orderDepositRetryQueue) orderQueueSnapshot() orderQueueSnapshot {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	var snapshot orderQueueSnapshot
+	for _, state := range q.byKey {
+		if state.readyAt.IsZero() {
+			continue
+		}
+		snapshot.backlog++
+		snapshot.nearestDeadline = earlierOrderDeadlineUnix(snapshot.nearestDeadline, state.order)
+	}
+	return snapshot
 }

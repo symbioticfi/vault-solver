@@ -91,9 +91,13 @@ func TestExternalModeNeverListsDiscounts(t *testing.T) {
 		log:       logr.Discard(),
 	}
 
-	quoteRoutes, quoted, err := solver.quoteRoutesWithDiscounts(t.Context(), []liquidlane.Route{route}, time.Now())
-	if err != nil || quoted != nil || len(quoteRoutes) != 1 {
-		t.Fatalf("external quote routes/list/error = %+v/%+v/%v", quoteRoutes, quoted, err)
+	quoteRoutes, err := solver.quoteRoutesWithDiscounts(
+		t.Context(),
+		[]liquidlane.Route{route},
+		time.Now(),
+	)
+	if err != nil || quoteRoutes.listed != nil || !quoteRoutes.complete || len(quoteRoutes.routes) != 1 {
+		t.Fatalf("external quote routes/error = %+v/%v", quoteRoutes, err)
 	}
 	fillRoutes, filled, err := solver.fillRoutesWithDiscounts(
 		t.Context(),
@@ -139,7 +143,7 @@ func TestResolveDiscountRevalidatesSelectedTerms(t *testing.T) {
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
 				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-				Nonce:    "0x1", Deadline: deadline,
+				Nonce:    "1", Deadline: deadline,
 			},
 			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
 		}
