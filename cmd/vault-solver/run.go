@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,10 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	for i, s := range cfg.Solvers {
 		solverNames[i] = s.Name
 	}
+	// Every line this process logs, including shared components such as txmanager and the chain
+	// client, names the integration it serves, so a log or Sentry event never has to be traced back
+	// to a deployment by pod name.
+	log = log.WithValues("solver", strings.Join(solverNames, ","))
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,

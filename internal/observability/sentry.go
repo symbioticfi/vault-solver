@@ -2,6 +2,7 @@ package observability
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -64,12 +65,32 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 			scope.SetContext("log", enc.Fields)
 		}
 		scope.SetLevel(sentryLevel(e.Level))
-		// Group by the static log message, not the title: the title carries the error text so the
-		// issue stream shows the cause, while one log site still maps to one issue.
-		scope.SetFingerprint([]string{e.Message})
+		// Loggers are named per solver ("rfq", "lifi.txmanager", ...), so the name says which
+		// deployment an event came from even when the log site is shared code like txmanager.
+		if e.LoggerName != "" {
+			scope.SetTag("logger", e.LoggerName)
+		}
+		solver := eventSolver(e.LoggerName, enc.Fields)
+		if solver != "" {
+			scope.SetTag("solver", solver)
+		}
+		// Group by solver and static message, not the title: the title carries the error text so
+		// the issue stream shows the cause, while one log site in one solver still maps to one issue.
+		scope.SetFingerprint([]string{solver, e.Message})
 		sentry.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
+}
+
+// eventSolver names the integration an event belongs to: the process-wide "solver" log field
+// when present (run.go stamps it on every line), otherwise the first segment of the logger name
+// ("rfq.txmanager" -> "rfq").
+func eventSolver(loggerName string, fields map[string]any) string {
+	if solver, ok := fields["solver"].(string); ok && solver != "" {
+		return solver
+	}
+	first, _, _ := strings.Cut(loggerName, ".")
+	return first
 }
 
 // eventTitle is the log message followed by the logged error, when there is one. logr's

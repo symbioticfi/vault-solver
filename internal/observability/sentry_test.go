@@ -64,3 +64,20 @@ func TestEventTitleAppendsLoggedError(t *testing.T) {
 		})
 	}
 }
+
+func TestEventSolverPrefersTheProcessFieldOverTheLoggerName(t *testing.T) {
+	for _, tc := range []struct {
+		logger string
+		fields map[string]any
+		want   string
+	}{
+		{logger: "txmanager", fields: map[string]any{"solver": "rfq"}, want: "rfq"},
+		{logger: "lifi.txmanager", fields: map[string]any{}, want: "lifi"},
+		{logger: "redstone-oev.ws", fields: map[string]any{"solver": ""}, want: "redstone-oev"},
+		{logger: "", fields: map[string]any{}, want: ""},
+	} {
+		if got := eventSolver(tc.logger, tc.fields); got != tc.want {
+			t.Errorf("eventSolver(%q, %v) = %q, want %q", tc.logger, tc.fields, got, tc.want)
+		}
+	}
+}

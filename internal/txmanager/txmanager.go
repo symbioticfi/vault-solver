@@ -884,7 +884,8 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 // later ones are debug with the running count, since the condition is already reported.
 func (m *Manager) noteReceiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
 	pending.receiptReadFailures++
-	fields := []any{
+	fields := make([]any, 0, 16)
+	fields = append(fields,
 		"label", pending.req.Label,
 		"hash", attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
@@ -892,7 +893,7 @@ func (m *Manager) noteReceiptReadFailed(pending *pendingTransaction, attempt txA
 		"cancellation", attempt.cancellation,
 		"rpcTimeout", m.receiptReadTimeout().String(),
 		"consecutiveFailures", pending.receiptReadFailures,
-	}
+	)
 	if pending.receiptReadFailures == 1 {
 		pending.receiptReadFailedAt = time.Now()
 		m.log.Error(err, "pending transaction receipt unavailable", fields...)
