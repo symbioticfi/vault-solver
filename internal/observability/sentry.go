@@ -67,30 +67,38 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 		scope.SetLevel(sentryLevel(e.Level))
 		// Loggers are named per solver ("rfq", "lifi.txmanager", ...), so the name says which
 		// deployment an event came from even when the log site is shared code like txmanager.
-		if e.LoggerName != "" {
-			scope.SetTag("logger", e.LoggerName)
-		}
-		solver := eventSolver(e.LoggerName, enc.Fields)
-		if solver != "" {
-			scope.SetTag("solver", solver)
+		tags := eventTags(e.LoggerName, enc.Fields)
+		for key, value := range tags {
+			scope.SetTag(key, value)
 		}
 		// Group by solver and static message, not the title: the title carries the error text so
 		// the issue stream shows the cause, while one log site in one solver still maps to one issue.
-		scope.SetFingerprint([]string{solver, e.Message})
+		scope.SetFingerprint([]string{tags["solver"], e.Message})
 		sentry.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
 }
 
-// eventSolver names the integration an event belongs to: the process-wide "solver" log field
-// when present (run.go stamps it on every line), otherwise the first segment of the logger name
-// ("rfq.txmanager" -> "rfq").
-func eventSolver(loggerName string, fields map[string]any) string {
-	if solver, ok := fields["solver"].(string); ok && solver != "" {
-		return solver
+// eventTags picks the searchable attribution for an event. "solver" is the log field run.go
+// stamps (process-wide with one solver, per solver otherwise), falling back to the first logger
+// name segment ("rfq.txmanager" -> "rfq"); "label" is the txmanager request label, which is how
+// shared components attribute work when several solvers share a process.
+func eventTags(loggerName string, fields map[string]any) map[string]string {
+	tags := map[string]string{}
+	if loggerName != "" {
+		tags["logger"] = loggerName
 	}
-	first, _, _ := strings.Cut(loggerName, ".")
-	return first
+	solver, _ := fields["solver"].(string)
+	if solver == "" {
+		solver, _, _ = strings.Cut(loggerName, ".")
+	}
+	if solver != "" {
+		tags["solver"] = solver
+	}
+	if label, ok := fields["label"].(string); ok && label != "" {
+		tags["label"] = label
+	}
+	return tags
 }
 
 // eventTitle is the log message followed by the logged error, when there is one. logr's

@@ -65,19 +65,31 @@ func TestEventTitleAppendsLoggedError(t *testing.T) {
 	}
 }
 
-func TestEventSolverPrefersTheProcessFieldOverTheLoggerName(t *testing.T) {
+func TestEventTagsAttributeSolverAndLabel(t *testing.T) {
 	for _, tc := range []struct {
+		name   string
 		logger string
 		fields map[string]any
-		want   string
+		want   map[string]string
 	}{
-		{logger: "txmanager", fields: map[string]any{"solver": "rfq"}, want: "rfq"},
-		{logger: "lifi.txmanager", fields: map[string]any{}, want: "lifi"},
-		{logger: "redstone-oev.ws", fields: map[string]any{"solver": ""}, want: "redstone-oev"},
-		{logger: "", fields: map[string]any{}, want: ""},
+		{name: "process field wins", logger: "txmanager", fields: map[string]any{"solver": "rfq", "label": "rfq-fill"},
+			want: map[string]string{"logger": "txmanager", "solver": "rfq", "label": "rfq-fill"}},
+		{name: "logger name fallback", logger: "lifi.txmanager", fields: map[string]any{},
+			want: map[string]string{"logger": "lifi.txmanager", "solver": "lifi"}},
+		{name: "shared component in a multi-solver process", logger: "txmanager", fields: map[string]any{"label": "uniswapx-fill"},
+			want: map[string]string{"logger": "txmanager", "solver": "txmanager", "label": "uniswapx-fill"}},
+		{name: "nothing known", logger: "", fields: map[string]any{}, want: map[string]string{}},
 	} {
-		if got := eventSolver(tc.logger, tc.fields); got != tc.want {
-			t.Errorf("eventSolver(%q, %v) = %q, want %q", tc.logger, tc.fields, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := eventTags(tc.logger, tc.fields)
+			if len(got) != len(tc.want) {
+				t.Fatalf("eventTags = %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Fatalf("eventTags[%q] = %q, want %q (all: %v)", k, got[k], v, got)
+				}
+			}
+		})
 	}
 }
