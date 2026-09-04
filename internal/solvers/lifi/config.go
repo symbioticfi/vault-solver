@@ -1,16 +1,15 @@
 package lifi
 
 import (
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -29,7 +28,7 @@ type rawConfig struct {
 	SolverMode         string                   `yaml:"solverMode"`
 	DiscountsURL       string                   `yaml:"privateDiscountsUrl"`
 	Gas                *liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy           rawStrategyConfig        `yaml:"strategy"`
+	Strategy           StrategyConfig           `yaml:"strategy"`
 }
 
 type rawOrderServerConfig struct {
@@ -37,11 +36,6 @@ type rawOrderServerConfig struct {
 	WSURL       string `yaml:"wsUrl"`
 	APIKeyEnv   string `yaml:"apiKeyEnv"`
 	HTTPTimeout string `yaml:"httpTimeout"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
 }
 
 type Config struct {
@@ -58,7 +52,7 @@ type Config struct {
 	QuoteInterval    time.Duration
 	QuoteTTL         time.Duration
 	QuoteRefreshMode string
-	SolverMode       string
+	SolverMode       liquidlane.SolverMode
 	DiscountsURL     string
 	Gas              *liquidlanegas.OracleConfig
 	Strategy         StrategyConfig
@@ -72,8 +66,8 @@ type OrderServerConfig struct {
 }
 
 type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
 
 const (
@@ -83,19 +77,16 @@ const (
 	defaultBlockPollInterval = time.Second
 	defaultQuoteRefreshMode  = quoteRefreshModeBlock
 	defaultStrategyName      = "default"
-	defaultSolverMode        = solverModeExternal
 )
 
 const (
 	quoteRefreshModeInterval = "interval"
 	quoteRefreshModeBlock    = "block"
-	solverModeExternal       = "external"
-	solverModeInternal       = "internal"
 )
 
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 
@@ -111,11 +102,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	liquidityLens, err := parse.OptionalNonZeroAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
 	adapters, err := parseAdapters(raw.Adapters)
 	if err != nil {
@@ -155,23 +144,22 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.OrderServer.WSURL == "" {
 		return nil, errors.New("orderServer.wsUrl is required")
 	}
-	solverMode := parse.OrDefault(raw.SolverMode, defaultSolverMode)
-	if solverMode != solverModeExternal && solverMode != solverModeInternal {
-		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, solverMode)
+	solverMode, err := liquidlane.ParseSolverMode(raw.SolverMode)
+	if err != nil {
+		return nil, err
 	}
-	if solverMode == solverModeInternal && raw.DiscountsURL == "" {
+	if solverMode == liquidlane.SolverModeInternal && raw.DiscountsURL == "" {
 		return nil, errors.New("privateDiscountsUrl is required in internal solverMode")
 	}
-	if solverMode == solverModeExternal && raw.DiscountsURL != "" {
+	if solverMode == liquidlane.SolverModeExternal && raw.DiscountsURL != "" {
 		return nil, errors.New("privateDiscountsUrl requires internal solverMode")
 	}
-	var gas *liquidlanegas.OracleConfig
-	if raw.Gas != nil {
-		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
-		if gasErr != nil {
-			return nil, gasErr
-		}
-		gas = &parsed
+	gas, err := liquidlanegas.ParseOptionalConfig(raw.Gas)
+	if err != nil {
+		return nil, err
+	}
+	if raw.Strategy.Name == "" {
+		raw.Strategy.Name = defaultStrategyName
 	}
 	return &Config{
 		OrderServer: OrderServerConfig{
@@ -192,14 +180,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		SolverMode:       solverMode,
 		DiscountsURL:     raw.DiscountsURL,
 		Gas:              gas,
-		Strategy: StrategyConfig{
-			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
-			Config: raw.Strategy.Config,
-		},
+		Strategy:         raw.Strategy,
 	}, nil
 }
 
-func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
+func (c *Config) usesDiscounts() bool { return c.SolverMode == liquidlane.SolverModeInternal }
 
 func parseQuoteInterval(ms int, mode string) (time.Duration, error) {
 	if ms == 0 {
@@ -218,18 +203,5 @@ func parseAdapters(raw []string) ([]common.Address, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("at least one adapters entry is required")
 	}
-	out := make([]common.Address, 0, len(raw))
-	seen := make(map[common.Address]bool, len(raw))
-	for i, a := range raw {
-		addr, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return nil, err
-		}
-		if seen[addr] {
-			return nil, errors.Errorf("adapters[%d]: duplicate adapter %s", i, addr.Hex())
-		}
-		seen[addr] = true
-		out = append(out, addr)
-	}
-	return out, nil
+	return parse.NonZeroAddresses(raw, "adapters")
 }

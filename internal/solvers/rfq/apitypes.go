@@ -60,86 +60,111 @@ const (
 
 // parsedQuote is the validated, typed form of a quotable request.
 type parsedQuote struct {
-	req strategyRequest
-	inv []solverInventory
+	req quoteRequestFacts
+	inv []liquidlane.Inventory
+}
+
+type quoteAmounts struct {
+	tokenIn  common.Address
+	tokenOut common.Address
+	amount   *big.Int
 }
 
 // toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
 func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
-	// Schema-level validation (malformed → 400).
-	if q.Type != quoteTypeExactInput {
-		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
+	if err := q.validateEnvelope(); err != nil {
+		return nil, err
 	}
-	if q.Protocol != quoteProtocolV1 {
-		return nil, errors.Errorf("protocol must be %q", quoteProtocolV1)
-	}
-	if q.NumOutputs <= 0 {
-		return nil, errors.New("numOutputs must be positive")
-	}
-	if q.QuoteID == "" || q.RequestID == "" {
-		return nil, errors.New("quoteId and requestId are required")
-	}
-	if !common.IsHexAddress(q.Swapper) {
-		return nil, errors.Errorf("swapper: invalid address %q", q.Swapper)
-	}
-	tokenIn, err := parse.Address(q.TokenIn, "tokenIn")
+	amounts, err := q.parseAmounts()
 	if err != nil {
 		return nil, err
+	}
+	inventory, err := q.parseInventory(amounts.tokenIn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Well-formed requests outside this solver's lane are declined, not rejected.
+	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(inventory) == 0 {
+		return nil, nil
+	}
+	return &parsedQuote{
+		req: quoteRequestFacts{
+			RequestID: q.RequestID, QuoteID: q.QuoteID,
+			TokenIn: amounts.tokenIn, TokenOut: amounts.tokenOut, Amount: amounts.amount,
+		},
+		inv: inventory,
+	}, nil
+}
+
+func (q *quoteRequest) validateEnvelope() error {
+	if q.Type != quoteTypeExactInput {
+		return errors.Errorf("type must be %q", quoteTypeExactInput)
+	}
+	if q.Protocol != quoteProtocolV1 {
+		return errors.Errorf("protocol must be %q", quoteProtocolV1)
+	}
+	if q.NumOutputs <= 0 {
+		return errors.New("numOutputs must be positive")
+	}
+	if q.QuoteID == "" || q.RequestID == "" {
+		return errors.New("quoteId and requestId are required")
+	}
+	if !common.IsHexAddress(q.Swapper) {
+		return errors.Errorf("swapper: invalid address %q", q.Swapper)
+	}
+	return nil
+}
+
+func (q *quoteRequest) parseAmounts() (quoteAmounts, error) {
+	tokenIn, err := parse.Address(q.TokenIn, "tokenIn")
+	if err != nil {
+		return quoteAmounts{}, err
 	}
 	tokenOut, err := parse.Address(q.TokenOut, "tokenOut")
 	if err != nil {
-		return nil, err
+		return quoteAmounts{}, err
 	}
 	amount, err := parseUint256(q.Amount, "amount")
 	if err != nil {
-		return nil, err
+		return quoteAmounts{}, err
 	}
-	inv := make([]solverInventory, 0, len(q.Adapters))
+	return quoteAmounts{tokenIn: tokenIn, tokenOut: tokenOut, amount: amount}, nil
+}
+
+func (q *quoteRequest) parseInventory(tokenIn common.Address) ([]liquidlane.Inventory, error) {
+	inventory := make([]liquidlane.Inventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
 		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn)
 		if perr != nil {
 			return nil, perr
 		}
-		inv = append(inv, entry)
+		inventory = append(inventory, entry)
 	}
-
-	// Quote-logic checks (well-formed but not for us → 204).
-	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(q.Adapters) == 0 {
-		return nil, nil
-	}
-	return &parsedQuote{
-		req: strategyRequest{
-			RequestID: q.RequestID,
-			QuoteID:   q.QuoteID,
-			TokenIn:   tokenIn,
-			TokenOut:  tokenOut,
-			Amount:    amount,
-		},
-		inv: inv,
-	}, nil
+	return inventory, nil
 }
 
-func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (solverInventory, error) {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (liquidlane.Inventory, error) {
 	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
-		return solverInventory{}, err
+		return liquidlane.Inventory{}, err
 	}
 	asset, err := parse.Address(v.Asset, idxField(index, "asset"))
 	if err != nil {
-		return solverInventory{}, err
+		return liquidlane.Inventory{}, err
 	}
 	if v.AssetDecimals < 0 || v.AssetDecimals > 255 {
-		return solverInventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
+		return liquidlane.Inventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
 	}
 	maxAssets, err := parseUint256(v.MaxAssets, idxField(index, "maxAssets"))
 	if err != nil {
-		return solverInventory{}, err
+		return liquidlane.Inventory{}, err
 	}
 	maxRate, err := parseUint256(v.MaxRate, idxField(index, "maxRate"))
 	if err != nil {
-		return solverInventory{}, err
+		return liquidlane.Inventory{}, err
 	}
 	var discountID *common.Hash
 	if v.DiscountID != nil && *v.DiscountID != "" {

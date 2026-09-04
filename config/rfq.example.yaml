@@ -1,8 +1,9 @@
+# yaml-language-server: $schema=./vault-solver.schema.json
 # vault-solver — RFQ Filler (`rfq-filler`), annotated example.
 #
 # A quote server + order-filling poller for Symbiotic RFQ, on top of per-vault LiquidLaneAdapters.
 # Addresses below are the Ethereum mainnet (chainId 1) deployment; for a testnet (e.g. Hoodi,
-# chainId 560048) swap chainId and the executor/reactor/adapter addresses.
+# chainId 560048) swap chainId and the executor/adapter addresses.
 #
 # Provide secrets by env-var NAME (read at point of use, never in the parsed config):
 #   SOLVER_PRIVATE_KEY          — the caller EOA; must be an authorized caller of the Executor
@@ -39,7 +40,7 @@ observability:
 solvers:
   - name: rfq-filler
     config:
-      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/strategy-plan.md
+      strategy:                        # pluggable decision layer (omit ⇒ default); see docs/STRATEGIES.md
         name: default                  #   "default" (in-process pricing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 
@@ -51,7 +52,6 @@ solvers:
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle
-      reactor:  "0xC323B898d7E4105E3980082B74CC5D4602996B10"   # Reactor — invoked by the Executor at fill time
       # liquidityLens: "0x..."          # optional FrontendLiquidityLens; reads LiquidLane headroom from its
                                         # cross-adapter deallocation-cascade estimate instead of getMaxAssets(). Omit to use the adapter getter.
 
@@ -82,4 +82,4 @@ solvers:
       # these scope quoting/filling and are required; the Executor must additionally be an authorized
       # filler on each adapter (its marketMaker or owner, or a delegated isFiller).
       adapters:
-        - "0x..."   # TODO: concrete adapter instance(s) emitted by factory 0x9b5dbB434269e39e41b1E331C2AcE09e05A899B5
+        - "0x1111111111111111111111111111111111111111" # replace with an adapter emitted by factory 0x9b5dbB434269e39e41b1E331C2AcE09e05A899B5

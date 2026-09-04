@@ -19,6 +19,7 @@ import (
 const (
 	rpcAttemptTimeout              = 20 * time.Second
 	jsonRPCVersion                 = "2.0"
+	rpcMethodCall                  = "eth_call"
 	rpcMethodChainID               = "eth_chainId"
 	rpcMethodGetBalance            = "eth_getBalance"
 	rpcMethodGetTransactionCount   = "eth_getTransactionCount"
@@ -45,14 +46,9 @@ type fallbackTransport struct {
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Buffer the body once so it can be replayed against each endpoint.
-	var body []byte
-	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
-		_ = req.Body.Close()
-		if err != nil {
-			return nil, errors.Errorf("rpc fallback: read body: %w", err)
-		}
-		body = b
+	body, err := readRequestBody(req)
+	if err != nil {
+		return nil, err
 	}
 	method := "unknown"
 	var (
@@ -98,58 +94,26 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 
 		resp, err := t.base.RoundTrip(attempt)
-		var inspectedOutcome *rpcOutcome
-		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
-			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, nullFallbackID)
-				if inspectErr != nil || unavailable {
-					_ = resp.Body.Close()
-					cancel()
-					if inspectErr != nil {
-						lastErr = inspectErr
-						lastOutcome = classifyRPCFailure(inspectErr, req.Context().Err())
-					} else {
-						lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
-						lastOutcome = rpcOutcomeNullResult
-					}
-					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
-					t.log.V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
-					continue
-				}
-				if t.metrics != nil {
-					outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
-					inspectedOutcome = &outcome
-				}
-			}
-			// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
-			// classify JSON-RPC error envelopes only after that body has been consumed.
-			if t.metrics == nil {
-				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-			} else if inspectedOutcome != nil {
-				outcome := *inspectedOutcome
-				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func() {
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
-				})
-			} else {
-				statusCode := resp.StatusCode
-				resp.Body = newObservedRPCBody(resp.Body, cancel, func(responseBody []byte, truncated bool, readErr error) {
-					outcome := classifyRPCResponse(method, statusCode, responseBody, truncated, readErr)
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
-				})
-			}
-			return resp, nil
-		}
-
 		if err != nil {
 			lastErr = err
 			lastOutcome = classifyRPCFailure(err, req.Context().Err())
-		} else {
+		} else if unavailableHTTPStatus(resp.StatusCode) {
 			lastErr = errors.Errorf("status %d", resp.StatusCode)
 			lastOutcome = classifyHTTPStatus(resp.StatusCode)
 			_ = resp.Body.Close()
+		} else {
+			inspectedBody, inspectErr := inspectNullFallback(resp, nullFallbackID, nullFallback && i < len(t.endpoints)-1)
+			if inspectErr != nil {
+				_ = resp.Body.Close()
+				cancel()
+				lastOutcome, lastErr = classifyNullFallbackError(nullFallbackMethod, inspectErr, req.Context().Err())
+				t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
+				t.log.V(1).Info("rpc result unavailable; trying fallback",
+					"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
+				continue
+			}
+			t.observeResponse(resp, cancel, endpoint, method, inspectedBody, requestObservation)
+			return resp, nil
 		}
 		cancel()
 		t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
@@ -160,6 +124,62 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	requestObservation.finish(lastOutcome)
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
+}
+
+func (t *fallbackTransport) observeResponse(
+	resp *http.Response,
+	cancel context.CancelFunc,
+	endpoint, method string,
+	inspectedBody []byte,
+	request *rpcRequestObservation,
+) {
+	// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
+	// classify JSON-RPC error envelopes only after that body has been consumed.
+	if t.metrics == nil {
+		resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+		return
+	}
+	statusCode := resp.StatusCode
+	resp.Body = newObservedRPCBody(resp.Body, cancel, inspectedBody, func(responseBody []byte, truncated bool, readErr error) {
+		outcome := classifyRPCResponse(method, statusCode, responseBody, truncated, readErr)
+		t.metrics.observeAttempt(t.role, endpoint, method, outcome)
+		request.finish(outcome)
+	})
+}
+
+func readRequestBody(req *http.Request) ([]byte, error) {
+	if req.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		return nil, errors.Errorf("rpc fallback: read body: %w", err)
+	}
+	return body, nil
+}
+
+func inspectNullFallback(resp *http.Response, id json.RawMessage, enabled bool) ([]byte, error) {
+	if !enabled || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil
+	}
+	unavailable, body, err := hasNullRPCResult(resp, id)
+	if err != nil {
+		return body, err
+	}
+	if unavailable {
+		return body, errNullRPCResult
+	}
+	return body, nil
+}
+
+var errNullRPCResult = errors.New("null rpc result")
+
+func classifyNullFallbackError(method string, err, parentErr error) (rpcOutcome, error) {
+	if errors.Is(err, errNullRPCResult) {
+		return rpcOutcomeNullResult, errors.Errorf("%s returned a null result", method)
+	}
+	return classifyRPCFailure(err, parentErr), err
 }
 
 type rpcRequestInfo struct {
@@ -201,14 +221,10 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 	return info
 }
 
-func boundedRPCMethod(body []byte) string {
-	return inspectRPCRequest(body).boundedMethod
-}
-
 func boundedRPCMethodName(method string) string {
 	// The client is internal, but keep the label bounded if a future raw-RPC call is added.
 	switch method {
-	case "eth_blockNumber", "eth_call", rpcMethodChainID, "eth_estimateGas", "eth_feeHistory",
+	case "eth_blockNumber", rpcMethodCall, rpcMethodChainID, "eth_estimateGas", "eth_feeHistory",
 		"eth_gasPrice", rpcMethodGetBalance, "eth_getBlockByHash", "eth_getBlockByNumber",
 		"eth_getBlockReceipts", "eth_getCode", "eth_getLogs", "eth_getStorageAt",
 		"eth_getTransactionByHash", rpcMethodGetTransactionCount, rpcMethodGetTransactionReceipt,
@@ -292,6 +308,7 @@ type observedRPCBody struct {
 	cancel    context.CancelFunc
 	observe   func([]byte, bool, error)
 	body      []byte
+	capture   bool
 	truncated bool
 	readErr   error
 	once      sync.Once
@@ -300,39 +317,17 @@ type observedRPCBody struct {
 func newObservedRPCBody(
 	body io.ReadCloser,
 	cancel context.CancelFunc,
+	inspected []byte,
 	observe func([]byte, bool, error),
 ) *observedRPCBody {
-	return &observedRPCBody{ReadCloser: body, cancel: cancel, observe: observe}
-}
-
-type classifiedRPCBody struct {
-	io.ReadCloser
-
-	cancel  context.CancelFunc
-	observe func()
-	once    sync.Once
-}
-
-func newClassifiedRPCBody(
-	body io.ReadCloser,
-	cancel context.CancelFunc,
-	observe func(),
-) *classifiedRPCBody {
-	return &classifiedRPCBody{ReadCloser: body, cancel: cancel, observe: observe}
-}
-
-func (b *classifiedRPCBody) Close() error {
-	closeErr := b.ReadCloser.Close()
-	b.once.Do(func() {
-		b.observe()
-		b.cancel()
-	})
-	return closeErr
+	return &observedRPCBody{
+		ReadCloser: body, cancel: cancel, observe: observe, body: inspected, capture: inspected == nil,
+	}
 }
 
 func (b *observedRPCBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if n > 0 {
+	if n > 0 && b.capture {
 		remaining := rpcResponseObservationLimit - len(b.body)
 		if remaining > 0 {
 			copied := min(n, remaining)

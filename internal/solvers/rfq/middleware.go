@@ -17,13 +17,11 @@ const maxRequestBytes = 1 << 20 // 1 MiB
 
 const requestIDHeader = "X-Request-Id"
 
-type ctxKey int
-
-const requestIDKey ctxKey = iota
+type requestIDContextKey struct{}
 
 // requestID returns the id assigned to the request by logRequests, or "" if absent.
 func requestID(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey).(string)
+	id, _ := ctx.Value(requestIDContextKey{}).(string)
 	return id
 }
 
@@ -36,7 +34,7 @@ func logRequests(next http.Handler, log logr.Logger) http.Handler {
 			id = newRequestID()
 		}
 		w.Header().Set(requestIDHeader, id)
-		r = r.WithContext(context.WithValue(r.Context(), requestIDKey, id))
+		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, id))
 
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}

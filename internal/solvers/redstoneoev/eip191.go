@@ -35,11 +35,26 @@ var executorV6Args = abi.Arguments{
 // ExecutorV6Digest is the inner digest the Executor hashes before EIP-191 wrapping:
 // keccak256(abi.encode("EXECUTOR_V6", chainId, callback, opDataHash, bid, nonce, maxTxGasPrice)).
 func ExecutorV6Digest(chainID *big.Int, callback common.Address, opDataHash common.Hash, bid, nonce, maxTxGasPrice *big.Int) (common.Hash, error) {
-	enc, err := executorV6Args.Pack(executorV6Domain, chainID, callback, opDataHash, bid, nonce, maxTxGasPrice)
+	encoded, err := encodeExecutorV6(chainID, callback, opDataHash, bid, nonce, maxTxGasPrice)
 	if err != nil {
-		return common.Hash{}, errors.Errorf("encode EXECUTOR_V6: %w", err)
+		return common.Hash{}, err
 	}
-	return crypto.Keccak256Hash(enc), nil
+	return crypto.Keccak256Hash(encoded), nil
+}
+
+func encodeExecutorV6(
+	chainID *big.Int,
+	callback common.Address,
+	operationHash common.Hash,
+	bid, nonce, maxTxGasPrice *big.Int,
+) ([]byte, error) {
+	encoded, err := executorV6Args.Pack(
+		executorV6Domain, chainID, callback, operationHash, bid, nonce, maxTxGasPrice,
+	)
+	if err != nil {
+		return nil, errors.Errorf("encode EXECUTOR_V6: %w", err)
+	}
+	return encoded, nil
 }
 
 // SignBid produces the 65-byte EIP-191 (personal_sign) signature over the EXECUTOR_V6 digest that the

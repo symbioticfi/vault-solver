@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
@@ -68,14 +69,14 @@ quoteRefreshMode: block
 		cfg.Gas.TokenUSDFeeds[permissioned].MaxAge != time.Hour {
 		t.Fatalf("gas oracle config = %+v", cfg.Gas)
 	}
-	if cfg.SolverMode != solverModeExternal || cfg.usesDiscounts() {
+	if cfg.SolverMode != liquidlane.SolverModeExternal || cfg.usesDiscounts() {
 		t.Fatalf("solver mode = %q discounts=%v", cfg.SolverMode, cfg.usesDiscounts())
 	}
 	if !cfg.TokenPolicy.RequiresSingleRoute(permissioned) {
 		t.Fatalf("token scope = %q", cfg.TokenPolicy.Scope())
 	}
-	if _, err := newStrategy(cfg.Strategy); err != nil {
-		t.Fatalf("newStrategy: %v", err)
+	if _, err := newPlanner(cfg.Strategy); err != nil {
+		t.Fatalf("new strategy: %v", err)
 	}
 }
 
@@ -119,6 +120,16 @@ gas:
 	}
 	if _, err := parseConfig(parseYAMLNode(t, base+"tokensToQuote: bogus\n")); err == nil {
 		t.Fatal("expected invalid tokensToQuote error")
+	}
+	for _, entries := range []string{
+		`  - "0x0000000000000000000000000000000000000000"`,
+		`  - "0x6666666666666666666666666666666666666666"
+  - "0x6666666666666666666666666666666666666666"`,
+	} {
+		raw := strings.Replace(base, `  - "0x6666666666666666666666666666666666666666"`, entries, 1)
+		if _, err := parseConfig(parseYAMLNode(t, raw)); err == nil {
+			t.Fatalf("expected permissionedTokens validation error for:\n%s", entries)
+		}
 	}
 }
 
@@ -328,32 +339,8 @@ adapters:
   - "0x5555555555555555555555555555555555555555"
   - "0x5555555555555555555555555555555555555555"
 `))
-	if err == nil || !strings.Contains(err.Error(), "duplicate adapter") {
+	if err == nil || !strings.Contains(err.Error(), "duplicate address") {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestParseConfigRejectsInvalidPermissionedTokens(t *testing.T) {
-	base := `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-permissionedTokens:
-`
-	for _, entries := range []string{
-		`  - "0x0000000000000000000000000000000000000000"`,
-		`  - "0x6666666666666666666666666666666666666666"
-  - "0x6666666666666666666666666666666666666666"`,
-	} {
-		if _, err := parseConfig(parseYAMLNode(t, base+entries+"\n")); err == nil {
-			t.Fatalf("expected permissionedTokens validation error for:\n%s", entries)
-		}
 	}
 }
 

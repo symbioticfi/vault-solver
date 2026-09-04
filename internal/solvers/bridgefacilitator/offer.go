@@ -9,13 +9,12 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, offer types.OfferExecution,
+	av auctionView, offer OfferExecution,
 ) (threef.CreateOfferDto, error) {
 	auction := av.dto
 	if offer.Principal == nil || offer.ExpectedReturn == nil {
@@ -54,7 +53,7 @@ func (s *Solver) buildSignedOffer(
 		UseCallback:    true,
 	}
 	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
-	sig, err := s.deps.Signer.SignHash(digest)
+	sig, err := s.signer.SignHash(digest)
 	if err != nil {
 		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)
 	}

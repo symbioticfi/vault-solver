@@ -42,11 +42,9 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 	}
 }
 
-func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Route) error {
-	timer := observability.StartOperation(s.operations.quoteRefresh)
-	outcome := observability.ExternalOperationError
-	defer func() { timer.Finish(ctx, outcome) }()
-
+func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Route) (err error) {
+	timer := observability.StartOperation(s.metrics.operation(quoteRefreshOperation))
+	defer func() { timer.Finish(ctx, observability.OutcomeForError(err)) }()
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 
@@ -56,13 +54,11 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		return err
 	}
 	s.chainTime.Store(now.Unix())
-	discountRoutes, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
+	decisionRoutes, listed, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
 	if discountErr != nil {
 		s.log.Error(discountErr, "refresh advertised discount routes")
 	}
-	decisionRoutes := discountRoutes.routes
-	listed := discountRoutes.listed
-	current, err := s.reader.quoteSnapshot(ctx, decisionRoutes, s.cfg.Executor, now)
+	current, err := s.reader.Quote(ctx, decisionRoutes, s.cfg.Executor, now)
 	if err != nil {
 		return err
 	}
@@ -86,13 +82,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		maxFeePerGas: maxFee, chainTime: now, expiresAt: serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		singleRouteFor: s.cfg.TokenPolicy.SingleRouteTokens(),
 	}) {
-		outcome = observability.ExternalOperationSuccess
-		if discountErr != nil || !discountRoutes.complete {
-			outcome = observability.ExternalOperationDegraded
-		}
-		if s.metrics != nil {
-			s.metrics.quoteRefresh.Set(float64(time.Now().Unix()))
-		}
+		s.metrics.quoteRefreshed(time.Now())
 		s.log.V(1).Info(
 			"quote state refreshed",
 			"epoch", epoch,
@@ -104,20 +94,19 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 			"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		)
 	} else {
-		outcome = observability.ExternalOperationSkipped
 		s.log.V(1).Info("quote state refresh discarded", "epoch", epoch)
 	}
 	return nil
 }
 
-func (s *Solver) publishQuoteState(epoch uint64, state *quoteState) bool {
-	if s.planningFills.Load() != 0 || s.quoteEpoch.Load() != epoch {
+func (q *quoteRuntime) publishQuoteState(epoch uint64, state *quoteState) bool {
+	if q.planningFills.Load() != 0 || q.quoteEpoch.Load() != epoch {
 		return false
 	}
 	state.epoch = epoch
-	s.quoteState.Store(state)
-	if s.planningFills.Load() != 0 || s.quoteEpoch.Load() != epoch {
-		s.quoteState.CompareAndSwap(state, nil)
+	q.quoteState.Store(state)
+	if q.planningFills.Load() != 0 || q.quoteEpoch.Load() != epoch {
+		q.quoteState.CompareAndSwap(state, nil)
 		return false
 	}
 	return true

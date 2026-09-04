@@ -60,6 +60,32 @@ func TestNonZeroAddress(t *testing.T) {
 	}
 }
 
+func TestNonZeroAddresses(t *testing.T) {
+	first := "0x1111111111111111111111111111111111111111"
+	second := "0x2222222222222222222222222222222222222222"
+	got, err := NonZeroAddresses([]string{first, second}, "adapters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != common.HexToAddress(first) || got[1] != common.HexToAddress(second) {
+		t.Fatalf("addresses = %v", got)
+	}
+	for _, values := range [][]string{{first, first}, {common.Address{}.Hex()}} {
+		if _, err := NonZeroAddresses(values, "adapters"); err == nil {
+			t.Fatalf("NonZeroAddresses(%v): error = nil", values)
+		}
+	}
+}
+
+func TestOptionalNonZeroAddress(t *testing.T) {
+	if got, err := OptionalNonZeroAddress("", "field"); err != nil || got != (common.Address{}) {
+		t.Fatalf("omitted address = %s, %v", got, err)
+	}
+	if _, err := OptionalNonZeroAddress(common.Address{}.Hex(), "field"); err == nil {
+		t.Fatal("explicit zero address accepted")
+	}
+}
+
 func TestHash(t *testing.T) {
 	tests := []struct {
 		name    string

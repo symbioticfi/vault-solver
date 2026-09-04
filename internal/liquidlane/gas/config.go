@@ -22,6 +22,19 @@ type RawTokenFeed struct {
 	MaxAge string `yaml:"maxAge"`
 }
 
+// ParseOptionalConfig preserves the distinction between omitted gas accounting and an invalid
+// configured oracle block.
+func ParseOptionalConfig(raw *RawConfig) (*OracleConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	parsed, err := ParseConfig(*raw)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
 // ParseConfig validates the shared gas YAML without changing its gas.* field paths.
 func ParseConfig(raw RawConfig) (OracleConfig, error) {
 	nativeFeed, err := parse.NonZeroAddress(raw.NativeUSDFeed, "gas.nativeUsdFeed")

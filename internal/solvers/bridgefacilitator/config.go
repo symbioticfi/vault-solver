@@ -10,25 +10,19 @@ import (
 	"gopkg.in/yaml.v3"
 
 	cfgparse "github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
-	APIBaseURL        string            `yaml:"apiBaseUrl"`
-	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
-	Adapters          *[]string         `yaml:"adapters"`
-	AdapterFactory    string            `yaml:"adapterFactory"`
-	LiquidityLens     string            `yaml:"liquidityLens"`
-	HTTPTimeout       string            `yaml:"httpTimeout"`
-	OfferExpiryBuffer string            `yaml:"offerExpiryBuffer"`
-	Intervals         rawIntervals      `yaml:"intervals"`
-	Strategy          rawStrategyConfig `yaml:"strategy"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	APIBaseURL        string         `yaml:"apiBaseUrl"`
+	RedeemBatchSize   int            `yaml:"redeemBatchSize"`
+	Adapters          *[]string      `yaml:"adapters"`
+	AdapterFactory    string         `yaml:"adapterFactory"`
+	LiquidityLens     string         `yaml:"liquidityLens"`
+	HTTPTimeout       string         `yaml:"httpTimeout"`
+	OfferExpiryBuffer string         `yaml:"offerExpiryBuffer"`
+	Intervals         rawIntervals   `yaml:"intervals"`
+	Strategy          StrategyConfig `yaml:"strategy"`
 }
 
 type rawIntervals struct {
@@ -61,8 +55,8 @@ type Config struct {
 }
 
 type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
 
 // Target is one adapter the bot facilitates. Only static adapter addresses are config: Vault
@@ -104,7 +98,7 @@ const defaultStrategyName = "default"
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := cfgparse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.APIBaseURL == "" {
@@ -120,22 +114,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var adapterFactory common.Address
-	if raw.AdapterFactory != "" {
-		adapterFactory, err = cfgparse.NonZeroAddress(raw.AdapterFactory, "adapterFactory")
-		if err != nil {
-			return nil, err
-		}
+	adapterFactory, err := cfgparse.OptionalNonZeroAddress(raw.AdapterFactory, "adapterFactory")
+	if err != nil {
+		return nil, err
 	}
 	if len(targets) == 0 && adapterFactory == (common.Address{}) {
 		return nil, errors.New("at least one adapters entry or adapterFactory is required")
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		liquidityLens, err = cfgparse.NonZeroAddress(raw.LiquidityLens, "liquidityLens")
-		if err != nil {
-			return nil, err
-		}
+	liquidityLens, err := cfgparse.OptionalNonZeroAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
 
 	discover, err := cfgparse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
@@ -160,10 +148,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
-	if strategy.Name == "" {
-		strategy.Name = defaultStrategyName
+	if raw.Strategy.Name == "" {
+		raw.Strategy.Name = defaultStrategyName
 	}
 
 	return &Config{
@@ -175,7 +161,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		AdapterFactory:    adapterFactory,
 		LiquidityLens:     liquidityLens,
 		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:          strategy,
+		Strategy:          raw.Strategy,
 	}, nil
 }
 

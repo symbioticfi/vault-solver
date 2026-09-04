@@ -11,8 +11,8 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information and exit",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			cmd.Println(version.String())
+		Run: func(command *cobra.Command, _ []string) {
+			command.Println(version.String())
 		},
 	}
 }

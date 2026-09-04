@@ -2,72 +2,45 @@ package redstoneoev
 
 import (
 	"math/big"
+	"slices"
 	"time"
 
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-const (
-	oevBidEnqueued       = "enqueued"
-	oevBidWon            = "won"
-	oevBidSettledSuccess = "settled_success"
-	oevBidSettledFailed  = "settled_failed"
-	oevBidWouldBid       = "would_bid"
-	oevBidUnresolved     = "unresolved"
-)
-
-var (
-	auctionDecisionOutcomes = [...]string{
-		"breaker", "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
-		"sign_error", "signer_locked", "state_unknown", "strategy_error", "strategy_invalid", "too_late",
-		"would_bid", "bid_cap", "deposit_low", "empty_auction_id", "executor_state_stale",
-		"no_legs", "gas_unprofitable", "stale_epoch", "stale_state", "in_flight", "callback_balance", "strategy_skip",
-	}
-	bidLifecycleStages = [...]string{
-		oevBidEnqueued, oevBidWon, oevBidSettledSuccess, oevBidSettledFailed, oevBidWouldBid,
-	}
-)
+var auctionOutcomes = []string{
+	"breaker", "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
+	"sign_error", "signer_locked", "strategy_error", "strategy_invalid", "too_late", "would_bid",
+	"bid_cap", "bid_lane_busy", "deposit_low", "empty_auction_id", "executor_state_stale",
+	"no_legs", "gas_unprofitable", "stale_epoch", "stale_state", "in_flight", "callback_balance",
+	"strategy_skip", "other",
+}
 
 // metrics are the OEV solver's collectors, registered on the shared Prometheus registry (served at
 // the framework's /metrics). All methods are nil-safe so the solver runs unmetered when no registry
 // is provided.
 type metrics struct {
-	workflow          *observability.WorkflowMetrics
-	wonInflight       prometheus.GaugeFunc
-	oldestWonInflight prometheus.GaugeFunc
-	hotPath           prometheus.Histogram
-	deposit           prometheus.Gauge
-	depositBelowFloor prometheus.Gauge
-	feedConnected     prometheus.Gauge
-	now               func() time.Time
+	workflow   *observability.WorkflowMetrics
+	hotPath    prometheus.Histogram
+	deposit    prometheus.Gauge
+	depositLow prometheus.Gauge // 1 when the deposit is below the on-chain MIN_DEPOSIT floor
+	feed       prometheus.Gauge
+	winflight  prometheus.Gauge
+	oldestWin  prometheus.Gauge
 }
 
-func newMetrics(
-	reg prometheus.Registerer,
-	strategyName string,
-	wonMetrics func() (count int, oldestAge time.Duration),
-) (*metrics, error) {
-	if strategyName == "" {
-		strategyName = defaultStrategyName
-	}
-	if wonMetrics == nil {
-		wonMetrics = func() (int, time.Duration) { return 0, 0 }
-	}
+func newMetrics(reg prometheus.Registerer, strategyName string) (*metrics, error) {
 	workflow, err := observability.NewWorkflowMetrics(reg, Name, observability.WorkflowSpec{
-		Strategy:   strategyName,
-		Operations: []string{stateRefreshOperation},
+		Strategy: strategyName, Operations: []string{"state_refresh"},
 		Events: []observability.WorkflowEventSpec{
-			{Event: "auction", Outcomes: auctionDecisionOutcomes[:]},
-			{Event: "bid", Outcomes: append(bidLifecycleStages[:], oevBidUnresolved)},
+			{Event: "auction", Outcomes: auctionOutcomes},
+			{Event: "bid", Outcomes: []string{"enqueued", "won", "settled_success", "settled_failed", "would_bid", "unresolved"}},
 			{Event: "breaker", Outcomes: []string{"failure"}},
 			{Event: "state_refresh", Outcomes: []string{"success"}},
 		},
-		Amounts: []observability.WorkflowAmountSpec{{
-			Event: "bid", Kinds: bidLifecycleStages[:], Assets: []string{"native"},
-		}},
+		Amounts: []observability.WorkflowAmountSpec{{Event: "bid", Kinds: []string{"enqueued", "won", "settled_success", "settled_failed", "would_bid"}, Assets: []string{"native"}}},
 	})
 	if err != nil {
 		return nil, err
@@ -75,120 +48,83 @@ func newMetrics(
 	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
 	m := &metrics{
 		workflow: workflow,
-		wonInflight: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "oev_won_inflight",
-			Help: "Locally observed winning bids awaiting settlement.",
-		}, func() float64 {
-			count, _ := wonMetrics()
-			return float64(count)
-		}),
-		oldestWonInflight: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "oev_oldest_won_inflight_age_seconds",
-			Help: "Age of the oldest inflight reservation since its win was locally observed; zero when none.",
-		}, func() float64 {
-			_, oldestAge := wonMetrics()
-			return oldestAge.Seconds()
-		}),
 		hotPath: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "oev_hotpath_seconds", Help: "Wall-clock time from a parsed auction frame to its terminal local outcome.",
+			Name: "oev_hotpath_seconds", Help: "handleAuction wall-clock (the ~400ms budget).",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.4, 1},
 		}),
-		deposit: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei).",
-		}),
-		depositBelowFloor: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "oev_deposit_below_floor",
-			Help: "1 when the signer's Executor deposit is below the on-chain settlement floor; 0 otherwise.",
-		}),
-		feedConnected: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "oev_feed_connected",
-			Help: "Whether the OEV WebSocket is connected with all configured topic subscriptions sent (1 or 0).",
-		}),
-		now: time.Now,
+		deposit:    prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_wei", Help: "Signer's Executor deposit (wei)."}),
+		depositLow: prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_deposit_below_floor", Help: "1 when the Executor deposit is below the on-chain MIN_DEPOSIT floor."}),
+		feed:       prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_feed_connected", Help: "Whether the subscribed OEV feed is connected."}),
+		winflight:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_won_inflight", Help: "Winning bids awaiting settlement."}),
+		oldestWin:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "oev_oldest_won_inflight_age_seconds", Help: "Age of the oldest unsettled win."}),
 	}
-	for _, collector := range []prometheus.Collector{
-		m.wonInflight, m.oldestWonInflight, m.hotPath, m.deposit, m.depositBelowFloor, m.feedConnected,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
-		}
+	if err := observability.RegisterCollectors(
+		reg, "redstoneoev", m.hotPath, m.deposit, m.depositLow,
+		m.feed, m.winflight, m.oldestWin,
+	); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
 
-func (m *metrics) auctionDecision(outcome string, elapsed time.Duration) {
-	if m == nil {
-		return
-	}
-	m.workflow.ObserveEventAt("auction", outcome, 1, m.now())
-	switch outcome {
-	case auctionOutcomeFeedIgnored, auctionOutcomeDuplicate, skipEmptyAuctionID:
-		return
-	default:
-		m.hotPath.Observe(elapsed.Seconds())
-	}
-}
-
-func (m *metrics) enqueuedBid(amount *big.Int) {
+func (m *metrics) bid(amount *big.Int) {
 	if m != nil {
-		m.observeBid(oevBidEnqueued, amount)
-	}
-}
-
-func (m *metrics) won(amount *big.Int) {
-	if m != nil {
-		m.observeBid(oevBidWon, amount)
+		m.workflow.ObserveEvent("auction", "enqueued")
+		m.observeBid("enqueued", amount)
 	}
 }
 
 func (m *metrics) wouldBid(amount *big.Int) {
 	if m != nil {
-		m.observeBid(oevBidWouldBid, amount)
+		m.workflow.ObserveEvent("auction", "would_bid")
+		m.observeBid("would_bid", amount)
 	}
 }
 
-func (m *metrics) breakerFailure() {
+func (m *metrics) settled(amount *big.Int) {
 	if m != nil {
-		m.workflow.ObserveEventAt("breaker", "failure", 1, m.now())
+		m.observeBid("settled_success", amount)
 	}
 }
 
-func (m *metrics) settlement(success bool, amount *big.Int) {
-	outcome := oevBidSettledFailed
-	if success {
-		outcome = oevBidSettledSuccess
-	}
+func (m *metrics) won(amount *big.Int) {
 	if m != nil {
-		m.observeBid(outcome, amount)
+		m.observeBid("won", amount)
+	}
+}
+
+func (m *metrics) failed(amount *big.Int) {
+	if m != nil {
+		m.observeBid("settled_failed", amount)
+		m.workflow.ObserveEvent("breaker", "failure")
 	}
 }
 
 func (m *metrics) observeBid(outcome string, amount *big.Int) {
-	m.workflow.ObserveEventAt("bid", outcome, 1, m.now())
+	m.workflow.ObserveEvent("bid", outcome)
 	m.workflow.AddAmount("bid", "native", outcome, amount)
 }
 
-func (m *metrics) unresolvedWins(count int) {
-	if m != nil && count > 0 {
-		m.workflow.ObserveEventAt("bid", oevBidUnresolved, float64(count), m.now())
-	}
-}
-
-func (m *metrics) depositWei(depositWei float64) {
+func (m *metrics) skip(reason string) {
 	if m != nil {
-		m.deposit.Set(depositWei)
+		if !slices.Contains(auctionOutcomes, reason) {
+			reason = "other"
+		}
+		m.workflow.ObserveEvent("auction", reason)
 	}
 }
 
-func (m *metrics) depositFloorState(below bool) {
+func (m *metrics) operation() *observability.OperationObserver {
 	if m == nil {
-		return
+		return nil
 	}
-	value := float64(0)
-	if below {
-		value = 1
+	return m.workflow.Operation("state_refresh")
+}
+
+func (m *metrics) stateRefreshed() {
+	if m != nil {
+		m.workflow.ObserveEvent("state_refresh", "success")
 	}
-	m.depositBelowFloor.Set(value)
 }
 
 func (m *metrics) setFeedConnected(connected bool) {
@@ -199,11 +135,35 @@ func (m *metrics) setFeedConnected(connected bool) {
 	if connected {
 		value = 1
 	}
-	m.feedConnected.Set(value)
+	m.feed.Set(value)
 }
 
-func (m *metrics) stateRefreshed() {
+func (m *metrics) updateWins(count int, oldest time.Duration) {
 	if m != nil {
-		m.workflow.ObserveEventAt("state_refresh", "success", 1, m.now())
+		m.winflight.Set(float64(count))
+		m.oldestWin.Set(oldest.Seconds())
+	}
+}
+
+func (m *metrics) latency(d time.Duration) {
+	if m != nil {
+		m.hotPath.Observe(d.Seconds())
+	}
+}
+
+func (m *metrics) depositWei(depositWei float64) {
+	if m != nil {
+		m.deposit.Set(depositWei)
+	}
+}
+
+// depositBelowFloor sets the alarm gauge; "below" now means deposit < MIN_DEPOSIT.
+func (m *metrics) depositBelowFloor(below bool) {
+	if m != nil {
+		v := 0.0
+		if below {
+			v = 1
+		}
+		m.depositLow.Set(v)
 	}
 }

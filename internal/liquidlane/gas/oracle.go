@@ -14,9 +14,12 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
-const maxOracleDecimals = 36
+const (
+	maxOracleDecimals = 36
+	maxFutureSkew     = 15 * time.Second
+)
 
-var chainlinkFeed = aggregator.NewAggregatorV3()
+var feedBinding = aggregator.NewAggregatorV3()
 
 type OracleConfig struct {
 	NativeUSDFeed USDFeed
@@ -38,26 +41,26 @@ type PriceSnapshot struct {
 }
 
 func NewPriceSnapshot(rates map[common.Address]*big.Int) *PriceSnapshot {
-	out := make(map[common.Address]*big.Int, len(rates))
+	cloned := make(map[common.Address]*big.Int, len(rates))
 	for token, rate := range rates {
 		if rate != nil {
-			out[token] = new(big.Int).Set(rate)
+			cloned[token] = new(big.Int).Set(rate)
 		}
 	}
-	return &PriceSnapshot{tokenOutPerNative: out}
+	return &PriceSnapshot{tokenOutPerNative: cloned}
 }
 
-func (s *PriceSnapshot) TokenOutPerNative(token common.Address) *big.Int {
-	if s == nil || s.tokenOutPerNative[token] == nil {
+func (snapshot *PriceSnapshot) TokenOutPerNative(token common.Address) *big.Int {
+	if snapshot == nil {
 		return nil
 	}
-	return new(big.Int).Set(s.tokenOutPerNative[token])
+	return copyBig(snapshot.tokenOutPerNative[token])
 }
 
-func (s *PriceSnapshot) MarshalJSON() ([]byte, error) {
-	rates := map[common.Address]*big.Int(nil)
-	if s != nil {
-		rates = s.tokenOutPerNative
+func (snapshot *PriceSnapshot) MarshalJSON() ([]byte, error) {
+	var rates map[common.Address]*big.Int
+	if snapshot != nil {
+		rates = snapshot.tokenOutPerNative
 	}
 	return json.Marshal(struct {
 		TokenOutPerNative map[common.Address]*big.Int `json:"tokenOutPerNative"`
@@ -73,21 +76,21 @@ type OracleReader struct {
 	cfg   OracleConfig
 }
 
-func NewOracleReader(c multicaller, cfg OracleConfig) (*OracleReader, error) {
-	if c == nil {
+func NewOracleReader(client multicaller, config OracleConfig) (*OracleReader, error) {
+	if client == nil {
 		return nil, errors.New("gas oracle: chain client is required")
 	}
-	if cfg.NativeUSDFeed.Address == (common.Address{}) {
+	if config.NativeUSDFeed.Address == (common.Address{}) {
 		return nil, errors.New("gas oracle: native USD feed is required")
 	}
-	if cfg.NativeUSDFeed.MaxAge <= 0 {
+	if config.NativeUSDFeed.MaxAge <= 0 {
 		return nil, errors.New("gas oracle: native USD feed max age must be positive")
 	}
-	if len(cfg.TokenUSDFeeds) == 0 {
+	if len(config.TokenUSDFeeds) == 0 {
 		return nil, errors.New("gas oracle: at least one token USD feed is required")
 	}
-	feeds := make(map[common.Address]USDFeed, len(cfg.TokenUSDFeeds))
-	for token, feed := range cfg.TokenUSDFeeds {
+	feeds := make(map[common.Address]USDFeed, len(config.TokenUSDFeeds))
+	for token, feed := range config.TokenUSDFeeds {
 		if token == (common.Address{}) || feed.Address == (common.Address{}) {
 			return nil, errors.New("gas oracle: token and feed addresses must be non-zero")
 		}
@@ -96,65 +99,74 @@ func NewOracleReader(c multicaller, cfg OracleConfig) (*OracleReader, error) {
 		}
 		feeds[token] = feed
 	}
-	cfg.TokenUSDFeeds = feeds
-	return &OracleReader{chain: c, cfg: cfg}, nil
+	config.TokenUSDFeeds = feeds
+	return &OracleReader{chain: client, cfg: config}, nil
 }
 
-func (r *OracleReader) ValidateTokens(tokens []Token) error {
-	decimals := make(map[common.Address]int, len(tokens))
+func (reader *OracleReader) ValidateTokens(tokens []Token) error {
+	seen := make(map[common.Address]int, len(tokens))
 	for _, token := range tokens {
 		if token.Address == (common.Address{}) {
 			return errors.New("gas oracle: token address must be non-zero")
 		}
-		if current, ok := decimals[token.Address]; ok && current != token.Decimals {
-			return errors.Errorf("gas oracle: token %s has inconsistent decimals %d and %d",
-				token.Address.Hex(), current, token.Decimals)
+		if decimals, exists := seen[token.Address]; exists && decimals != token.Decimals {
+			return errors.Errorf(
+				"gas oracle: token %s has inconsistent decimals %d and %d",
+				token.Address.Hex(), decimals, token.Decimals,
+			)
 		}
-		decimals[token.Address] = token.Decimals
+		seen[token.Address] = token.Decimals
 	}
-	for _, token := range uniqueTokens(tokens) {
+	for _, token := range normalizedTokens(tokens) {
 		if token.Decimals < 0 || token.Decimals > maxOracleDecimals {
-			return errors.Errorf("gas oracle: token %s decimals %d exceed supported range [0,%d]",
-				token.Address.Hex(), token.Decimals, maxOracleDecimals)
+			return errors.Errorf(
+				"gas oracle: token %s decimals %d exceed supported range [0,%d]",
+				token.Address.Hex(), token.Decimals, maxOracleDecimals,
+			)
 		}
-		if r.cfg.TokenUSDFeeds[token.Address].Address == (common.Address{}) {
+		if reader.cfg.TokenUSDFeeds[token.Address].Address == (common.Address{}) {
 			return errors.Errorf("gas oracle: missing USD feed for token %s", token.Address.Hex())
 		}
 	}
 	return nil
 }
 
-func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) (*PriceSnapshot, error) {
-	if err := r.ValidateTokens(tokens); err != nil {
+func (reader *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) (*PriceSnapshot, error) {
+	if err := reader.ValidateTokens(tokens); err != nil {
 		return nil, err
 	}
-	tokens = uniqueTokens(tokens)
-	calls := make([]chain.Call, 0, 2+2*len(tokens))
-	calls = appendFeedCalls(calls, r.cfg.NativeUSDFeed.Address)
+	tokens = normalizedTokens(tokens)
+	feeds := make([]USDFeed, 0, len(tokens)+1)
+	feeds = append(feeds, reader.cfg.NativeUSDFeed)
 	for _, token := range tokens {
-		calls = appendFeedCalls(calls, r.cfg.TokenUSDFeeds[token.Address].Address)
+		feeds = append(feeds, reader.cfg.TokenUSDFeeds[token.Address])
 	}
-	results, err := r.chain.Multicall(ctx, calls)
+	calls := make([]chain.Call, 0, len(feeds)*2)
+	for _, feed := range feeds {
+		calls = append(calls,
+			chain.Call{Target: feed.Address, AllowFailure: true, Data: feedBinding.PackLatestRoundData()},
+			chain.Call{Target: feed.Address, AllowFailure: true, Data: feedBinding.PackDecimals()},
+		)
+	}
+	results, err := reader.chain.Multicall(ctx, calls)
 	if err != nil {
 		return nil, errors.Errorf("gas oracle: multicall: %w", err)
 	}
 	if len(results) != len(calls) {
 		return nil, errors.Errorf("gas oracle: got %d results, want %d", len(results), len(calls))
 	}
-	native, err := decodeFeed(
-		results[:2], r.cfg.NativeUSDFeed.Address, now, r.cfg.NativeUSDFeed.MaxAge,
-	)
-	if err != nil {
-		return nil, err
-	}
-	rates := make(map[common.Address]*big.Int, len(tokens))
-	for i, token := range tokens {
-		feed := r.cfg.TokenUSDFeeds[token.Address]
-		price, decodeErr := decodeFeed(results[2+i*2:4+i*2], feed.Address, now, feed.MaxAge)
+
+	prices := make([]feedPrice, len(feeds))
+	for index, feed := range feeds {
+		price, decodeErr := readFeed(results[index*2:(index+1)*2], feed, now)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		rate := tokenPerNative(native, price, token.Decimals)
+		prices[index] = price
+	}
+	rates := make(map[common.Address]*big.Int, len(tokens))
+	for index, token := range tokens {
+		rate := quoteNative(prices[0], prices[index+1], token.Decimals)
 		if rate.Sign() <= 0 {
 			return nil, errors.Errorf("gas oracle: token/native rate for %s rounded to zero", token.Address.Hex())
 		}
@@ -168,76 +180,59 @@ type feedPrice struct {
 	decimals uint8
 }
 
-func appendFeedCalls(calls []chain.Call, feed common.Address) []chain.Call {
-	return append(calls,
-		chain.Call{Target: feed, AllowFailure: true, Data: chainlinkFeed.PackLatestRoundData()},
-		chain.Call{Target: feed, AllowFailure: true, Data: chainlinkFeed.PackDecimals()},
-	)
-}
-
-func decodeFeed(results []chain.CallResult, feed common.Address, now time.Time, maxAge time.Duration) (feedPrice, error) {
+func readFeed(results []chain.CallResult, feed USDFeed, now time.Time) (feedPrice, error) {
 	if len(results) != 2 || !results[0].Success || !results[1].Success {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s call failed", feed.Hex())
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s call failed", feed.Address.Hex())
 	}
-	round, err := chainlinkFeed.UnpackLatestRoundData(results[0].ReturnData)
+	round, err := feedBinding.UnpackLatestRoundData(results[0].ReturnData)
 	if err != nil {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s latestRoundData: %w", feed.Hex(), err)
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s latestRoundData: %w", feed.Address.Hex(), err)
 	}
-	decimals, err := chainlinkFeed.UnpackDecimals(results[1].ReturnData)
+	decimals, err := feedBinding.UnpackDecimals(results[1].ReturnData)
 	if err != nil {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s decimals: %w", feed.Hex(), err)
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s decimals: %w", feed.Address.Hex(), err)
 	}
-	if round.RoundId == nil || round.Answer == nil || round.UpdatedAt == nil {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s returned nil round data", feed.Hex())
+	if round.RoundId == nil || round.Answer == nil || round.UpdatedAt == nil ||
+		round.RoundId.Sign() <= 0 || round.Answer.Sign() <= 0 || round.UpdatedAt.Sign() <= 0 || !round.UpdatedAt.IsInt64() {
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s returned invalid round data", feed.Address.Hex())
 	}
-	if round.RoundId.Sign() <= 0 || round.Answer.Sign() <= 0 ||
-		round.UpdatedAt.Sign() <= 0 || !round.UpdatedAt.IsInt64() {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s returned invalid round data", feed.Hex())
-	}
-	const maxFutureSkewSeconds = 15
-	age := now.Unix() - round.UpdatedAt.Int64()
-	if age < -maxFutureSkewSeconds {
+	updated := time.Unix(round.UpdatedAt.Int64(), 0)
+	if updated.After(now.Add(maxFutureSkew)) {
 		return feedPrice{}, errors.Errorf(
-			"gas oracle: feed %s updated %ds in the future", feed.Hex(), -age,
+			"gas oracle: feed %s updated %ds in the future", feed.Address.Hex(), int64(updated.Sub(now)/time.Second),
 		)
 	}
-	// A new Ethereum block can land between the caller's timestamp read and this latest-state
-	// multicall. Accept only that small race, not arbitrary future timestamps.
-	age = max(age, 0)
-	maxAgeSeconds := int64(maxAge / time.Second)
-	if maxAge%time.Second != 0 {
-		maxAgeSeconds++
-	}
-	if age > maxAgeSeconds {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s is stale: age %ds, max %ds", feed.Hex(), age, maxAgeSeconds)
+	age := max(now.Sub(updated), time.Duration(0))
+	if age > feed.MaxAge {
+		return feedPrice{}, errors.Errorf(
+			"gas oracle: feed %s is stale: age %ds, max %ds",
+			feed.Address.Hex(), int64(age/time.Second), int64((feed.MaxAge+time.Second-1)/time.Second),
+		)
 	}
 	if decimals > maxOracleDecimals {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s decimals %d exceed %d", feed.Hex(), decimals, maxOracleDecimals)
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s decimals %d exceed %d", feed.Address.Hex(), decimals, maxOracleDecimals)
 	}
-	return feedPrice{answer: new(big.Int).Set(round.Answer), decimals: decimals}, nil
+	return feedPrice{answer: copyBig(round.Answer), decimals: decimals}, nil
 }
 
-func tokenPerNative(native, token feedPrice, tokenDecimals int) *big.Int {
-	numerator := new(big.Int).Mul(native.answer, pow10(int(token.decimals)+tokenDecimals))
-	denominator := new(big.Int).Mul(token.answer, pow10(int(native.decimals)))
-	return numerator.Div(numerator, denominator)
+func quoteNative(native, token feedPrice, tokenDecimals int) *big.Int {
+	numerator := new(big.Int).Mul(native.answer, chain.Exp10(int(token.decimals)+tokenDecimals))
+	denominator := new(big.Int).Mul(token.answer, chain.Exp10(int(native.decimals)))
+	return numerator.Quo(numerator, denominator)
 }
 
-func uniqueTokens(tokens []Token) []Token {
-	byAddress := make(map[common.Address]Token, len(tokens))
+func normalizedTokens(tokens []Token) []Token {
+	unique := make(map[common.Address]Token, len(tokens))
 	for _, token := range tokens {
-		if current, ok := byAddress[token.Address]; !ok || token.Decimals > current.Decimals {
-			byAddress[token.Address] = token
+		current, exists := unique[token.Address]
+		if !exists || token.Decimals > current.Decimals {
+			unique[token.Address] = token
 		}
 	}
-	out := make([]Token, 0, len(byAddress))
-	for _, token := range byAddress {
-		out = append(out, token)
+	result := make([]Token, 0, len(unique))
+	for _, token := range unique {
+		result = append(result, token)
 	}
-	slices.SortFunc(out, func(a, b Token) int { return a.Address.Cmp(b.Address) })
-	return out
-}
-
-func pow10(decimals int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	slices.SortFunc(result, func(left, right Token) int { return left.Address.Cmp(right.Address) })
+	return result
 }

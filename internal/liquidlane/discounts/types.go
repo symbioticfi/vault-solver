@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 const maxUint48 = int64(1<<48 - 1)
@@ -52,15 +53,15 @@ func ParseOffer(item ListItem) (*Offer, error) {
 	if err != nil {
 		return nil, err
 	}
-	adapter, err := parseAddress(item.Adapter, "adapter")
+	adapter, err := parse.NonZeroAddress(item.Adapter, "adapter")
 	if err != nil {
 		return nil, err
 	}
-	tokenToRedeem, err := parseAddress(item.TokenToRedeem, "tokenToRedeem")
+	tokenToRedeem, err := parse.NonZeroAddress(item.TokenToRedeem, "tokenToRedeem")
 	if err != nil {
 		return nil, err
 	}
-	collateral, err := parseAddress(item.Collateral, "collateral")
+	collateral, err := parse.NonZeroAddress(item.Collateral, "collateral")
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +102,11 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if err != nil {
 		return nil, err
 	}
-	adapter, err := parseAddress(resolved.Discount.Adapter, "adapter")
+	adapter, err := parse.NonZeroAddress(resolved.Discount.Adapter, "adapter")
 	if err != nil {
 		return nil, err
 	}
-	tokenToRedeem, err := parseAddress(resolved.Discount.TokenToRedeem, "tokenToRedeem")
+	tokenToRedeem, err := parse.NonZeroAddress(resolved.Discount.TokenToRedeem, "tokenToRedeem")
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +117,11 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
 		return nil, errors.Errorf("discount: must be <= %d", liquidlane.DiscountPrecision)
 	}
-	signer, err := parseAddress(resolved.Discount.Signer, "signer")
+	signer, err := parse.NonZeroAddress(resolved.Discount.Signer, "signer")
 	if err != nil {
 		return nil, err
 	}
-	protocol, err := parseAddress(resolved.Discount.Protocol, "protocol")
+	protocol, err := parse.NonZeroAddress(resolved.Discount.Protocol, "protocol")
 	if err != nil {
 		return nil, err
 	}
@@ -156,15 +157,20 @@ func ParseSigned(resolved *Resolved) (*Signed, error) {
 	}, nil
 }
 
-func parseAddress(raw, field string) (common.Address, error) {
-	if !common.IsHexAddress(raw) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, raw)
+func parseUint256Decimal(raw, field string) (*big.Int, error) {
+	if raw == "" {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
-	address := common.HexToAddress(raw)
-	if address == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address", field)
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+		}
 	}
-	return address, nil
+	value, ok := new(big.Int).SetString(raw, 10)
+	if !ok || value.BitLen() > 256 {
+		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
+	}
+	return value, nil
 }
 
 func parseHash(raw, field string) (common.Hash, error) {
@@ -191,22 +197,6 @@ func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
 	out, ok := new(big.Int).SetString(raw, 10)
 	if !ok || out.Sign() < 0 {
 		return nil, errors.Errorf("%s: invalid non-negative decimal %q", field, raw)
-	}
-	return out, nil
-}
-
-func parseUint256Decimal(raw, field string) (*big.Int, error) {
-	if raw == "" {
-		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
-	}
-	for _, digit := range raw {
-		if digit < '0' || digit > '9' {
-			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
-		}
-	}
-	out, ok := new(big.Int).SetString(raw, 10)
-	if !ok || out.BitLen() > 256 {
-		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
 	}
 	return out, nil
 }

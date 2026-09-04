@@ -7,15 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -23,30 +24,29 @@ type fakeBackend struct {
 	open         []backendOrder
 	executable   *backendOrder
 	order        *backendOrder
-	discount     *resolveDiscountResponse
-	discounts    *discountsResponse
+	discount     *discounts.Resolved
+	discounts    *discounts.List
 	resolveCalls int
 	listCalls    int
-	orderListErr error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
-	return f.open, f.orderListErr
+	return f.open, nil
 }
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
 }
 func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
 
-func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
+func (f *fakeBackend) Resolve(context.Context, string) (*discounts.Resolved, error) {
 	f.resolveCalls++
 	return f.discount, nil
 }
 
-func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+func (f *fakeBackend) ListDiscounts(context.Context) (*discounts.List, error) {
 	f.listCalls++
 	if f.discounts == nil {
-		return &discountsResponse{}, nil
+		return &discounts.List{}, nil
 	}
 	return f.discounts, nil
 }
@@ -54,7 +54,7 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	permInv   []solverInventory
+	permInv   []liquidlane.Inventory
 	permErr   error
 	authErr   error
 	authCalls int
@@ -70,19 +70,20 @@ func (f *fakeRecoveryReader) latestBlockTime(context.Context) (time.Time, error)
 
 func (f *fakeRecoveryReader) readQuoteCandidates(
 	ctx context.Context,
-	inventory []solverInventory,
+	inventory []liquidlane.Inventory,
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
-		ctx, inventory, tokenIn, tokenOut, amountIn,
+		ctx, inventory, tokenIn, tokenOut, amountIn, reservations,
 	)
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
 	context.Context, common.Address, common.Address, []recoveryVault,
-) ([]solverInventory, error) {
+) ([]liquidlane.Inventory, error) {
 	return f.permInv, f.permErr
 }
 
@@ -109,13 +110,6 @@ func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Resul
 	return f.result
 }
 
-func confirmedTxResult() txmanager.Result {
-	return txmanager.Result{
-		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeConfirmed,
-	}
-}
-
 func strPtr(s string) *string { return &s }
 func i64Ptr(i int64) *int64   { return &i }
 
@@ -126,53 +120,50 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		strategy: fixedFillStrategy{plan: baseFillPlan()},
+		planner:  fixedFillStrategy{plan: baseFillPlan()},
+		capacity: testCapacityBook(),
 		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
-		inflight: make(map[string]bool),
 	}
 }
 
 type fixedFillStrategy struct {
-	plan    *types.FillPlan
+	plan    *liquidlane.Plan
 	err     error
 	onBuild func()
 }
 
 func (s fixedFillStrategy) DecideQuote(
 	context.Context,
-	types.QuoteInput,
-) (types.QuoteOutput, error) {
-	return types.QuoteOutput{}, nil
+	QuoteInput,
+) (QuoteOutput, error) {
+	return QuoteOutput{}, nil
 }
 
 func (s fixedFillStrategy) BuildFillPlan(
 	context.Context,
-	types.FillInput,
-) (*types.FillPlan, error) {
+	FillInput,
+) (*liquidlane.Plan, error) {
 	if s.onBuild != nil {
 		s.onBuild()
 	}
 	return s.plan, s.err
 }
 
-func baseFillPlan() *types.FillPlan {
-	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []types.FillLeg{{
-			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
+func baseFillPlan() *liquidlane.Plan {
+	return &liquidlane.Plan{
+		Routes: []liquidlane.PlanLeg{{
+			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), ExpectedAmountOut: big.NewInt(900000),
+			CapacityID: "capacity-1", ReservedAmountOut: big.NewInt(900000),
 		}},
 	}
 }
 
-func discountFillPlan(h common.Hash) *types.FillPlan {
-	return &types.FillPlan{
-		QuoteID: "q1", TokenIn: tIn, TokenOut: tOut,
-		AmountIn: big.NewInt(1_000000000000000000), QuotedAmountOut: big.NewInt(900000),
-		Legs: []types.FillLeg{{
-			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
-			MaxRate: big.NewInt(1), DiscountID: &h,
+func discountFillPlan(h common.Hash) *liquidlane.Plan {
+	return &liquidlane.Plan{
+		Routes: []liquidlane.PlanLeg{{
+			Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), ExpectedAmountOut: big.NewInt(900000),
+			DiscountID: &h, CapacityID: "capacity-1", ReservedAmountOut: big.NewInt(900000),
 		}},
 	}
 }
@@ -201,12 +192,12 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 
 func TestExecution_DirectFillHappyPath(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
@@ -218,14 +209,29 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	}
 }
 
+func TestPrepareExecutable_TreatsProtocolAsSigner(t *testing.T) {
+	_, backend := fillFixtures(t)
+	payload, err := executableFromBackend(backend.executable)
+	if err != nil {
+		t.Fatalf("executableFromBackend: %v", err)
+	}
+	executable, err := prepareExecutable(payload, common.HexToAddress("0x10"))
+	if err != nil {
+		t.Fatalf("prepareExecutable: %v", err)
+	}
+	if want := common.HexToAddress("0xaa"); executable.order.Request.Protocol != want {
+		t.Fatalf("protocol signer = %s, want %s", executable.order.Request.Protocol.Hex(), want.Hex())
+	}
+}
+
 func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
 	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(1_010, 0)
-	e.strategy = fixedFillStrategy{
+	e.planner = fixedFillStrategy{
 		plan: baseFillPlan(),
 		onBuild: func() {
 			wallNow = wallNow.Add(15 * time.Second)
@@ -242,12 +248,12 @@ func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) 
 
 func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
 	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_790, 0)
-	e.strategy = fixedFillStrategy{
+	e.planner = fixedFillStrategy{
 		plan: baseFillPlan(),
 		onBuild: func() {
 			wallNow = wallNow.Add(10 * time.Second)
@@ -259,7 +265,7 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 	if txm.lastReq.Data != nil {
 		t.Fatal("fill was admitted after its chain deadline elapsed")
 	}
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed ||
 		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
 		t.Fatalf("status = %+v, want deadline failure", rec)
@@ -290,12 +296,12 @@ func TestRFQFillDeadline(t *testing.T) {
 func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	st, be := fillFixtures(t)
 	be.executable.Outputs[0].Amount = "899999"
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 	if len(txm.lastReq.Data) != 0 {
@@ -305,109 +311,45 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{
-		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeReverted,
-		Err:     errors.New("tx reverted on-chain"),
-	}}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
-	}
-}
-
-func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
-	tests := []struct {
-		name    string
-		result  txmanager.Result
-		outcome string
-	}{
-		{
-			name: "reverted",
-			result: txmanager.Result{
-				Outcome: txmanager.OutcomeReverted,
-				Err:     errors.New("tx reverted on-chain"),
-			},
-			outcome: liquidlane.FillOutcomeFailure,
-		},
-		{
-			name: "not admitted",
-			result: txmanager.Result{
-				Outcome:     txmanager.OutcomeSubmissionError,
-				Err:         errors.New("admission rejected"),
-				NotAdmitted: true,
-			},
-			outcome: liquidlane.FillOutcomeNotAdmitted,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			st, be := fillFixtures(t)
-			reg := prometheus.NewRegistry()
-			metrics, err := newRFQMetrics(reg, st, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newExec(t, st, be, &fakeTxm{result: test.result})
-			e.metrics = metrics
-
-			e.syncOnce(t.Context())
-
-			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
-				t.Fatalf("status = %v, want failed", rec)
-			}
-			for _, outcome := range []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted} {
-				want := float64(0)
-				if outcome == test.outcome {
-					want = 1
-				}
-				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", outcome, want)
-			}
-		})
-	}
-}
-
-func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
-	st, be := fillFixtures(t)
-	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: txmanager.Result{
-		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeIncludedUnconfirmed,
-		Err:     errors.New("confirmation wait failed"),
-	}}
-	e := newExec(t, st, be, txm)
-
-	e.syncOnce(context.Background())
-
-	if rec := st.order("o1"); rec == nil || rec.Status != statusSubmitted {
-		t.Fatalf("status = %v, want submitted", rec)
 	}
 }
 
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
+	signedTokenIn := common.HexToAddress("0x0000000000000000000000000000000000000021")
+	order := sampleOrder()
+	order.Request.TokenIn = signedTokenIn
+	encoded, err := orderTupleArgs.Pack(order)
+	if err != nil {
+		t.Fatalf("pack order: %v", err)
+	}
+	be.executable.EncodedOrder = new(hexutil.Encode(encoded))
+
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
-			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
+		Discount: discounts.Terms{
+			Adapter: vlt.Hex(), TokenToRedeem: signedTokenIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
 			Nonce:    "1", Deadline: 4_102_444_700,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_750, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
-	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
+	e.planner = fixedFillStrategy{plan: discountFillPlan(h)}
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -415,6 +357,17 @@ func TestExecution_DiscountFill(t *testing.T) {
 	}
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
+	}
+	values, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
+	if err != nil {
+		t.Fatalf("unpack fill calldata: %v", err)
+	}
+	discountSwaps := *abi.ConvertType(
+		values[3], new([]executor.IReactorDiscountSwapInput),
+	).(*[]executor.IReactorDiscountSwapInput)
+	if len(discountSwaps) != 1 ||
+		discountSwaps[0].DiscountSwap.Discount.TokenToRedeem != signedTokenIn {
+		t.Fatalf("discount swaps = %+v, want signed order tokenIn %s", discountSwaps, signedTokenIn)
 	}
 	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
 		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
@@ -431,15 +384,15 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
@@ -447,16 +400,16 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_700, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
-	// strategy's own dependency.
+	// planner's own dependency.
 	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
-	e.strategy = newDefaultTestStrategy()
+	e.planner = newDefaultTestStrategy()
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -475,9 +428,9 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &discounts.Resolved{
 		DiscountID: h.Hex(),
-		Discount: discountTerms{
+		Discount: discounts.Terms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
 			TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
@@ -486,13 +439,13 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: confirmedTxResult()}
+	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
 	e := newExec(t, st, be, txm)
-	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
+	e.planner = fixedFillStrategy{plan: discountFillPlan(h)}
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := testOrder(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
@@ -509,7 +462,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if be.resolveCalls != 2 {
 		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
 	}
-	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec = testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -521,7 +474,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	listedID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
 	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
@@ -550,7 +503,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+	be := &fakeBackend{discounts: &discounts.List{Discounts: []discounts.ListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,
@@ -570,11 +523,11 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	txm := &fakeTxm{result: txmanager.Result{}}
 	e := newExec(t, st, be, txm)
-	e.strategy = fixedFillStrategy{}
+	e.planner = fixedFillStrategy{}
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := testOrder(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -583,14 +536,14 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 }
 
 func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
-	strategy := &inputRecordingStrategy{fillPlan: baseFillPlan()}
+	planner := &inputRecordingStrategy{plan: baseFillPlan()}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
 	e.tokenPolicy = testPermissionedPolicy(t, tIn)
-	e.strategy = strategy
+	e.planner = planner
 
-	plan, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	plan, _, err := e.buildFillPlan(
+		t.Context(), "q1", sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -598,29 +551,29 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	if plan == nil {
 		t.Fatal("buildFillPlan returned nil")
 	}
-	if !strategy.fillInput.RequireSingleRoute {
+	if !planner.fillInput.RequireSingleRoute {
 		t.Fatal("permissioned fill recovery input did not require a single route")
 	}
 }
 
 func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	plan := baseFillPlan()
-	plan.Legs = []types.FillLeg{
+	plan.Routes = []liquidlane.PlanLeg{
 		{
-			Adapter: vlt, AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+			Adapter: vlt, AmountIn: big.NewInt(500000000000000000), ExpectedAmountOut: big.NewInt(450000),
 		},
 		{
 			Adapter:  common.HexToAddress("0x0000000000000000000000000000000000000004"),
-			AmountIn: big.NewInt(500000000000000000), AmountOut: big.NewInt(450000),
+			AmountIn: big.NewInt(500000000000000000), ExpectedAmountOut: big.NewInt(450000),
 		},
 	}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), &fakeBackend{}, &fakeTxm{})
 	e.discountsEnabled = false
 	e.tokenPolicy = testPermissionedPolicy(t, tIn)
-	e.strategy = fixedFillStrategy{plan: plan}
+	e.planner = fixedFillStrategy{plan: plan}
 
-	got, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+	got, _, err := e.buildFillPlan(
+		t.Context(), "q1", sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)

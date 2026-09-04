@@ -1,9 +1,14 @@
 # vault-solver — developer & CI tasks.
 #
-# Generated code (api/bindings, api/threef) is committed for a hermetic build; the refresh-*
-# targets regenerate it from upstream on demand.
+# Generated code under api/ is committed for a hermetic build; the refresh-* targets
+# regenerate it from vendored or upstream contracts on demand.
 
 SHELL := bash
+override GOTOOLCHAIN := go1.26.5
+export GOTOOLCHAIN
+TOOLS_BIN ?= $(CURDIR)/.tools/bin
+GOLANGCI_LINT ?= $(TOOLS_BIN)/golangci-lint
+ABIGEN ?= $(TOOLS_BIN)/abigen
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
@@ -25,8 +30,8 @@ CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
 # Live 3F OpenAPI spec (Sepolia dev).
 OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
-# NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
-# rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
+# The configured deployment may lag backend source. Inspect adapter/protocolSignature fields before
+# accepting a refresh, or regenerate from a backend checkout at the intended revision.
 RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
 # LI.FI order-server OpenAPI spec (testnet/dev). The NestJS app serves a Scalar UI at /docs with NO raw
 # JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and
@@ -78,9 +83,12 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
 
 BIN     := bin/vault-solver
 PKG     := github.com/symbioticfi/vault-solver
+TARGET  ?= ./...
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+E2E_DIR ?= $(CURDIR)/.e2e
+E2E_PROFILE ?= all
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) \
            -X $(PKG)/internal/version.Commit=$(COMMIT) \
            -X $(PKG)/internal/version.Date=$(DATE)
@@ -88,14 +96,29 @@ LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) \
 .PHONY: help
 help: ## List available targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
-		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-32s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: tools
-tools: ## Install pinned codegen + lint tools
-	go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+tools: ## Install pinned codegen + lint tools into .tools/bin
+	@mkdir -p "$(TOOLS_BIN)"
+	GOBIN="$(TOOLS_BIN)" go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
+	GOBIN="$(TOOLS_BIN)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "OpenAPI clients use the Java openapi-generator via hack/openapi-generator-cli.sh (needs a JRE; jar auto-downloaded)."
 	@echo "Morpho GraphQL uses gqlfetch + genqlient through go run in the make targets."
+
+.PHONY: doctor
+doctor: ## Check the pinned Go/lint toolchain and required command-line tools
+	@actual="$$(go env GOVERSION)"; [[ "$$actual" == "$(GOTOOLCHAIN)" ]] || \
+		{ echo "Go toolchain $$actual, want $(GOTOOLCHAIN)"; exit 1; }
+	@test -x "$(GOLANGCI_LINT)" || { echo "missing $(GOLANGCI_LINT); run make tools"; exit 1; }
+	@"$(GOLANGCI_LINT)" version | grep -q "version $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))" || \
+		{ "$(GOLANGCI_LINT)" version; echo "want golangci-lint $(GOLANGCI_LINT_VERSION)"; exit 1; }
+	@for tool in git curl jq python3; do command -v "$$tool" >/dev/null || \
+		{ echo "missing required tool: $$tool"; exit 1; }; done
+	@echo "required development tools are ready"
+	@if command -v java >/dev/null 2>&1 && java_version="$$(java -version 2>&1)"; then \
+		printf '%s\n' "$$java_version" | head -n 1; \
+	else echo "optional codegen dependency missing: Java runtime"; fi
 
 .PHONY: refresh-abi
 refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_OUT=..., CORE_MIRROR_OUT=...)
@@ -151,7 +174,7 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 		abi="api/abi/$$c.json"; \
 		if [[ ! -f "$$abi" ]]; then echo "missing $$abi (run make refresh-abi)"; exit 1; fi; \
 		mkdir -p "api/bindings/$$rel"; \
-		abigen --v2 --abi "$$abi" --pkg "$$pkg" --type "$$c" --out "api/bindings/$$rel/$$c.go"; \
+		"$(ABIGEN)" --v2 --abi "$$abi" --pkg "$$pkg" --type "$$c" --out "api/bindings/$$rel/$$c.go"; \
 		echo "generated api/bindings/$$rel/$$c.go (v2)"; \
 	done
 
@@ -215,13 +238,63 @@ graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients
 generate: bindings openapi-client graphql-client ## Regenerate all committed codegen
 
 .PHONY: build
-build: ## Build the binary
+build: ## Build the vault-solver binary
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/vault-solver
 
+.PHONY: build-all
+build-all: ## Compile every package
+	go build ./...
+
 .PHONY: test
-test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
-	go test -race -cover ./...
+test: ## Run uncached race tests with coverage (fork/live suites are tag-gated out)
+	go test -race -cover -count=1 ./...
+
+.PHONY: verify-fast
+verify-fast: ## Run uncached tests + lint for TARGET (default ./...)
+	go test -count=1 $(TARGET)
+	"$(GOLANGCI_LINT)" run $(TARGET)
+
+.PHONY: verify-race
+verify-race: ## Run uncached race tests for TARGET (default ./...)
+	go test -race -count=1 $(TARGET)
+
+.PHONY: format-check
+format-check: ## Check formatting without modifying files
+	@tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \
+		"$(GOLANGCI_LINT)" fmt --diff >"$$tmp"; \
+		if [[ -s "$$tmp" ]]; then cat "$$tmp"; exit 1; fi
+
+.PHONY: verify
+verify: format-check build-all test lint ## Run the complete read-only repository gate
+
+.PHONY: e2e-init
+e2e-init: ## Clone the pinned private E2E harness into the ignored E2E_DIR
+	VAULT_SOLVER_E2E_DIR="$(E2E_DIR)" ./hack/e2e-init.sh
+
+.PHONY: test-e2e
+test-e2e: e2e-init ## Run local E2E profiles (E2E_PROFILE=all|3f|rfq|lifi|uniswapx|redstoneoev)
+	e2e_port_base="$$(printf '%s' '$(CURDIR)' | cksum | awk '{print 20000 + ($$1 % 20000)}')"; \
+	cd "$(E2E_DIR)" && \
+		E2E_IMAGE_PREFIX="vault-solver-e2e-$$(printf '%s' '$(CURDIR)' | shasum -a 256 | cut -c1-12)" \
+		VAULT_SOLVER_E2E_PROJECT_PREFIX="vault-solver-e2e-$$(printf '%s' '$(CURDIR)' | shasum -a 256 | cut -c1-12)" \
+		ANVIL_PORT="$${ANVIL_PORT:-$$e2e_port_base}" \
+		INDEXER_PORT="$${INDEXER_PORT:-$$((e2e_port_base + 1))}" \
+		BACKEND_PORT="$${BACKEND_PORT:-$$((e2e_port_base + 2))}" \
+		SOLVER_PORT="$${SOLVER_PORT:-$$((e2e_port_base + 3))}" \
+		FIXTURE_PORT="$${FIXTURE_PORT:-$$((e2e_port_base + 4))}" \
+		VAULT_SOLVER_METRICS_PORT="$${VAULT_SOLVER_METRICS_PORT:-$$((e2e_port_base + 5))}" \
+		POSTGRES_PORT="$${POSTGRES_PORT:-$$((e2e_port_base + 6))}" \
+		UNISWAPX_QUOTE_PORT="$${UNISWAPX_QUOTE_PORT:-$$((e2e_port_base + 7))}" \
+		VAULT_SOLVER_SRC="$(CURDIR)" ./run.sh "$(E2E_PROFILE)"
+
+.PHONY: test-e2e-suite
+test-e2e-suite: ## Compile the tagged solver-owned E2E package without running live tests
+	go test -tags e2e -run '^$$' ./e2e
+
+.PHONY: test-e2e-harness
+test-e2e-harness: e2e-init test-e2e-suite ## Run unit tests for E2E fixtures and orchestration
+	cd "$(E2E_DIR)" && pnpm install --frozen-lockfile && pnpm test
 
 # Local-only OEV integration suite — build-tagged, skipped by the default `test` + CI.
 .PHONY: test-oev-live
@@ -233,12 +306,12 @@ test-txmanager-anvil: ## Exercise replacement/cancellation against an Anvil memp
 	go test -race -tags integration -run TestAnvilTxManagerPendingLifecycle -v ./internal/txmanager
 
 .PHONY: format
-format: ## Run golangci-lint with autofix
-	golangci-lint run --fix
+format: ## Format and autofix Go code
+	"$(GOLANGCI_LINT)" run --fix
 
 .PHONY: lint
 lint: ## Run golangci-lint (no autofix; must report 0 issues)
-	golangci-lint run
+	"$(GOLANGCI_LINT)" run
 
 .PHONY: tidy
 tidy: ## Tidy and verify go.mod / go.sum

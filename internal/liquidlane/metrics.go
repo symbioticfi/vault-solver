@@ -70,6 +70,15 @@ func (m *FillMetrics) ObserveOutcome(outcome string) {
 	}
 }
 
+// ObserveFailure classifies a failed fill by whether it entered the transaction lane.
+func (m *FillMetrics) ObserveFailure(notAdmitted bool) {
+	outcome := FillOutcomeFailure
+	if notAdmitted {
+		outcome = FillOutcomeNotAdmitted
+	}
+	m.ObserveOutcome(outcome)
+}
+
 func (m *FillMetrics) add(token common.Address, kind string, amount *big.Int) {
 	if token != (common.Address{}) {
 		m.workflow.AddAmount(fillWorkflowEvent, token.Hex(), kind, amount)

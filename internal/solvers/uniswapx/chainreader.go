@@ -14,7 +14,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidsnapshot "github.com/symbioticfi/vault-solver/internal/liquidlane/snapshot"
 )
 
 var uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
@@ -22,23 +21,20 @@ var uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
 const maxExecutorCallers = 256
 
 type reader struct {
-	chain     *chain.Client
-	snapshots *liquidsnapshot.Reader
+	*liquidlane.Reader
+
+	chain *chain.Client
 }
 
-type snapshot = liquidsnapshot.Quote
-type fillSnapshot = liquidsnapshot.Fill
+type snapshot = liquidlane.QuoteSnapshot
+type fillSnapshot = liquidlane.FillSnapshot
 
 func newReader(c *chain.Client, log logr.Logger, cfg *liquidlanegas.OracleConfig, liquidityLens common.Address) (*reader, error) {
-	snapshots, err := liquidsnapshot.New(c, log, cfg, liquidityLens)
+	snapshots, err := liquidlane.NewReader(c, log, liquidityLens, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, snapshots: snapshots}, nil
-}
-
-func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error) {
-	return r.snapshots.ResolveRoutes(ctx, adapters)
+	return &reader{chain: c, Reader: snapshots}, nil
 }
 
 func (r *reader) validateExecutorCode(
@@ -63,14 +59,7 @@ func (r *reader) validateExecutorCaller(
 	ctx context.Context,
 	executor, caller common.Address,
 ) error {
-	calls := make([]chain.Call, maxExecutorCallers)
-	for i := range calls {
-		calls[i] = chain.Call{
-			Target:       executor,
-			AllowFailure: true,
-			Data:         uniswapXExecutor.PackCallers(big.NewInt(int64(i))),
-		}
-	}
+	calls := executorCallerCalls(executor)
 	results, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return errors.Errorf("read executor callers: %w", err)
@@ -79,6 +68,17 @@ func (r *reader) validateExecutorCaller(
 		return errors.Errorf("read executor callers: got %d results, want %d", len(results), len(calls))
 	}
 	return requireExecutorCaller(caller, results)
+}
+
+func executorCallerCalls(executor common.Address) []chain.Call {
+	calls := make([]chain.Call, maxExecutorCallers)
+	for index := range calls {
+		calls[index] = chain.Call{
+			Target: executor, AllowFailure: true,
+			Data: uniswapXExecutor.PackCallers(big.NewInt(int64(index))),
+		}
+	}
+	return calls
 }
 
 func requireExecutorCaller(caller common.Address, results []chain.CallResult) error {
@@ -106,38 +106,11 @@ func (r *reader) unauthorizedAdapters(
 	executor common.Address,
 	routes []liquidlane.Route,
 ) ([]common.Address, error) {
-	authorized, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executor)
+	authorized, err := r.FilterAuthorizedRoutes(ctx, routes, executor)
 	if err != nil {
 		return nil, err
 	}
 	return liquidlane.UnauthorizedAdapters(routes, authorized), nil
-}
-
-func (r *reader) validateGasTokens(routes []liquidlane.Route) error {
-	return r.snapshots.ValidateGasTokens(routes)
-}
-
-func (r *reader) quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error) {
-	return r.snapshots.Quote(ctx, routes, executor, now)
-}
-
-func (r *reader) fillSnapshot(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	executor, tokenIn common.Address,
-	amountIn *big.Int,
-	now time.Time,
-) (fillSnapshot, error) {
-	return r.snapshots.Fill(ctx, routes, executor, tokenIn, amountIn, now)
-}
-
-func (r *reader) physicalFillQuotes(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	tokenIn common.Address,
-	amountIn *big.Int,
-) ([]liquidlane.FillQuote, error) {
-	return r.snapshots.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
@@ -157,8 +130,8 @@ func (r *reader) transactionBlockTimeConfirmed(
 	if err != nil {
 		return time.Time{}, errors.Errorf("read transaction receipt %s: %w", txHash.Hex(), err)
 	}
-	if receipt == nil || receipt.BlockNumber == nil || receipt.Status != types.ReceiptStatusSuccessful {
-		return time.Time{}, errors.Errorf("transaction %s has no successful canonical receipt", txHash.Hex())
+	if err := validateSuccessfulReceipt(txHash, receipt); err != nil {
+		return time.Time{}, err
 	}
 	header, err := r.chain.HeaderByNumber(ctx, receipt.BlockNumber)
 	if err != nil {
@@ -178,6 +151,13 @@ func (r *reader) transactionBlockTimeConfirmed(
 		return time.Time{}, errors.Errorf("transaction %s: %w", txHash.Hex(), err)
 	}
 	return time.Unix(int64(header.Time), 0), nil
+}
+
+func validateSuccessfulReceipt(txHash common.Hash, receipt *types.Receipt) error {
+	if receipt == nil || receipt.BlockNumber == nil || receipt.Status != types.ReceiptStatusSuccessful {
+		return errors.Errorf("transaction %s has no successful canonical receipt", txHash.Hex())
+	}
+	return nil
 }
 
 func requireConfirmationDepth(receiptBlock, head *big.Int, confirmations uint64) error {

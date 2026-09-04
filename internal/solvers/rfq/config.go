@@ -9,8 +9,8 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -29,12 +29,7 @@ type rawConfig struct {
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
 	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
-	Strategy               rawStrategyConfig `yaml:"strategy"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	Strategy               StrategyConfig    `yaml:"strategy"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -49,7 +44,8 @@ type Config struct {
 	// Executor is the Executor contract (the on-chain filler identity; the bot EOA must be an authorized
 	// caller — added to the Executor's callers allowlist via setCallers by its owner).
 	Executor common.Address
-	// Reactor is the RFQ Reactor (used at execution time); optional.
+	// Reactor is optional deployment identity retained for runtime diagnostics. Signed order validation
+	// uses request.protocol; the solver never trusts this field as an execution target.
 	Reactor common.Address
 	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
 	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
@@ -64,7 +60,7 @@ type Config struct {
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
 	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
 	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
-	SolverMode string
+	SolverMode liquidlane.SolverMode
 	// TokenPolicy scopes quoted input tokens and enforces single-route fills in permissioned mode.
 	TokenPolicy tokenpolicy.Policy
 	// MinAmountsIn is the per-input-token minimum request size, keyed by input-token address (config
@@ -82,29 +78,22 @@ type Config struct {
 }
 
 type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
-
-// Solver-mode profiles (see Config.SolverMode).
-const (
-	solverModeExternal = "external" // permissioned adapters only; no discounts API (default)
-	solverModeInternal = "internal" // public discounts API on top of all advertised adapters
-)
 
 // Defaults applied when a field is unset.
 const (
 	defaultListenAddr   = ":42073"
 	defaultPollInterval = 3 * time.Second
 	defaultOrderLimit   = 20
-	defaultSolverMode   = solverModeExternal
 	defaultStrategyName = "default"
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.BackendURL == "" {
@@ -117,13 +106,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	mode := parse.OrDefault(raw.SolverMode, defaultSolverMode)
-	if mode != solverModeExternal && mode != solverModeInternal {
-		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, mode)
+	mode, err := liquidlane.ParseSolverMode(raw.SolverMode)
+	if err != nil {
+		return nil, err
 	}
 	tokenPolicy, err := tokenpolicy.Parse(raw.TokensToQuote, raw.PermissionedTokens)
 	if err != nil {
 		return nil, err
+	}
+	if raw.Strategy.Name == "" {
+		raw.Strategy.Name = defaultStrategyName
 	}
 
 	cfg := &Config{
@@ -135,10 +127,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		OrderLimit:             defaultOrderLimit,
 		SolverMode:             mode,
 		TokenPolicy:            tokenPolicy,
-		Strategy: StrategyConfig{
-			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
-			Config: raw.Strategy.Config,
-		},
+		Strategy:               raw.Strategy,
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
@@ -146,15 +135,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
 	}
-	if raw.Reactor != "" {
-		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
-			return nil, err
-		}
+	if cfg.LiquidityLens, err = parse.OptionalNonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+		return nil, err
 	}
-	if raw.LiquidityLens != "" {
-		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	if cfg.Reactor, err = parse.OptionalNonZeroAddress(raw.Reactor, "reactor"); err != nil {
+		return nil, err
 	}
 	for token, amount := range raw.MinAmountsIn {
 		field := `minAmountsIn["` + token + `"]`
@@ -186,20 +171,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
-	if mode == solverModeExternal && len(cfg.Adapters) == 0 {
+	if mode == liquidlane.SolverModeExternal && len(cfg.Adapters) == 0 {
 		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
 	return cfg, nil
 }
 
 // usesDiscounts reports whether this solver may call the internal-only discounts API (internal mode only).
-func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
+func (c *Config) usesDiscounts() bool { return c.SolverMode == liquidlane.SolverModeInternal }
 
 // restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
 // scoped to the configured Adapters: external mode with at least one adapter. parseConfig requires external
 // to have adapters; the len check guards hand-built Configs.
 func (c *Config) restrictsToAdapters() bool {
-	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
+	return c.SolverMode == liquidlane.SolverModeExternal && len(c.Adapters) > 0
 }
 
 // quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It scopes in

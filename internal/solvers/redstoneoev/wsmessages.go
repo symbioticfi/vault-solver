@@ -9,20 +9,29 @@ import (
 // Hand-written WS structs pinned to RedStone's zod schema and live auction frames; there is no upstream
 // OpenAPI to generate from.
 func opName(raw []byte) (string, error) {
-	var head struct {
-		Op string `json:"op"`
-	}
-	if err := json.Unmarshal(raw, &head); err != nil {
+	head, err := decodeEnvelope(raw)
+	if err != nil {
 		return "", errors.Errorf("ws: decode op: %w", err)
 	}
 	return head.Op, nil
 }
 
-func isFeedAuction(raw []byte) bool {
-	var frame struct {
-		Payload map[string]json.RawMessage `json:"payload"`
+type wsEnvelope struct {
+	Op      string                     `json:"op"`
+	Payload map[string]json.RawMessage `json:"payload"`
+}
+
+func decodeEnvelope(raw []byte) (wsEnvelope, error) {
+	var envelope wsEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return wsEnvelope{}, err
 	}
-	if err := json.Unmarshal(raw, &frame); err != nil || len(frame.Payload) == 0 {
+	return envelope, nil
+}
+
+func isFeedAuction(raw []byte) bool {
+	frame, err := decodeEnvelope(raw)
+	if err != nil || len(frame.Payload) == 0 {
 		return false
 	}
 	if _, ok := frame.Payload["positions"]; ok {

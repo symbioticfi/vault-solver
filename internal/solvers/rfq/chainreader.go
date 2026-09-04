@@ -12,7 +12,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	liquidplanning "github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
 )
 
 // reader is the RFQ adapter over the shared LiquidLane read surface.
@@ -23,8 +23,12 @@ type reader struct {
 	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
 }
 
-func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
-	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chain: c, chainID: c.ChainID().Int64()}
+func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) (*reader, error) {
+	ll, err := liquidlane.NewReader(c, log, liquidityLens, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &reader{ll: ll, chain: c, chainID: c.ChainID().Int64()}, nil
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
@@ -41,28 +45,16 @@ func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
 // adapter whitelist source (see buildAdapterWhitelist) and the fill-plan recovery candidate universe.
 type recoveryVault = liquidlane.Adapter
 
-// readVaultInventories reads each adapter's fill-time views (paused, getMaxAssets(tokenIn),
-// getMaxRate(tokenIn)) in one multicall, using the startup-resolved Vault/Asset (decimals cached). Used
-// to build each fill plan from current state. Paused / failing / zero-liquidity adapters are dropped;
-// direct legs only. Mirrors readAdapterInventories in inventories.ts.
-func (r *reader) readVaultInventories(
-	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
-) ([]solverInventory, error) {
-	if len(vaults) == 0 {
-		return nil, nil
-	}
-	return r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
-}
-
 // readQuoteCandidates turns amount-independent inventory into current,
 // amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
 // belongs to the solver; strategies receive only the completed decision input.
 func (r *reader) readQuoteCandidates(
 	ctx context.Context,
-	inventory []solverInventory,
+	inventory []liquidlane.Inventory,
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
@@ -97,23 +89,23 @@ func (r *reader) readQuoteCandidates(
 	for index := range matching {
 		matching[index].TokenInDecimals = inputDecimals
 	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	allocated := liquidplanning.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {
 		return nil, nil
 	}
 	routes := make([]liquidlane.Route, 0, len(allocated))
-	seen := make(map[liquidlane.RouteID]bool, len(allocated))
+	seen := make(map[liquidlane.RouteID]struct{}, len(allocated))
 	for _, item := range allocated {
-		if !seen[item.ID] {
+		if _, duplicate := seen[item.ID]; !duplicate {
 			routes = append(routes, item.Route)
-			seen[item.ID] = true
+			seen[item.ID] = struct{}{}
 		}
 	}
 	quotes, err := r.ll.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
 	if err != nil {
 		return nil, err
 	}
-	return liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), nil
+	return liquidplanning.NormalizeOracleInventory(amountIn, allocated, quotes), nil
 }
 
 func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
@@ -121,16 +113,18 @@ func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
 }
 
 func unresolvedQuoteAdapters(
-	inventory []solverInventory,
+	inventory []liquidlane.Inventory,
 	resolved map[common.Address]recoveryVault,
 ) []common.Address {
-	seen := make(map[common.Address]bool, len(inventory))
+	seen := make(map[common.Address]struct{}, len(inventory))
 	out := make([]common.Address, 0, len(inventory))
 	for _, item := range inventory {
-		if _, ok := resolved[item.Adapter]; ok || seen[item.Adapter] {
+		_, known := resolved[item.Adapter]
+		_, duplicate := seen[item.Adapter]
+		if known || duplicate {
 			continue
 		}
-		seen[item.Adapter] = true
+		seen[item.Adapter] = struct{}{}
 		out = append(out, item.Adapter)
 	}
 	return out
@@ -149,26 +143,17 @@ func resolvedQuoteAdapters(resolved []recoveryVault) map[common.Address]recovery
 
 func applyResolvedQuoteAdapters(
 	chainID int64,
-	inventory []solverInventory,
+	inventory []liquidlane.Inventory,
 	byAdapter map[common.Address]recoveryVault,
-) ([]solverInventory, error) {
-	out := make([]solverInventory, len(inventory))
+) ([]liquidlane.Inventory, error) {
+	out := make([]liquidlane.Inventory, len(inventory))
 	for index, item := range inventory {
 		adapter, ok := byAdapter[item.Adapter]
 		if !ok {
 			return nil, errors.Errorf("resolve quote adapter %s: metadata unavailable", item.Adapter.Hex())
 		}
-		if adapter.TokenOut != item.TokenOut {
-			return nil, errors.Errorf(
-				"resolve quote adapter %s: backend asset %s does not match on-chain asset %s",
-				item.Adapter.Hex(), item.TokenOut.Hex(), adapter.TokenOut.Hex(),
-			)
-		}
-		if adapter.TokenOutDecimals != item.TokenOutDecimals {
-			return nil, errors.Errorf(
-				"resolve quote adapter %s: backend asset decimals %d do not match on-chain decimals %d",
-				item.Adapter.Hex(), item.TokenOutDecimals, adapter.TokenOutDecimals,
-			)
+		if err := validateResolvedAdapter(item, adapter); err != nil {
+			return nil, err
 		}
 		item.Vault = adapter.Vault
 		item.CapacityID = liquidlane.NewCapacityID(chainID, adapter.Vault, item.TokenOut)
@@ -177,12 +162,22 @@ func applyResolvedQuoteAdapters(
 	return out, nil
 }
 
-// resolveVaults returns a copy of the configured entries with each Vault (adapter.vault()) and Asset
-// (vault.asset()) resolved from chain at startup — config carries only adapter addresses, both fixed
-// for the adapter's lifetime. Returning a fresh slice (rather than mutating the input) keeps the
-// resolved fill-plan recovery universe independent of the config slice. Two batched multicalls (adapters'
-// vault(), then those vaults' asset()); an entry whose reads revert is left zero and skipped by
-// fill-time reads (readVaultInventories needs a non-zero Asset). Errors only on a multicall transport failure.
+func validateResolvedAdapter(item liquidlane.Inventory, adapter recoveryVault) error {
+	if adapter.TokenOut != item.TokenOut {
+		return errors.Errorf(
+			"resolve quote adapter %s: backend asset %s does not match on-chain asset %s",
+			item.Adapter.Hex(), item.TokenOut.Hex(), adapter.TokenOut.Hex(),
+		)
+	}
+	if adapter.TokenOutDecimals != item.TokenOutDecimals {
+		return errors.Errorf(
+			"resolve quote adapter %s: backend asset decimals %d do not match on-chain decimals %d",
+			item.Adapter.Hex(), item.TokenOutDecimals, adapter.TokenOutDecimals,
+		)
+	}
+	return nil
+}
+
 func (r *reader) resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
 	adapters := make([]common.Address, len(vaults))
 	for i := range vaults {
@@ -196,15 +191,25 @@ func (r *reader) validateDirectAuthorization(
 	executor common.Address,
 	vaults []recoveryVault,
 ) error {
-	routes := make([]liquidlane.Route, len(vaults))
+	addresses := make([]common.Address, len(vaults))
 	for i := range vaults {
-		routes[i].Adapter = vaults[i].Adapter
+		addresses[i] = vaults[i].Adapter
 	}
-	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executor)
+	auth, err := r.ll.ReadAuth(ctx, addresses, executor)
 	if err != nil {
 		return err
 	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, authorized); len(missing) > 0 {
+	allowed := make(map[common.Address]bool, len(auth))
+	for _, item := range auth {
+		allowed[item.Adapter] = item.Authorized
+	}
+	missing := make([]common.Address, 0)
+	for _, address := range addresses {
+		if !allowed[address] {
+			missing = append(missing, address)
+		}
+	}
+	if len(missing) > 0 {
 		return errors.Errorf(
 			"executor %s is not authorized as direct filler for configured adapters: %v",
 			executor.Hex(), missing,
@@ -213,15 +218,14 @@ func (r *reader) validateDirectAuthorization(
 	return nil
 }
 
-// readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
-// authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
-// current marketMaker value (including zero) has delegated via adapter.isFiller(marketMaker, executor).
-// Used at fill time so we never build inputs for an unauthorized adapter. Mirrors
-// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller).
+// readPermissionedVaultInventories reads current inventory for routes the executor may fill directly.
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
-) ([]solverInventory, error) {
-	base, err := r.readVaultInventories(ctx, tokenIn, vaults)
+) ([]liquidlane.Inventory, error) {
+	if len(vaults) == 0 {
+		return nil, nil
+	}
+	base, err := r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
 	if err != nil || len(base) == 0 {
 		return base, err
 	}

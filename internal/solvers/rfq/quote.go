@@ -9,13 +9,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/capacity"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
-// quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
+// quoteService prices backend RFQ requests by handing filtered candidates to the planner. It is safe
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and it holds no mutable state itself.
 type quoteService struct {
@@ -31,7 +30,9 @@ type quoteService struct {
 	// map (or a nil map) has no minimum.
 	minAmountsIn map[common.Address]*big.Int
 	reader       quoteCandidateReader
-	strategy     types.Strategy
+	planner      Planner
+	capacity     *capacity.Book
+	metrics      *rfqMetrics
 	log          logr.Logger
 	now          func() time.Time
 }
@@ -39,118 +40,89 @@ type quoteService struct {
 type quoteCandidateReader interface {
 	readQuoteCandidates(
 		ctx context.Context,
-		inventory []solverInventory,
+		inventory []liquidlane.Inventory,
 		tokenIn common.Address,
 		tokenOut common.Address,
 		amountIn *big.Int,
+		reservations liquidlane.CapacityReservations,
 	) ([]liquidlane.QuoteCandidate, error)
 }
 
-type quoteDecisionOutcome string
-
-const (
-	quoteDecisionQuoted           quoteDecisionOutcome = "quoted"
-	quoteDecisionLaneUnavailable  quoteDecisionOutcome = "lane_unavailable"
-	quoteDecisionNotQuotable      quoteDecisionOutcome = "not_quotable"
-	quoteDecisionBelowMinimum     quoteDecisionOutcome = "below_minimum"
-	quoteDecisionNoCandidates     quoteDecisionOutcome = "no_candidates"
-	quoteDecisionStrategyDeclined quoteDecisionOutcome = "strategy_declined"
-	quoteDecisionBadRequest       quoteDecisionOutcome = "bad_request"
-	quoteDecisionError            quoteDecisionOutcome = "error"
-)
-
-var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
-	quoteDecisionQuoted,
-	quoteDecisionLaneUnavailable,
-	quoteDecisionNotQuotable,
-	quoteDecisionBelowMinimum,
-	quoteDecisionNoCandidates,
-	quoteDecisionStrategyDeclined,
-	quoteDecisionBadRequest,
-	quoteDecisionError,
-}
-
-// quoteDecision keeps the domain classification next to the response it produced. The HTTP handler
-// owns metrics observation, so direct/internal quote evaluation does not masquerade as transport
-// traffic and every authenticated handler invocation records exactly one terminal decision.
-type quoteDecision struct {
-	response    *quoteResponse
-	outcome     quoteDecisionOutcome
-	observation *quoteObservation
-}
-
-type quoteObservation struct {
-	tokenIn   common.Address
-	tokenOut  common.Address
-	amountIn  *big.Int
-	amountOut *big.Int
-}
-
-// quote returns a terminal domain decision. Its response is nil (→ HTTP 204) when the request is
-// well-formed but this filler can't quote it (wrong type/chain, input token out of scope or below its
-// configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
-// returned only for malformed input or a failed dependency.
-func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+// quote returns a priced quote, or nil (→ HTTP 204) when the request is well-formed but this filler
+// can't quote it (wrong type/chain, input token out of scope or below its configured minimum, no
+// whitelisted adapter, no matching asset, or no viable planner). An error is returned only for
+// malformed input or a failed chain read.
+func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (response *quoteResponse, err error) {
+	outcome := quoteDecisionError
+	defer func() { qs.metrics.quote(outcome, response) }()
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
+		outcome = quoteDecisionBadRequest
+		return nil, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
+		outcome = quoteDecisionLaneUnavailable
 		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+		return nil, nil
 	}
 	if parsed == nil {
+		outcome = quoteDecisionNotQuotable
 		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
-		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
+		return nil, nil
 	}
-	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
-		qs.log.V(1).Info("declining quote: input token out of scope",
-			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
-		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
-	}
-	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
-		qs.log.V(1).Info("declining quote: input amount below configured minimum",
-			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
-			"amount", parsed.req.Amount.String(), "min", minIn.String())
-		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
+	if !qs.allowsInput(parsed.req, q.QuoteID) {
+		minimum, configured := qs.minAmountsIn[parsed.req.TokenIn]
+		if configured && parsed.req.Amount.Cmp(minimum) < 0 {
+			outcome = quoteDecisionBelowMinimum
+		} else {
+			outcome = quoteDecisionNotQuotable
+		}
+		return nil, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
 	if len(inv) == 0 {
+		outcome = quoteDecisionNoCandidates
 		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
+		return nil, nil
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	candidates, err := qs.reader.readQuoteCandidates(
+		ctx, inv, req.TokenIn, req.TokenOut, req.Amount, qs.capacity.Snapshot(),
+	)
 	if err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
+		return nil, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
 	if len(candidates) == 0 {
+		outcome = quoteDecisionNoCandidates
 		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
+		return nil, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
-	out, err := qs.strategy.DecideQuote(ctx, input)
+	out, err := qs.planner.DecideQuote(ctx, input)
 	if err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
+		return nil, errors.Errorf("quote: planner: %w", err)
 	}
-	if out.Decision != types.DecisionQuote {
-		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
+	if out.Decision != DecisionQuote {
+		outcome = quoteDecisionStrategyDeclined
+		qs.log.V(1).Info("declining quote: no viable planner", "quoteId", q.QuoteID, "reason", out.Reason)
+		return nil, nil
 	}
-	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
+	if _, err := FillPlanFromQuote(input, out); err != nil {
+		return nil, errors.Errorf("quote: planner: %w", err)
 	}
 	if !qs.canQuote() {
+		outcome = quoteDecisionLaneUnavailable
 		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+		return nil, nil
 	}
 
 	qs.log.V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
 		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
-	response := &quoteResponse{
+	outcome = quoteDecisionQuoted
+	return &quoteResponse{
 		ChainID:   qs.chainID,
 		AmountIn:  req.Amount.String(),
 		AmountOut: out.QuotedAmountOut.String(),
@@ -160,15 +132,23 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		TokenIn:   lowerAddr(req.TokenIn),
 		TokenOut:  lowerAddr(req.TokenOut),
 		QuoteID:   q.QuoteID,
-	}
-	return quoteDecision{
-		response: response,
-		outcome:  quoteDecisionQuoted,
-		observation: &quoteObservation{
-			tokenIn: req.TokenIn, tokenOut: req.TokenOut,
-			amountIn: req.Amount, amountOut: out.QuotedAmountOut,
-		},
 	}, nil
+}
+
+func (qs *quoteService) allowsInput(request quoteRequestFacts, quoteID string) bool {
+	if !qs.tokenPolicy.Allows(request.TokenIn) {
+		qs.log.V(1).Info("declining quote: input token out of scope",
+			"quoteId", quoteID, "tokenIn", lowerAddr(request.TokenIn), "scope", qs.tokenPolicy.Scope())
+		return false
+	}
+	minimum, configured := qs.minAmountsIn[request.TokenIn]
+	if configured && request.Amount.Cmp(minimum) < 0 {
+		qs.log.V(1).Info("declining quote: input amount below configured minimum",
+			"quoteId", quoteID, "tokenIn", lowerAddr(request.TokenIn),
+			"amount", request.Amount.String(), "min", minimum.String())
+		return false
+	}
+	return true
 }
 
 // canQuote fails closed when the lane-state dependency was not wired. Production construction

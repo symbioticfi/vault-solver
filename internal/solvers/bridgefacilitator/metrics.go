@@ -2,155 +2,98 @@ package bridgefacilitator
 
 import (
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
-	threeFStateOffers             = "offers"
-	threeFStateActiveRequests     = "active_requests"
-	threeFStateRedeemable         = "redeemable"
-	threeFStateTargets            = "targets"
-	threeFEventOffer              = "offer"
-	threeFEventRedeem             = "redeem"
-	threeFOfferPrincipal          = "principal"
-	threeFOfferExpectedYield      = "expected_yield"
-	targetRefreshOperation        = "target_refresh"
-	offerRefreshOperation         = "offer_refresh"
-	activeRequestRefreshOperation = "active_request_refresh"
-	redeemableRefreshOperation    = "redeemable_refresh"
+	targetRefreshOperation     = "target_refresh"
+	offerRefreshOperation      = "offer_refresh"
+	activeRefreshOperation     = "active_request_refresh"
+	redeemableRefreshOperation = "redeemable_refresh"
 )
 
-type threeFOperationObservers struct {
-	targetRefresh        *observability.OperationObserver
-	offerRefresh         *observability.OperationObserver
-	activeRequestRefresh *observability.OperationObserver
-	redeemableRefresh    *observability.OperationObserver
-}
-
 type threeFMetrics struct {
-	workflow             *observability.WorkflowMetrics
-	operations           threeFOperationObservers
-	backlogNonemptySince *prometheus.GaugeVec
-	backlogNonempty      map[string]bool
-	now                  func() time.Time
+	mu       sync.Mutex
+	workflow *observability.WorkflowMetrics
+	backlog  *prometheus.GaugeVec
+	since    map[string]time.Time
 }
 
-func newThreeFMetrics(reg prometheus.Registerer, strategyName string) (*threeFMetrics, error) {
-	spec := observability.WorkflowSpec{
-		Strategy: strategyName,
-		Operations: []string{
-			targetRefreshOperation, offerRefreshOperation,
-			activeRequestRefreshOperation, redeemableRefreshOperation,
-		},
+func newThreeFMetrics(reg prometheus.Registerer, strategy string) (*threeFMetrics, error) {
+	workflow, err := observability.NewWorkflowMetrics(reg, Name, observability.WorkflowSpec{
+		Strategy:   strategy,
+		Operations: []string{targetRefreshOperation, offerRefreshOperation, activeRefreshOperation, redeemableRefreshOperation},
 		Events: []observability.WorkflowEventSpec{
-			{Event: threeFEventOffer, Outcomes: []string{"success", "error"}},
-			{Event: threeFEventRedeem, Outcomes: []string{"success"}},
+			{Event: "offer", Outcomes: []string{"success", "error"}},
+			{Event: "redeem", Outcomes: []string{"success"}},
 		},
-		Amounts: []observability.WorkflowAmountSpec{{
-			Event: threeFEventOffer, Kinds: []string{threeFOfferPrincipal, threeFOfferExpectedYield},
-		}},
-		States: []string{
-			threeFStateOffers, threeFStateActiveRequests, threeFStateRedeemable, threeFStateTargets,
-		},
-	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+		Amounts: []observability.WorkflowAmountSpec{{Event: "offer", Kinds: []string{"principal", "expected_yield"}}},
+		States:  []string{"targets", "offers", "active_requests", "redeemable"},
+	})
 	if err != nil {
 		return nil, err
 	}
 	m := &threeFMetrics{
 		workflow: workflow,
-		operations: threeFOperationObservers{
-			targetRefresh:        workflow.Operation(targetRefreshOperation),
-			offerRefresh:         workflow.Operation(offerRefreshOperation),
-			activeRequestRefresh: workflow.Operation(activeRequestRefreshOperation),
-			redeemableRefresh:    workflow.Operation(redeemableRefreshOperation),
-		},
-		backlogNonemptySince: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "threef_backlog_nonempty_since_timestamp",
-			Help: "Unix timestamp when this process first observed a continuous non-empty 3F backlog in complete authoritative snapshots by view; 0 before the first authoritative non-empty observation or after an authoritative empty snapshot. Pair with solver_bot_workflow_last_observation_timestamp; resets on process restart; not an item age.",
+		backlog: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "threef_backlog_nonempty_since_timestamp", Help: "Start of a continuous non-empty 3F backlog observation.",
 		}, []string{"view"}),
-		backlogNonempty: make(map[string]bool, 2),
-		now:             time.Now,
+		since: make(map[string]time.Time),
 	}
-	if err := reg.Register(m.backlogNonemptySince); err != nil {
-		return nil, errors.Errorf("bridgefacilitator: register metric: %w", err)
-	}
-	for _, view := range []string{threeFStateActiveRequests, threeFStateRedeemable} {
-		m.backlogNonemptySince.WithLabelValues(view)
+	if err := observability.RegisterCollectors(reg, "bridgefacilitator", m.backlog); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
 
-func (s *Solver) observeOfferSubmission(result string) {
-	if s.metrics == nil {
-		return
+func (m *threeFMetrics) operation(name string) *observability.OperationObserver {
+	if m == nil {
+		return nil
 	}
-	if result != "success" {
-		result = "error"
-	}
-	s.metrics.workflow.ObserveEventAt(threeFEventOffer, result, 1, s.metrics.now())
+	return m.workflow.Operation(name)
 }
 
-func (s *Solver) observeSubmittedOffer(token common.Address, principal, expectedYield *big.Int) {
-	if s.metrics == nil {
+func (m *threeFMetrics) state(view string, count int) {
+	if m == nil {
 		return
 	}
-	s.observeOfferSubmission("success")
-	if token == (common.Address{}) {
+	now := time.Now()
+	m.workflow.ObserveStateAt(view, count, now)
+	if view != "active_requests" && view != "redeemable" {
 		return
 	}
-	s.metrics.workflow.AddAmount(threeFEventOffer, token.Hex(), threeFOfferPrincipal, principal)
-	s.metrics.workflow.AddAmount(threeFEventOffer, token.Hex(), threeFOfferExpectedYield, expectedYield)
-}
-
-func (s *Solver) observeRedeemedRequests(count int) {
-	if s.metrics != nil && count > 0 {
-		s.metrics.workflow.ObserveEventAt(
-			threeFEventRedeem, "success", float64(count), s.metrics.now(),
-		)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if count == 0 {
+		delete(m.since, view)
+		m.backlog.WithLabelValues(view).Set(0)
+		return
 	}
-}
-
-func (s *Solver) observeState(view string, count int) {
-	if s.metrics != nil {
-		s.metrics.workflow.ObserveStateAt(view, count, s.metrics.now())
+	if m.since[view].IsZero() {
+		m.since[view] = now
+		m.backlog.WithLabelValues(view).Set(float64(now.Unix()))
 	}
 }
 
-// observeBacklog tracks only the process-local continuous non-empty condition. It deliberately does
-// not estimate when any individual Request became active or redeemable; the current on-chain views do
-// not expose those transition timestamps.
-func (m *threeFMetrics) observeBacklog(view string, count int) {
-	if view != threeFStateActiveRequests && view != threeFStateRedeemable {
+func (m *threeFMetrics) offer(outcome string, token common.Address, principal, expectedYield *big.Int) {
+	if m == nil {
 		return
 	}
-	gauge := m.backlogNonemptySince.WithLabelValues(view)
-	if count <= 0 {
-		m.backlogNonempty[view] = false
-		gauge.Set(0)
-		return
+	m.workflow.ObserveEvent("offer", outcome)
+	if outcome == "success" {
+		m.workflow.AddAmount("offer", token.Hex(), "principal", principal)
+		m.workflow.AddAmount("offer", token.Hex(), "expected_yield", expectedYield)
 	}
-	if m.backlogNonempty[view] {
-		return
-	}
-	m.backlogNonempty[view] = true
-	gauge.Set(float64(m.now().Unix()))
 }
 
-// observeTargetDerivedState publishes only observations that cover both the complete target source
-// and the complete local scan. Runtime work may still use a safe subset from a partial target refresh.
-func (s *Solver) observeTargetDerivedState(view string, count int, scanComplete bool) {
-	if !s.targetsAuthoritative || !scanComplete {
-		return
-	}
-	s.observeState(view, count)
-	if s.metrics != nil {
-		s.metrics.observeBacklog(view, count)
+func (m *threeFMetrics) redeemed(count int) {
+	if m != nil && count > 0 {
+		m.workflow.ObserveEventAt("redeem", "success", float64(count), time.Now())
 	}
 }

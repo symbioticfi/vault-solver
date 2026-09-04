@@ -3,7 +3,6 @@ package txmanager
 import (
 	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -15,147 +14,53 @@ const (
 	accountRefreshError   = "error"
 )
 
-type accountSnapshot struct {
-	balanceWei   float64
-	latestNonce  float64
-	pendingNonce float64
-	refreshedAt  float64
-}
-
-// accountMetrics is one collector so a Prometheus scrape observes account identity, counters, and
-// the retained balance/nonce snapshot from one lock-consistent point in time. It emits nothing until
-// the transaction manager starts, and it emits snapshot gauges only after the first complete read.
+// accountMetrics uses ordinary Prometheus collectors. Zero-label vectors keep snapshot series
+// absent until the first complete refresh, without maintaining a second metrics state machine.
 type accountMetrics struct {
-	mu sync.RWMutex
+	now func() time.Time
 
-	address          string
-	snapshot         accountSnapshot
-	hasSnapshot      bool
-	successRefreshes uint64
-	errorRefreshes   uint64
-	now              func() time.Time
-
-	infoDesc         *prometheus.Desc
-	balanceDesc      *prometheus.Desc
-	latestNonceDesc  *prometheus.Desc
-	pendingNonceDesc *prometheus.Desc
-	refreshesDesc    *prometheus.Desc
-	lastRefreshDesc  *prometheus.Desc
+	info, balance, latestNonce, pendingNonce, lastRefresh *prometheus.GaugeVec
+	refreshes                                             *prometheus.CounterVec
 }
 
 func newAccountMetrics() *accountMetrics {
+	gauge := func(name, help string, labels ...string) *prometheus.GaugeVec {
+		return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: name, Help: help,
+		}, labels)
+	}
 	return &accountMetrics{
-		now: time.Now,
-		infoDesc: newAccountMetricDesc(
-			"account_info",
-			"Constant 1 identifying the public transaction-sender address.",
-			"address",
-		),
-		balanceDesc: newAccountMetricDesc(
-			"account_balance_wei",
-			"Latest native-token balance of the transaction-sending account in wei.",
-		),
-		latestNonceDesc: newAccountMetricDesc(
-			"account_latest_nonce",
-			"Latest mined nonce reported by the transaction write endpoint.",
-		),
-		pendingNonceDesc: newAccountMetricDesc(
-			"account_pending_nonce",
-			"Pending nonce reported by the transaction write endpoint.",
-		),
-		refreshesDesc: newAccountMetricDesc(
-			"account_refreshes_total",
-			"Periodic complete signer balance and nonce snapshots by bounded outcome.",
-			"outcome",
-		),
-		lastRefreshDesc: newAccountMetricDesc(
-			"account_last_successful_refresh_timestamp",
-			"Unix timestamp of the last complete signer balance and nonce snapshot.",
-		),
+		now:          time.Now,
+		info:         gauge("account_info", "Constant 1 identifying the public transaction-sender address.", "address"),
+		balance:      gauge("account_balance_wei", "Latest native-token balance of the transaction-sending account in wei."),
+		latestNonce:  gauge("account_latest_nonce", "Latest mined nonce reported by the transaction write endpoint."),
+		pendingNonce: gauge("account_pending_nonce", "Pending nonce reported by the transaction write endpoint."),
+		lastRefresh:  gauge("account_last_successful_refresh_timestamp", "Unix timestamp of the last complete signer balance and nonce snapshot."),
+		refreshes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "account_refreshes_total",
+			Help: "Periodic complete signer balance and nonce snapshots by bounded outcome.",
+		}, []string{"outcome"}),
 	}
 }
 
-func newAccountMetricDesc(name, help string, variableLabels ...string) *prometheus.Desc {
-	return prometheus.NewDesc(
-		prometheus.BuildFQName(metricsNamespace, metricsSubsystem, name),
-		help,
-		variableLabels,
-		nil,
-	)
-}
-
-func (m *accountMetrics) Describe(ch chan<- *prometheus.Desc) {
-	ch <- m.infoDesc
-	ch <- m.balanceDesc
-	ch <- m.latestNonceDesc
-	ch <- m.pendingNonceDesc
-	ch <- m.refreshesDesc
-	ch <- m.lastRefreshDesc
-}
-
-func (m *accountMetrics) Collect(ch chan<- prometheus.Metric) {
-	m.mu.RLock()
-	address := m.address
-	snapshot := m.snapshot
-	hasSnapshot := m.hasSnapshot
-	successRefreshes := m.successRefreshes
-	errorRefreshes := m.errorRefreshes
-	m.mu.RUnlock()
-
-	if address == "" {
-		return
-	}
-	ch <- prometheus.MustNewConstMetric(m.infoDesc, prometheus.GaugeValue, 1, address)
-	ch <- prometheus.MustNewConstMetric(
-		m.refreshesDesc,
-		prometheus.CounterValue,
-		float64(successRefreshes),
-		accountRefreshSuccess,
-	)
-	ch <- prometheus.MustNewConstMetric(
-		m.refreshesDesc,
-		prometheus.CounterValue,
-		float64(errorRefreshes),
-		accountRefreshError,
-	)
-	if !hasSnapshot {
-		return
-	}
-	ch <- prometheus.MustNewConstMetric(m.balanceDesc, prometheus.GaugeValue, snapshot.balanceWei)
-	ch <- prometheus.MustNewConstMetric(m.latestNonceDesc, prometheus.GaugeValue, snapshot.latestNonce)
-	ch <- prometheus.MustNewConstMetric(m.pendingNonceDesc, prometheus.GaugeValue, snapshot.pendingNonce)
-	ch <- prometheus.MustNewConstMetric(m.lastRefreshDesc, prometheus.GaugeValue, snapshot.refreshedAt)
+func (m *accountMetrics) collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.info, m.balance, m.latestNonce, m.pendingNonce, m.refreshes, m.lastRefresh}
 }
 
 func (m *accountMetrics) bind(address common.Address) {
 	normalized := strings.ToLower(address.Hex())
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.address != "" && m.address != normalized {
-		panic("txmanager: account metrics cannot be rebound to another signer")
-	}
-	m.address = normalized
+	m.info.WithLabelValues(normalized).Set(1)
+	m.refreshes.WithLabelValues(accountRefreshSuccess).Add(0)
+	m.refreshes.WithLabelValues(accountRefreshError).Add(0)
 }
 
 func (m *accountMetrics) observe(balance *big.Int, latestNonce, pendingNonce uint64) {
-	balanceWei, _ := new(big.Float).SetInt(balance).Float64()
-	snapshot := accountSnapshot{
-		balanceWei:   balanceWei,
-		latestNonce:  float64(latestNonce),
-		pendingNonce: float64(pendingNonce),
-		refreshedAt:  float64(m.now().Unix()),
-	}
-	m.mu.Lock()
-	m.snapshot = snapshot
-	m.hasSnapshot = true
-	m.successRefreshes++
-	m.mu.Unlock()
-}
-
-func (m *accountMetrics) observeError() {
-	m.mu.Lock()
-	m.errorRefreshes++
-	m.mu.Unlock()
+	value, _ := new(big.Float).SetInt(balance).Float64()
+	m.balance.WithLabelValues().Set(value)
+	m.latestNonce.WithLabelValues().Set(float64(latestNonce))
+	m.pendingNonce.WithLabelValues().Set(float64(pendingNonce))
+	m.lastRefresh.WithLabelValues().Set(float64(m.now().Unix()))
+	m.refreshes.WithLabelValues(accountRefreshSuccess).Inc()
 }
 
 func (m *Metrics) bindAccount(address common.Address) {
@@ -165,14 +70,13 @@ func (m *Metrics) bindAccount(address common.Address) {
 }
 
 func (m *Metrics) observeAccount(balance *big.Int, latestNonce, pendingNonce uint64) {
-	if m == nil || balance == nil || balance.Sign() < 0 {
-		return
+	if m != nil && balance != nil && balance.Sign() >= 0 {
+		m.account.observe(balance, latestNonce, pendingNonce)
 	}
-	m.account.observe(balance, latestNonce, pendingNonce)
 }
 
 func (m *Metrics) observeAccountRefreshError() {
 	if m != nil {
-		m.account.observeError()
+		m.account.refreshes.WithLabelValues(accountRefreshError).Inc()
 	}
 }

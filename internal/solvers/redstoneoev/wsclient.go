@@ -42,38 +42,26 @@ func (c *wsConfig) withDefaults() {
 // which is safe for the hot path (non-blocking; drops + returns false if the buffer is full) and
 // discards stale buffered solves on every (re)connect.
 type wsClient struct {
-	cfg    wsConfig
-	log    logr.Logger
-	onMsg  func(context.Context, []byte)
-	dialer *websocket.Dialer
-	header http.Header
-	send   chan []byte
-	// onConnectionState receives true only after every subscription frame has been sent. The
-	// callback may be invoked by Run while metrics are concurrently scraped, so it must be safe for
-	// concurrent use.
-	onConnectionState func(bool)
+	cfg         wsConfig
+	log         logr.Logger
+	onMsg       func(context.Context, []byte)
+	dialer      *websocket.Dialer
+	header      http.Header
+	send        chan []byte
+	onConnected func(bool)
 }
 
-func newWSClient(
-	cfg wsConfig,
-	log logr.Logger,
-	onMsg func(context.Context, []byte),
-	onConnectionState func(bool),
-) *wsClient {
+func newWSClient(cfg wsConfig, log logr.Logger, onMsg func(context.Context, []byte)) *wsClient {
 	cfg.withDefaults()
 	h := http.Header{}
 	h.Set("x-api-key", cfg.APIKey)
-	if onConnectionState == nil {
-		onConnectionState = func(bool) {}
-	}
 	return &wsClient{
-		cfg:               cfg,
-		log:               log.WithName("ws"),
-		onMsg:             onMsg,
-		dialer:            &websocket.Dialer{HandshakeTimeout: cfg.HandshakeTimeout},
-		header:            h,
-		send:              make(chan []byte, 8),
-		onConnectionState: onConnectionState,
+		cfg:    cfg,
+		log:    log.WithName("ws"),
+		onMsg:  onMsg,
+		dialer: &websocket.Dialer{HandshakeTimeout: cfg.HandshakeTimeout},
+		header: h,
+		send:   make(chan []byte, 8),
 	}
 }
 
@@ -107,22 +95,27 @@ func (w *wsClient) Run(ctx context.Context) error {
 		if time.Since(start) > w.cfg.BackoffMax {
 			backoff = w.cfg.BackoffInitial
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff + jitter()):
+		if err := waitReconnect(ctx, backoff+jitter()); err != nil {
+			return err
 		}
-		if backoff *= 2; backoff > w.cfg.BackoffMax {
-			backoff = w.cfg.BackoffMax
-		}
+		backoff = min(2*backoff, w.cfg.BackoffMax)
+	}
+}
+
+func waitReconnect(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
 // serveOnce dials, subscribes, and runs the read/write pumps until the connection drops, rotates, or
 // ctx is cancelled.
 func (w *wsClient) serveOnce(ctx context.Context) error {
-	// A failed dial or subscription must leave the client visibly disconnected throughout backoff.
-	w.onConnectionState(false)
 	conn, resp, err := w.dialer.DialContext(ctx, w.cfg.URL, w.header)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close() // handshake response body; not used
@@ -146,8 +139,11 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 			return errors.Errorf("subscribe %s: %w", topic, werr)
 		}
 	}
-	w.onConnectionState(true)
 	w.log.Info("subscribed", "topics", w.cfg.Topics)
+	if w.onConnected != nil {
+		w.onConnected(true)
+		defer w.onConnected(false)
+	}
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
@@ -162,8 +158,6 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 	case e := <-errCh:
 		retErr = e
 	}
-	// Publish teardown before closing/joining the pumps so a blocked pump cannot leave a stale 1.
-	w.onConnectionState(false)
 	// Tear the connection down and JOIN both pumps before returning, so no pump goroutine — and no
 	// second reader competing for w.send — outlives this connection into the next reconnect.
 	cancel()
@@ -188,10 +182,7 @@ func (w *wsClient) readPump(ctx context.Context, conn *websocket.Conn, errCh cha
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			select {
-			case errCh <- errors.Errorf("read: %w", err):
-			default:
-			}
+			w.nonblockErr(errCh, errors.Errorf("read: %w", err))
 			return
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(w.cfg.MsgTimeout))

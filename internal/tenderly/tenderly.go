@@ -1,5 +1,4 @@
-// Package tenderly builds Tenderly Simulator draft links so a failed transaction can be replayed
-// with its exact calldata (no ABI needed) for debugging.
+// Package tenderly creates inert simulator draft links for failed transaction diagnostics.
 package tenderly
 
 import (
@@ -13,8 +12,6 @@ import (
 
 const simulatorBaseURL = "https://dashboard.tenderly.co/simulator/new"
 
-// draft is the payload Tenderly's Simulator expects base64url-encoded in the `?draft=` query param:
-// https://docs.tenderly.co/simulator-ui/draft-links
 type draft struct {
 	V       int     `json:"v"`
 	Network network `json:"network"`
@@ -33,10 +30,13 @@ type row struct {
 	Value            string `json:"value"`
 }
 
-// SimulatorURL returns a Tenderly Simulator draft link for a single raw call (to/from/calldata on
-// chainID), or "" if chainID is nil. The draft only pre-fills the simulator; it executes nothing
-// until opened and run.
-func SimulatorURL(chainID *big.Int, from, to common.Address, data []byte, value *big.Int) string {
+func SimulatorURL(
+	chainID *big.Int,
+	from common.Address,
+	to common.Address,
+	calldata []byte,
+	value *big.Int,
+) string {
 	if chainID == nil {
 		return ""
 	}
@@ -51,7 +51,7 @@ func SimulatorURL(chainID *big.Int, from, to common.Address, data []byte, value 
 			ContractAddress:  to.Hex(),
 			From:             from.Hex(),
 			InputDataType:    "raw",
-			RawFunctionInput: hexutil.Encode(data),
+			RawFunctionInput: hexutil.Encode(calldata),
 			Value:            amount,
 		},
 	})

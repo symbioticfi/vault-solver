@@ -11,7 +11,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
 var lifiExecutor = executor.NewLiquidLaneLifiExecutor()
@@ -24,7 +23,7 @@ type fillCalldata struct {
 
 func buildExecutorRoutes(
 	order submittedOrder,
-	plan *types.FillPlan,
+	plan *liquidlane.Plan,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
 ) (
 	[]executor.ILiquidLaneLifiExecutorFillRoute,
@@ -38,11 +37,8 @@ func buildExecutorRoutes(
 	discountRoutes := make([]executor.ILiquidLaneLifiExecutorDiscountRoute, 0, len(plan.Routes))
 	totalAmountIn := new(big.Int)
 	for i, route := range plan.Routes {
-		if route.Adapter == (common.Address{}) || route.AmountIn == nil || route.AmountIn.Sign() <= 0 ||
-			route.ExpectedAmountOut == nil || route.ExpectedAmountOut.Sign() <= 0 ||
-			route.MinAmountOut == nil || route.MinAmountOut.Sign() <= 0 ||
-			route.MinAmountOut.Cmp(route.ExpectedAmountOut) > 0 {
-			return nil, nil, errors.Errorf("fill plan route %d is invalid", i)
+		if err := validateExecutorRoute(route); err != nil {
+			return nil, nil, errors.Errorf("fill plan route %d: %w", i, err)
 		}
 		totalAmountIn.Add(totalAmountIn, route.AmountIn)
 		if route.DiscountID == nil {
@@ -63,8 +59,25 @@ func buildExecutorRoutes(
 	return directRoutes, discountRoutes, nil
 }
 
+func validateExecutorRoute(route liquidlane.PlanLeg) error {
+	if route.Adapter == (common.Address{}) {
+		return errors.New("adapter is zero")
+	}
+	if route.AmountIn == nil || route.AmountIn.Sign() <= 0 {
+		return errors.New("amountIn must be positive")
+	}
+	if route.ExpectedAmountOut == nil || route.ExpectedAmountOut.Sign() <= 0 {
+		return errors.New("expectedAmountOut must be positive")
+	}
+	if route.MinAmountOut == nil || route.MinAmountOut.Sign() <= 0 ||
+		route.MinAmountOut.Cmp(route.ExpectedAmountOut) > 0 {
+		return errors.New("minAmountOut is outside the executable output")
+	}
+	return nil
+}
+
 func buildExecutorDiscountRoute(
-	route types.FillRoute,
+	route liquidlane.PlanLeg,
 	discountID common.Hash,
 	tokenIn common.Address,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
@@ -107,7 +120,7 @@ func buildExecutorDiscountRoute(
 func buildFillCalldata(
 	order submittedOrder,
 	orderID common.Hash,
-	plan *types.FillPlan,
+	plan *liquidlane.Plan,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
 ) (*fillCalldata, error) {
 	directRoutes, discountRoutes, err := buildExecutorRoutes(order, plan, resolvedDiscounts)
@@ -131,13 +144,10 @@ func buildFillCalldata(
 
 func lifiFillDeadline(
 	order submittedOrder,
-	plan *types.FillPlan,
+	plan *liquidlane.Plan,
 	resolvedDiscounts map[common.Hash]*discounts.Signed,
 ) (time.Time, error) {
-	deadline := earlierDeadline(
-		unixDeadline(int64(order.Order.Expires)),
-		unixDeadline(int64(order.Order.FillDeadline)),
-	)
+	deadline := orderDeadline(&order)
 	for i, route := range plan.Routes {
 		if route.DiscountID == nil {
 			continue

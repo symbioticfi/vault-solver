@@ -8,40 +8,41 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/capacity"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	liquidplanning "github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func (s *Solver) submitFill(
 	ctx context.Context,
 	order *submittedOrder,
-	plan *types.FillPlan,
+	plan *liquidlane.Plan,
 	calldata *fillCalldata,
 	maxFeePerGas *big.Int,
 	chainTime time.Time,
 	chainObservedAt time.Time,
-) (*pendingFill, error) {
-	reservations, ok := fillPlanReservations(plan)
+	plannedAgainst liquidlane.CapacityReservations,
+) error {
+	reservations, ok := liquidplanning.FillRouteReservations(plan.Routes)
 	if !ok {
 		s.log.Error(errors.New("strategy returned invalid capacity reservations"),
 			"order fill: reject strategy plan", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil, nil
+		return nil
 	}
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, calldata.OrderID)
 	if err != nil {
-		return nil, errors.Errorf("read order status for %s: %w", calldata.OrderID.Hex(), err)
+		return errors.Errorf("read order status for %s: %w", calldata.OrderID.Hex(), err)
 	}
 	if status == lifiOrderStatusNone {
 		s.log.Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
-		return nil, errOrderDepositNotVisible
+		return errOrderDepositNotVisible
 	}
 	if status != lifiOrderStatusDeposited {
 		s.log.Info("order skipped: on-chain order is no longer fillable at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
-		return nil, errOrderNotFillable
+		return errOrderNotFillable
 	}
 	var cancelAt time.Time
 	if !calldata.Deadline.IsZero() {
@@ -56,10 +57,9 @@ func (s *Solver) submitFill(
 			s.log.Info("order skipped: execution deadline elapsed before submission",
 				"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
 				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix())
-			return nil, nil
+			return nil
 		}
 	}
-	reservationKey := calldata.OrderID.Hex()
 	deadline := int64(0)
 	deadlineRemaining := time.Duration(0)
 	cancelAtUnix := int64(0)
@@ -82,7 +82,20 @@ func (s *Solver) submitFill(
 		"deadlineRemaining", deadlineRemaining,
 		"cancelAt", cancelAtUnix,
 	)
-	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
+	lease, err := s.capacity.Acquire(
+		capacity.NewOwner(Name, calldata.OrderID.Hex()),
+		reservations,
+		capacity.Limits(plannedAgainst, reservations),
+	)
+	if err != nil {
+		return errors.Errorf("reserve fill capacity: %w", err)
+	}
+	defer func() {
+		lease.Release()
+		s.requestQuoteRefresh()
+	}()
+	s.requestQuoteRefresh()
+	result := s.txm.Send(ctx, txmanager.Request{
 		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
@@ -90,39 +103,30 @@ func (s *Solver) submitFill(
 		},
 		Label: "lifi-fill",
 	})
-	if !accepted {
-		s.log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
-			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
-		return nil, nil
+	if result.Err != nil {
+		if s.metrics != nil {
+			s.metrics.fill.ObserveFailure(result.NotAdmitted)
+			s.metrics.order("error")
+		}
+		s.log.Error(result.Err, "order fill failed",
+			"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
+			"quoteId", order.QuoteID, "tx", result.Hash.Hex(), "notAdmitted", result.NotAdmitted)
+		return nil
 	}
-	if s.reserveWithoutRefresh(reservationKey, reservations) {
-		s.log.V(1).Info(
-			"fill capacity reserved",
-			"orderId", order.OrderID,
-			"onChainOrderId", calldata.OrderID.Hex(),
-			"quoteId", order.QuoteID,
-			"capacityGroups", len(reservations),
-			"pendingFills", s.capacity.Len(),
+	if s.metrics != nil {
+		planned := new(big.Int)
+		for _, route := range plan.Routes {
+			planned.Add(planned, route.ExpectedAmountOut)
+		}
+		s.metrics.fill.Observe(
+			result.Receipt, order.TokenIn, order.AmountIn, order.TokenOut, order.OutputAmount,
+			liquidlane.PlannedSurplus(planned, order.OutputAmount),
 		)
+		s.metrics.order("submitted")
 	}
-	s.log.V(1).Info(
-		"order fill submitted",
-		"orderId", order.OrderID,
-		"onChainOrderId", calldata.OrderID.Hex(),
-		"quoteId", order.QuoteID,
-		"routes", len(plan.Routes),
-		"reservationDomains", len(reservations),
-		"pendingFills", s.capacity.Len(),
-		"gasAccounting", s.cfg.Gas != nil,
-		"requestMaxFeePerGas", bigString(maxFeePerGas),
-	)
-	return &pendingFill{
-		order:          order,
-		orderID:        calldata.OrderID,
-		reservationKey: reservationKey,
-		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
-		result:         result,
-	}, nil
+	s.log.Info("order filled", "orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
+		"quoteId", order.QuoteID, "tx", result.Hash.Hex(), "routes", len(plan.Routes))
+	return nil
 }
 
 func (s *Solver) fillRequestObsolete(
@@ -148,71 +152,6 @@ func (s *Solver) fillRequestObsolete(
 	default:
 		return false, errors.Errorf("unsupported order status %d for %s", status, orderID.Hex())
 	}
-}
-
-func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {
-	fill := completion.fill
-	pending.remove(fill.reservationKey)
-	outcome := completion.result.Outcome
-	if outcome == txmanager.OutcomeConfirmed {
-		s.observeFillAmounts(completion.result, fill)
-		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
-		return
-	}
-	if outcome == txmanager.OutcomeIncludedUnconfirmed {
-		s.observeFillAmounts(completion.result, fill)
-		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
-			"orderId", fill.order.OrderID,
-			"onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID,
-			"tx", completion.result.Hash.Hex(),
-		)
-		return
-	}
-	err := completion.result.Err
-	if err == nil {
-		err = errors.Errorf("unknown transaction outcome %q", outcome)
-	}
-	s.log.Error(err, "order fill failed",
-		"orderId", fill.order.OrderID,
-		"onChainOrderId", fill.orderID.Hex(),
-		"quoteId", fill.order.QuoteID,
-		"tx", completion.result.Hash.Hex(),
-		"notAdmitted", completion.result.NotAdmitted,
-	)
-}
-
-func (s *Solver) observeFillAmounts(result txmanager.Result, fill *pendingFill) {
-	if s.metrics == nil {
-		return
-	}
-	s.metrics.fillAmounts.Observe(
-		result.Receipt,
-		fill.order.TokenIn,
-		fill.order.AmountIn,
-		fill.order.TokenOut,
-		fill.order.OutputAmount,
-		fill.plannedSurplus,
-	)
-}
-
-func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations, bool) {
-	if plan == nil || len(plan.Routes) == 0 {
-		return nil, false
-	}
-	return liquidstrategies.FillRouteReservations(plan.Routes)
-}
-
-func (s *Solver) reserveWithoutRefresh(
-	orderKey string,
-	reservations liquidlane.CapacityReservations,
-) bool {
-	return s.capacity.Set(orderKey, reservations)
-}
-
-func (s *Solver) releaseReservationWithoutRefresh(orderKey string) bool {
-	return s.capacity.Delete(orderKey)
 }
 
 func (s *Solver) requestQuoteRefresh() {

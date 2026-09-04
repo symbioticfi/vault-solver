@@ -5,7 +5,7 @@
 //
 // KNOWN GAP: RedStone has not (yet) shared the schema of the inbound auction broadcast
 // (`op: "auction"`, incl. the liquidations-mode positions/prices payload). Until they do,
-// that frame's contract-of-record is the docs example + live frames captured in P0
+// that frame's contract-of-record is the docs example plus captured live frames
 // (see docs/OEV-PLAN.md §6.1, §6.3) — formalized in openapi/redstone-oev.asyncapi.yaml.
 //
 // Fields RedStone's schema adds beyond the public docs:

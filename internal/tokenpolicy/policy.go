@@ -1,16 +1,13 @@
-// Package tokenpolicy defines the shared input-token admission policy used by solvers.
+// Package tokenpolicy owns the protocol-neutral input token admission rule.
 package tokenpolicy
 
 import (
-	"strconv"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// Scope selects which input-token class a solver serves.
 type Scope string
 
 const (
@@ -19,61 +16,48 @@ const (
 	Permissionless Scope = "permissionless"
 )
 
-// Policy admits input tokens and marks the permissioned-only scope as single-route.
-// Its zero value is the unrestricted "all" policy.
+// Policy is immutable after construction. Its zero value is the unrestricted policy.
 type Policy struct {
-	scope        Scope
-	permissioned map[common.Address]bool
+	scope  Scope
+	tokens map[common.Address]struct{}
 }
 
-// Parse validates the YAML-facing scope and permissioned-token list.
 func Parse(rawScope string, rawTokens []string) (Policy, error) {
 	scope := Scope(parse.OrDefault(rawScope, string(All)))
-	if !validScope(scope) {
-		return Policy{}, errors.Errorf(
-			"tokensToQuote: must be %q, %q or %q, got %q",
-			All, Permissioned, Permissionless, rawScope,
-		)
-	}
-
-	tokens := make([]common.Address, 0, len(rawTokens))
-	for i, value := range rawTokens {
-		token, err := parse.NonZeroAddress(value, "permissionedTokens["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return Policy{}, err
-		}
-		tokens = append(tokens, token)
+	tokens, err := parse.NonZeroAddresses(rawTokens, "permissionedTokens")
+	if err != nil {
+		return Policy{}, err
 	}
 	return New(scope, tokens)
 }
 
-// New constructs a policy from typed values.
 func New(scope Scope, tokens []common.Address) (Policy, error) {
 	if scope == "" {
 		scope = All
 	}
-	if !validScope(scope) {
-		return Policy{}, errors.Errorf("invalid token scope %q", scope)
+	if !valid(scope) {
+		return Policy{}, errors.Errorf(
+			"tokensToQuote: must be %q, %q or %q, got %q",
+			All, Permissioned, Permissionless, scope,
+		)
 	}
-
-	policy := Policy{scope: scope, permissioned: make(map[common.Address]bool, len(tokens))}
-	for i, token := range tokens {
+	policy := Policy{scope: scope, tokens: make(map[common.Address]struct{}, len(tokens))}
+	for index, token := range tokens {
 		if token == (common.Address{}) {
-			return Policy{}, errors.Errorf("permissionedTokens[%d]: zero address", i)
+			return Policy{}, errors.Errorf("permissionedTokens[%d]: zero address", index)
 		}
-		if policy.permissioned[token] {
-			return Policy{}, errors.Errorf("permissionedTokens[%d]: duplicate token %s", i, token.Hex())
+		if _, duplicate := policy.tokens[token]; duplicate {
+			return Policy{}, errors.Errorf("permissionedTokens[%d]: duplicate token %s", index, token.Hex())
 		}
-		policy.permissioned[token] = true
+		policy.tokens[token] = struct{}{}
 	}
 	return policy, nil
 }
 
-func validScope(scope Scope) bool {
+func valid(scope Scope) bool {
 	return scope == All || scope == Permissioned || scope == Permissionless
 }
 
-// Scope returns the normalized configured scope.
 func (p Policy) Scope() Scope {
 	if p.scope == "" {
 		return All
@@ -81,31 +65,31 @@ func (p Policy) Scope() Scope {
 	return p.scope
 }
 
-// Allows reports whether token is in this solver's input-token scope.
 func (p Policy) Allows(token common.Address) bool {
+	_, listed := p.tokens[token]
 	switch p.Scope() {
-	case Permissioned:
-		return p.permissioned[token]
-	case Permissionless:
-		return !p.permissioned[token]
 	case All:
 		return true
+	case Permissioned:
+		return listed
+	case Permissionless:
+		return !listed
+	default:
+		return false
 	}
-	return false
 }
 
-// RequiresSingleRoute reports whether an admitted token must use one physical route.
 func (p Policy) RequiresSingleRoute(token common.Address) bool {
-	return p.Scope() == Permissioned && p.permissioned[token]
+	_, listed := p.tokens[token]
+	return p.Scope() == Permissioned && listed
 }
 
-// SingleRouteTokens returns the strategy-facing single-route token set.
 func (p Policy) SingleRouteTokens() map[common.Address]bool {
-	if p.Scope() != Permissioned || len(p.permissioned) == 0 {
+	if p.Scope() != Permissioned || len(p.tokens) == 0 {
 		return nil
 	}
-	tokens := make(map[common.Address]bool, len(p.permissioned))
-	for token := range p.permissioned {
+	tokens := make(map[common.Address]bool, len(p.tokens))
+	for token := range p.tokens {
 		tokens[token] = true
 	}
 	return tokens

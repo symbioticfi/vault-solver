@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -27,11 +26,9 @@ type orderMessage struct {
 }
 
 type orderFeed struct {
-	url           string
-	apiKey        string
-	log           logr.Logger
-	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
-	recoveryReady atomic.Bool // connection recovery writes; Prometheus scrapes read concurrently.
+	url    string
+	apiKey string
+	log    logr.Logger
 }
 
 type orderFeedConnectionHooks struct {
@@ -65,11 +62,12 @@ func (f *orderFeed) run(
 			return ctx.Err()
 		case <-timer.C:
 		}
-		backoff *= 2
-		if backoff > maxWSBackoff {
-			backoff = maxWSBackoff
-		}
+		backoff = nextWSBackoff(backoff)
 	}
+}
+
+func nextWSBackoff(current time.Duration) time.Duration {
+	return min(2*current, maxWSBackoff)
 }
 
 func (f *orderFeed) watchOnce(
@@ -91,10 +89,6 @@ func (f *orderFeed) watchOnce(
 		}
 		return false, errors.Errorf("dial websocket: %w", err)
 	}
-	// A newly established connection always starts unready. Quotes must remain gated until this
-	// connection's REST recovery has converged, even if the previous connection was ready.
-	f.recoveryReady.Store(false)
-	f.connected.Store(true)
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -109,12 +103,8 @@ func (f *orderFeed) watchOnce(
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	var work sync.WaitGroup
 	defer func() {
-		f.connected.Store(false)
 		cancelConnection()
 		work.Wait()
-		// Store after joining connection work so a late completion from the closing connection cannot
-		// leave readiness set for the next scrape or reconnect.
-		f.recoveryReady.Store(false)
 	}()
 	if hooks.beforeRead != nil {
 		hooks.beforeRead(connectionCtx)
@@ -152,29 +142,27 @@ func (f *orderFeed) watchOnce(
 	}
 }
 
-// markRecoveryReady publishes readiness only for a still-current established connection. watchOnce
-// serializes connection generations and clears the bit both before a reconnect and after joining the
-// closing connection's work, so an old recovery goroutine cannot make a newer connection ready.
-func (f *orderFeed) markRecoveryReady(connectionCtx context.Context) {
-	if connectionCtx.Err() != nil || !f.connected.Load() {
-		return
-	}
-	f.recoveryReady.Store(true)
-}
-
 func pongFor(msg []byte) ([]byte, bool) {
 	trimmed := bytes.TrimSpace(msg)
 	if strings.EqualFold(string(trimmed), "ping") {
 		return []byte("pong"), true
 	}
-	var envelope struct {
-		Event string `json:"event"`
-	}
-	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+	event, ok := websocketEvent(trimmed)
+	if !ok {
 		return nil, false
 	}
-	if strings.EqualFold(envelope.Event, "ping") {
+	if strings.EqualFold(event, "ping") {
 		return []byte(`{"event":"pong"}`), true
 	}
 	return nil, false
+}
+
+func websocketEvent(message []byte) (string, bool) {
+	var envelope struct {
+		Event string `json:"event"`
+	}
+	if err := json.Unmarshal(message, &envelope); err != nil {
+		return "", false
+	}
+	return envelope.Event, true
 }

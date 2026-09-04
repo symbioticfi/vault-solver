@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -19,341 +18,163 @@ const (
 	orderRecoveryOperation = "order_recovery"
 )
 
-type lifiOperationObservers struct {
-	quoteRefresh  *observability.OperationObserver
-	quoteSuspend  *observability.OperationObserver
-	orderRecovery *observability.OperationObserver
-}
+const (
+	queueInbox orderQueueStage = iota
+	queueRecoveryRetry
+	queueCapacityRetry
+	queueDepositRetry
+	queueStageCount
+)
+
+var queueStageLabels = [queueStageCount]string{"inbox", "recovery_retry", "capacity_retry", "deposit_retry"}
 
 type lifiMetrics struct {
-	workflow           *observability.WorkflowMetrics
-	operations         lifiOperationObservers
-	quotes             *lifiQuoteMetrics
-	orderFeedConnected prometheus.GaugeFunc
-	orderRecoveryReady prometheus.GaugeFunc
-	orderQueueMetrics  *lifiOrderQueueMetrics
-	fillAmounts        *liquidlane.FillMetrics
+	workflow            *observability.WorkflowMetrics
+	quotes              *lifiQuoteMetrics
+	connected, recovery prometheus.Gauge
+	backlog, deadline   *prometheus.GaugeVec
+	fill                *liquidlane.FillMetrics
 }
 
-// lifiQuoteMetrics registers as one collector and holds the read lock across all child collectors,
-// so a scrape cannot interleave with Reset plus repopulation.
+// lifiQuoteMetrics makes a refresh atomic from the collector's point of view: pair.Reset and
+// repopulation must not expose a partial quote snapshot to a concurrent scrape.
 type lifiQuoteMetrics struct {
-	mu            sync.RWMutex
-	activeQuotes  prometheus.Gauge
-	activeRanges  prometheus.Gauge
-	pairMaxInput  *prometheus.GaugeVec
-	lastRefreshAt prometheus.Gauge
+	mu                    sync.RWMutex
+	active, ranges, fresh prometheus.Gauge
+	pair                  *prometheus.GaugeVec
 }
 
-func newLIFIQuoteMetrics() *lifiQuoteMetrics {
-	return &lifiQuoteMetrics{
-		activeQuotes: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_active_quotes",
-			Help: "Process-local standing quote count from the last successful reconciliation; quotes may expire remotely after their TTL.",
-		}),
-		activeRanges: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_active_quote_ranges",
-			Help: "Process-local standing quote range count from the last successful reconciliation.",
-		}),
-		pairMaxInput: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "lifi_active_quote_max_input_atomic_units",
-			Help: "Largest currently advertised input amount per standing quote pair; alternatives are maxed, not summed.",
-		}, []string{"token_in", "token_out", "token_in_decimals", "token_out_decimals"}),
-		lastRefreshAt: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_last_successful_refresh_timestamp",
-			Help: "Unix timestamp of the last successful standing-quote reconciliation.",
-		}),
+func newLIFIMetrics(reg prometheus.Registerer, strategy string) (*lifiMetrics, error) {
+	spec := liquidlane.FillWorkflowSpec()
+	spec.Strategy = strategy
+	spec.Operations = []string{quoteRefreshOperation, quoteSuspendOperation, orderRecoveryOperation}
+	spec.Events = append(spec.Events,
+		observability.WorkflowEventSpec{Event: "order_processing", Outcomes: []string{"submitted", "deferred", "dropped", "declined", "error"}},
+		observability.WorkflowEventSpec{Event: "queue_drop", Outcomes: []string{"inbox", "capacity_retry", "deposit_retry"}},
+	)
+	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	if err != nil {
+		return nil, err
 	}
+	quotes := &lifiQuoteMetrics{
+		active: prometheus.NewGauge(prometheus.GaugeOpts{Name: "lifi_active_quotes", Help: "Active standing quotes."}),
+		ranges: prometheus.NewGauge(prometheus.GaugeOpts{Name: "lifi_active_quote_ranges", Help: "Active standing quote ranges."}),
+		fresh:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "lifi_last_successful_refresh_timestamp", Help: "Last quote reconciliation."}),
+		pair: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "lifi_active_quote_max_input_atomic_units", Help: "Largest input range per pair."},
+			[]string{"token_in", "token_out", "token_in_decimals", "token_out_decimals"}),
+	}
+	m := &lifiMetrics{
+		workflow:  workflow,
+		quotes:    quotes,
+		connected: prometheus.NewGauge(prometheus.GaugeOpts{Name: "lifi_order_feed_connected", Help: "Whether the order feed is connected."}),
+		recovery:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "lifi_order_recovery_ready", Help: "Whether REST recovery completed for this connection."}),
+		backlog:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "lifi_order_backlog", Help: "Orders waiting by stage."}, []string{"stage"}),
+		deadline:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "lifi_order_nearest_deadline_timestamp", Help: "Nearest waiting order deadline by stage."}, []string{"stage"}),
+		fill:      liquidlane.NewFillMetrics(workflow),
+	}
+	if err := observability.RegisterCollectors(reg, "lifi",
+		m.quotes, m.connected, m.recovery, m.backlog, m.deadline,
+	); err != nil {
+		return nil, err
+	}
+	m.queues(orderQueueMetrics{})
+	return m, nil
 }
 
 func (m *lifiQuoteMetrics) Describe(ch chan<- *prometheus.Desc) {
-	m.activeQuotes.Describe(ch)
-	m.activeRanges.Describe(ch)
-	m.pairMaxInput.Describe(ch)
-	m.lastRefreshAt.Describe(ch)
+	m.active.Describe(ch)
+	m.ranges.Describe(ch)
+	m.fresh.Describe(ch)
+	m.pair.Describe(ch)
 }
 
 func (m *lifiQuoteMetrics) Collect(ch chan<- prometheus.Metric) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	m.activeQuotes.Collect(ch)
-	m.activeRanges.Collect(ch)
-	m.pairMaxInput.Collect(ch)
-	m.lastRefreshAt.Collect(ch)
+	m.active.Collect(ch)
+	m.ranges.Collect(ch)
+	m.fresh.Collect(ch)
+	m.pair.Collect(ch)
 }
 
 func (m *lifiQuoteMetrics) observe(state *quoteState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pairMaxInput.Reset()
-	activeQuotes, activeRanges := 0, 0
-	if state != nil {
-		activeQuotes = state.activeQuoteCount()
-		for key, pair := range state.active {
-			maximum := new(big.Int)
-			for _, quote := range pair.quotes {
-				activeRanges += len(quote.Ranges)
-				for _, quoteRange := range quote.Ranges {
-					if quoteRange.MaxAmount != nil && quoteRange.MaxAmount.Cmp(maximum) > 0 {
-						maximum.Set(quoteRange.MaxAmount)
-					}
+	m.pair.Reset()
+	quotes, ranges := 0, 0
+	for key, value := range state.active {
+		quotes += len(value.quotes)
+		maximum := new(big.Int)
+		for _, quote := range value.quotes {
+			for _, span := range quote.Ranges {
+				ranges++
+				if span.MaxAmount != nil && span.MaxAmount.Cmp(maximum) > 0 {
+					maximum.Set(span.MaxAmount)
 				}
 			}
-			value, _ := new(big.Float).SetInt(maximum).Float64()
-			m.pairMaxInput.WithLabelValues(
-				strings.ToLower(key.fromAsset.Hex()), strings.ToLower(key.toAsset.Hex()),
-				strconv.Itoa(key.fromDecimals), strconv.Itoa(key.toDecimals),
-			).Set(value)
 		}
+		asFloat, _ := new(big.Float).SetInt(maximum).Float64()
+		m.pair.WithLabelValues(strings.ToLower(key.fromAsset.Hex()), strings.ToLower(key.toAsset.Hex()), strconv.Itoa(key.fromDecimals), strconv.Itoa(key.toDecimals)).Set(asFloat)
 	}
-	m.activeQuotes.Set(float64(activeQuotes))
-	m.activeRanges.Set(float64(activeRanges))
-	m.lastRefreshAt.SetToCurrentTime()
+	m.active.Set(float64(quotes))
+	m.ranges.Set(float64(ranges))
+	m.fresh.SetToCurrentTime()
 }
 
-var orderProcessingOutcomes = [...]orderProcessingOutcome{
-	orderProcessingSubmitted,
-	orderProcessingDepositDeferred,
-	orderProcessingCapacityDeferred,
-	orderProcessingCapacityDropped,
-	orderProcessingNotActionable,
-	orderProcessingStrategyDeclined,
-	orderProcessingInvalidPlan,
-	orderProcessingRetryableError,
-	orderProcessingOther,
-}
-
-type orderQueue string
-
-const (
-	orderQueueInbox         orderQueue = "inbox"
-	orderQueueRecoveryRetry orderQueue = "recovery_retry"
-	orderQueueCapacityRetry orderQueue = "capacity_retry"
-	orderQueueDepositRetry  orderQueue = "deposit_retry"
-)
-
-var orderQueues = [...]orderQueue{
-	orderQueueInbox,
-	orderQueueRecoveryRetry,
-	orderQueueCapacityRetry,
-	orderQueueDepositRetry,
-}
-
-var orderDropQueues = [...]orderQueue{orderQueueInbox, orderQueueCapacityRetry, orderQueueDepositRetry}
-
-type orderQueueSnapshot struct {
-	backlog         int
-	nearestDeadline int64
-}
-
-func earlierOrderDeadlineUnix(current int64, order *submittedOrder) int64 {
-	deadline := orderDeadline(order)
-	if deadline.IsZero() {
-		return current
-	}
-	if current == 0 || deadline.Unix() < current {
-		return deadline.Unix()
-	}
-	return current
-}
-
-type trackedOrderQueue struct {
-	generation uint64
-	snapshot   func() orderQueueSnapshot
-}
-
-// lifiOrderQueueMetrics resolves scrape-time values from the live queue owners.
-// Retry queues remain single-worker owned for control flow; their snapshot methods
-// add only the synchronization required by concurrent Prometheus collection.
-type lifiOrderQueueMetrics struct {
-	mu              sync.RWMutex
-	nextGeneration  uint64
-	tracked         map[orderQueue]trackedOrderQueue
-	backlog         *prometheus.Desc
-	nearestDeadline *prometheus.Desc
-}
-
-func newLIFIOrderQueueMetrics() *lifiOrderQueueMetrics {
-	return &lifiOrderQueueMetrics{
-		tracked: make(map[orderQueue]trackedOrderQueue, len(orderQueues)),
-		backlog: prometheus.NewDesc(
-			"lifi_order_backlog",
-			"Current process-local LI.FI orders waiting in each execution stage.",
-			[]string{"stage"},
-			nil,
-		),
-		nearestDeadline: prometheus.NewDesc(
-			"lifi_order_nearest_deadline_timestamp",
-			"Unix timestamp of the nearest order deadline in each execution stage; zero when none.",
-			[]string{"stage"},
-			nil,
-		),
-	}
-}
-
-func (m *lifiOrderQueueMetrics) Describe(ch chan<- *prometheus.Desc) {
-	ch <- m.backlog
-	ch <- m.nearestDeadline
-}
-
-func (m *lifiOrderQueueMetrics) Collect(ch chan<- prometheus.Metric) {
-	for _, queue := range orderQueues {
-		snapshot := m.snapshot(queue)
-		ch <- prometheus.MustNewConstMetric(
-			m.backlog,
-			prometheus.GaugeValue,
-			float64(snapshot.backlog),
-			string(queue),
-		)
-		ch <- prometheus.MustNewConstMetric(
-			m.nearestDeadline,
-			prometheus.GaugeValue,
-			float64(snapshot.nearestDeadline),
-			string(queue),
-		)
-	}
-}
-
-func (m *lifiOrderQueueMetrics) snapshot(queue orderQueue) orderQueueSnapshot {
-	m.mu.RLock()
-	snapshot := m.tracked[queue].snapshot
-	m.mu.RUnlock()
-	if snapshot == nil {
-		return orderQueueSnapshot{}
-	}
-	return snapshot()
-}
-
-func (m *lifiMetrics) trackOrderQueue(queue orderQueue, snapshot func() orderQueueSnapshot) func() {
-	if m == nil || m.orderQueueMetrics == nil || snapshot == nil {
-		return func() {}
-	}
-	metrics := m.orderQueueMetrics
-	metrics.mu.Lock()
-	metrics.nextGeneration++
-	generation := metrics.nextGeneration
-	metrics.tracked[queue] = trackedOrderQueue{generation: generation, snapshot: snapshot}
-	metrics.mu.Unlock()
-	return func() {
-		metrics.mu.Lock()
-		if metrics.tracked[queue].generation == generation {
-			delete(metrics.tracked, queue)
-		}
-		metrics.mu.Unlock()
-	}
-}
-
-func newLIFIMetrics(
-	reg prometheus.Registerer,
-	feed *orderFeed,
-	strategyName string,
-) (*lifiMetrics, error) {
-	spec := liquidlane.FillWorkflowSpec()
-	spec.Strategy = strategyName
-	spec.Operations = []string{quoteRefreshOperation, quoteSuspendOperation, orderRecoveryOperation}
-	for _, outcome := range orderProcessingOutcomes {
-		spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-			Event: "order_processing", Outcomes: []string{string(outcome)},
-		})
-	}
-	for _, queue := range orderDropQueues {
-		spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-			Event: "queue_drop", Outcomes: []string{string(queue)},
-		})
-	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
-	if err != nil {
-		return nil, err
-	}
-	orderQueueMetrics := newLIFIOrderQueueMetrics()
-	m := &lifiMetrics{
-		workflow: workflow,
-		operations: lifiOperationObservers{
-			quoteRefresh:  workflow.Operation(quoteRefreshOperation),
-			quoteSuspend:  workflow.Operation(quoteSuspendOperation),
-			orderRecovery: workflow.Operation(orderRecoveryOperation),
-		},
-		quotes: newLIFIQuoteMetrics(),
-		orderFeedConnected: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "lifi_order_feed_connected",
-			Help: "1 while the LI.FI WebSocket order feed owns an established connection; 0 otherwise.",
-		}, func() float64 {
-			if feed != nil && feed.connected.Load() {
-				return 1
-			}
-			return 0
-		}),
-		orderRecoveryReady: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name: "lifi_order_recovery_ready",
-			Help: "1 while the current established LI.FI order-feed connection has completed REST recovery; 0 otherwise.",
-		}, func() float64 {
-			if feed != nil && feed.connected.Load() && feed.recoveryReady.Load() {
-				return 1
-			}
-			return 0
-		}),
-		orderQueueMetrics: orderQueueMetrics,
-		fillAmounts:       liquidlane.NewFillMetrics(workflow),
-	}
-	for _, collector := range []prometheus.Collector{
-		m.quotes, m.orderFeedConnected, m.orderRecoveryReady, m.orderQueueMetrics,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("lifi: register metric: %w", err)
-		}
-	}
-	return m, nil
-}
-
-func (s *Solver) observeQuoteRefresh(state *quoteState) {
-	if s.metrics != nil {
-		s.metrics.quotes.observe(state)
-	}
-}
-
-func (s *Solver) operationObservers() lifiOperationObservers {
-	if s == nil || s.metrics == nil {
-		return lifiOperationObservers{}
-	}
-	return s.metrics.operations
-}
-
-func (m *lifiMetrics) observeOrderProcessing(outcome orderProcessingOutcome) {
+func (m *lifiMetrics) observeQuotes(state *quoteState) {
 	if m != nil {
-		m.workflow.ObserveEvent("order_processing", string(boundedOrderProcessingOutcome(outcome)))
+		m.quotes.observe(state)
 	}
 }
 
-func boundedOrderProcessingOutcome(outcome orderProcessingOutcome) orderProcessingOutcome {
-	for _, declared := range orderProcessingOutcomes {
-		if outcome == declared {
-			return outcome
-		}
+func (m *lifiMetrics) operation(name string) *observability.OperationObserver {
+	if m == nil {
+		return nil
 	}
-	return orderProcessingOther
+	return m.workflow.Operation(name)
 }
 
-func (m *lifiMetrics) observeOrderQueueDrop(queue orderQueue, err error) {
-	if m == nil || !orderQueueWasDropped(queue, err) {
+func (m *lifiMetrics) feedState(connected, recovered bool) {
+	if m == nil {
 		return
 	}
-	m.workflow.ObserveEvent("queue_drop", string(queue))
+	m.connected.Set(boolFloat(connected))
+	m.recovery.Set(boolFloat(connected && recovered))
 }
 
-func orderQueueWasDropped(queue orderQueue, err error) bool {
-	switch queue {
-	case orderQueueInbox:
-		return errors.Is(err, errOrderInboxFull)
-	case orderQueueCapacityRetry:
-		return errors.Is(err, errOrderRetryFull)
-	case orderQueueDepositRetry:
-		return errors.Is(err, errOrderDepositRetryFull) ||
-			errors.Is(err, errOrderDepositRetryKey) ||
-			errors.Is(err, errOrderDepositRetryExpired) ||
-			errors.Is(err, errOrderDepositRetryWindow)
-	case orderQueueRecoveryRetry:
-		return false
-	default:
-		return false
+func (m *lifiMetrics) queues(snapshot orderQueueMetrics) {
+	if m == nil {
+		return
+	}
+	for stage, label := range queueStageLabels {
+		m.backlog.WithLabelValues(label).Set(float64(snapshot[stage].count))
+		m.deadline.WithLabelValues(label).Set(float64(snapshot[stage].deadline))
 	}
 }
+
+func (m *lifiMetrics) order(outcome string) {
+	if m != nil {
+		m.workflow.ObserveEvent("order_processing", outcome)
+	}
+}
+
+func (m *lifiMetrics) queueDrop(stage string) {
+	if m != nil {
+		m.workflow.ObserveEvent("queue_drop", stage)
+	}
+}
+
+func boolFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+type orderQueueMetric struct {
+	count    int
+	deadline int64
+}
+
+type orderQueueStage uint8
+type orderQueueMetrics [queueStageCount]orderQueueMetric

@@ -13,16 +13,26 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/decision"
 )
 
 var executorB = executor.NewRedStoneExecutor()
+
+type stateReader interface {
+	ReadExecutorState(ctx context.Context, executor, signer common.Address) (ExecutorState, error)
+	ReadAdapterSnapshot(ctx context.Context, adapter, callback common.Address) (decision.AdapterSnapshot, error)
+	ReadGasPrices(ctx context.Context, adapter decision.AdapterSnapshot, now time.Time) (*liquidlanegas.PriceSnapshot, error)
+	ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error)
+}
+
+func (r *reader) ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error) {
+	return r.chain.BalanceAt(ctx, account, nil)
+}
 
 // reader owns RedStone Executor reads and maps shared LiquidLane facts into OEV strategy input.
 type reader struct {
 	chain *chain.Client
 	ll    *liquidlane.Reader
-	gas   *liquidlanegas.OracleReader
 }
 
 func newReader(
@@ -31,15 +41,11 @@ func newReader(
 	gasCfg *liquidlanegas.OracleConfig,
 	liquidityLens common.Address,
 ) (*reader, error) {
-	var gasReader *liquidlanegas.OracleReader
-	if gasCfg != nil {
-		var err error
-		gasReader, err = liquidlanegas.NewOracleReader(c, *gasCfg)
-		if err != nil {
-			return nil, err
-		}
+	ll, err := liquidlane.NewReader(c, log, liquidityLens, gasCfg)
+	if err != nil {
+		return nil, err
 	}
-	return &reader{chain: c, ll: liquidlane.NewReader(c, log, liquidityLens), gas: gasReader}, nil
+	return &reader{chain: c, ll: ll}, nil
 }
 
 // ExecutorState is the signer's accounting on the RedStone Executor.
@@ -76,26 +82,31 @@ func (r *reader) ReadAdapterSnapshot(
 	ctx context.Context,
 	adapterAddress common.Address,
 	callback common.Address,
-) (types.AdapterSnapshot, error) {
+) (decision.AdapterSnapshot, error) {
 	snapshot, err := r.ll.ReadAdapterSnapshot(ctx, adapterAddress, callback)
 	if err != nil {
-		return types.AdapterSnapshot{}, err
+		return decision.AdapterSnapshot{}, err
 	}
-	redeemable := make([]types.RedeemableSnapshot, 0, len(snapshot.Routes))
-	for _, route := range snapshot.Routes {
-		redeemable = append(redeemable, types.RedeemableSnapshot{
+	redeemable := projectRedeemableSnapshots(snapshot.Routes)
+	return decision.AdapterSnapshot{
+		Address: snapshot.Adapter.Adapter, Vault: snapshot.Vault,
+		Loan: snapshot.TokenOut, LoanDecimals: snapshot.TokenOutDecimals,
+		Paused: snapshot.Paused, FreeAssets: liquidlane.CloneBig(snapshot.FreeAssets),
+		Withdrawable: liquidlane.CloneBig(snapshot.Withdrawable),
+		Redeemable:   redeemable, Filler: snapshot.Authorized,
+	}, nil
+}
+
+func projectRedeemableSnapshots(routes []liquidlane.RouteSnapshot) []decision.RedeemableSnapshot {
+	redeemable := make([]decision.RedeemableSnapshot, 0, len(routes))
+	for _, route := range routes {
+		redeemable = append(redeemable, decision.RedeemableSnapshot{
 			Asset: route.TokenIn, Decimals: route.TokenInDecimals,
 			MaxRate: liquidlane.CloneBig(route.MaxRate), MaxAssets: liquidlane.CloneBig(route.MaxAssets),
 			AcquireBalance: liquidlane.CloneBig(route.AcquireBalance),
 		})
 	}
-	return types.AdapterSnapshot{
-		Address: snapshot.Adapter.Adapter, Vault: snapshot.Vault,
-		Loan: snapshot.TokenOut, LoanDecimals: snapshot.TokenOutDecimals,
-		Paused:     snapshot.Paused,
-		FreeAssets: liquidlane.CloneBig(snapshot.FreeAssets), Withdrawable: liquidlane.CloneBig(snapshot.Withdrawable),
-		Redeemable: redeemable, Filler: snapshot.Authorized,
-	}, nil
+	return redeemable
 }
 
 // ReadGasPrices returns the shared token/native price snapshot when gas accounting is configured.
@@ -103,13 +114,10 @@ func (r *reader) ReadAdapterSnapshot(
 // solver keeps its last coherent state and eventually fails closed on cache staleness.
 func (r *reader) ReadGasPrices(
 	ctx context.Context,
-	adapter types.AdapterSnapshot,
+	adapter decision.AdapterSnapshot,
 	now time.Time,
 ) (*liquidlanegas.PriceSnapshot, error) {
-	if r.gas == nil {
-		return nil, nil
-	}
-	return r.gas.Read(ctx, []liquidlanegas.Token{{
+	return r.ll.ReadGasPrices(ctx, []liquidlanegas.Token{{
 		Address:  adapter.Loan,
 		Decimals: adapter.LoanDecimals,
 	}}, now)

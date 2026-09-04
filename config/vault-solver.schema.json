@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/symbioticfi/vault-solver/blob/main/config/vault-solver.schema.json",
+  "title": "vault-solver configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["chain", "signer", "solvers"],
+  "properties": {
+    "chain": { "$ref": "#/$defs/chain" },
+    "signer": { "$ref": "#/$defs/signer" },
+    "txManager": { "$ref": "#/$defs/txManager" },
+    "observability": { "$ref": "#/$defs/observability" },
+    "solvers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/solverEntry" }
+    }
+  },
+  "$defs": {
+    "envReference": {
+      "type": "string",
+      "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+    },
+    "address": {
+      "anyOf": [
+        { "type": "string", "pattern": "^0x[0-9A-Fa-f]{40}$" },
+        { "$ref": "#/$defs/envReference" }
+      ]
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "duration": {
+      "type": "string",
+      "minLength": 2,
+      "description": "Go duration such as 450ms, 1.5s, or 1h30m"
+    },
+    "decimalInteger": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rpcUrl", "chainId"],
+      "properties": {
+        "rpcUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "rpcFallbackUrls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "writeRpcUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "chainId": { "type": "integer", "minimum": 1 },
+        "multicallAddress": { "$ref": "#/$defs/address" }
+      }
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keyEnv": { "$ref": "#/$defs/nonEmptyString" },
+        "keystorePath": { "$ref": "#/$defs/nonEmptyString" },
+        "passphraseEnv": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "oneOf": [
+        { "required": ["keyEnv"], "not": { "required": ["keystorePath"] } },
+        { "required": ["keystorePath", "passphraseEnv"], "not": { "required": ["keyEnv"] } }
+      ]
+    },
+    "txManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confirmations": { "type": "integer", "minimum": 1 },
+        "maxFeeGwei": { "type": "number", "exclusiveMinimum": 0 },
+        "tipGwei": { "type": "number", "minimum": 0 },
+        "broadcastTimeoutMs": { "type": "integer", "minimum": 1 },
+        "accountPollIntervalMs": { "type": "integer", "minimum": 1 },
+        "replacementIntervalMs": { "type": "integer", "minimum": 1 },
+        "pendingTimeoutMs": { "type": "integer", "minimum": 1 },
+        "shutdownTimeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": { "type": "string" },
+        "debug": { "type": "boolean" }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "enum": ["default", "webhook"] },
+        "config": { "type": "object" }
+      }
+    },
+    "gas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nativeUsdFeed", "nativeMaxAge", "tokenUsdFeeds"],
+      "properties": {
+        "nativeUsdFeed": { "$ref": "#/$defs/address" },
+        "nativeMaxAge": { "$ref": "#/$defs/duration" },
+        "tokenUsdFeeds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["token", "feed", "maxAge"],
+            "properties": {
+              "token": { "$ref": "#/$defs/address" },
+              "feed": { "$ref": "#/$defs/address" },
+              "maxAge": { "$ref": "#/$defs/duration" }
+            }
+          }
+        }
+      }
+    },
+    "tokenPolicy": {
+      "properties": {
+        "tokensToQuote": { "type": "string", "enum": ["all", "permissioned", "permissionless"] },
+        "permissionedTokens": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/address" }
+        }
+      }
+    },
+    "solverEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "config"],
+          "properties": {
+            "name": { "const": "3f-bridge-facilitator" },
+            "config": { "$ref": "#/$defs/threefConfig" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "config"],
+          "properties": {
+            "name": { "const": "rfq-filler" },
+            "config": { "$ref": "#/$defs/rfqConfig" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "config"],
+          "properties": {
+            "name": { "const": "redstone-oev" },
+            "config": { "$ref": "#/$defs/oevConfig" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "config"],
+          "properties": {
+            "name": { "const": "lifi-samechain" },
+            "config": { "$ref": "#/$defs/lifiConfig" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "config"],
+          "properties": {
+            "name": { "const": "uniswapx-filler" },
+            "config": { "$ref": "#/$defs/uniswapxConfig" }
+          }
+        }
+      ]
+    },
+    "threefConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiBaseUrl"],
+      "properties": {
+        "apiBaseUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "redeemBatchSize": { "type": "integer", "minimum": 1 },
+        "adapters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/address" }
+        },
+        "adapterFactory": { "$ref": "#/$defs/address" },
+        "liquidityLens": { "$ref": "#/$defs/address" },
+        "httpTimeout": { "$ref": "#/$defs/duration" },
+        "offerExpiryBuffer": { "$ref": "#/$defs/duration" },
+        "intervals": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "discover": { "$ref": "#/$defs/duration" },
+            "redeemPoll": { "$ref": "#/$defs/duration" },
+            "reconcile": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "strategy": { "$ref": "#/$defs/strategy" }
+      },
+      "anyOf": [
+        { "required": ["adapters"] },
+        { "required": ["adapterFactory"] }
+      ]
+    },
+    "rfqConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backendUrl", "backendSharedSecretEnv", "executor"],
+      "properties": {
+        "backendUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "backendSharedSecretEnv": { "$ref": "#/$defs/nonEmptyString" },
+        "listenAddr": { "type": "string" },
+        "executor": { "$ref": "#/$defs/address" },
+        "liquidityLens": { "$ref": "#/$defs/address" },
+        "pollIntervalMs": { "type": "integer", "minimum": 1 },
+        "orderLimit": { "type": "integer", "minimum": 1 },
+        "solverMode": { "type": "string", "enum": ["external", "internal"] },
+        "tokensToQuote": { "type": "string", "enum": ["all", "permissioned", "permissionless"] },
+        "permissionedTokens": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "minAmountsIn": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/decimalInteger" }
+        },
+        "adapters": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "strategy": { "$ref": "#/$defs/strategy" }
+      }
+    },
+    "oevConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ws", "executor", "adapter", "callback"],
+      "properties": {
+        "ws": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "apiKeyEnv"],
+          "properties": {
+            "url": { "$ref": "#/$defs/nonEmptyString" },
+            "apiKeyEnv": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "executor": { "$ref": "#/$defs/address" },
+        "adapter": { "$ref": "#/$defs/address" },
+        "callback": { "$ref": "#/$defs/address" },
+        "liquidityLens": { "$ref": "#/$defs/address" },
+        "gas": { "$ref": "#/$defs/gas" },
+        "strategy": { "$ref": "#/$defs/strategy" },
+        "dryRun": { "type": "boolean" },
+        "maxTxGasPriceWei": { "$ref": "#/$defs/decimalInteger" },
+        "maxBidWei": { "$ref": "#/$defs/decimalInteger" },
+        "breaker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxFailures": { "type": "integer", "minimum": 1 },
+            "windowMs": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "intervals": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "opsPollMs": { "type": "integer", "minimum": 1 },
+            "executorStateMaxAgeMs": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "lifiConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orderServer", "inputSettler", "outputSettler", "executor", "adapters"],
+      "properties": {
+        "orderServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseUrl", "wsUrl", "apiKeyEnv"],
+          "properties": {
+            "baseUrl": { "$ref": "#/$defs/nonEmptyString" },
+            "wsUrl": { "$ref": "#/$defs/nonEmptyString" },
+            "apiKeyEnv": { "$ref": "#/$defs/nonEmptyString" },
+            "httpTimeout": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "inputSettler": { "$ref": "#/$defs/address" },
+        "outputSettler": { "$ref": "#/$defs/address" },
+        "executor": { "$ref": "#/$defs/address" },
+        "liquidityLens": { "$ref": "#/$defs/address" },
+        "adapters": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/address" } },
+        "tokensToQuote": { "type": "string", "enum": ["all", "permissioned", "permissionless"] },
+        "permissionedTokens": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "quoteIntervalMs": { "type": "integer", "minimum": 1 },
+        "quoteTtl": { "$ref": "#/$defs/duration" },
+        "quoteRefreshMode": { "type": "string", "enum": ["block", "interval"] },
+        "solverMode": { "type": "string", "enum": ["external", "internal"] },
+        "privateDiscountsUrl": { "$ref": "#/$defs/nonEmptyString" },
+        "gas": { "$ref": "#/$defs/gas" },
+        "strategy": { "$ref": "#/$defs/strategy" }
+      }
+    },
+    "uniswapxConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reactor", "executor", "quoteServer", "orderServer"],
+      "properties": {
+        "reactor": { "$ref": "#/$defs/address" },
+        "executor": { "$ref": "#/$defs/address" },
+        "liquidityLens": { "$ref": "#/$defs/address" },
+        "adapters": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "solverMode": { "type": "string", "enum": ["external", "internal"] },
+        "tokensToQuote": { "type": "string", "enum": ["all", "permissioned", "permissionless"] },
+        "permissionedTokens": { "type": "array", "items": { "$ref": "#/$defs/address" } },
+        "quoteServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "listenAddress": { "type": "string" },
+            "httpTimeout": { "$ref": "#/$defs/duration" },
+            "refreshInterval": { "$ref": "#/$defs/duration" },
+            "quoteTtl": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "orderServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseUrl", "apiKeyEnv"],
+          "properties": {
+            "baseUrl": { "$ref": "#/$defs/nonEmptyString" },
+            "apiKeyEnv": { "$ref": "#/$defs/nonEmptyString" },
+            "pollInterval": { "$ref": "#/$defs/duration" },
+            "httpTimeout": { "$ref": "#/$defs/duration" },
+            "beta": { "type": "boolean" },
+            "sources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "exclusiveV2": { "type": "boolean" },
+                "publicV2": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "discounts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseUrl"],
+          "properties": {
+            "baseUrl": { "$ref": "#/$defs/nonEmptyString" },
+            "httpTimeout": { "$ref": "#/$defs/duration" },
+            "minimumValidity": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "gas": { "$ref": "#/$defs/gas" },
+        "breaker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxFailures": { "type": "integer", "minimum": 1 },
+            "window": { "$ref": "#/$defs/duration" }
+          }
+        },
+        "strategy": { "$ref": "#/$defs/strategy" }
+      }
+    }
+  }
+}

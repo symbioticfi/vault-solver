@@ -13,7 +13,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
 const (
@@ -24,16 +23,18 @@ const (
 )
 
 type orderClient struct {
-	api    *lifiorder.APIClient
-	apiKey string
-	chain  string
+	client   *lifiorder.APIClient
+	apiKey   string
+	chainRef string
 }
 
 func newOrderClient(baseURL, apiKey string, timeout time.Duration, chainID int64) *orderClient {
 	cfg := lifiorder.NewConfiguration()
 	cfg.Servers = lifiorder.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
 	cfg.HTTPClient = &http.Client{Timeout: timeout}
-	return &orderClient{api: lifiorder.NewAPIClient(cfg), apiKey: apiKey, chain: strconv.FormatInt(chainID, 10)}
+	return &orderClient{
+		client: lifiorder.NewAPIClient(cfg), apiKey: apiKey, chainRef: strconv.FormatInt(chainID, 10),
+	}
 }
 
 func (c *orderClient) withAuth(ctx context.Context) context.Context {
@@ -43,7 +44,7 @@ func (c *orderClient) withAuth(ctx context.Context) context.Context {
 }
 
 func (c *orderClient) validateExecutorRegistration(ctx context.Context, executor common.Address) error {
-	identities, httpResp, err := c.api.SolverAPIAPI.
+	identities, httpResp, err := c.client.SolverAPIAPI.
 		SolverApiV0ControllerGetSolverIdentities(c.withAuth(ctx)).
 		Execute()
 	closeResp(httpResp)
@@ -63,7 +64,7 @@ func (c *orderClient) validateExecutorRegistration(ctx context.Context, executor
 func (c *orderClient) replaceSupportedContracts(
 	ctx context.Context, dto lifiorder.PutSupportedContractsDto,
 ) error {
-	_, httpResp, err := c.api.SolverAPIV1API.
+	_, httpResp, err := c.client.SolverAPIV1API.
 		SupportedContractsControllerReplaceSupportedContracts(c.withAuth(ctx)).
 		PutSupportedContractsDto(dto).
 		Execute()
@@ -78,7 +79,7 @@ func (c *orderClient) ensureSupportedContracts(
 	ctx context.Context, chainID int64, inputSettler, outputSettler common.Address,
 ) error {
 	chain := chainRef(chainID)
-	current, httpResp, err := c.api.SolverAPIV1API.
+	current, httpResp, err := c.client.SolverAPIV1API.
 		SupportedContractsControllerGetSupportedContracts(c.withAuth(ctx)).
 		Execute()
 	closeResp(httpResp)
@@ -181,14 +182,14 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 	for offset := int32(0); ; {
 		// exclusiveFor scopes quote ownership to this solver; it is independent from
 		// the output context's optional on-chain exclusivity window.
-		response, httpResp, err := c.api.BridgeAPIAPI.
+		response, httpResp, err := c.client.BridgeAPIAPI.
 			OrdersControllerGetOrders(c.withAuth(ctx)).
 			Limit(orderRecoveryPageLimit).
 			Offset(offset).
 			Status(status).
 			ExclusiveFor(executor.Hex()).
-			OriginChainId(c.chain).
-			DestinationChainId(c.chain).
+			OriginChainId(c.chainRef).
+			DestinationChainId(c.chainRef).
 			Execute()
 		closeResp(httpResp)
 		if err != nil {
@@ -243,11 +244,11 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 	}
 }
 
-func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) error {
+func (c *orderClient) submitQuotes(ctx context.Context, quotes []Quote) error {
 	dtoQuotes := make([]lifiorder.SubmitQuotesDtoQuotesInner, 0, len(quotes))
 	expectedRanges := 0
 	for i, quote := range quotes {
-		dto, err := submitQuoteDTO(c.chain, quote, i)
+		dto, err := submitQuoteDTO(c.chainRef, quote, i)
 		if err != nil {
 			return err
 		}
@@ -255,7 +256,7 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 		expectedRanges += len(dto.Ranges)
 	}
 
-	response, httpResp, err := c.api.SolverAPIAPI.
+	response, httpResp, err := c.client.SolverAPIAPI.
 		QuotesControllerSubmitQuotes(c.withAuth(ctx)).
 		SubmitQuotesDto(lifiorder.SubmitQuotesDto{Quotes: dtoQuotes}).
 		Execute()
@@ -276,7 +277,7 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 	return nil
 }
 
-func submitQuoteDTO(chain string, quote types.Quote, index int) (lifiorder.SubmitQuotesDtoQuotesInner, error) {
+func submitQuoteDTO(chain string, quote Quote, index int) (lifiorder.SubmitQuotesDtoQuotesInner, error) {
 	field := "quotes[" + strconv.Itoa(index) + "]"
 	expiry, err := int32Checked(quote.Expiry, field+".expiry")
 	if err != nil {

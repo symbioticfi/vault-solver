@@ -6,11 +6,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/uniswapxservice"
@@ -28,9 +26,10 @@ const (
 type orderClient struct {
 	client *uniswapxservice.APIClient
 
-	requestMu   sync.Mutex
+	// Run calls the client during startup before handing sole ownership to orderLoop.
 	lastRequest time.Time
 	requestGap  time.Duration
+	now         func() time.Time
 }
 
 func newOrderClient(cfg OrderServerConfig, apiKey string) *orderClient {
@@ -47,6 +46,7 @@ func newOrderClient(cfg OrderServerConfig, apiKey string) *orderClient {
 	return &orderClient{
 		client:     uniswapxservice.NewAPIClient(generatedConfig),
 		requestGap: minOrderRequestGap,
+		now:        time.Now,
 	}
 }
 
@@ -78,20 +78,20 @@ func (c *orderClient) orders(
 ) ([]orderEntry, error) {
 	var orders []orderEntry
 	var cursor string
-	seenCursors := make(map[string]bool)
+	seenCursors := make(map[string]struct{})
 	for range maxOrderPages {
 		page, err := c.orderPage(ctx, chainID, filler, status, createdAfter, cursor)
 		if err != nil {
 			return orders, err
 		}
 		orders = append(orders, page.Orders...)
-		if page.Cursor == "" {
+		if page.done() {
 			return orders, nil
 		}
-		if seenCursors[page.Cursor] {
+		if _, repeated := seenCursors[page.Cursor]; repeated {
 			return orders, errors.New("orders response repeated its cursor")
 		}
-		seenCursors[page.Cursor] = true
+		seenCursors[page.Cursor] = struct{}{}
 		cursor = page.Cursor
 	}
 	return orders, errors.Errorf("orders response exceeds %d pages", maxOrderPages)
@@ -118,11 +118,6 @@ func (c *orderClient) ordersByHash(
 		end := min(start+maxOrderHashBatch, len(hashes))
 		if err := c.fetchOrderHashBatch(ctx, chainID, hashes[start:end], terminals); err != nil {
 			return nil, err
-		}
-	}
-	for hash := range requested {
-		if _, ok := terminals[hash]; !ok {
-			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
 		}
 	}
 	return terminals, nil
@@ -211,19 +206,27 @@ func (c *orderClient) orderPage(
 			orderPageLimit,
 		)
 	}
-	orders := make([]orderEntry, 0, len(response.Orders))
-	for i := range response.Orders {
-		order := response.Orders[i].DutchV2OrderEntity
+	orders, err := projectOrderEntries(response.Orders)
+	if err != nil {
+		return orderPage{}, err
+	}
+	return orderPage{Orders: orders, Cursor: response.GetCursor()}, nil
+}
+
+func projectOrderEntries(orders []uniswapxservice.GetOrdersResponseOrdersInner) ([]orderEntry, error) {
+	entries := make([]orderEntry, 0, len(orders))
+	for i := range orders {
+		order := orders[i].DutchV2OrderEntity
 		if order == nil {
-			return orderPage{}, errors.Errorf("GET /orders: order %d is not Dutch_V2", i)
+			return nil, errors.Errorf("GET /orders: order %d is not Dutch_V2", i)
 		}
 		entry, err := orderEntryFromAPI(order)
 		if err != nil {
-			return orderPage{}, errors.Errorf("GET /orders: order %d: %w", i, err)
+			return nil, errors.Errorf("GET /orders: order %d: %w", i, err)
 		}
-		orders = append(orders, entry)
+		entries = append(entries, entry)
 	}
-	return orderPage{Orders: orders, Cursor: response.GetCursor()}, nil
+	return entries, nil
 }
 
 func (c *orderClient) executeOrderRequest(
@@ -278,7 +281,7 @@ func orderTerminalFromAPI(
 			chainID,
 		)
 	}
-	orderHash, err := decodeHash(order.OrderHash)
+	orderHash, err := parseHash(order.OrderHash)
 	if err != nil || orderHash == (common.Hash{}) {
 		return common.Hash{}, orderTerminal{}, errors.Errorf("invalid order hash %q", order.OrderHash)
 	}
@@ -289,7 +292,7 @@ func orderTerminalFromAPI(
 	terminal := orderTerminal{Status: string(order.OrderStatus)}
 	txHashValue, hasTxHash := order.GetTxHashOk()
 	if hasTxHash {
-		txHash, decodeErr := decodeHash(*txHashValue)
+		txHash, decodeErr := parseHash(*txHashValue)
 		if decodeErr != nil || txHash == (common.Hash{}) {
 			return common.Hash{}, orderTerminal{}, errors.Errorf("invalid transaction hash %q", *txHashValue)
 		}
@@ -306,17 +309,6 @@ func orderTerminalFromAPI(
 		)
 	}
 	return orderHash, terminal, nil
-}
-
-func decodeHash(value string) (common.Hash, error) {
-	decoded, err := hexutil.Decode(value)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if len(decoded) != common.HashLength {
-		return common.Hash{}, errors.Errorf("got %d bytes, want %d", len(decoded), common.HashLength)
-	}
-	return common.BytesToHash(decoded), nil
 }
 
 func orderEntryFromAPI(order *uniswapxservice.DutchV2OrderEntity) (orderEntry, error) {
@@ -390,12 +382,11 @@ func (r *errorLimitReader) Read(data []byte) (int, error) {
 }
 
 func (c *orderClient) waitForRequestSlot(ctx context.Context) error {
-	c.requestMu.Lock()
-	defer c.requestMu.Unlock()
 	if c.requestGap <= 0 {
 		return nil
 	}
-	delay := time.Until(c.lastRequest.Add(c.requestGap))
+	now := c.currentTime()
+	delay := c.lastRequest.Add(c.requestGap).Sub(now)
 	if delay > 0 {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -405,6 +396,13 @@ func (c *orderClient) waitForRequestSlot(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
-	c.lastRequest = time.Now()
+	c.lastRequest = c.currentTime()
 	return nil
+}
+
+func (c *orderClient) currentTime() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }

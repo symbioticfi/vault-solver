@@ -1,104 +1,46 @@
 package chain
 
 import (
-	"io"
+	"context"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
-
-	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
-	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
-func TestRPCMetricsClassifyFallbackAndRPCError(t *testing.T) {
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), rpcMethodGetTransactionReceipt) {
-			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":3,"result":null}`)
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), `"id":2`) {
-			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"reverted"}}`)
-			return
-		}
-		if strings.Contains(string(body), `"id":3`) {
-			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":3,"result":{"blockNumber":"0x1"}}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":"0x1"}`)
-	}))
-	defer fallback.Close()
-
-	metrics, err := NewRPCMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
+func TestRPCMethodLabelsAreBounded(t *testing.T) {
+	tests := map[string]string{
+		rpcMethodCall:     rpcMethodCall,
+		"eth_getBalance":  "eth_getBalance",
+		"wallet_secretOp": "other",
+		"":                "other",
 	}
-	endpoints := mustEndpoints(t, primary.URL, fallback.URL)
-	metrics.bindTransport(rpcRoleRead, len(endpoints))
-	transport := &fallbackTransport{
-		endpoints: endpoints, base: http.DefaultTransport, metrics: metrics, role: rpcRoleRead, log: logr.Discard(),
-	}
-	for _, payload := range []string{
-		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[]}`,
-		`{"jsonrpc":"2.0","id":2,"method":"eth_call","params":[]}`,
-		`{"jsonrpc":"2.0","id":3,"method":"eth_getTransactionReceipt","params":[]}`,
-	} {
-		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, primary.URL, strings.NewReader(payload))
-		if reqErr != nil {
-			t.Fatal(reqErr)
+	for method, want := range tests {
+		if got := boundedRPCMethodName(method); got != want {
+			t.Errorf("boundedRPCMethodName(%q) = %q, want %q", method, got, want)
 		}
-		resp, roundTripErr := transport.RoundTrip(req)
-		if roundTripErr != nil {
-			t.Fatalf("round trip: %v", roundTripErr)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
-
-	metricstest.RequireValue(t, metrics.requests.WithLabelValues(rpcRoleRead, "eth_call", string(rpcOutcomeSuccess)), 1)
-	metricstest.RequireValue(t, metrics.requests.WithLabelValues(rpcRoleRead, "eth_call", string(rpcOutcomeRPCError)), 1)
-	metricstest.RequireValue(t, metrics.attempts.WithLabelValues(
-		rpcRoleRead, "0", "eth_call", string(rpcOutcomeHTTP5xx),
-	), 2)
-	metricstest.RequireValue(t, metrics.attempts.WithLabelValues(
-		rpcRoleRead, "1", "eth_call", string(rpcOutcomeSuccess),
-	), 1)
-	metricstest.RequireValue(t, metrics.attempts.WithLabelValues(
-		rpcRoleRead, "1", "eth_call", string(rpcOutcomeRPCError),
-	), 1)
-	metricstest.RequireValue(t, metrics.attempts.WithLabelValues(
-		rpcRoleRead, "0", rpcMethodGetTransactionReceipt, string(rpcOutcomeNullResult),
-	), 1)
-	metricstest.RequireValue(t, metrics.requests.WithLabelValues(
-		rpcRoleRead, rpcMethodGetTransactionReceipt, string(rpcOutcomeSuccess),
-	), 1)
-	metricstest.RequireValue(t, metrics.inflight.WithLabelValues(rpcRoleRead), 0)
-	if got := testutil.ToFloat64(metrics.lastSuccessfulAttempt.WithLabelValues(rpcRoleRead, "1")); got <= 0 {
-		t.Fatalf("last successful attempt = %v, want timestamp", got)
 	}
 }
 
-func TestBoundedRPCMethod(t *testing.T) {
-	for _, test := range []struct {
-		body string
-		want string
+func TestClassifyRPCResponse(t *testing.T) {
+	tests := []struct {
+		name, method, body string
+		status             int
+		truncated          bool
+		err                error
+		want               rpcOutcome
 	}{
-		{`{"jsonrpc":"2.0","method":"eth_getBalance"}`, "eth_getBalance"},
-		{`{"jsonrpc":"2.0","method":"custom_user_value"}`, "other"},
-		{`[{"jsonrpc":"2.0","method":"eth_call"}]`, "batch"},
-		{`not-json`, "unknown"},
-	} {
-		if got := boundedRPCMethod([]byte(test.body)); got != test.want {
-			t.Errorf("boundedRPCMethod(%q) = %q, want %q", test.body, got, test.want)
-		}
+		{"success", rpcMethodCall, `{"jsonrpc":"2.0","id":1,"result":"0x1"}`, http.StatusOK, false, nil, rpcOutcomeSuccess},
+		{"rpc error", rpcMethodCall, `{"jsonrpc":"2.0","id":1,"error":{"code":-1}}`, http.StatusOK, false, nil, rpcOutcomeRPCError},
+		{"batch error", "batch", `[{"jsonrpc":"2.0","id":1,"error":{"code":-1}}]`, http.StatusOK, false, nil, rpcOutcomeRPCError},
+		{"decode error", rpcMethodCall, `{`, http.StatusOK, false, nil, rpcOutcomeDecodeError},
+		{"large result", rpcMethodCall, `{`, http.StatusOK, true, nil, rpcOutcomeSuccess},
+		{"rate limited", rpcMethodCall, ``, http.StatusTooManyRequests, false, nil, rpcOutcomeRateLimited},
+		{"read canceled", rpcMethodCall, ``, http.StatusOK, false, context.Canceled, rpcOutcomeContextCanceled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyRPCResponse(test.method, test.status, []byte(test.body), test.truncated, test.err); got != test.want {
+				t.Fatalf("outcome = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

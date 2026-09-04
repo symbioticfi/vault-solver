@@ -87,6 +87,17 @@ func newReader(c *chain.Client, lens common.Address) *reader {
 	return &reader{chain: c, lens: lens}
 }
 
+func (r *reader) multicallExact(ctx context.Context, calls []chain.Call, what string) ([]chain.CallResult, error) {
+	results, err := r.chain.Multicall(ctx, calls)
+	if err != nil {
+		return nil, errors.Errorf("%s: %w", what, err)
+	}
+	if len(results) != len(calls) {
+		return nil, errors.Errorf("%s returned %d results, want %d", what, len(results), len(calls))
+	}
+	return results, nil
+}
+
 // factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
 // append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
 func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
@@ -150,6 +161,11 @@ type resolvedAdapter struct {
 	err        error
 }
 
+func (adapter resolvedAdapter) usable() bool {
+	return adapter.err == nil && adapter.authorized &&
+		adapter.vault != (common.Address{}) && adapter.collateral != (common.Address{})
+}
+
 // authorizedByProbe reports whether the adapter's ERC-1271 isValidSignature accepted the probe
 // signature. A revert or any non-magic return means not authorized (drop the adapter), not a hard error.
 func authorizedByProbe(res chain.CallResult) bool {
@@ -163,9 +179,6 @@ func authorizedByProbe(res chain.CallResult) bool {
 	return magic == erc1271MagicValue
 }
 
-// errAdapterUnconfigured marks an adapter whose on-chain wiring is incomplete (a zero offerSigner,
-// vault or asset). That is the normal state of a freshly deployed adapter, not a read failure, so
-// callers skip it quietly instead of alerting.
 var errAdapterUnconfigured = errors.New("adapter not configured")
 
 // decodeAddr returns the non-zero address a Multicall sub-call returned, or an error tagged with
@@ -201,12 +214,9 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 			chain.Call{Target: a, Data: bfAdapter.PackIsValidSignature(probe.hash, probe.sig), AllowFailure: true},
 		)
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.multicallExact(ctx, calls, "adapter resolution")
 	if err != nil {
 		return nil, err
-	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("adapter resolution returned %d results, want %d", len(res), len(calls))
 	}
 
 	// Decode round 1; queue an asset() call for each adapter that resolved and is an authorized signer.
@@ -236,12 +246,9 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 		return out, nil
 	}
 
-	ares, err := r.chain.Multicall(ctx, assetCalls)
+	ares, err := r.multicallExact(ctx, assetCalls, "asset resolution")
 	if err != nil {
 		return nil, err
-	}
-	if len(ares) != len(assetCalls) {
-		return nil, errors.Errorf("asset resolution returned %d results, want %d", len(ares), len(assetCalls))
 	}
 	for k, idx := range assetIdx {
 		collateral, derr := decodeAddr(ares[k], erc4626b.UnpackAsset, "vault.asset()")
@@ -283,12 +290,9 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()},
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.multicallExact(ctx, calls, "liquidity multicall")
 	if err != nil {
 		return exposureState{}, err
-	}
-	if len(res) != len(calls) {
-		return exposureState{}, errors.Errorf("multicall returned %d results, want %d", len(res), len(calls))
 	}
 	for i, rr := range res {
 		if !rr.Success {
@@ -338,8 +342,8 @@ func clampCount(n *big.Int) int {
 }
 
 // requestSlotCalls builds the requests(i) reads for i in [0, n) — n from requestsLength(). AllowFailure:
-// a concurrent finalize can shrink the array between the length read and these, so individual slots may
-// revert without discarding the other valid results.
+// a concurrent finalize can shrink the array between the length read and these, so a tail index may
+// revert; collectRequests stops at that gap.
 func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
 	calls := make([]chain.Call, n)
 	for i := range calls {
@@ -348,60 +352,50 @@ func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
 	return calls
 }
 
-// collectRequests decodes every valid requests(i) result while reporting whether the response was a
-// complete snapshot. A failed, malformed, zero, missing, or extra result makes the snapshot incomplete,
-// but does not prevent safe work on the valid subset.
-func collectRequests(res []chain.CallResult, expected int) ([]common.Address, bool) {
-	complete := len(res) == expected
-	if len(res) > expected {
-		res = res[:expected]
-	}
+// collectRequests decodes the leading run of successful requests(i) results into request addresses.
+// finalizeRequest keeps the array dense (swap-pop), so the first reverted/undecodable slot ends the set.
+func collectRequests(res []chain.CallResult) []common.Address {
 	out := make([]common.Address, 0, len(res))
 	for _, rr := range res {
 		if !rr.Success {
-			complete = false
-			continue
+			break
 		}
 		addr, err := bfAdapter.UnpackRequests(rr.ReturnData)
-		if err != nil || addr == (common.Address{}) {
-			complete = false
-			continue
+		if err != nil {
+			break
 		}
 		out = append(out, addr)
 	}
-	return out, complete
+	return out
 }
 
 // readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads
 // requestsLength(), enumerates exactly that many requests(i), then batches every canWithdraw() into a
-// single multicall. The boolean reports whether every requested slot and canWithdraw result was present
-// and decodable; valid results are returned even when the snapshot is incomplete.
-func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, bool, error) {
+// single multicall.
+func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, error) {
 	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if len(lres) != 1 || !lres[0].Success {
-		return nil, false, errors.New("adapter.requestsLength() reverted")
+		return nil, errors.New("adapter.requestsLength() reverted")
 	}
 	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
 	if err != nil {
-		return nil, false, errors.Errorf("adapter.requestsLength(): %w", err)
+		return nil, errors.Errorf("adapter.requestsLength(): %w", err)
 	}
-	complete := n.IsInt64() && n.Sign() >= 0 && n.Int64() <= int64(maxRequests)
 	count := clampCount(n)
 	if count == 0 {
-		return nil, complete, nil
+		return nil, nil
 	}
 
 	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	reqs, slotsComplete := collectRequests(res, count)
-	complete = complete && slotsComplete
+	reqs := collectRequests(res)
 	if len(reqs) == 0 {
-		return nil, complete, nil
+		return nil, nil
 	}
 
 	calls := make([]chain.Call, len(reqs))
@@ -411,27 +405,21 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 	}
 	res, err = r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	ready := make([]common.Address, 0, len(reqs))
-	if len(res) != len(reqs) {
-		complete = false
-	}
-	resultCount := min(len(res), len(reqs))
-	for i, rr := range res[:resultCount] {
+	for i, rr := range res {
 		if !rr.Success {
-			complete = false
 			continue
 		}
 		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)
 		if derr != nil {
-			complete = false
 			continue
 		}
 		if ok {
 			ready = append(ready, reqs[i])
 		}
 	}
-	return ready, complete, nil
+	return ready, nil
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 const (
@@ -22,9 +23,7 @@ const (
 
 var (
 	errOrderForDifferentChain = errors.New("order is for a different chain")
-	// errOrderUnsupported marks order kinds the feed carries but this solver never fills (non-EVM
-	// submissions, non-fillable statuses). Expected traffic, not a malformed message.
-	errOrderUnsupported = errors.New("unsupported order")
+	errOrderUnsupported       = errors.New("unsupported order")
 )
 
 type submittedOrderEvent struct {
@@ -49,10 +48,8 @@ type submittedOrder struct {
 	OnChainOrderID string
 	dedupeKey      string
 	processed      chan struct{}
-	recoveryGen    uint64
 
-	Order        inputsettler.StandardOrder
-	InputSettler common.Address
+	Order inputsettler.StandardOrder
 
 	TokenIn      common.Address
 	AmountIn     *big.Int
@@ -99,7 +96,7 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		return nil, errors.Errorf("unsupported non-onchain order type %q: %w", event.OrderType, errOrderUnsupported)
 	}
 
-	inputSettler, err := parseAddress(event.InputSettler, "inputSettler")
+	inputSettler, err := parse.NonZeroAddress(event.InputSettler, "inputSettler")
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +118,6 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OnChainOrderID: event.Meta.OnChainOrderID,
 		dedupeKey:      dedupeKey,
 		Order:          parsed.order,
-		InputSettler:   inputSettler,
 		TokenIn:        parsed.tokenIn,
 		AmountIn:       parsed.amountIn,
 		TokenOut:       parsed.tokenOut,
@@ -175,11 +171,11 @@ func isOnChainOrderEvent(event submittedOrderEvent) bool {
 func parseStandardOrder(
 	dto lifiorder.SubmitOrderDtoOrder,
 ) (*parsedStandardOrder, error) {
-	user, err := parseAddress(dto.User, "order.user")
+	user, err := parse.NonZeroAddress(dto.User, "order.user")
 	if err != nil {
 		return nil, err
 	}
-	inputOracle, err := parseAddress(dto.InputOracle, "order.inputOracle")
+	inputOracle, err := parse.NonZeroAddress(dto.InputOracle, "order.inputOracle")
 	if err != nil {
 		return nil, err
 	}
@@ -364,17 +360,6 @@ func eventQuoteID(event submittedOrderEvent) string {
 		return s
 	}
 	return ""
-}
-
-func parseAddress(raw, field string) (common.Address, error) {
-	if !common.IsHexAddress(raw) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, raw)
-	}
-	addr := common.HexToAddress(raw)
-	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address", field)
-	}
-	return addr, nil
 }
 
 func parseUint32(raw, field string) (uint32, error) {

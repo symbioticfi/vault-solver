@@ -10,7 +10,6 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
@@ -21,7 +20,8 @@ type rawConfig struct {
 	Callback         string                   `yaml:"callback"`
 	LiquidityLens    string                   `yaml:"liquidityLens"`
 	Gas              *liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy         rawStrategyConfig        `yaml:"strategy"`
+	Strategy         StrategyConfig           `yaml:"strategy"`
+	DryRun           bool                     `yaml:"dryRun"`
 	MaxTxGasPriceWei string                   `yaml:"maxTxGasPriceWei"`
 	MaxBidWei        string                   `yaml:"maxBidWei"`
 	Breaker          rawBreaker               `yaml:"breaker"`
@@ -31,11 +31,6 @@ type rawConfig struct {
 type rawWS struct {
 	URL       string `yaml:"url"`
 	APIKeyEnv string `yaml:"apiKeyEnv"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
 }
 
 type rawBreaker struct {
@@ -65,6 +60,7 @@ type Config struct {
 	Gas           *liquidlanegas.OracleConfig
 
 	Strategy StrategyConfig
+	DryRun   bool
 
 	MaxTxGasPrice *big.Int
 	MaxBidWei     *big.Int
@@ -79,8 +75,8 @@ type Config struct {
 }
 
 type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
 }
 
 const (
@@ -116,19 +112,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	liquidityLens, err := parse.OptionalNonZeroAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
-	var gas *liquidlanegas.OracleConfig
-	if raw.Gas != nil {
-		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
-		if gasErr != nil {
-			return nil, gasErr
-		}
-		gas = &parsed
+	gas, err := liquidlanegas.ParseOptionalConfig(raw.Gas)
+	if err != nil {
+		return nil, err
 	}
 
 	breakerWindow, err := parse.MsDuration(raw.Breaker.WindowMs, defaultBreakerWindow, "breaker.windowMs")
@@ -146,19 +136,20 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if opsPoll >= executorStateMaxAge {
 		return nil, errors.Errorf("intervals.opsPollMs (%s) must be < intervals.executorStateMaxAgeMs (%s)", opsPoll, executorStateMaxAge)
 	}
+	if raw.Strategy.Name == "" {
+		raw.Strategy.Name = defaultStrategyName
+	}
 
 	cfg := &Config{
-		WSURL:         raw.WS.URL,
-		APIKeyEnv:     raw.WS.APIKeyEnv,
-		Executor:      executor,
-		Adapter:       adapter,
-		Callback:      callback,
-		LiquidityLens: liquidityLens,
-		Gas:           gas,
-		Strategy: StrategyConfig{
-			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
-			Config: raw.Strategy.Config,
-		},
+		WSURL:               raw.WS.URL,
+		APIKeyEnv:           raw.WS.APIKeyEnv,
+		Executor:            executor,
+		Adapter:             adapter,
+		Callback:            callback,
+		LiquidityLens:       liquidityLens,
+		Gas:                 gas,
+		Strategy:            raw.Strategy,
+		DryRun:              raw.DryRun,
 		BreakerMaxFailures:  parse.OrDefault(raw.Breaker.MaxFailures, defaultBreakerFails),
 		BreakerWindow:       breakerWindow,
 		OpsPoll:             opsPoll,
@@ -178,7 +169,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
 	}
-	if strategies.RequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
+	if cfg.Strategy.Name == webhookPlannerName && cfg.MaxBidWei == nil {
 		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil

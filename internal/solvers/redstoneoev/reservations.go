@@ -1,253 +1,139 @@
 package redstoneoev
 
-// reservations.go holds the in-flight auction lifecycle state and auction-id dedup ring.
-
 import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/decision"
 )
 
-// reservedBid is one enqueued-but-not-yet-resolved bid. The solver tracks lifecycle only: strategies own
-// callback funding/gas decisions, while this state lets the solver pass pending auction ids back to the
-// strategy and release reservations by nonce/result frames.
-type reservedBid struct {
-	nonce     uint64
-	at        time.Time
-	auctionID string
-	bidWei    *big.Int
-	won       bool
-	wonAt     time.Time // first matched local win transition; never advanced by replayed results
-}
-
-type bidLifecycleRecord struct {
-	bidWei  *big.Int
-	won     bool
-	settled bool
-}
-
-type bidSettlementTransition struct {
-	bidWei  *big.Int
-	won     bool
-	settled bool
-}
-
-// reservationTTL is only a fallback for missed auction/liquidation result frames. Normal release is
-// event-driven: a lost auction-result or our liquidation-result frees the bid immediately, while a won bid
-// without a result stays pinned long enough for delayed settlement/nonce reconciliation.
 const reservationTTL = 5 * time.Minute
 
-type inFlightState struct {
-	pending []pendingAuction
+// exposureBook is the sole owner of sent-bid resources. Snapshot returns pending auction and
+// economic exposure facts under the same lock, so a planner never combines different result epochs.
+type exposureBook struct {
+	mu   sync.Mutex
+	bids map[string]bidLease
 }
 
-type pendingAuction struct {
-	ID     string
-	SentAt time.Time
-	Won    bool
+type bidLease struct {
+	nonce    uint64
+	sentAt   time.Time
+	won      bool
+	resolved bool
+	exposure decision.Exposure
 }
 
-// inFlightSnapshot returns the bounded pending-auction state strategies use for de-duping/risk control.
-func (s *Solver) inFlightSnapshot() inFlightState {
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	var out inFlightState
-	if len(s.res) > 0 {
-		out.pending = make([]pendingAuction, 0, len(s.res))
+func (b *exposureBook) acquire(id string, nonce uint64, at time.Time, exposure decision.Exposure) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bids == nil {
+		b.bids = make(map[string]bidLease)
 	}
-	for _, r := range s.res {
-		out.pending = append(out.pending, pendingAuction{ID: r.auctionID, SentAt: r.at, Won: r.won})
-	}
-	return out
+	b.bids[id] = bidLease{nonce: nonce, sentAt: at, exposure: cloneExposure(exposure)}
 }
 
-func (s *Solver) reserve(
-	nonce uint64,
-	now time.Time,
-	auctionID string,
-	bidWei *big.Int,
-) {
-	auctionID = normalizeAuctionID(auctionID)
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	s.res = append(s.res, reservedBid{
-		nonce:     nonce,
-		at:        now,
-		auctionID: auctionID,
-		bidWei:    cloneBig(bidWei),
-	})
-	s.ensureBidLifecycleLocked(auctionID, bidWei)
-}
-
-func (s *Solver) releaseReservationByAuction(id string) {
-	id = normalizeAuctionID(id)
-	if id == "" {
-		return
-	}
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	s.res = slices.DeleteFunc(s.res, func(r reservedBid) bool { return r.auctionID == id })
-}
-
-func (s *Solver) markReservationWon(id string, wonAt time.Time) (*big.Int, bool) {
-	id = normalizeAuctionID(id)
-	if id == "" || wonAt.IsZero() {
-		return nil, false
-	}
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	var (
-		bidWei            *big.Int
-		reservationWasWon bool
-	)
-	for i := range s.res {
-		if s.res[i].auctionID != id {
+func (b *exposureBook) snapshot(now time.Time) ([]decision.PendingAuction, decision.Exposure) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pending := make([]decision.PendingAuction, 0, len(b.bids))
+	exposure := decision.Exposure{BidNative: new(big.Int), GasNative: new(big.Int)}
+	for id, lease := range b.bids {
+		expiresAt := lease.sentAt.Add(reservationTTL)
+		if id == "" || !expiresAt.After(now) {
 			continue
 		}
-		bidWei = s.res[i].bidWei
-		reservationWasWon = s.res[i].won
-		if !reservationWasWon {
-			s.res[i].won = true
-			s.res[i].wonAt = wonAt
-		}
-		break
+		pending = append(pending, decision.PendingAuction{
+			ID: id, SentAt: lease.sentAt, Won: lease.won, ExpiresAt: expiresAt,
+		})
+		exposure.BidNative.Add(exposure.BidNative, orZero(lease.exposure.BidNative))
+		exposure.GasNative.Add(exposure.GasNative, orZero(lease.exposure.GasNative))
+		exposure.Positions = append(exposure.Positions, lease.exposure.Positions...)
 	}
-	record := s.ensureBidLifecycleLocked(id, bidWei)
-	if record == nil {
-		return cloneBig(bidWei), false
-	}
-	if reservationWasWon {
-		record.won = true
-	}
-	if record.won {
-		return cloneBig(record.bidWei), false
-	}
-	record.won = true
-	return cloneBig(record.bidWei), true
+	slices.SortFunc(pending, func(a, b decision.PendingAuction) int { return strings.Compare(a.ID, b.ID) })
+	return pending, cloneExposure(exposure)
 }
 
-func (s *Solver) settleReservationByAuction(id, lifecycleKey string) bidSettlementTransition {
-	id = normalizeAuctionID(id)
-	lifecycleKey = strings.TrimSpace(lifecycleKey)
-	if lifecycleKey == "" {
-		return bidSettlementTransition{}
-	}
-
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
-	var (
-		reservation      reservedBid
-		reservationFound bool
-	)
-	s.res = slices.DeleteFunc(s.res, func(candidate reservedBid) bool {
-		if id == "" || candidate.auctionID != id {
-			return false
-		}
-		reservation = candidate
-		reservationFound = true
-		return true
-	})
-	record := s.ensureBidLifecycleLocked(lifecycleKey, reservation.bidWei)
-	if reservationFound && reservation.won {
-		record.won = true
-	}
-	transition := bidSettlementTransition{bidWei: cloneBig(record.bidWei)}
-	if !record.won {
-		record.won = true
-		transition.won = true
-	}
-	if !record.settled {
-		record.settled = true
-		transition.settled = true
-	}
-	return transition
+func (b *exposureBook) remove(id string) {
+	b.mu.Lock()
+	delete(b.bids, id)
+	b.mu.Unlock()
 }
 
-func (s *Solver) ensureBidLifecycleLocked(id string, bidWei *big.Int) *bidLifecycleRecord {
+func (b *exposureBook) markWon(id string) *big.Int {
 	if id == "" {
 		return nil
 	}
-	if s.bidLifecycle == nil {
-		s.bidLifecycle = make(map[string]*bidLifecycleRecord)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lease, ok := b.bids[id]
+	if ok {
+		lease.won = true
+		b.bids[id] = lease
 	}
-	if record := s.bidLifecycle[id]; record != nil {
-		if record.bidWei == nil && bidWei != nil {
-			record.bidWei = cloneBig(bidWei)
+	return cloneBig(lease.exposure.BidNative)
+}
+
+func (b *exposureBook) markResolved(id string) *big.Int {
+	if id == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lease, ok := b.bids[id]
+	if ok {
+		lease.resolved = true
+		b.bids[id] = lease
+	}
+	return cloneBig(lease.exposure.BidNative)
+}
+
+// reconcile releases only bids proven settled by nonce, acknowledged by a liquidation result, or
+// expired after the missed-result safety TTL. Won bids otherwise stay pinned across state refreshes.
+func (b *exposureBook) reconcile(onChainNonce uint64, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, lease := range b.bids {
+		if lease.resolved || lease.nonce <= onChainNonce || now.Sub(lease.sentAt) > reservationTTL {
+			delete(b.bids, id)
 		}
-		return record
 	}
-	if len(s.bidLifecycleOrder) >= maxSeenAuctions {
-		evictionIndex := slices.IndexFunc(s.bidLifecycleOrder, func(existingID string) bool {
-			record := s.bidLifecycle[existingID]
-			return record == nil || record.settled
-		})
-		evictionIndex = max(0, evictionIndex)
-		evicted := s.bidLifecycleOrder[evictionIndex]
-		delete(s.bidLifecycle, evicted)
-		s.bidLifecycleOrder = slices.Delete(s.bidLifecycleOrder, evictionIndex, evictionIndex+1)
-	}
-	record := &bidLifecycleRecord{bidWei: cloneBig(bidWei)}
-	s.bidLifecycle[id] = record
-	s.bidLifecycleOrder = append(s.bidLifecycleOrder, id)
-	return record
 }
 
-func normalizeAuctionID(id string) string {
-	return strings.TrimSpace(id)
-}
-
-func (s *Solver) wonReservationMetrics() (int, time.Duration) {
-	return s.wonReservationMetricsAt(time.Now())
-}
-
-func (s *Solver) wonReservationMetricsAt(now time.Time) (int, time.Duration) {
-	s.resMu.Lock()
-	defer s.resMu.Unlock()
+func (b *exposureBook) wonMetrics(now time.Time) (int, time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	count := 0
-	var oldestAge time.Duration
-	for _, r := range s.res {
-		if !r.won || r.wonAt.IsZero() {
+	var oldest time.Time
+	for _, lease := range b.bids {
+		if !lease.won || lease.resolved {
 			continue
 		}
 		count++
-		oldestAge = max(oldestAge, now.Sub(r.wonAt))
+		if oldest.IsZero() || lease.sentAt.Before(oldest) {
+			oldest = lease.sentAt
+		}
 	}
-	return count, oldestAge
+	if oldest.IsZero() {
+		return count, 0
+	}
+	return count, max(now.Sub(oldest), 0)
 }
 
-// pruneReservations frees a reservation once its bid resolves: when nonce <= the on-chain nonce (the bid
-// won and settled — a pending bid is signed with nonce = on-chain + 1, so settlement sets the on-chain nonce
-// to exactly the consumed bid's, and `<=` releases precisely then), or once it has aged past reservationTTL.
-// A won reservation's fallback TTL starts at its observed win so a late win cannot expire immediately.
-// Still-pending bids stay pinned.
-func (s *Solver) pruneReservations(onChainNonce uint64, now time.Time) {
-	s.resMu.Lock()
-	unresolvedWins := 0
-	s.res = slices.DeleteFunc(s.res, func(r reservedBid) bool {
-		if r.nonce <= onChainNonce {
-			return true
-		}
-		anchor := r.at
-		if r.won && !r.wonAt.IsZero() {
-			anchor = r.wonAt
-		}
-		expired := now.Sub(anchor) > reservationTTL
-		if expired && r.won {
-			unresolvedWins++
-		}
-		return expired
-	})
-	s.resMu.Unlock()
-	s.metrics.unresolvedWins(unresolvedWins)
+func cloneExposure(source decision.Exposure) decision.Exposure {
+	return decision.Exposure{
+		BidNative: cloneBig(source.BidNative),
+		GasNative: cloneBig(source.GasNative),
+		Positions: slices.Clone(source.Positions),
+	}
 }
 
-// maxSeenAuctions bounds both lifecycle replay protection and auction-ingress de-duplication.
+// maxSeenAuctions bounds replay de-duplication across websocket reconnects.
 const maxSeenAuctions = 1024
 
-// seenAuctions is a bounded, insertion-ordered de-dup set for auction ids: a re-subscribe on reconnect can
-// replay a frame, and bidding twice for one auction burns a second nonce for the same opportunity.
-// Touched only while parsing auction frames before bid work is dispatched, so it needs no lock.
 type seenAuctions struct {
 	set   map[string]struct{}
 	order []string
@@ -255,15 +141,17 @@ type seenAuctions struct {
 }
 
 func newSeenAuctions(capacity int) *seenAuctions {
+	if capacity <= 0 {
+		panic("redstoneoev: seen auction capacity must be positive")
+	}
 	return &seenAuctions{set: make(map[string]struct{}, capacity), cap: capacity}
 }
 
-// seen reports whether id was already processed; if not, it records it (evicting the oldest past cap).
 func (s *seenAuctions) seen(id string) bool {
 	if _, ok := s.set[id]; ok {
 		return true
 	}
-	if len(s.order) >= s.cap {
+	if len(s.order) == s.cap {
 		delete(s.set, s.order[0])
 		s.order = s.order[1:]
 	}

@@ -14,12 +14,13 @@ import (
 	"github.com/go-logr/logr"
 
 	callbackbinding "github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
+	"github.com/symbioticfi/vault-solver/internal/app"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	appconfig "github.com/symbioticfi/vault-solver/internal/config"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/signer"
-	"github.com/symbioticfi/vault-solver/internal/solver"
-	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/decision"
+	oevpolicy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/policy"
 )
 
 type forkPayload struct {
@@ -39,7 +40,7 @@ type forkPayload struct {
 // TestLiveSepoliaDumpForkPayload writes /tmp/oev-fork-payload.json for an anvil-fork settlement replay.
 //
 //	set -a; . ./.env.local; set +a
-//	OEV_TEST_MONITOR=true OEV_TEST_MARKETS=... OEV_TEST_POSITIONS=... \
+//	# Set strategy.config.testMonitor.markets/positions in $OEV_CONFIG.
 //	go test -tags live ./internal/solvers/redstoneoev -run TestLiveSepoliaDumpForkPayload -v
 func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if os.Getenv("ETH_RPC_URL_SEPOLIA") == "" || os.Getenv("OEV_SIGNER_PRIVATE_KEY") == "" {
@@ -66,7 +67,7 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load signer: %v", err)
 	}
-	built, err := factory(cfg.Solvers[0].Config, solver.Deps{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
+	built, err := Factory(cfg.Solvers[0].Config, app.Services{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
 	if err != nil {
 		t.Fatalf("build solver: %v", err)
 	}
@@ -77,9 +78,8 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	if err := s.refreshState(ctx); err != nil {
 		t.Fatalf("refresh solver state: %v", err)
 	}
-	strategy := defaultStrategyOf(t, s)
-	go strategy.Run(ctx)
-	snap := waitForStrategySnapshot(t, ctx, strategy)
+	go s.facts.Run(ctx)
+	snap := waitForStrategySnapshot(t, ctx, s.facts)
 
 	prices := make(map[string]string, len(snap.Prices))
 	for id, price := range snap.Prices {
@@ -137,12 +137,12 @@ func getenvDefault(key, fallback string) string {
 	return fallback
 }
 
-func waitForStrategySnapshot(t *testing.T, ctx context.Context, strategy *defaultstrategy.Strategy) defaultstrategy.SnapshotSeed {
+func waitForStrategySnapshot(t *testing.T, ctx context.Context, source decision.FactSource) oevpolicy.SnapshotSeed {
 	t.Helper()
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		snap := strategy.SnapshotForTest()
+		snap := oevpolicy.SnapshotForTest(source)
 		if len(snap.Prices) > 0 {
 			return snap
 		}

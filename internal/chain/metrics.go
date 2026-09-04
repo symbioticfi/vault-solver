@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 type rpcOutcome string
@@ -88,13 +90,11 @@ func NewRPCMetrics(reg prometheus.Registerer) (*RPCMetrics, error) {
 		}, []string{"role", "endpoint"}),
 		now: time.Now,
 	}
-	for _, collector := range []prometheus.Collector{
+	if err := observability.RegisterCollectors(reg, "chain: RPC",
 		m.requests, m.attempts, m.inflight, m.requestDuration,
 		m.lastSuccessfulRequest, m.lastSuccessfulAttempt,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("chain: register RPC metric: %w", err)
-		}
+	); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -22,7 +21,7 @@ const (
 )
 
 type quoteSubmitter interface {
-	submitQuotes(ctx context.Context, quotes []types.Quote) error
+	submitQuotes(ctx context.Context, quotes []Quote) error
 }
 
 type quotePairKey struct {
@@ -35,12 +34,18 @@ type quotePairKey struct {
 type quotePairState struct {
 	fingerprint string
 	expiry      int64
-	quotes      []types.Quote
+	quotes      []Quote
 }
 
 type quoteState struct {
 	active      map[quotePairKey]quotePairState
 	renewBefore time.Duration
+}
+
+type quoteRefreshSnapshot struct {
+	input             QuoteInput
+	directInventory   int
+	physicalInventory int
 }
 
 func (s *Solver) quoteLoop(
@@ -141,16 +146,13 @@ func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
-	timer := observability.StartOperation(s.operationObservers().quoteSuspend)
-	outcome := observability.ExternalOperationError
-	defer func() { timer.Finish(ctx, outcome) }()
-
+	timer := observability.StartOperation(s.metrics.operation(quoteSuspendOperation))
+	defer func() { timer.Finish(ctx, observability.OutcomeForError(ctx.Err())) }()
 	backoff := initialQuoteSuspensionBackoff
 	for {
 		removed, err := state.reconcile(ctx, s.orders, nil, s.wallNow())
 		if err == nil {
-			outcome = observability.ExternalOperationSuccess
-			s.observeQuoteRefresh(state)
+			s.metrics.observeQuotes(state)
 			if removed > 0 {
 				s.log.Info("quotes suspended", "removedPairs", removed)
 			}
@@ -185,10 +187,9 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
-	timer := observability.StartOperation(s.operationObservers().quoteRefresh)
-	outcome := observability.ExternalOperationError
+	timer := observability.StartOperation(s.metrics.operation(quoteRefreshOperation))
+	outcome := observability.ExternalOperationSuccess
 	defer func() { timer.Finish(ctx, outcome) }()
-
 	if !s.transactionLaneReady() {
 		outcome = observability.ExternalOperationSkipped
 		s.log.V(1).Info(
@@ -196,113 +197,135 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
-		timer.Finish(ctx, outcome)
 		s.suspendQuotes(ctx, state)
 		return
 	}
+	snapshot := s.loadQuoteRefreshSnapshot(ctx, routes)
+	if snapshot == nil {
+		outcome = observability.ExternalOperationError
+		return
+	}
+	out, err := s.planner.DecideQuotes(ctx, snapshot.input)
+	if err != nil {
+		outcome = observability.ExternalOperationError
+		s.log.Error(err, "quote refresh: strategy")
+		return
+	}
+	s.logQuotePlan(snapshot, out.Quotes)
+	s.publishQuotePlan(ctx, state, snapshot, out.Quotes)
+}
+
+func (s *Solver) loadQuoteRefreshSnapshot(
+	ctx context.Context,
+	routes []route,
+) *quoteRefreshSnapshot {
 	chainTime, err := s.now(ctx)
 	if err != nil {
 		s.log.Error(err, "quote refresh: read latest block time")
-		return
+		return nil
 	}
-	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor, chainTime)
+	snapshotSet, err := s.reader.Quote(ctx, routes, s.cfg.Executor, chainTime)
 	if err != nil {
 		s.log.Error(err, "quote refresh: read routes")
-		return
+		return nil
 	}
 	maxFeePerGas := new(big.Int)
 	if s.cfg.Gas != nil {
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
 			s.log.Error(err, "quote refresh: read max fee per gas")
-			return
+			return nil
 		}
 	}
 	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
 	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
 	inventory := append([]liquidlane.Inventory(nil), direct...)
-	discountInventory, discountDegraded := s.quoteDiscountInventories(ctx, discountBases, chainTime)
-	inventory = append(inventory, discountInventory...)
+	inventory = append(inventory, s.quoteDiscountInventories(ctx, discountBases, chainTime)...)
 	reservations := s.capacity.Snapshot()
 	serverTime := s.wallNow()
-	out, err := s.strategy.DecideQuotes(ctx, types.QuoteInput{
-		Solver:            s.cfg.Executor,
-		Inventory:         inventory,
-		Reservations:      reservations,
-		SingleRouteTokens: s.cfg.TokenPolicy.SingleRouteTokens(),
-		GasSnapshot:       snapshotSet.GasSnapshot,
-		GasPrices:         snapshotSet.GasPrices,
-		MaxFeePerGas:      maxFeePerGas,
-		ChainTime:         chainTime,
-		ServerTime:        serverTime,
-		QuoteExpiresAt:    serverTime.Add(s.cfg.QuoteTTL),
-	})
-	if err != nil {
-		s.log.Error(err, "quote refresh: strategy")
-		return
+	return &quoteRefreshSnapshot{
+		input: QuoteInput{
+			Solver:            s.cfg.Executor,
+			Inventory:         inventory,
+			Reservations:      reservations,
+			SingleRouteTokens: s.cfg.TokenPolicy.SingleRouteTokens(),
+			GasSnapshot:       snapshotSet.GasSnapshot,
+			GasPrices:         snapshotSet.GasPrices,
+			MaxFeePerGas:      maxFeePerGas,
+			ChainTime:         chainTime,
+			ServerTime:        serverTime,
+			QuoteExpiresAt:    serverTime.Add(s.cfg.QuoteTTL),
+		},
+		directInventory: len(direct), physicalInventory: len(discountBases),
 	}
-	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
-	if len(out.Quotes) == 0 {
+}
+
+func (s *Solver) logQuotePlan(snapshot *quoteRefreshSnapshot, quotes []Quote) {
+	earliestExpiry, latestExpiry := quoteExpiryBounds(quotes)
+	if len(quotes) == 0 {
 		s.log.V(1).Info(
 			"quote refresh: strategy produced no quotes",
-			"inventory", len(inventory),
-			"directInventory", len(direct),
-			"physicalInventory", len(discountBases),
-			"discountInventory", len(inventory)-len(direct),
-			"reservationDomains", len(reservations),
+			"inventory", len(snapshot.input.Inventory),
+			"directInventory", snapshot.directInventory,
+			"physicalInventory", snapshot.physicalInventory,
+			"discountInventory", len(snapshot.input.Inventory)-snapshot.directInventory,
+			"reservationDomains", len(snapshot.input.Reservations),
 			"gasAccounting", s.cfg.Gas != nil,
-			"pricingMaxFeePerGas", maxFeePerGas.String(),
+			"pricingMaxFeePerGas", snapshot.input.MaxFeePerGas.String(),
 		)
-	} else {
-		s.log.V(1).Info(
-			"quote plan selected",
-			"quotePairs", len(out.Quotes),
-			"quoteRanges", quoteRangeCount(out.Quotes),
-			"earliestExpiry", earliestExpiry,
-			"latestExpiry", latestExpiry,
-		)
-	}
-	if !s.transactionLaneReady() {
-		outcome = observability.ExternalOperationSkipped
-		s.log.V(1).Info(
-			"quote plan discarded: transaction lane unavailable",
-			"quotePairs", len(out.Quotes),
-			"quoteRanges", quoteRangeCount(out.Quotes),
-		)
-		timer.Finish(ctx, outcome)
-		s.suspendQuotes(ctx, state)
 		return
 	}
-	removed, err := state.reconcile(ctx, s.orders, out.Quotes, serverTime)
-	if err != nil {
-		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
-		return
-	}
-	s.observeQuoteRefresh(state)
-	outcome = observability.ExternalOperationSuccess
-	if discountDegraded {
-		outcome = observability.ExternalOperationDegraded
-	}
-	s.log.Info(
-		"quotes reconciled",
-		"quotes", len(out.Quotes),
-		"quoteRanges", quoteRangeCount(out.Quotes),
-		"activePairs", len(state.active),
-		"removedPairs", removed,
-		"inventory", len(inventory),
-		"directInventory", len(direct),
-		"physicalInventory", len(discountBases),
-		"discountInventory", len(inventory)-len(direct),
-		"reservationDomains", len(reservations),
-		"pendingFills", s.capacity.Len(),
-		"gasAccounting", s.cfg.Gas != nil,
-		"pricingMaxFeePerGas", maxFeePerGas.String(),
+	s.log.V(1).Info(
+		"quote plan selected",
+		"quotePairs", len(quotes),
+		"quoteRanges", quoteRangeCount(quotes),
 		"earliestExpiry", earliestExpiry,
 		"latestExpiry", latestExpiry,
 	)
 }
 
-func quoteRangeCount(quotes []types.Quote) int {
+func (s *Solver) publishQuotePlan(
+	ctx context.Context,
+	state *quoteState,
+	snapshot *quoteRefreshSnapshot,
+	quotes []Quote,
+) {
+	if !s.transactionLaneReady() {
+		s.log.V(1).Info(
+			"quote plan discarded: transaction lane unavailable",
+			"quotePairs", len(quotes),
+			"quoteRanges", quoteRangeCount(quotes),
+		)
+		s.suspendQuotes(ctx, state)
+		return
+	}
+	removed, err := state.reconcile(ctx, s.orders, quotes, snapshot.input.ServerTime)
+	if err != nil {
+		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(quotes))
+		return
+	}
+	s.metrics.observeQuotes(state)
+	earliestExpiry, latestExpiry := quoteExpiryBounds(quotes)
+	s.log.Info(
+		"quotes reconciled",
+		"quotes", len(quotes),
+		"quoteRanges", quoteRangeCount(quotes),
+		"activePairs", len(state.active),
+		"removedPairs", removed,
+		"inventory", len(snapshot.input.Inventory),
+		"directInventory", snapshot.directInventory,
+		"physicalInventory", snapshot.physicalInventory,
+		"discountInventory", len(snapshot.input.Inventory)-snapshot.directInventory,
+		"reservationDomains", len(snapshot.input.Reservations),
+		"pendingFills", s.capacity.Len(),
+		"gasAccounting", s.cfg.Gas != nil,
+		"pricingMaxFeePerGas", snapshot.input.MaxFeePerGas.String(),
+		"earliestExpiry", earliestExpiry,
+		"latestExpiry", latestExpiry,
+	)
+}
+
+func quoteRangeCount(quotes []Quote) int {
 	ranges := 0
 	for _, quote := range quotes {
 		ranges += len(quote.Ranges)
@@ -310,7 +333,7 @@ func quoteRangeCount(quotes []types.Quote) int {
 	return ranges
 }
 
-func quoteExpiryBounds(quotes []types.Quote) (earliest, latest int64) {
+func quoteExpiryBounds(quotes []Quote) (earliest, latest int64) {
 	for _, quote := range quotes {
 		if earliest == 0 || quote.Expiry < earliest {
 			earliest = quote.Expiry
@@ -355,18 +378,10 @@ func (s *quoteState) needsRenewal(now time.Time) bool {
 	return false
 }
 
-func (s *quoteState) activeQuoteCount() int {
-	count := 0
-	for _, pair := range s.active {
-		count += len(pair.quotes)
-	}
-	return count
-}
-
 func (s *quoteState) reconcile(
 	ctx context.Context,
 	submitter quoteSubmitter,
-	quotes []types.Quote,
+	quotes []Quote,
 	now time.Time,
 ) (int, error) {
 	next := indexQuotePairs(quotes)
@@ -397,7 +412,7 @@ func (s *quoteState) reconcile(
 		return quotePairKeyString(publishKeys[i]) < quotePairKeyString(publishKeys[j])
 	})
 	sort.Slice(expire, func(i, j int) bool { return quotePairKeyString(expire[i]) < quotePairKeyString(expire[j]) })
-	toPublish := make([]types.Quote, 0, len(quotes)+len(expire))
+	toPublish := make([]Quote, 0, len(quotes)+len(expire))
 	for _, key := range expire {
 		for _, quote := range s.active[key].quotes {
 			quote.Expiry = now.Add(-time.Second).Unix()
@@ -436,8 +451,8 @@ func shouldReplaceQuotePair(current, upcoming quotePairState, now time.Time, ren
 	return current.expiry <= now.Add(renewBefore).Unix()
 }
 
-func indexQuotePairs(quotes []types.Quote) map[quotePairKey]quotePairState {
-	grouped := make(map[quotePairKey][]types.Quote)
+func indexQuotePairs(quotes []Quote) map[quotePairKey]quotePairState {
+	grouped := make(map[quotePairKey][]Quote)
 	for _, quote := range quotes {
 		key := pairKey(quote)
 		grouped[key] = append(grouped[key], quote)
@@ -461,13 +476,13 @@ func indexQuotePairs(quotes []types.Quote) map[quotePairKey]quotePairState {
 		out[key] = quotePairState{
 			fingerprint: strings.Join(fingerprints, "|"),
 			expiry:      expiry,
-			quotes:      append([]types.Quote(nil), pairQuotes...),
+			quotes:      append([]Quote(nil), pairQuotes...),
 		}
 	}
 	return out
 }
 
-func pairKey(quote types.Quote) quotePairKey {
+func pairKey(quote Quote) quotePairKey {
 	return quotePairKey{
 		fromAsset: quote.FromAsset, toAsset: quote.ToAsset,
 		fromDecimals: quote.FromDecimals, toDecimals: quote.ToDecimals,

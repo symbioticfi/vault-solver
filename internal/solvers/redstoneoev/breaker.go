@@ -12,7 +12,6 @@ type breaker struct {
 	mu          sync.Mutex
 	blacklisted bool
 	failures    []time.Time
-	failureIDs  map[string]time.Time
 	maxFailures int
 	window      time.Duration
 }
@@ -33,51 +32,31 @@ func (b *breaker) recordFailure(now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.failures = append(b.failures, now)
-	b.prune(now)
+	b.pruneLocked(now)
 }
 
-func (b *breaker) recordFailureOnce(id string, now time.Time) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.prune(now)
-	if _, exists := b.failureIDs[id]; exists {
-		return false
-	}
-	if b.failureIDs == nil {
-		b.failureIDs = make(map[string]time.Time)
-	}
-	b.failureIDs[id] = now
-	b.failures = append(b.failures, now)
-	return true
-}
-
-// tripped reports whether bidding must halt, with a reason.
-func (b *breaker) tripped(now time.Time) (bool, string) {
+// tripped reports whether bidding must halt.
+func (b *breaker) tripped(now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.blacklisted {
-		return true, "api key blacklisted"
+		return true
 	}
-	b.prune(now)
+	b.pruneLocked(now)
 	if b.maxFailures > 0 && len(b.failures) >= b.maxFailures {
-		return true, "failed-liquidation rate-limit"
+		return true
 	}
-	return false, ""
+	return false
 }
 
 // prune drops failures older than the window. Caller holds the lock.
-func (b *breaker) prune(now time.Time) {
+func (b *breaker) pruneLocked(now time.Time) {
 	cutoff := now.Add(-b.window)
-	keep := b.failures[:0]
-	for _, t := range b.failures {
-		if t.After(cutoff) {
-			keep = append(keep, t)
+	kept := b.failures[:0]
+	for _, failure := range b.failures {
+		if failure.After(cutoff) {
+			kept = append(kept, failure)
 		}
 	}
-	b.failures = keep
-	for id, observedAt := range b.failureIDs {
-		if !observedAt.After(cutoff) {
-			delete(b.failureIDs, id)
-		}
-	}
+	b.failures = kept
 }

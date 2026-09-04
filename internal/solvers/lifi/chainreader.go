@@ -2,7 +2,6 @@ package lifi
 
 import (
 	"context"
-	"math/big"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -14,57 +13,27 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidsnapshot "github.com/symbioticfi/vault-solver/internal/liquidlane/snapshot"
 )
 
-var (
-	lifiInputSettler = inputsettler.NewILifiInputSettler()
-)
+var lifiInputSettler = inputsettler.NewILifiInputSettler()
 
 type reader struct {
-	chain     *chain.Client
-	snapshots *liquidsnapshot.Reader
+	*liquidlane.Reader
+
+	chain *chain.Client
 }
 
 type route = liquidlane.Route
 
-type quoteSnapshotSet = liquidsnapshot.Quote
-type fillSnapshotSet = liquidsnapshot.Fill
+type quoteSnapshotSet = liquidlane.QuoteSnapshot
+type fillSnapshotSet = liquidlane.FillSnapshot
 
 func newReader(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig, liquidityLens common.Address) (*reader, error) {
-	snapshots, err := liquidsnapshot.New(c, log, gasCfg, liquidityLens)
+	snapshots, err := liquidlane.NewReader(c, log, liquidityLens, gasCfg)
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, snapshots: snapshots}, nil
-}
-
-func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error) {
-	return r.snapshots.ResolveRoutes(ctx, adapters)
-}
-
-func (r *reader) validateGasTokens(routes []route) error {
-	return r.snapshots.ValidateGasTokens(routes)
-}
-
-func (r *reader) quoteSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	chainTime time.Time,
-) (quoteSnapshotSet, error) {
-	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
-}
-
-func (r *reader) fillSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	tokenIn common.Address,
-	amountIn *big.Int,
-	chainTime time.Time,
-) (fillSnapshotSet, error) {
-	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
+	return &reader{chain: c, Reader: snapshots}, nil
 }
 
 func (r *reader) validateExecutor(
@@ -105,16 +74,12 @@ func (r *reader) validateExecutor(
 }
 
 func (r *reader) validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error {
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{
-		To:   &inputSettler,
-		Data: lifiInputSettler.PackGovernanceFee(),
-	}, nil)
+	fee, err := readContract(
+		ctx, r.chain, inputSettler, lifiInputSettler.PackGovernanceFee(),
+		lifiInputSettler.UnpackGovernanceFee, "input settler governance fee",
+	)
 	if err != nil {
-		return errors.Errorf("input settler governance fee: %w", err)
-	}
-	fee, err := lifiInputSettler.UnpackGovernanceFee(ret)
-	if err != nil {
-		return errors.Errorf("input settler governance fee: malformed response: %w", err)
+		return err
 	}
 	if fee != 0 {
 		return errors.Errorf("input settler governance fee is %d, expected zero", fee)
@@ -127,7 +92,7 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
+	direct, err := r.FilterAuthorizedRoutes(ctx, routes, executorAddr)
 	if err != nil {
 		return err
 	}
@@ -149,13 +114,11 @@ func (r *reader) orderIdentifier(
 	if err != nil {
 		return common.Hash{}, errors.Errorf("pack orderIdentifier: %w", err)
 	}
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &inputSettler, Data: data}, nil)
+	orderID, err := readContract(
+		ctx, r.chain, inputSettler, data, lifiInputSettler.UnpackOrderIdentifier, "orderIdentifier",
+	)
 	if err != nil {
-		return common.Hash{}, errors.Errorf("call orderIdentifier: %w", err)
-	}
-	orderID, err := lifiInputSettler.UnpackOrderIdentifier(ret)
-	if err != nil {
-		return common.Hash{}, errors.Errorf("unpack orderIdentifier: %w", err)
+		return common.Hash{}, err
 	}
 	return common.Hash(orderID), nil
 }
@@ -165,15 +128,33 @@ func (r *reader) orderStatus(ctx context.Context, inputSettler common.Address, o
 	if err != nil {
 		return 0, errors.Errorf("pack orderStatus: %w", err)
 	}
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &inputSettler, Data: data}, nil)
+	status, err := readContract(
+		ctx, r.chain, inputSettler, data, lifiInputSettler.UnpackOrderStatus, "orderStatus",
+	)
 	if err != nil {
-		return 0, errors.Errorf("call orderStatus: %w", err)
-	}
-	status, err := lifiInputSettler.UnpackOrderStatus(ret)
-	if err != nil {
-		return 0, errors.Errorf("unpack orderStatus: %w", err)
+		return 0, err
 	}
 	return status, nil
+}
+
+func readContract[T any](
+	ctx context.Context,
+	client *chain.Client,
+	target common.Address,
+	data []byte,
+	unpack func([]byte) (T, error),
+	what string,
+) (T, error) {
+	var zero T
+	returnData, err := client.CallContract(ctx, ethereum.CallMsg{To: &target, Data: data}, nil)
+	if err != nil {
+		return zero, errors.Errorf("call %s: %w", what, err)
+	}
+	value, err := unpack(returnData)
+	if err != nil {
+		return zero, errors.Errorf("unpack %s: %w", what, err)
+	}
+	return value, nil
 }
 
 func (r *reader) latestBlockNumber(ctx context.Context) (uint64, error) {

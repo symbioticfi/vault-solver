@@ -1,0 +1,157 @@
+package policy
+
+import (
+	"context"
+	"math/big"
+	"slices"
+	"sync/atomic"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/decision"
+)
+
+// testMonitor reads configured Sepolia markets and positions from the callback's Morpho contract.
+type testMonitor struct {
+	reader      Reader
+	log         logr.Logger
+	callback    common.Address
+	loadAdapter func() (decision.AdapterSnapshot, bool)
+	markets     []common.Hash
+	positions   []common.Address
+	monitorPoll time.Duration
+
+	snap atomic.Pointer[snapshot]
+}
+
+func newTestMonitor(
+	r Reader,
+	log logr.Logger,
+	cfg Config,
+	callback common.Address,
+	loadAdapter func() (decision.AdapterSnapshot, bool),
+	seed *TestMonitorConfig,
+) (*testMonitor, error) {
+	if seed == nil || len(seed.Markets) == 0 {
+		return nil, errors.New("test monitor requires at least one market")
+	}
+	if len(seed.Positions) == 0 {
+		return nil, errors.New("test monitor requires at least one borrower")
+	}
+	m := &testMonitor{
+		reader:      r,
+		log:         log.WithName("testMonitor"),
+		callback:    callback,
+		loadAdapter: loadAdapter,
+		markets:     append([]common.Hash(nil), seed.Markets...),
+		positions:   append([]common.Address(nil), seed.Positions...),
+		monitorPoll: cfg.MonitorPoll,
+	}
+	m.snap.Store(&snapshot{
+		markets:   map[common.Hash]MarketInfo{},
+		prices:    map[common.Hash]*big.Int{},
+		positions: map[common.Hash]map[common.Address]morpho.PositionState{},
+	})
+	return m, nil
+}
+
+func (m *testMonitor) Run(ctx context.Context) {
+	m.refresh(ctx)
+	runMonitor(ctx, m.monitorPoll, m.refresh)
+}
+
+func (m *testMonitor) refresh(ctx context.Context) {
+	adapter, ok := m.loadAdapter()
+	if !ok {
+		m.log.V(1).Info("test monitor adapter snapshot unavailable; keeping cache")
+		return
+	}
+	loan, redeemable, ok := adapterMarketScope(adapter)
+	if !ok {
+		m.log.V(1).Info("test monitor adapter snapshot incomplete; keeping cache")
+		return
+	}
+	startBlock, startTime, err := m.reader.ReadHead(ctx)
+	if err != nil {
+		m.log.Error(err, "test monitor header read failed; keeping cache")
+		return
+	}
+	morphoAddr, err := m.reader.ReadCallbackMorpho(ctx, m.callback)
+	if err != nil || morphoAddr == (common.Address{}) {
+		m.log.Error(err, "test monitor MORPHO read failed; keeping cache")
+		return
+	}
+	params, err := m.reader.ResolveParams(ctx, morphoAddr, m.markets)
+	if err != nil {
+		m.log.Error(err, "test monitor market params read failed; keeping cache")
+		return
+	}
+	served := verifyAdapterPair(params, loan, redeemable)
+	want := make(map[common.Hash]MarketParams, len(served))
+	for _, id := range served {
+		want[id] = params[id]
+	}
+	if len(want) == 0 {
+		m.log.V(1).Info("test monitor found no adapter-served markets")
+		return
+	}
+	markets, prices, err := m.reader.ReadTestMarketStates(ctx, morphoAddr, want)
+	if err != nil {
+		m.log.Error(err, "test monitor market state read failed; keeping cache")
+		return
+	}
+	positions, err := m.reader.ReadTestPositions(ctx, morphoAddr, markets, m.positions)
+	if err != nil {
+		m.log.Error(err, "test monitor positions read failed; keeping cache")
+		return
+	}
+	endBlock, _, err := m.reader.ReadHead(ctx)
+	if err != nil {
+		m.log.Error(err, "test monitor end-header read failed; keeping cache")
+		return
+	}
+	if endBlock != startBlock {
+		m.log.V(1).Info("test monitor refresh crossed block boundary; keeping cache",
+			"startBlock", startBlock, "endBlock", endBlock)
+		return
+	}
+	m.snap.Store(&snapshot{
+		markets: markets, prices: prices, positions: positions,
+		block: startBlock, blockTime: startTime, updatedAt: time.Now(),
+	})
+}
+
+func verifyAdapterPair(params map[common.Hash]MarketParams, adapterLoan common.Address, redeemable []common.Address) []common.Hash {
+	redeem := make(map[common.Address]struct{}, len(redeemable))
+	for _, t := range redeemable {
+		redeem[t] = struct{}{}
+	}
+	out := make([]common.Hash, 0, len(params))
+	for id, p := range params {
+		if _, ok := redeem[p.CollateralToken]; p.LoanToken == adapterLoan && ok {
+			out = append(out, id)
+		}
+	}
+	slices.SortFunc(out, common.Hash.Cmp)
+	return out
+}
+
+func (m *testMonitor) Snapshot(
+	_ decision.AuctionSnapshot,
+	now time.Time,
+	adapter decision.AdapterSnapshot,
+) decision.MarketFacts {
+	snap := m.snapshot()
+	candidates := candidatesFromSnapshot(snap, uint64(now.Unix()), adapter, func(id common.Hash, _ MarketInfo) *big.Int {
+		return snap.prices[id]
+	})
+	return marketFacts(snap, candidates)
+}
+
+func (m *testMonitor) snapshot() *snapshot {
+	return m.snap.Load()
+}

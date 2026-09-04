@@ -2,9 +2,10 @@ package redstoneoev
 
 import (
 	"math/big"
+	"slices"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/decision"
 )
 
 func allSuccess(res []chain.CallResult, expectedLen int) bool {
@@ -33,20 +34,15 @@ func orZero(v *big.Int) *big.Int {
 	return new(big.Int).Set(v)
 }
 
-func exp10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
-}
-
-func cloneAdapterSnapshot(in types.AdapterSnapshot) types.AdapterSnapshot {
+func cloneAdapterSnapshot(in decision.AdapterSnapshot) decision.AdapterSnapshot {
 	out := in
 	out.FreeAssets = cloneBig(in.FreeAssets)
 	out.Withdrawable = cloneBig(in.Withdrawable)
-	out.Redeemable = make([]types.RedeemableSnapshot, len(in.Redeemable))
-	for i, r := range in.Redeemable {
-		out.Redeemable[i] = r
-		out.Redeemable[i].MaxRate = cloneBig(r.MaxRate)
-		out.Redeemable[i].MaxAssets = cloneBig(r.MaxAssets)
-		out.Redeemable[i].AcquireBalance = cloneBig(r.AcquireBalance)
+	out.Redeemable = slices.Clone(in.Redeemable)
+	for index := range out.Redeemable {
+		out.Redeemable[index].MaxRate = cloneBig(out.Redeemable[index].MaxRate)
+		out.Redeemable[index].MaxAssets = cloneBig(out.Redeemable[index].MaxAssets)
+		out.Redeemable[index].AcquireBalance = cloneBig(out.Redeemable[index].AcquireBalance)
 	}
 	return out
 }

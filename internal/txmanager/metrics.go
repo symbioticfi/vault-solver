@@ -8,6 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -126,7 +128,9 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
 		}, []string{"label", "phase", "outcome"}),
 	}
-	for _, collector := range []prometheus.Collector{
+	accountCollectors := m.account.collectors()
+	collectors := make([]prometheus.Collector, 0, 9+len(accountCollectors))
+	collectors = append(collectors,
 		m.requests,
 		m.inflight,
 		m.gasUsed,
@@ -136,11 +140,10 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.admissionWait,
 		m.lifecycleDuration,
 		m.phaseDuration,
-		m.account,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("txmanager: register metric: %w", err)
-		}
+	)
+	collectors = append(collectors, accountCollectors...)
+	if err := observability.RegisterCollectors(reg, "txmanager", collectors...); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

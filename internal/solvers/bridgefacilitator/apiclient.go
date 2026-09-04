@@ -10,7 +10,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/signer"
@@ -24,29 +23,29 @@ const getOffersDeadlineWindow = 5 * time.Minute
 //
 // All methods are called from the single solver Run goroutine; no locking is required.
 type apiClient struct {
-	c       *threef.APIClient
-	sgnr    signer.Signer
-	chainID *big.Int // operating chain; the grunt-api signing domain and the listOffers chainId query
-	log     logr.Logger
+	client  *threef.APIClient
+	signer  signer.Signer
+	chainID *big.Int
+	now     func() time.Time
 }
 
-func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration, log logr.Logger) *apiClient {
+func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration) *apiClient {
 	cfg := threef.NewConfiguration()
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
 	// request would stall the single solver loop, redemption scans included.
 	cfg.HTTPClient = &http.Client{Timeout: timeout}
 	return &apiClient{
-		c:       threef.NewAPIClient(cfg),
-		sgnr:    sgnr,
+		client:  threef.NewAPIClient(cfg),
+		signer:  sgnr,
 		chainID: chainID,
-		log:     log,
+		now:     time.Now,
 	}
 }
 
 // listAuctions returns the current auctions, each carrying its EIP-712 domain (needed for signing); no auth required.
 func (ac *apiClient) listAuctions(ctx context.Context) ([]threef.AuctionDto, error) {
-	auctions, httpResp, err := ac.c.AuctionAPI.AuctionControllerListV1(ctx).Domain(true).Execute()
+	auctions, httpResp, err := ac.client.AuctionAPI.AuctionControllerListV1(ctx).Domain(true).Execute()
 	closeResp(httpResp)
 	if err != nil {
 		return nil, apiErr("list auctions", httpResp, err)
@@ -56,7 +55,7 @@ func (ac *apiClient) listAuctions(ctx context.Context) ([]threef.AuctionDto, err
 
 // createOffer submits a signed offer.
 func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto) error {
-	_, httpResp, e := ac.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
+	_, httpResp, e := ac.client.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResp(httpResp)
 	if e != nil {
 		return apiErr("create offer", httpResp, e)
@@ -67,12 +66,12 @@ func (ac *apiClient) createOffer(ctx context.Context, dto threef.CreateOfferDto)
 // listOffers returns the adapter's outstanding offers. Authenticated via a per-adapter EIP-712
 // GetOffers signature in the Authorization: Bearer header — no API key required.
 func (ac *apiClient) listOffers(ctx context.Context, adapter common.Address) ([]threef.OfferDto, error) {
-	deadline := big.NewInt(time.Now().Add(getOffersDeadlineWindow).Unix())
-	sig, err := ac.sgnr.SignHash(GetOffersDigest(adapter, deadline, ac.chainID))
+	deadline := big.NewInt(ac.now().Add(getOffersDeadlineWindow).Unix())
+	sig, err := ac.signer.SignHash(GetOffersDigest(adapter, deadline, ac.chainID))
 	if err != nil {
 		return nil, errors.Errorf("3f api: sign GetOffers: %w", err)
 	}
-	o, httpResp, e := ac.c.OfferAPI.OfferControllerGetV1(ctx).
+	o, httpResp, e := ac.client.OfferAPI.OfferControllerGetV1(ctx).
 		Maker(lowerAddr(adapter)).
 		// chainId is the operating chain; the server rebuilds the grunt-api signing domain from it to
 		// verify the signature and routes the EIP-1271 check to that chain.

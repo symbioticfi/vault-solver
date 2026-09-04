@@ -1,7 +1,12 @@
-# vault-solver — RFQ Filler solver (plan)
+# RFQ Filler
 
-Porting the TypeScript `@symbiotic/rfq-filler` into `vault-solver` as the **`rfq`** solver, following
-the framework boundary and conventions in [`../CLAUDE.md`](../CLAUDE.md). 
+> **Role:** maintained integration contract for `rfq-filler`: protocol scope, design decisions, deployment
+> prerequisites, deliberate TypeScript divergences, and live open work.
+>
+> **Code/config:** `internal/solvers/rfq` · [`config/rfq.example.yaml`](../config/rfq.example.yaml)
+
+The implementation follows the framework boundary in [Architecture](ARCHITECTURE.md) and preserves the
+relevant behavior of the TypeScript `@symbiotic/rfq-filler` reference.
 
 ---
 
@@ -18,12 +23,14 @@ push path; orders are found exclusively by polling the backend.
   the code-first OpenAPI surface (`/openapi.json`, `/openapi.yaml`, `/docs`). `/quote` is gated by an
   `x-rfq-shared-secret` header (the backend peer). There is **no `/notify` endpoint**.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
-  backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
+  backend, then drives each order through `queued → submitted → {filled|expired|failed}`. Transient planning,
+  backend, or capacity failures leave the single-owner record queued for the next poll; there is no separately
+  observable submitting phase.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
   sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
   adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
   leg's **adapter** address.
-- **State** — in-memory only: `orders` (state machine) and `attempts`.
+- **State** — in-memory only: one record per order containing lifecycle and attempt count.
 
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
 solver maps that boundary shape into the shared LiquidLane terms from
@@ -31,14 +38,14 @@ solver maps that boundary shape into the shared LiquidLane terms from
 `adapter + tokenIn + tokenOut + maxAssets + maxRate`, and RFQ's external `asset` field is the shared
 `tokenOut`. Pricing leg types are **direct** (`discountId == null`, public adapter rate) and
 **discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the backend
-`/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
-the direct path is solid; they are sequenced last, not dropped.
+`/discounts` flow). Both direct and discount legs are implemented and converge on the same validated fill
+plan.
 
 ---
 
 ## 2. How it maps onto the framework
 
-A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no framework edits
+A new self-contained `internal/solvers/rfq/` implementing `app.Integration` — no framework edits
 (CLAUDE.md modularity rule). The generic layer is reused as-is:
 
 - **`Run(ctx)`** starts the RFQ **HTTP listener** (`/quote` + `/health` + OpenAPI) *and* the poll
@@ -53,30 +60,15 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   Prometheus metrics belong to the generic `internal/observability` layer (one registry, one
   `/metrics` on `:9090`), so the RFQ server doesn't expose its own. Instead the solver **registers its
   collectors on the shared registry** via `deps.Metrics.Registerer()` in the factory: a Huma/HTTP
-  middleware records `rfq_filler_http_request_duration_seconds{method,route,status}` (route is
-  allowlisted and method is normalized to `GET` / `POST` / `other` to bound cardinality, and the
-  histogram's `_count` is the canonical transport request counter). The deprecated
-  `rfq_filler_http_requests_total` remains for one compatibility release so existing alerts can migrate.
-  After authentication, the quote service returns a typed terminal decision alongside its optional
-  response and records exactly one bounded workflow `quote/<outcome>` event; malformed client input is
-  `bad_request`, distinct from dependency/strategy `error`. Responses selected for writing additionally record input/output
-  atomic-unit volume by asset; neither signal claims a win or fill. Workflow `order_poll/success`
-  freshness advances only after a complete successful `listOpenOrders` result has been processed,
-  including an empty list; failures retain the previous value. The same backend call is timed by the
-  external-operation histogram as the fixed `order_poll` operation: complete polls (including empty)
-  are `success`, live failures are `error`, and shutdown-cancelled polls are `skipped`. Order handling
-  and fill submission are outside that timer. The framework also registers the standard Go runtime +
-  process collectors, so `/metrics` carries CPU,
-  memory, goroutines, GC, and FDs. Successful receipts record `fill/success` and token-native amounts;
-  transaction failures and pre-admission rejections record `fill/failure` and `fill/not_admitted` without
-  amounts. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
-  awarded-but-unfinished orders and the quote→fill funnel visible without inventing realized PnL. The
-  canonical names, labels, and meanings are in the
-  [README metrics table](../README.md#metrics).
+  middleware records `rfq_filler_http_request_duration_seconds{method,route,status}`; its histogram
+  count is also the request counter (route is allowlisted to bound cardinality). The
+  framework also registers the standard Go runtime + process collectors, so `/metrics` carries CPU,
+  memory, goroutines, GC, and FDs. The filler latency histogram and its request count are surfaced on
+  the shared observability port rather than a per-solver endpoint.
 - **Quote-server middleware** (outer→inner: body cap → access log → metrics → panic recovery): every
   request gets a generated/propagated `X-Request-Id` (echoed on the response and threaded into the
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
-  request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
+  metrics above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
 - **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on
@@ -99,12 +91,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.
-- **Addresses + backend URL come from `solver.config`** (config-is-king); secrets
-  (`backendSharedSecret`, the caller key) via `*Env` indirection (`os.Getenv` at point of use).
-- **Bindings** for `Executor`/`Reactor` (from the `rfq` build) and `LiquidLaneAdapter`/`UniversalDelegator`/
-  `IVaultV2`/`IERC4626` (from a standalone `core-mirror` build) are vendored via `make refresh-abi` +
-  `bindings` (two `FORGE_OUT`/`CORE_MIRROR_OUT` sources). The nested `fill`/order ABI is encoded/decoded
-  via the generated bindings, never hand-rolled.
+- **Addresses + backend URL come from `solvers[].config`** (config-is-king); secrets
+  (`backendSharedSecretEnv`, the caller key) via `*Env` indirection (`os.Getenv` at point of use).
+- **Bindings** for `Executor`/`Reactor`, `LiquidLaneAdapter`, `UniversalDelegator`, `IVaultV2`, and
+  `IERC4626` are generated from vendored ABIs; the nested fill/order ABI is never hand-rolled. The canonical
+  commands and source ownership live in [Development](DEVELOPMENT.md#code-generation).
 - **Signer** — the framework's single EOA is the RFQ **caller** (must be in the Executor's `callers`
   allowlist, added by the owner via `setCallers`).
 
@@ -112,17 +103,22 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 
 | TS (`rfq-filler/src/`) | Go (`internal/solvers/rfq/`) |
 |---|---|
-| `index.ts` + `server.ts` (Hono) | `solver.go` (`Run`: HTTP server + poll loop) + `server.go` (Huma routes/auth) |
+| `index.ts` + `server.ts` (Hono) | `factory.go` + `runtime.go` (composition and HTTP/execution lifecycle) + `server.go` (Huma routes/auth) |
 | `api.ts` (Zod schemas) | `apitypes.go` (request/response structs + Huma validation tags) |
-| `quote.ts` + `strategy.ts` | `quote.go` + `strategy.go` (quote-server wiring and typed input assembly) + `strategies/` (the pluggable decision layer: `default` = allocation, `webhook` = external decider) |
-| `execution.ts` | `execution.go` (poll loop, order state machine, fill; fresh fill-plan production lives in the strategy) |
-| `executor.ts` + `reactor`/`contracts.ts` | `order.go` (encode/decode reactor order, `fill` calldata) |
+| `quote.ts` + `strategy.ts` | `quote.go` + `planner_*.go` (typed facts, default allocation, and webhook decision boundary) |
+| `execution.ts` | `execution.go` (one serial poll/validate/plan/admit/submit flow; fresh fill-plan production lives in the planner) |
+| `executor.ts` + `reactor`/`contracts.ts` | `order.go` (decode and cross-check the backend executable against the signed Reactor order, then build typed `fill` calldata) |
 | `backend.ts` + `discounts.ts` | `backend.go` (thin adapter over the generated `api/rfqbackend` client for `/orders`) + shared `internal/liquidlane/discounts` (`/discounts`) |
 | `contracts.ts` + `inventories.ts` | `chainreader.go` (multicall adapter/vault reads) + shared `chain` |
-| `domain.ts` | `store.go` types + `strategies/types` (RFQ strategy input/output and fill plan) + shared `liquidlane.QuoteCandidate` |
-| `config/env.ts` + deployment manifests | `config.go` (typed `solver.config`) |
-| `db`/repositories | `store.go` (in-memory orders/attempts) |
+| `domain.ts` | `store.go` plus root-local planner facts and shared `liquidlane.{QuoteCandidate,Plan}` |
+| `config/env.ts` + deployment manifests | `config.go` (typed `solvers[].config`) |
+| `db`/repositories | `store.go` (in-memory order records) |
 | `metrics.ts` | `metrics.go` (collectors on the shared registry) + framework `internal/observability` (`/metrics` — see §2) |
+
+Accepted-order execution is one linear `submitOrder` flow. It reads and validates backend/order facts, resolves
+discounts, builds the fresh plan and immutable calldata, then acquires capacity and calls the transaction manager.
+Every earlier exit happens before funds-moving side effects; persistence and lease release follow the terminal
+result. There is no intermediate action/result object or second orchestration layer.
 
 ### Pluggable strategy layer
 
@@ -168,13 +164,12 @@ minimum, including the deJAAA/deJTRSY deRWA share classes, carry a 1-token dust 
 `gating_test.go` (`TestParseConfigMinAmountsIn`, `TestParseConfigMinAmountsInErrors`,
 `TestQuoteMinAmountIn`) and `server_test.go` (`TestServer_QuoteBelowMinAmountNoContent`).
 
-The generic strategy pattern and trust model (solver provides raw facts; the trusted strategy is the
-brain; the solver only enforces its own structural and safety constraints) are documented once in
-[`strategy-plan.md`](strategy-plan.md), shared with every solver. Shared LiquidLane fact conventions
+The generic decision pattern and trust model (the coordinator provides facts; its planner owns economics;
+execution enforces structural and safety constraints) are documented once in
+[`STRATEGIES.md`](STRATEGIES.md), shared with every solver. Shared LiquidLane fact conventions
 are documented in [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md). The concrete RFQ
-input/output types (`QuoteInput`/`QuoteOutput`, `FillInput`/`FillPlan`) live in
-`internal/solvers/rfq/strategies/types`; the candidate itself is the shared
-`liquidlane.QuoteCandidate`.
+input/output types (`QuoteInput`/`QuoteOutput`, `FillInput`) live beside the planner; execution uses the
+shared `liquidlane.Plan` and `liquidlane.QuoteCandidate` directly.
 
 The RFQ solver is the protocol adapter around the shared LiquidLane reader. It obtains current
 amount-specific `FillQuote`s, and `NormalizeOracleInventory` binds each backend inventory entry to its
@@ -203,28 +198,8 @@ executor-specific `discountSwap` calldata mapping.
 
 ## 3. Configuration (env-agnostic: local / hoodi / mainnet)
 
-One code path; per-environment differences are pure YAML. Sketch of `solver.config` for `rfq`:
-
-```yaml
-solvers:
-  - name: rfq-filler
-    config:
-      strategy:                                         # pluggable decision layer (omit ⇒ default)
-        name: default                                   #   "default" (in-process) | "webhook" (external decider)
-        config: {}
-      backendUrl: https://rfq-backend.example
-      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
-      listenAddr: ":42073"                              # quote HTTP server (poll-only; no /notify)
-      executor:             "0x…"                       # Executor (bot EOA is an authorized caller — setCallers allowlist)
-      reactor:              "0x…"
-      pollIntervalMs: 3000
-      orderLimit: 20
-      solverMode: external                              # "external" (default) | "internal" — see below
-      minAmountsIn:                                     # optional per-input-token floor (base units)
-        "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
-      adapters:                                         # LiquidLane adapter addresses (whitelist + fill planning)
-        - "0x…liquidLaneAdapter"                        # vault + collateral resolved on-chain at startup
-```
+One code path serves every environment; exact fields and defaults live in the annotated
+[`config/rfq.example.yaml`](../config/rfq.example.yaml).
 
 **`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
 available only to **internal Symbiotic** solvers, so one mode flag drives both the discount-API gate and the
@@ -267,81 +242,31 @@ list serves two purposes:
 
 ---
 
-## 4. Build phases
+## 4. Implementation status
 
-All phases below are committed scope. Phasing is about sequencing and reviewable increments, not
-dropping features.
-
-0. **(done)** Vendor RFQ ABIs: `Executor`/`Reactor` from `../rfq/out`, and `LiquidLaneAdapter`/
-   `UniversalDelegator`/`IVaultV2`/`IERC4626` from a standalone `core-mirror` build →
-   `api/bindings/rfq/` + `api/bindings/{delegator,vaultv2,erc4626}`. CGO-free build holds.
-1. **(done) Quote path** — `config.go`, bindings, route-specific amount quote reads (`paused`,
-   `getMaxAssets`, `getAmountOut`, `minDiscount`; decimals cached), `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
-   `/health`, `/openapi.json` + `/docs`, shared-secret auth), in-memory store. Unit-tested (pricing
-   golden numbers, config, httptest server).
-2. **(done) Execution** — backend client (`/orders`), **poll-only** loop + order state machine
-   (`queued→submitting→submitted→{filled|expired|failed}`), reactor-order decode + `Executor.fill`
-   (mixed overload, golden selector test) via the shared txmanager (revert→failed), attempt tracking,
-   signed-order filler/deadline/output terms as the execution source of truth with fail-closed backend
-   envelope consistency checks,
-   and on-chain **fresh fill planning via a single multicall** over the configured per-vault adapters
-   (adapter views + `marketMaker`/`owner`/`isFiller` authorization filter). Direct legs only.
-   Unit-tested (state machine with fakes, backend httptest).
-3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
-   discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
-   `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and
-   discount inventories in fill planning. Direct + discount fills now match the TS filler. Unit-tested
-   (discount-leg selection, discount fill resolves + encodes).
-4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
-   configured `vaults[].adapter` set (originally `adapterWhitelistEnabled`; now auto-enabled by
-   `solverMode: external` when `adapters` is non-empty — see §3),
-   fill-time discounts filtered by the same set, and a guard that fails the order when a
-   backend-resolved discount's adapter differs from the quoted strategy leg's adapter (no tx is
-   sent; a still-open order is re-armed and re-evaluated next poll, matching the TS lifecycle).
-   Unit-tested (whitelist build/filter, config flag + zero-address rejection, factory wiring, quote
-   200/204 paths incl. disabled toggle, fill-time discount filter, mismatch → failed order with no
-   tx).
-5. **(done) Permissioned-scope single-route constraint** — when `tokensToQuote` is `permissioned`,
-   quote and fill inputs use one candidate instead of aggregation, and the solver rejects multi-leg
-   strategy/webhook outputs before publication or calldata construction. Input beyond that route's
-   output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
-   planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
-   single-route capped output, webhook rejection, and fresh planning.
-
-**Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
-per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
-refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault` and collateral `asset` are resolved once at startup (from
-`adapter.vault()` / `vault.asset()`), not re-read per fill plan, so there are no per-read round-trips.
+The quote server, poll-only order lifecycle, direct and signed-discount execution, mode-dependent adapter
+scoping, permissioned single-route policy, generated calldata, and fresh Multicall planning are implemented.
+The package tests pin config, HTTP/wire behavior, strategy validation, order transitions, discount resolution,
+and generated selectors. Completed phase history belongs in Git; live deployment prerequisites and deliberate
+divergences remain below.
 
 ---
 
 ## 5. Open items / prerequisites
 
-- **Pareto AA_FalconXUSDC activation** — the token-agnostic RFQ implementation supports the
-  18-decimal mainnet tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing
-  permissioned, single-route path. The bounded Symbiotic `ParetoOracle`
-  (`0xba833D6288aC591BFffbeD16909B8B824e7fA9F2`) and the Pareto account factory/implementation
-  (`0xa47cE86c304e251198F1a318c569e5217b694e1F` /
-  `0xE54219880a1296D028CcD7B3d5a34c65fb0B7CAB`) are deployed and verified. The rfq-backend and
-  rfq-frontend mainnet entries are enabled, and vault-solver-deploy includes the token in
-  `permissionedTokens`, its one-token floor (`1000000000000000000`) in `minAmountsIn`, and the target
-  adapter `0x59CDDE0D345c0eE6ED453FE7d3fb365Fe0721E85` on the first mainnet solver instance.
-
-  The remaining activation is on-chain: the adapter's `accounts(token)` is still zero, so its owner
-  must call `addTokenToRedeem` before the solver can route this tranche. The configured executor
-  `0xD6fABB653a586FdB4a6FE7946fecC6688e9E0d59` is not currently the adapter owner, market maker, or a
-  delegated filler. The deployed `internal` profile can execute through a live signed discount; a
-  direct route additionally requires the adapter owner to authorize that executor. No dedicated
-  per-token solver process or protocol branch is required.
-
-  Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
-  for the external operator-facing runtime and configuration surface.
+- **Pareto AA_FalconXUSDC activation** — the token-agnostic implementation supports the 18-decimal mainnet
+  tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing permissioned, single-route path; no
+  token-specific solver branch is required. Before activation, the deployment must include the token and its
+  base-unit floor, the selected adapter must expose a non-zero `accounts(token)` route, and execution must have
+  either direct executor authorization or a live signed discount. Treat backend/deployment-repository state and
+  on-chain authorization as runtime checks, not durable claims in this plan.
 
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
-- **Per-environment inputs needed to run**: backend base URL, `Executor` / `Reactor` addresses, the
-  LiquidLane adapter address list (`vaults`; adapter whitelist + fill planning — each adapter's vault and
+- **Per-environment inputs needed to run**: backend base URL, the `Executor` address, the optional `reactor`
+  deployment identity retained only for diagnostics (`request.protocol` remains the signed protocol identity), the
+  LiquidLane adapter address list (`adapters`; adapter whitelist + fill planning — each adapter's vault and
   collateral are resolved on-chain at startup; with the whitelist enabled an empty list declines every
   quote), the backend shared secret, and the caller key (last two via env). Hoodi addresses are known
   from the TS deployment manifest; local from the rfq-integration local-stack deploy.
@@ -381,7 +306,9 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
   Keep it that way — don't add per-quote chain reads outside that one multicall.
 
-### Parity with the current TS filler
+---
+
+## 6. Reference parity and deliberate divergences
 
 **Status (verified against the current TS `rfq-filler` working tree): functional parity plus the
 permissioned-scope single-route constraint described above.** The
@@ -421,7 +348,7 @@ A few **intentional, non-fund-moving divergences** remain, by design:
 - **Fill-time discount filter** — matches TS exactly: keep discounts where the adapter is
   whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
   `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
-- **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
+- **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `adapters` set
   (the Go config analogue of the TS deployment manifest's `vaults`). It was originally gated by an
   explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag
   has since been folded into **`solverMode`** (§3), and scoping is now per-path. The **quote** whitelist
@@ -459,18 +386,12 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
   is nothing to port; tracing is out of scope unless fleet-wide tracing is later required.
 
-### Backend OpenAPI spec (vendored)
+## 7. Backend OpenAPI contract
 
 The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generated at runtime). It is
 vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is
 generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
 
-- **The temp railway deployment is stale.** As of this writing it is built from a commit *before* the
-  backend renamed discount `vault`→`adapter` and order `signature`→`protocolSignature`, so its served
-  spec disagrees with both the current backend code and the current filler. The vendored file is
-  generated from **current backend code**, not that deployment. Until the deployment is refreshed,
-  regenerate the vendored spec from a backend running current code — e.g. `pnpm tsx
-  scripts/dump-openapi.ts` in `rfq-backend` (builds the Hono app in-process, no DB, dumps the spec).
 - **Generated Go client (`api/rfqbackend/`).** The spec now carries `components` schemas with `$ref`s
   (the earlier hono-openapi all-inlined limitation is fixed), so the client is generated with the Java
   **openapi-generator** (`make refresh-rfq-client`) — the only generator that ingests this OpenAPI 3.1

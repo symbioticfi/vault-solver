@@ -16,9 +16,7 @@ type nonceStore struct {
 func (n *nonceStore) reconcile(onchain uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if onchain > n.issued {
-		n.issued = onchain
-	}
+	n.reconcileLocked(onchain)
 }
 
 // next returns the next nonce to sign: strictly greater than both the on-chain nonce and any nonce
@@ -26,9 +24,13 @@ func (n *nonceStore) reconcile(onchain uint64) {
 func (n *nonceStore) next(onchain uint64) uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.reconcileLocked(onchain)
+	n.issued++
+	return n.issued
+}
+
+func (n *nonceStore) reconcileLocked(onchain uint64) {
 	if onchain > n.issued {
 		n.issued = onchain
 	}
-	n.issued++
-	return n.issued
 }

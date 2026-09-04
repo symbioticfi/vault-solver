@@ -16,19 +16,25 @@ type auctionView struct {
 
 // depositAsset returns the auction's deposit-asset address string for logging ("" if absent).
 func (a auctionView) depositAsset() string {
-	da, ok := a.dto.GetDepositAssetOk()
-	if !ok || da == nil {
+	asset, present := a.dto.GetDepositAssetOk()
+	if !present || asset == nil {
 		return ""
 	}
-	if addr, hasAddr := da.GetAddressOk(); hasAddr && addr != nil {
-		return *addr
+	address, present := asset.GetAddressOk()
+	if !present || address == nil {
+		return ""
 	}
-	return ""
+	return *address
 }
 
 // isOpen reports whether the auction status permits offers.
 func (a auctionView) isOpen() bool {
-	return strings.EqualFold(a.dto.Status, "open") || strings.EqualFold(a.dto.Status, "solvable")
+	switch strings.ToLower(a.dto.Status) {
+	case "open", "solvable":
+		return true
+	default:
+		return false
+	}
 }
 
 // requestAddr returns the Request contract address, or the zero address if malformed.
@@ -56,9 +62,9 @@ func (a auctionView) amountRequested() *big.Int {
 	if !ok || s == nil {
 		return nil
 	}
-	n, ok := new(big.Int).SetString(*s, 10)
-	if !ok {
+	amount := new(big.Int)
+	if _, parsed := amount.SetString(*s, 10); !parsed {
 		return nil
 	}
-	return n
+	return amount
 }

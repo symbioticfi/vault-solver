@@ -15,21 +15,12 @@ import (
 const maxAdvertisedDiscountRoutes = 256
 
 type advertisedRouteFilter struct {
-	adapters map[common.Address]bool
+	adapters map[common.Address]struct{}
 	tokenIn  common.Address
 	tokenOut common.Address
 }
 
-type discountRouteSet struct {
-	routes   []liquidlane.Route
-	listed   *liquiddiscounts.List
-	complete bool
-}
-
 func (s *Solver) listDiscounts(ctx context.Context) (*liquiddiscounts.List, error) {
-	if s.discounts == nil {
-		return &liquiddiscounts.List{}, nil
-	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.Discounts.HTTPTimeout)
 	defer cancel()
 	return s.discounts.ListDiscounts(requestCtx)
@@ -39,7 +30,7 @@ func (s *Solver) quoteRoutesWithDiscounts(
 	ctx context.Context,
 	configured []liquidlane.Route,
 	now time.Time,
-) (discountRouteSet, error) {
+) ([]liquidlane.Route, *liquiddiscounts.List, error) {
 	filter := advertisedRouteFilter{}
 	if s.cfg.quoteScopesToAdapters() {
 		filter.adapters = adapterSet(s.cfg.Adapters)
@@ -53,10 +44,9 @@ func (s *Solver) fillRoutesWithDiscounts(
 	tokenIn, tokenOut common.Address,
 	now time.Time,
 ) ([]liquidlane.Route, *liquiddiscounts.List, error) {
-	result, err := s.routesWithDiscounts(ctx, configured, now, advertisedRouteFilter{
+	return s.routesWithDiscounts(ctx, configured, now, advertisedRouteFilter{
 		tokenIn: tokenIn, tokenOut: tokenOut,
 	})
-	return result.routes, result.listed, err
 }
 
 func (s *Solver) routesWithDiscounts(
@@ -64,18 +54,16 @@ func (s *Solver) routesWithDiscounts(
 	configured []liquidlane.Route,
 	now time.Time,
 	filter advertisedRouteFilter,
-) (discountRouteSet, error) {
+) ([]liquidlane.Route, *liquiddiscounts.List, error) {
 	if !s.cfg.usesDiscounts() {
-		return discountRouteSet{routes: configured, complete: true}, nil
+		return configured, nil, nil
 	}
 	listed, err := s.listDiscounts(ctx)
 	if err != nil {
-		return discountRouteSet{routes: configured}, err
+		return configured, nil, err
 	}
-	dynamic, complete := s.resolveAdvertisedRoutes(ctx, listed, configured, now, filter)
-	return discountRouteSet{
-		routes: mergeRoutes(configured, dynamic), listed: listed, complete: complete,
-	}, nil
+	dynamic := s.resolveAdvertisedRoutes(ctx, listed, configured, now, filter)
+	return mergeRoutes(configured, dynamic), listed, nil
 }
 
 func (s *Solver) resolveAdvertisedRoutes(
@@ -84,27 +72,34 @@ func (s *Solver) resolveAdvertisedRoutes(
 	configured []liquidlane.Route,
 	now time.Time,
 	filter advertisedRouteFilter,
-) ([]liquidlane.Route, bool) {
+) []liquidlane.Route {
 	offers, issues := liquiddiscounts.LiveOffers(listed, now)
+	for _, issue := range issues {
+		s.log.V(1).Info(
+			"ignore invalid advertised discount",
+			"discountId", issue.DiscountID,
+			"error", issue.Err.Error(),
+		)
+	}
 	type routeKey struct {
 		adapter  common.Address
 		tokenIn  common.Address
 		tokenOut common.Address
 		decimals int
 	}
-	expected := make(map[routeKey]bool, len(offers))
-	known := make(map[routeKey]bool, len(configured))
+	expected := make(map[routeKey]struct{}, len(offers))
+	known := make(map[routeKey]struct{}, len(configured))
 	for _, route := range configured {
 		known[routeKey{
 			adapter: route.Adapter, tokenIn: route.TokenIn,
 			tokenOut: route.TokenOut, decimals: route.TokenOutDecimals,
-		}] = true
+		}] = struct{}{}
 	}
-	adapters := make(map[common.Address]bool)
+	adapters := make(map[common.Address]struct{})
 	skipped := 0
 	for _, offer := range offers {
 		if !s.cfg.TokenPolicy.Allows(offer.TokenToRedeem) ||
-			filter.adapters != nil && !filter.adapters[offer.Adapter] ||
+			filter.adapters != nil && !setContains(filter.adapters, offer.Adapter) ||
 			filter.tokenIn != (common.Address{}) && offer.TokenToRedeem != filter.tokenIn ||
 			filter.tokenOut != (common.Address{}) && offer.Collateral != filter.tokenOut {
 			continue
@@ -113,17 +108,17 @@ func (s *Solver) resolveAdvertisedRoutes(
 			adapter: offer.Adapter, tokenIn: offer.TokenToRedeem,
 			tokenOut: offer.Collateral, decimals: offer.CollateralDecimals,
 		}
-		if known[key] || expected[key] {
+		if setContains(known, key) || setContains(expected, key) {
 			continue
 		}
 		if len(expected) == maxAdvertisedDiscountRoutes {
 			skipped++
 			continue
 		}
-		expected[key] = true
+		expected[key] = struct{}{}
 	}
 	for key := range expected {
-		adapters[key.adapter] = true
+		adapters[key.adapter] = struct{}{}
 	}
 	if skipped > 0 {
 		s.log.V(1).Info(
@@ -137,22 +132,20 @@ func (s *Solver) resolveAdvertisedRoutes(
 		orderedAdapters = append(orderedAdapters, adapter)
 	}
 	if len(orderedAdapters) == 0 {
-		return nil, len(issues) == 0 && skipped == 0
+		return nil
 	}
 	slices.SortFunc(orderedAdapters, func(a, b common.Address) int { return a.Cmp(b) })
 
 	routes := s.resolveAdvertisedAdapters(ctx, orderedAdapters)
 	resolved := make([]liquidlane.Route, 0, len(expected))
-	resolvedKeys := make(map[routeKey]bool, len(expected))
 	for _, route := range routes {
-		key := routeKey{
+		if !setContains(expected, routeKey{
 			adapter: route.Adapter, tokenIn: route.TokenIn,
 			tokenOut: route.TokenOut, decimals: route.TokenOutDecimals,
-		}
-		if !expected[key] {
+		}) {
 			continue
 		}
-		if err := s.reader.validateGasTokens([]liquidlane.Route{route}); err != nil {
+		if err := s.reader.ValidateGasTokens([]liquidlane.Route{route}); err != nil {
 			s.log.V(1).Info(
 				"skip advertised discount route",
 				"adapter", route.Adapter.Hex(),
@@ -163,17 +156,15 @@ func (s *Solver) resolveAdvertisedRoutes(
 			continue
 		}
 		resolved = append(resolved, route)
-		resolvedKeys[key] = true
 	}
-	complete := len(issues) == 0 && skipped == 0 && len(resolvedKeys) == len(expected)
-	return resolved, complete
+	return resolved
 }
 
 func (s *Solver) resolveAdvertisedAdapters(
 	ctx context.Context,
 	adapters []common.Address,
 ) []liquidlane.Route {
-	routes, err := s.reader.resolveRoutes(ctx, adapters)
+	routes, err := s.reader.ResolveRoutes(ctx, adapters)
 	if err == nil {
 		return routes
 	}
@@ -185,7 +176,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 
 	var resolved []liquidlane.Route
 	for _, adapter := range adapters {
-		adapterRoutes, err := s.reader.resolveRoutes(ctx, []common.Address{adapter})
+		adapterRoutes, err := s.reader.ResolveRoutes(ctx, []common.Address{adapter})
 		if err != nil {
 			s.log.Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
 			continue
@@ -247,23 +238,23 @@ func (s *Solver) logDiscountIssues(issues []liquiddiscounts.OfferIssue) {
 	}
 }
 
-func adapterSet(adapters []common.Address) map[common.Address]bool {
-	set := make(map[common.Address]bool, len(adapters))
+func adapterSet(adapters []common.Address) map[common.Address]struct{} {
+	set := make(map[common.Address]struct{}, len(adapters))
 	for _, adapter := range adapters {
-		set[adapter] = true
+		set[adapter] = struct{}{}
 	}
 	return set
 }
 
 func mergeRoutes(groups ...[]liquidlane.Route) []liquidlane.Route {
-	seen := make(map[liquidlane.RouteID]bool)
+	seen := make(map[liquidlane.RouteID]struct{})
 	var routes []liquidlane.Route
 	for _, group := range groups {
 		for _, route := range group {
-			if route.ID == "" || seen[route.ID] {
+			if route.ID == "" || setContains(seen, route.ID) {
 				continue
 			}
-			seen[route.ID] = true
+			seen[route.ID] = struct{}{}
 			routes = append(routes, route)
 		}
 	}
@@ -277,7 +268,7 @@ func directInventoriesForAdapters(
 	allowed := adapterSet(adapters)
 	direct := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
-		if allowed[item.Adapter] {
+		if setContains(allowed, item.Adapter) {
 			direct = append(direct, item)
 		}
 	}
@@ -291,9 +282,14 @@ func directFillQuotesForAdapters(
 	allowed := adapterSet(adapters)
 	direct := make([]liquidlane.FillQuote, 0, len(quotes))
 	for _, quote := range quotes {
-		if allowed[quote.Adapter] {
+		if setContains(allowed, quote.Adapter) {
 			direct = append(direct, quote)
 		}
 	}
 	return direct
+}
+
+func setContains[T comparable](set map[T]struct{}, value T) bool {
+	_, exists := set[value]
+	return exists
 }

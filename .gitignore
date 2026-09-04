@@ -22,6 +22,8 @@ dev-account.local.txt
 
 # Tooling
 /.tools/
+/.e2e/
+__pycache__/
 
 # Editor / OS
 .idea/
@@ -31,6 +33,3 @@ dev-account.local.txt
 
 # Local debug tooling (not part of the solver)
 /cmd/3f-debug/
-
-# Python bytecode from hack/ scripts
-__pycache__/

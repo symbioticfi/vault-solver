@@ -6,10 +6,10 @@ import (
 )
 
 func (s *Solver) exclusiveDeliveryHealthy() bool {
-	if s.exclusiveStateUnknown.Load() {
+	if s.breaker.exclusiveUnknown.Load() {
 		return false
 	}
-	last := s.lastExclusivePoll.Load()
+	last := s.breaker.lastExclusivePoll.Load()
 	if last == 0 {
 		return true
 	}
@@ -18,13 +18,13 @@ func (s *Solver) exclusiveDeliveryHealthy() bool {
 }
 
 func (s *Solver) markExclusiveStateUnknown() {
-	s.exclusiveStateUnknown.Store(true)
+	s.breaker.exclusiveUnknown.Store(true)
 	s.invalidateQuotes()
 }
 
 func (s *Solver) ready() bool {
 	now := time.Now()
-	lastPoll := s.lastExclusivePoll.Load()
+	lastPoll := s.breaker.lastExclusivePoll.Load()
 	epoch := s.quoteEpoch.Load()
 	state := s.quoteState.Load()
 	return lastPoll > 0 && !s.quoteBlocked(now.Unix()) &&

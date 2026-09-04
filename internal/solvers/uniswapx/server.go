@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	liquidplanning "github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
 )
 
 const maxQuoteRequestBytes = 32 << 10
@@ -38,49 +38,31 @@ func (s *Solver) newQuoteHTTPServer() *http.Server {
 
 func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	defer func() {
-		if s.metrics != nil {
-			s.metrics.observeQuoteLatency(time.Since(started))
-		}
-	}()
+	defer func() { s.metrics.observeQuoteLatency(time.Since(started)) }()
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteRequestBytes+1))
 	if err != nil {
-		s.log.V(1).Info("quote request rejected", "reason", "read-body", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.rejectQuoteRequest(w, "invalid request body", "read-body", "error", err.Error())
 		return
 	}
 	if len(body) > maxQuoteRequestBytes {
-		s.log.V(1).Info("quote request rejected", "reason", "body-too-large", "bytes", len(body))
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.rejectQuoteRequest(w, "invalid request body", "body-too-large", "bytes", len(body))
 		return
 	}
 	var request quoteRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		s.log.V(1).Info("quote request rejected", "reason", "invalid-json", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.rejectQuoteRequest(w, "invalid request body", "invalid-json", "error", err.Error())
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		s.log.V(1).Info(
-			"quote request rejected",
-			"reason", "trailing-json",
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-		)
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.rejectQuoteRequest(w, "invalid request body", "trailing-json",
+			"requestId", request.RequestID, "quoteId", request.QuoteID)
 		return
 	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
-			s.log.V(1).Info("quote request rejected", "reason", "invalid-breaker-notification")
-			s.observeQuote(quoteOutcomeInvalid)
-			http.Error(w, "invalid blockUntilTimestamp", http.StatusBadRequest)
+			s.rejectQuoteRequest(w, "invalid blockUntilTimestamp", "invalid-breaker-notification")
 			return
 		}
 		s.log.V(1).Info(
@@ -88,7 +70,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 			"blockUntilTimestamp", *request.BlockUntilTimestamp,
 		)
 		s.setBlockUntil(*request.BlockUntilTimestamp)
-		s.observeQuote(quoteOutcomeBreakerNotification)
+		s.metrics.observeQuote("breaker-notification")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -104,30 +86,30 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	response, err := s.quote(r.Context(), request)
 	if err != nil {
-		s.observeQuote(quoteOutcomeError)
+		s.metrics.observeQuote("error")
 		s.log.Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if response.AmountOut == "0" {
-		s.observeQuoteDecline(response.declineReason)
+		s.metrics.observeQuote(quoteMetricOutcome(response.declineReason))
 		s.log.V(1).Info(
 			"quote declined",
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
 			"type", request.Type,
 			"reason", response.declineReason,
-			"blockUntil", s.blockUntil.Load(),
-			"localBlockUntil", s.localBlockUntil.Load(),
-			"exclusiveBlockUntil", s.exclusiveBlockUntil.Load(),
-			"warmupUntil", s.warmupUntil.Load(),
+			"blockUntil", s.breaker.remoteUntil.Load(),
+			"localBlockUntil", s.breaker.localUntil.Load(),
+			"exclusiveBlockUntil", s.breaker.exclusiveUntil.Load(),
+			"warmupUntil", s.breaker.warmupUntil.Load(),
 			"planningFills", s.planningFills.Load(),
 		)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.observeQuote(quoteOutcomeQuoted)
-	s.observeQuotedAmounts(response)
+	s.metrics.observeQuote("quoted")
+	s.metrics.observeQuotedAmounts(response)
 	s.log.V(1).Info(
 		"quote returned",
 		"requestId", request.RequestID,
@@ -142,6 +124,12 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Solver) rejectQuoteRequest(w http.ResponseWriter, response, reason string, fields ...any) {
+	s.log.V(1).Info("quote request rejected", append([]any{"reason", reason}, fields...)...)
+	s.metrics.observeQuote("invalid")
+	http.Error(w, response, http.StatusBadRequest)
+}
+
 func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse, error) {
 	response := quoteResponse{
 		ChainID: s.chainID, RequestID: request.RequestID, Swapper: request.Swapper, TokenIn: request.TokenIn,
@@ -153,29 +141,29 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	}
 	now := s.currentTime()
 	if s.quoteBlocked(now) {
-		return declinedQuote(response, quoteDeclineBlocked), nil
+		return declinedQuote(response, "blocked"), nil
 	}
 	if request.RequestID == "" || request.QuoteID == "" || !supportedQuoteType(request.Type) || request.NumOutputs < 1 ||
 		!supportedQuoteProtocol(request.Protocol) || request.TokenInChainID != s.chainID || request.TokenOutChainID != s.chainID ||
 		!common.IsHexAddress(request.Swapper) ||
 		!common.IsHexAddress(request.TokenIn) || !common.IsHexAddress(request.TokenOut) {
-		return declinedQuote(response, quoteDeclineInvalidRequest), nil
+		return declinedQuote(response, "invalid-request"), nil
 	}
 	tokenIn := common.HexToAddress(request.TokenIn)
 	tokenOut := common.HexToAddress(request.TokenOut)
 	if tokenIn == tokenOut || tokenOut == (common.Address{}) || !s.cfg.TokenPolicy.Allows(tokenIn) {
-		return declinedQuote(response, quoteDeclinePairOutOfScope), nil
+		return declinedQuote(response, "pair-out-of-scope"), nil
 	}
 	requestAmount, amountOK := new(big.Int).SetString(request.Amount, 10)
 	if !amountOK || requestAmount.Sign() <= 0 {
-		return declinedQuote(response, quoteDeclineInvalidAmount), nil
+		return declinedQuote(response, "invalid-amount"), nil
 	}
 	epoch := s.quoteEpoch.Load()
 	state := s.quoteState.Load()
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
-		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
+		return declinedQuote(response, "quote-state-unavailable"), nil
 	}
-	input := strategytypes.QuoteInput{
+	input := QuoteInput{
 		RequestID: request.RequestID, QuoteID: request.QuoteID,
 		TokenIn: tokenIn, TokenOut: tokenOut,
 		RequireSingleRoute: state.singleRouteFor[tokenIn],
@@ -183,7 +171,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: s.decisionTrace(
+		Trace: liquidplanning.NewDecisionTrace(s.log,
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
 			"quoteType", request.Type,
@@ -194,18 +182,18 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	} else {
 		input.AmountOut = requestAmount
 	}
-	quote, err := s.strategy.DecideQuote(ctx, input)
+	quote, err := s.planner.DecideQuote(ctx, input)
 	if err != nil {
 		return response, err
 	}
 	if quote == nil {
-		return declinedQuote(response, quoteDeclineStrategy), nil
+		return declinedQuote(response, "strategy-declined"), nil
 	}
 	if err := validateStrategyQuote(input, quote); err != nil {
 		return response, err
 	}
 	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.quoteBlocked(s.currentTime()) {
-		return declinedQuote(response, quoteDeclineStateChanged), nil
+		return declinedQuote(response, "state-changed"), nil
 	}
 	response.AmountIn = quote.AmountIn.String()
 	response.AmountOut = quote.AmountOut.String()
@@ -213,25 +201,16 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	return response, nil
 }
 
-func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteResponse {
+func declinedQuote(response quoteResponse, reason string) quoteResponse {
 	response.declineReason = reason
 	return response
 }
 
 func (s *Solver) quoteBlocked(now int64) bool {
-	return s.timeBasedBlockUntil() > now ||
+	return s.breaker.blocked(now) ||
 		s.planningFills.Load() != 0 ||
 		(s.txm != nil && !s.txm.LaneReady()) ||
 		!s.exclusiveDeliveryHealthy()
-}
-
-func (s *Solver) timeBasedBlockUntil() int64 {
-	return max(
-		s.blockUntil.Load(),
-		s.localBlockUntil.Load(),
-		s.exclusiveBlockUntil.Load(),
-		s.warmupUntil.Load(),
-	)
 }
 
 func supportedQuoteType(value string) bool {
@@ -242,7 +221,7 @@ func supportedQuoteProtocol(value string) bool {
 	return value == "v1" || value == "v2"
 }
 
-func validateStrategyQuote(input strategytypes.QuoteInput, quote *strategytypes.Quote) error {
+func validateStrategyQuote(input QuoteInput, quote *Quote) error {
 	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 || quote.AmountOut == nil || quote.AmountOut.Sign() <= 0 {
 		return errors.New("strategy returned invalid quote amounts")
 	}
@@ -264,9 +243,16 @@ func (s *Solver) currentTime() int64 {
 }
 
 func (s *Solver) setBlockUntil(timestamp int64) {
-	s.blockUntil.Store(timestamp)
+	s.breaker.remoteUntil.Store(timestamp)
 	if timestamp > s.currentTime() {
 		s.invalidateQuotes()
 	}
 	s.requestQuoteRefresh()
+	s.updateBlockUntilMetric()
+}
+
+func (s *Solver) updateBlockUntilMetric() {
+	if s.metrics != nil {
+		s.metrics.blockUntil.Set(float64(s.breaker.maxUntil()))
+	}
 }
