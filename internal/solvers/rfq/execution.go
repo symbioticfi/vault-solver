@@ -227,7 +227,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 
 	res := e.txm.Send(ctx, txmanager.Request{
-		To: e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+		Solver: Name,
+		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
 	})
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome

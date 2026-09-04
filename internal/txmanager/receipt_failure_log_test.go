@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
@@ -143,8 +144,9 @@ func TestReceiptReadStreakSpansAttempts(t *testing.T) {
 	first, replacement := mk(7, 1), mk(7, 2)
 	b := &splitReceiptBackend{mockBackend: newMockBackend(), failing: replacement.Hash(), limit: 3}
 	m := newStreakManager(t, b, logger)
+	req := Request{Label: "split", Solver: "rfq-filler"}
 	pending := &pendingTransaction{
-		req: Request{Label: "split"}, nonce: 7, originalHash: first.Hash(),
+		req: req, log: m.requestLog(req), nonce: 7, originalHash: first.Hash(),
 		attempts: []txAttempt{{hash: first.Hash(), tx: first}, {hash: replacement.Hash(), tx: replacement}},
 	}
 
@@ -159,11 +161,56 @@ func TestReceiptReadStreakSpansAttempts(t *testing.T) {
 	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 0 {
 		t.Fatalf("recovered while one hash still failed; logs:\n%s", strings.Join(*logs, "\n"))
 	}
+	for _, entry := range *logs {
+		if !strings.Contains(entry, `"solver":"rfq-filler"`) {
+			t.Fatalf("txmanager log line should name the owning solver: %s", entry)
+		}
+	}
 
 	if _, done := m.receiptResult(t.Context(), pending); done {
 		t.Fatal("lifecycle completed without a receipt")
 	}
 	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 1 {
 		t.Fatalf("recovery lines = %d, want 1; logs:\n%s", info, strings.Join(*logs, "\n"))
+	}
+}
+
+// scriptedReceiptBackend answers receipt reads from a script (nil delegates to the mock), then
+// delegates for the rest.
+type scriptedReceiptBackend struct {
+	*mockBackend
+
+	script []error
+	calls  atomic.Int32
+}
+
+func (b *scriptedReceiptBackend) TransactionReceipt(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+	if i := int(b.calls.Add(1)) - 1; i < len(b.script) && b.script[i] != nil {
+		return nil, b.script[i]
+	}
+	return b.mockBackend.TransactionReceipt(ctx, h)
+}
+
+// A failed read between two nulls is not two consecutive misses: NotFound, timeout, NotFound must
+// not be reported as a reorg.
+func TestConfirmationMissCountResetsOnReadError(t *testing.T) {
+	b := &scriptedReceiptBackend{mockBackend: newMockBackend()}
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard())
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
+		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+	})
+	b.receipts[tx.Hash()] = successfulReceipt(tx, b.head-2)
+	// initial pending read, then the confirmation reads
+	b.script = []error{nil, ethereum.NotFound, errors.New("receipt rpc timeout"), ethereum.NotFound, nil}
+	pending := &pendingTransaction{
+		req: Request{Label: "scripted"}, nonce: 7,
+		attempts: []txAttempt{{hash: tx.Hash(), tx: tx}},
+	}
+	m.trackUnminedTransaction(pending)
+
+	result, done := m.receiptResult(t.Context(), pending)
+	if !done || result.Outcome != OutcomeConfirmed {
+		t.Fatalf("result = %+v done=%v, want confirmed", result, done)
 	}
 }

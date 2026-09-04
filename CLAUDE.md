@@ -76,8 +76,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   operational events; `V(1)` for debug detail. Structured key/values, not formatted strings. Every line
   names the integration it serves: with one configured solver `main` stamps the root logger with
   `solver=<name>` (shared components such as `txmanager` included); with several, each solver's
-  `deps.Log` is stamped instead and shared components attribute work through the txmanager request
-  `label`. Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
+  `deps.Log` is stamped instead and the txmanager stamps each request's lifecycle logs from
+  `Request.Solver` (set it to the package `Name` at every `txmanager.Request{}` site) plus `label`.
+  Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
   `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
