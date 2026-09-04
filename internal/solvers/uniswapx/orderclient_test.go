@@ -15,10 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func TestOrderClientPagesOpenOrders(t *testing.T) {
+func TestOrderClientReadsSingleOpenOrderSnapshot(t *testing.T) {
 	filler := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	firstHash := "0x" + strings.Repeat("1", 64)
-	secondHash := "0x" + strings.Repeat("2", 64)
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -28,20 +27,12 @@ func TestOrderClientPagesOpenOrders(t *testing.T) {
 		query := r.URL.Query()
 		if query.Get("chainId") != "1" || query.Get("filler") != filler.Hex() ||
 			query.Get("orderType") != orderTypeDutchV2 ||
-			query.Get("orderStatus") != "open" || query.Get("sortKey") != "createdAt" ||
-			query.Get("desc") != "true" || query.Get("sort") != "gt(0)" ||
-			query.Get("limit") != "1000" {
+			query.Get("orderStatus") != "open" || query.Get("limit") != "50" ||
+			query.Has("sortKey") || query.Has("desc") || query.Has("sort") || query.Has("cursor") {
 			t.Errorf("unexpected query: %s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if query.Get("cursor") == "" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{testAPIOrder(firstHash)}, "cursor": "next"})
-			return
-		}
-		if query.Get("cursor") != "next" {
-			t.Errorf("unexpected cursor %q", query.Get("cursor"))
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{testAPIOrder(secondHash)}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{testAPIOrder(firstHash)}})
 	}))
 	defer server.Close()
 
@@ -53,7 +44,7 @@ func TestOrderClientPagesOpenOrders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 2 || len(orders) != 2 || orders[0].OrderHash != firstHash || orders[1].OrderHash != secondHash {
+	if requests != 1 || len(orders) != 1 || orders[0].OrderHash != firstHash {
 		t.Fatalf("requests/orders = %d/%+v", requests, orders)
 	}
 }
@@ -231,12 +222,16 @@ func TestOrderClientReadsRecentFillerHistoryAcrossStatuses(t *testing.T) {
 		query := r.URL.Query()
 		if query.Get("chainId") != "1" || query.Get("filler") != filler.Hex() ||
 			query.Get("orderType") != orderTypeDutchV2 ||
-			query.Get("sortKey") != "createdAt" || query.Get("sort") != "gt(900)" ||
-			query.Get("desc") != "true" || query.Has("orderStatus") {
+			query.Get("limit") != "50" || query.Has("sortKey") || query.Has("sort") ||
+			query.Has("desc") || query.Has("cursor") || query.Has("orderStatus") {
 			t.Errorf("unexpected history query: %s", r.URL.RawQuery)
 		}
+		newer := testAPIOrder(common.HexToHash("0x1").Hex())
+		newer["createdAt"] = 901
+		older := testAPIOrder(common.HexToHash("0x2").Hex())
+		older["createdAt"] = 899
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{newer, older}})
 	}))
 	defer server.Close()
 
@@ -246,20 +241,16 @@ func TestOrderClientReadsRecentFillerHistoryAcrossStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(orders) != 0 {
-		t.Fatalf("history = %+v, want empty response", orders)
+	if len(orders) != 1 || orders[0].CreatedAt != 901 {
+		t.Fatalf("history = %+v, want only the newer order", orders)
 	}
 }
 
-func TestOrderClientRateLimitsEveryPage(t *testing.T) {
+func TestOrderClientRateLimitsSnapshot(t *testing.T) {
 	var requestCount int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("cursor") == "" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{}, "cursor": "next"})
-			return
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []any{}})
 	}))
 	defer server.Close()
@@ -271,11 +262,11 @@ func TestOrderClientRateLimitsEveryPage(t *testing.T) {
 	if _, err := client.openOrders(context.Background(), 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if requestCount != 2 {
-		t.Fatalf("request count = %d, want 2", requestCount)
+	if requestCount != 1 {
+		t.Fatalf("request count = %d, want 1", requestCount)
 	}
-	if elapsed := client.lastRequest.Sub(started); elapsed < 2*client.requestGap {
-		t.Fatalf("request slots elapsed = %s, want at least %s", elapsed, 2*client.requestGap)
+	if elapsed := client.lastRequest.Sub(started); elapsed < client.requestGap {
+		t.Fatalf("request slots elapsed = %s, want at least %s", elapsed, client.requestGap)
 	}
 }
 

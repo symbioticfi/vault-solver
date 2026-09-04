@@ -255,6 +255,10 @@ An already-terminal miss found only by initial startup history reconciliation is
 without opening a fresh local breaker.
 If terminal status or receipt time cannot be established, quoting stops without opening the breaker until
 reconciliation succeeds.
+The upstream `/orders` endpoint returns only the newest 50 rows and no longer paginates. A full 50-row open
+snapshot is processed but treated as incomplete; exclusive quoting and readiness stay blocked. Recovery
+filters the newest all-status snapshot locally and clears the unknown state only when that snapshot reaches
+the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
 asset and decimals, current physical capacity/rate, adapter minimum discount, token policy, and configured

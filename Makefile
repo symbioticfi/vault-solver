@@ -159,8 +159,12 @@ refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide 
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
 	@mkdir -p api/graphql/morpho
-	go run github.com/suessflorian/gqlfetch/gqlfetch@$(GQLFETCH_VERSION) \
-		-endpoint "$(MORPHO_GRAPHQL_URL)" > api/graphql/morpho/schema.graphql
+	@tmp="$$(mktemp)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		go run github.com/suessflorian/gqlfetch/gqlfetch@$(GQLFETCH_VERSION) \
+			-endpoint "$(MORPHO_GRAPHQL_URL)" > "$$tmp"; \
+		python3 -c 'from pathlib import Path; import sys; path = Path(sys.argv[1]); path.write_text(path.read_text().rstrip() + "\n")' "$$tmp"; \
+		mv "$$tmp" api/graphql/morpho/schema.graphql
 	@echo "vendored api/graphql/morpho/schema.graphql"
 
 .PHONY: bindings
