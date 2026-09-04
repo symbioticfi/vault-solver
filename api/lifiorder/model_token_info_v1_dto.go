@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the TokenInfoV1Dto type satisfies the MappedNullable interface at compile time
@@ -28,7 +26,8 @@ type TokenInfoV1Dto struct {
 	// Token contract address
 	Address string `json:"address"`
 	// Token decimals
-	Decimals float32 `json:"decimals"`
+	Decimals             float32 `json:"decimals"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _TokenInfoV1Dto TokenInfoV1Dto
@@ -168,45 +167,38 @@ func (o TokenInfoV1Dto) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name.Get()
 	toSerialize["address"] = o.Address
 	toSerialize["decimals"] = o.Decimals
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *TokenInfoV1Dto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"symbol",
-		"name",
-		"address",
-		"decimals",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varTokenInfoV1Dto := _TokenInfoV1Dto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varTokenInfoV1Dto)
+	err = json.Unmarshal(data, &varTokenInfoV1Dto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = TokenInfoV1Dto(varTokenInfoV1Dto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "symbol")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "address")
+		delete(additionalProperties, "decimals")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

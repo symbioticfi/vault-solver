@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the GetSupportedRoutesResponseV1Dto type satisfies the MappedNullable interface at compile time
@@ -22,7 +20,8 @@ var _ MappedNullable = &GetSupportedRoutesResponseV1Dto{}
 // GetSupportedRoutesResponseV1Dto struct for GetSupportedRoutesResponseV1Dto
 type GetSupportedRoutesResponseV1Dto struct {
 	// Array of supported routes
-	Routes []SupportedRouteV1Dto `json:"routes"`
+	Routes               []SupportedRouteV1Dto `json:"routes"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _GetSupportedRoutesResponseV1Dto GetSupportedRoutesResponseV1Dto
@@ -80,42 +79,35 @@ func (o GetSupportedRoutesResponseV1Dto) MarshalJSON() ([]byte, error) {
 func (o GetSupportedRoutesResponseV1Dto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["routes"] = o.Routes
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *GetSupportedRoutesResponseV1Dto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"routes",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varGetSupportedRoutesResponseV1Dto := _GetSupportedRoutesResponseV1Dto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varGetSupportedRoutesResponseV1Dto)
+	err = json.Unmarshal(data, &varGetSupportedRoutesResponseV1Dto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = GetSupportedRoutesResponseV1Dto(varGetSupportedRoutesResponseV1Dto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "routes")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SubmitOrderResponseDto type satisfies the MappedNullable interface at compile time
@@ -32,7 +30,8 @@ type SubmitOrderResponseDto struct {
 	// Input settler address
 	InputSettler string `json:"inputSettler"`
 	// Order metadata
-	Meta OrderMetaDto `json:"meta"`
+	Meta                 OrderMetaDto `json:"meta"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SubmitOrderResponseDto SubmitOrderResponseDto
@@ -262,45 +261,40 @@ func (o SubmitOrderResponseDto) ToMap() (map[string]interface{}, error) {
 	}
 	toSerialize["inputSettler"] = o.InputSettler
 	toSerialize["meta"] = o.Meta
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SubmitOrderResponseDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"order",
-		"quote",
-		"inputSettler",
-		"meta",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSubmitOrderResponseDto := _SubmitOrderResponseDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSubmitOrderResponseDto)
+	err = json.Unmarshal(data, &varSubmitOrderResponseDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SubmitOrderResponseDto(varSubmitOrderResponseDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "order")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "sponsorSignature")
+		delete(additionalProperties, "allocatorSignature")
+		delete(additionalProperties, "inputSettler")
+		delete(additionalProperties, "meta")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

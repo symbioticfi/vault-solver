@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OrdersResponse type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &OrdersResponse{}
 
 // OrdersResponse struct for OrdersResponse
 type OrdersResponse struct {
-	RequestId string                      `json:"requestId"`
-	Orders    []OrdersResponseOrdersInner `json:"orders"`
-	Cursor    NullableString              `json:"cursor"`
+	RequestId            string                      `json:"requestId"`
+	Orders               []OrdersResponseOrdersInner `json:"orders"`
+	Cursor               NullableString              `json:"cursor"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrdersResponse OrdersResponse
@@ -135,44 +134,37 @@ func (o OrdersResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["orders"] = o.Orders
 	toSerialize["cursor"] = o.Cursor.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OrdersResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"requestId",
-		"orders",
-		"cursor",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOrdersResponse := _OrdersResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOrdersResponse)
+	err = json.Unmarshal(data, &varOrdersResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrdersResponse(varOrdersResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "orders")
+		delete(additionalProperties, "cursor")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

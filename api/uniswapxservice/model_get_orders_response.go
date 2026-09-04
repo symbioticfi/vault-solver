@@ -21,8 +21,11 @@ var _ MappedNullable = &GetOrdersResponse{}
 type GetOrdersResponse struct {
 	Orders []GetOrdersResponseOrdersInner `json:"orders,omitempty"`
 	// Defined when the results are paginated. Pass back via the cursor query parameter to fetch the next page.
-	Cursor *string `json:"cursor,omitempty"`
+	Cursor               *string `json:"cursor,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _GetOrdersResponse GetOrdersResponse
 
 // NewGetOrdersResponse instantiates a new GetOrdersResponse object
 // This constructor will assign default values to properties that have it defined,
@@ -121,7 +124,34 @@ func (o GetOrdersResponse) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Cursor) {
 		toSerialize["cursor"] = o.Cursor
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *GetOrdersResponse) UnmarshalJSON(data []byte) (err error) {
+	varGetOrdersResponse := _GetOrdersResponse{}
+
+	err = json.Unmarshal(data, &varGetOrdersResponse)
+
+	if err != nil {
+		return err
+	}
+
+	*o = GetOrdersResponse(varGetOrdersResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "orders")
+		delete(additionalProperties, "cursor")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableGetOrdersResponse struct {

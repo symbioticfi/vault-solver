@@ -25,8 +25,11 @@ type QuoteRequestDtoIntentMetadata struct {
 	// Accepted input settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these input settlers and the winning solver supports it. Omitted or empty means any input settler is acceptable.
 	InputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"inputSettler,omitempty"`
 	// Accepted output settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these output settlers and the winning solver supports it. Omitted or empty means any output settler is acceptable.
-	OutputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
+	OutputSettler        []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _QuoteRequestDtoIntentMetadata QuoteRequestDtoIntentMetadata
 
 // NewQuoteRequestDtoIntentMetadata instantiates a new QuoteRequestDtoIntentMetadata object
 // This constructor will assign default values to properties that have it defined,
@@ -195,7 +198,36 @@ func (o QuoteRequestDtoIntentMetadata) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.OutputSettler) {
 		toSerialize["outputSettler"] = o.OutputSettler
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *QuoteRequestDtoIntentMetadata) UnmarshalJSON(data []byte) (err error) {
+	varQuoteRequestDtoIntentMetadata := _QuoteRequestDtoIntentMetadata{}
+
+	err = json.Unmarshal(data, &varQuoteRequestDtoIntentMetadata)
+
+	if err != nil {
+		return err
+	}
+
+	*o = QuoteRequestDtoIntentMetadata(varQuoteRequestDtoIntentMetadata)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "exclusiveFor")
+		delete(additionalProperties, "oracle")
+		delete(additionalProperties, "inputSettler")
+		delete(additionalProperties, "outputSettler")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableQuoteRequestDtoIntentMetadata struct {

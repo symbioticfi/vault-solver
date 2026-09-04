@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the QuoteRequest type satisfies the MappedNullable interface at compile time
@@ -21,18 +19,18 @@ var _ MappedNullable = &QuoteRequest{}
 
 // QuoteRequest struct for QuoteRequest
 type QuoteRequest struct {
-	TokenInChainId    int32                      `json:"tokenInChainId"`
-	TokenOutChainId   int32                      `json:"tokenOutChainId"`
-	TokenIn           string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenOut          string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Type              string                     `json:"type"`
-	Amount            string                     `json:"amount" validate:"regexp=^\\\\d+$"`
-	Swapper           string                     `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	SlippageTolerance float32                    `json:"slippageTolerance"`
-	RoutingPreference *string                    `json:"routingPreference,omitempty"`
-	PermitAmount      *string                    `json:"permitAmount,omitempty"`
-	SolverIds         []string                   `json:"solverIds,omitempty"`
-	Outputs           []QuoteRequestOutputsInner `json:"outputs"`
+	TokenInChainId       int64                      `json:"tokenInChainId"`
+	TokenOutChainId      int64                      `json:"tokenOutChainId"`
+	TokenIn              string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenOut             string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Type                 string                     `json:"type"`
+	Amount               string                     `json:"amount" validate:"regexp=^\\d+$"`
+	Swapper              string                     `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	RoutingPreference    *string                    `json:"routingPreference,omitempty"`
+	PermitAmount         *string                    `json:"permitAmount,omitempty"`
+	SolverIds            []string                   `json:"solverIds,omitempty"`
+	Outputs              []QuoteRequestOutputsInner `json:"outputs"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteRequest QuoteRequest
@@ -41,7 +39,7 @@ type _QuoteRequest QuoteRequest
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string, tokenOut string, type_ string, amount string, swapper string, slippageTolerance float32, outputs []QuoteRequestOutputsInner) *QuoteRequest {
+func NewQuoteRequest(tokenInChainId int64, tokenOutChainId int64, tokenIn string, tokenOut string, type_ string, amount string, swapper string, outputs []QuoteRequestOutputsInner) *QuoteRequest {
 	this := QuoteRequest{}
 	this.TokenInChainId = tokenInChainId
 	this.TokenOutChainId = tokenOutChainId
@@ -50,7 +48,6 @@ func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string
 	this.Type = type_
 	this.Amount = amount
 	this.Swapper = swapper
-	this.SlippageTolerance = slippageTolerance
 	var routingPreference string = "BEST_PRICE"
 	this.RoutingPreference = &routingPreference
 	this.Outputs = outputs
@@ -68,9 +65,9 @@ func NewQuoteRequestWithDefaults() *QuoteRequest {
 }
 
 // GetTokenInChainId returns the TokenInChainId field value
-func (o *QuoteRequest) GetTokenInChainId() int32 {
+func (o *QuoteRequest) GetTokenInChainId() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -79,7 +76,7 @@ func (o *QuoteRequest) GetTokenInChainId() int32 {
 
 // GetTokenInChainIdOk returns a tuple with the TokenInChainId field value
 // and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetTokenInChainIdOk() (*int32, bool) {
+func (o *QuoteRequest) GetTokenInChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -87,14 +84,14 @@ func (o *QuoteRequest) GetTokenInChainIdOk() (*int32, bool) {
 }
 
 // SetTokenInChainId sets field value
-func (o *QuoteRequest) SetTokenInChainId(v int32) {
+func (o *QuoteRequest) SetTokenInChainId(v int64) {
 	o.TokenInChainId = v
 }
 
 // GetTokenOutChainId returns the TokenOutChainId field value
-func (o *QuoteRequest) GetTokenOutChainId() int32 {
+func (o *QuoteRequest) GetTokenOutChainId() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -103,7 +100,7 @@ func (o *QuoteRequest) GetTokenOutChainId() int32 {
 
 // GetTokenOutChainIdOk returns a tuple with the TokenOutChainId field value
 // and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetTokenOutChainIdOk() (*int32, bool) {
+func (o *QuoteRequest) GetTokenOutChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -111,7 +108,7 @@ func (o *QuoteRequest) GetTokenOutChainIdOk() (*int32, bool) {
 }
 
 // SetTokenOutChainId sets field value
-func (o *QuoteRequest) SetTokenOutChainId(v int32) {
+func (o *QuoteRequest) SetTokenOutChainId(v int64) {
 	o.TokenOutChainId = v
 }
 
@@ -233,30 +230,6 @@ func (o *QuoteRequest) GetSwapperOk() (*string, bool) {
 // SetSwapper sets field value
 func (o *QuoteRequest) SetSwapper(v string) {
 	o.Swapper = v
-}
-
-// GetSlippageTolerance returns the SlippageTolerance field value
-func (o *QuoteRequest) GetSlippageTolerance() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.SlippageTolerance
-}
-
-// GetSlippageToleranceOk returns a tuple with the SlippageTolerance field value
-// and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetSlippageToleranceOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.SlippageTolerance, true
-}
-
-// SetSlippageTolerance sets field value
-func (o *QuoteRequest) SetSlippageTolerance(v float32) {
-	o.SlippageTolerance = v
 }
 
 // GetRoutingPreference returns the RoutingPreference field value if set, zero value otherwise.
@@ -396,7 +369,6 @@ func (o QuoteRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize["type"] = o.Type
 	toSerialize["amount"] = o.Amount
 	toSerialize["swapper"] = o.Swapper
-	toSerialize["slippageTolerance"] = o.SlippageTolerance
 	if !IsNil(o.RoutingPreference) {
 		toSerialize["routingPreference"] = o.RoutingPreference
 	}
@@ -407,50 +379,45 @@ func (o QuoteRequest) ToMap() (map[string]interface{}, error) {
 		toSerialize["solverIds"] = o.SolverIds
 	}
 	toSerialize["outputs"] = o.Outputs
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *QuoteRequest) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"tokenInChainId",
-		"tokenOutChainId",
-		"tokenIn",
-		"tokenOut",
-		"type",
-		"amount",
-		"swapper",
-		"slippageTolerance",
-		"outputs",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varQuoteRequest := _QuoteRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varQuoteRequest)
+	err = json.Unmarshal(data, &varQuoteRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteRequest(varQuoteRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenInChainId")
+		delete(additionalProperties, "tokenOutChainId")
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "tokenOut")
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "routingPreference")
+		delete(additionalProperties, "permitAmount")
+		delete(additionalProperties, "solverIds")
+		delete(additionalProperties, "outputs")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

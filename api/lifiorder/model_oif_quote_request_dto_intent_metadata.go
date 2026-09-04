@@ -19,8 +19,11 @@ var _ MappedNullable = &OifQuoteRequestDtoIntentMetadata{}
 
 // OifQuoteRequestDtoIntentMetadata Metadata for the order, never required, potentially contains provider specific data
 type OifQuoteRequestDtoIntentMetadata struct {
-	ExclusiveFor *OifQuoteRequestDtoIntentMetadataExclusiveFor `json:"exclusiveFor,omitempty"`
+	ExclusiveFor         *OifQuoteRequestDtoIntentMetadataExclusiveFor `json:"exclusiveFor,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _OifQuoteRequestDtoIntentMetadata OifQuoteRequestDtoIntentMetadata
 
 // NewOifQuoteRequestDtoIntentMetadata instantiates a new OifQuoteRequestDtoIntentMetadata object
 // This constructor will assign default values to properties that have it defined,
@@ -84,7 +87,33 @@ func (o OifQuoteRequestDtoIntentMetadata) ToMap() (map[string]interface{}, error
 	if !IsNil(o.ExclusiveFor) {
 		toSerialize["exclusiveFor"] = o.ExclusiveFor
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *OifQuoteRequestDtoIntentMetadata) UnmarshalJSON(data []byte) (err error) {
+	varOifQuoteRequestDtoIntentMetadata := _OifQuoteRequestDtoIntentMetadata{}
+
+	err = json.Unmarshal(data, &varOifQuoteRequestDtoIntentMetadata)
+
+	if err != nil {
+		return err
+	}
+
+	*o = OifQuoteRequestDtoIntentMetadata(varOifQuoteRequestDtoIntentMetadata)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "exclusiveFor")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableOifQuoteRequestDtoIntentMetadata struct {

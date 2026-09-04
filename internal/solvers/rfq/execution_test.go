@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -627,5 +628,25 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("buildFillPlan = %+v, want nil", got)
+	}
+}
+
+// The tolerant client decodes a dropped or renamed orderStatus as "" instead of failing. Treating that
+// as terminal used to mark the order failed, which the store re-arms, so the fill was re-submitted.
+func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
+	for _, status := range []string{"", "brand-new-status"} {
+		t.Run(fmt.Sprintf("status %q", status), func(t *testing.T) {
+			st := newStore(func() time.Time { return time.Unix(0, 0) })
+			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			st.markStatus("o1", statusSubmitted, common.HexToHash("0x1"), "")
+			be := &fakeBackend{order: &backendOrder{OrderID: "o1", OrderStatus: status}}
+			e := newExec(t, st, be, &fakeTxm{})
+
+			e.reconcileTerminalStatus(t.Context(), "o1")
+
+			if got := st.order("o1").Status; got != statusSubmitted {
+				t.Fatalf("status = %q, want %q", got, statusSubmitted)
+			}
+		})
 	}
 }

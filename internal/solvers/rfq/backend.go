@@ -77,12 +77,11 @@ func closeResp(resp *http.Response) {
 
 // listOpenOrders lists open orders assigned to filler.
 func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error) {
-	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100, so the int→int32
-	// narrowing is safe.
+	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100.
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		Filler(filler).
 		OrderStatus(backendOrderStatusOpen).
-		Limit(int32(limit))
+		Limit(int64(limit))
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
@@ -166,7 +165,7 @@ func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
 		bo.ProtocolSignature = v
 	}
 	if v, ok := o.GetDeadlineOk(); ok {
-		d := int64(*v)
+		d := *v
 		bo.Deadline = &d
 	}
 	if v, ok := o.GetFillerOk(); ok {

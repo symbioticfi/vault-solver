@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SolverQuoteDto type satisfies the MappedNullable interface at compile time
@@ -64,7 +62,8 @@ type SolverQuoteDto struct {
 	// Associated solver ID
 	SolverId float32 `json:"solverId"`
 	// Integrator key hash this quote is tagged for, or null for open-market quotes
-	IntegratorKeyHash NullableString `json:"integratorKeyHash,omitempty"`
+	IntegratorKeyHash    NullableString `json:"integratorKeyHash,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SolverQuoteDto SolverQuoteDto
@@ -698,62 +697,56 @@ func (o SolverQuoteDto) ToMap() (map[string]interface{}, error) {
 	if o.IntegratorKeyHash.IsSet() {
 		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash.Get()
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SolverQuoteDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"createdAt",
-		"updatedAt",
-		"fromChainNetworkId",
-		"toChainNetworkId",
-		"fromAssetAddress",
-		"toAssetAddress",
-		"fromAssetDecimals",
-		"toAssetDecimals",
-		"fromDecimals",
-		"toDecimals",
-		"expiry",
-		"quote",
-		"minAmount",
-		"maxAmount",
-		"exclusiveFor",
-		"fromAssetRecordId",
-		"toAssetRecordId",
-		"fromChainRecordId",
-		"toChainRecordId",
-		"solverId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSolverQuoteDto := _SolverQuoteDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSolverQuoteDto)
+	err = json.Unmarshal(data, &varSolverQuoteDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SolverQuoteDto(varSolverQuoteDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "updatedAt")
+		delete(additionalProperties, "fromChainNetworkId")
+		delete(additionalProperties, "toChainNetworkId")
+		delete(additionalProperties, "fromAssetAddress")
+		delete(additionalProperties, "toAssetAddress")
+		delete(additionalProperties, "fromAssetDecimals")
+		delete(additionalProperties, "toAssetDecimals")
+		delete(additionalProperties, "fromDecimals")
+		delete(additionalProperties, "toDecimals")
+		delete(additionalProperties, "expiry")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "minAmount")
+		delete(additionalProperties, "maxAmount")
+		delete(additionalProperties, "exclusiveFor")
+		delete(additionalProperties, "fromAssetRecordId")
+		delete(additionalProperties, "toAssetRecordId")
+		delete(additionalProperties, "fromChainRecordId")
+		delete(additionalProperties, "toChainRecordId")
+		delete(additionalProperties, "solverId")
+		delete(additionalProperties, "integratorKeyHash")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

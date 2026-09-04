@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -29,6 +28,7 @@ type OpenIntentSvmTxDto struct {
 	Data string `json:"data"`
 	// Estimated compute units (decimal string)
 	ComputeUnitsRequired string `json:"computeUnitsRequired"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OpenIntentSvmTxDto OpenIntentSvmTxDto
@@ -164,6 +164,11 @@ func (o OpenIntentSvmTxDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["to"] = o.To
 	toSerialize["data"] = o.Data
 	toSerialize["computeUnitsRequired"] = o.ComputeUnitsRequired
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -194,15 +199,23 @@ func (o *OpenIntentSvmTxDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOpenIntentSvmTxDto := _OpenIntentSvmTxDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOpenIntentSvmTxDto)
+	err = json.Unmarshal(data, &varOpenIntentSvmTxDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OpenIntentSvmTxDto(varOpenIntentSvmTxDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "to")
+		delete(additionalProperties, "data")
+		delete(additionalProperties, "computeUnitsRequired")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -27,13 +27,20 @@ OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
-RFQ_OPENAPI_URL ?= https://backend-production-a0ca.up.railway.app/api/v1/openapi.json
+RFQ_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi.json
+# Discount listing/resolution lives on the backend's internal API. Its document is published from the
+# PUBLIC prefix (the endpoints stay unrouted there), so it can be vendored and drift-checked like any
+# other spec while the API itself remains unreachable from outside.
+RFQ_INTERNAL_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi-internal.json
 # LI.FI order-server OpenAPI spec (testnet/dev). The NestJS app serves a Scalar UI at /docs with NO raw
 # JSON endpoint — the spec is embedded inline in the page, so refresh-lifi-openapi pulls the HTML and
 # extracts it via hack/scalar-openapi-extract.py (see that target).
 LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 UNISWAPX_OPENAPI_URL ?= https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
+# RedStone's public Atom OEV integration guide — the only public contract-of-record for the OEV
+# WebSocket (the zod schema they shared directly is not published anywhere).
+REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
@@ -125,6 +132,12 @@ refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=..
 	curl -fsSL "$(RFQ_OPENAPI_URL)" | jq . > openapi/rfq-backend.openapi.json
 	@echo "vendored openapi/rfq-backend.openapi.json (verify field names — see docs/RFQ-PLAN.md)"
 
+.PHONY: refresh-rfq-internal-openapi
+refresh-rfq-internal-openapi: ## Re-pull the RFQ backend internal OpenAPI spec (RFQ_INTERNAL_OPENAPI_URL=...)
+	@mkdir -p openapi
+	curl -fsSL "$(RFQ_INTERNAL_OPENAPI_URL)" | jq . > openapi/rfq-backend-internal.openapi.json
+	@echo "vendored openapi/rfq-backend-internal.openapi.json"
+
 .PHONY: refresh-lifi-openapi
 refresh-lifi-openapi: ## Re-pull the LI.FI order-server OpenAPI spec (LIFI_OPENAPI_URL=...)
 	@mkdir -p openapi
@@ -136,6 +149,12 @@ refresh-uniswapx-openapi: ## Re-pull the UniswapX order-pool OpenAPI spec
 	@mkdir -p openapi
 	curl -fsSL "$(UNISWAPX_OPENAPI_URL)" | jq . > openapi/uniswapx-service.openapi.json
 	@echo "vendored openapi/uniswapx-service.openapi.json"
+
+.PHONY: refresh-redstone-guide
+refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide (REDSTONE_GUIDE_URL=...)
+	@mkdir -p openapi
+	curl -fsSL "$(REDSTONE_GUIDE_URL)" > openapi/redstone-oev-atom-integration-guide.md
+	@echo "vendored openapi/redstone-oev-atom-integration-guide.md"
 
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
@@ -161,10 +180,24 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 # $(OPENAPI_GENERATOR_VERSION) is the floor — 5.4.0/7.0.1 fail on the 3.1 spec. The generated package is
 # stdlib-only (no go.mod change); the recipes strip the generator's non-package cruft, keeping just the Go
 # client. $(4) is available for source-specific generator flags; current specs generate with validation on.
+# Generator options that make the clients tolerant of upstream drift, so an additive change
+# upstream cannot break decoding:
+#   disallowAdditionalPropertiesIfNotPresent=false — models accept unknown fields and keep them in
+#     AdditionalProperties instead of erroring (drops DisallowUnknownFields from every model; the
+#     oneOf/anyOf helper in utils.go keeps it, which is what discriminates variants).
+# enumUnknownDefaultCase is deliberately off: it maps an unknown enum value to a placeholder, which
+# hides the real upstream value from the "unknown status" errors that reveal a rename.
+# The remaining strictness (a required property that upstream has since dropped) has no generator
+# flag; hack/openapi-relax-client.py strips those checks after generation.
+OPENAPI_TOLERANT_PROPS ?= disallowAdditionalPropertiesIfNotPresent=false
+
 define gen_openapi_client
 	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
-		generate --enable-post-process-file $(4) -i ./$(1) -g go -o ./$(2) --package-name $(3)
+		generate --enable-post-process-file $(4) -i $(1) -g go -o ./$(2) --package-name $(3) \
+		--additional-properties=$(OPENAPI_TOLERANT_PROPS)
 	cd $(2) && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+	python3 hack/openapi-relax-client.py $(2)
+	gofmt -w $(2)
 endef
 
 .PHONY: refresh-3f-client
@@ -173,9 +206,19 @@ refresh-3f-client: ## Generate the 3F API client (openapi-generator, Go) from th
 	$(call gen_openapi_client,openapi/3f-bf.openapi.json,api/threef,threef)
 
 .PHONY: refresh-rfq-client
+# `null=interface{}`: this spec has a property whose whole schema is `{type: null}` (zod's z.null()),
+# which openapi-generator 7.24.0 otherwise renders as the uncompilable Go type `nil`.
+# `integer=int64`: the backend emits unformatted integers with a 2^53-1 maximum (deadlines), which
+# the generator would otherwise narrow to int32.
+RFQ_TYPE_MAPPINGS = --type-mappings null=interface{},integer=int64
 refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) from the vendored spec
 	@rm -f api/rfqbackend/*.go
-	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend)
+	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend,$(RFQ_TYPE_MAPPINGS))
+
+.PHONY: refresh-rfq-internal-client
+refresh-rfq-internal-client: ## Generate the RFQ backend internal client from the vendored spec
+	@rm -f api/rfqbackendinternal/*.go
+	$(call gen_openapi_client,openapi/rfq-backend-internal.openapi.json,api/rfqbackendinternal,rfqbackendinternal,$(RFQ_TYPE_MAPPINGS))
 
 .PHONY: refresh-lifi-client
 refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generator, Go) from the vendored spec
@@ -183,16 +226,13 @@ refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generato
 	$(call gen_openapi_client,openapi/lifi-order.openapi.json,api/lifiorder,lifiorder)
 
 .PHONY: refresh-uniswapx-client
+# The normalized spec is a build intermediate (gitignored), not a second vendored copy.
+UNISWAPX_NORMALIZED_SPEC = openapi/.uniswapx-service.normalized.openapi.json
 refresh-uniswapx-client: ## Generate the UniswapX order-pool client from the vendored spec
 	@rm -f api/uniswapxservice/*.go
-	@tmpdir="$$(mktemp -d)"; \
-		trap 'rm -rf "$$tmpdir"' EXIT; \
-		tmp="$$tmpdir/uniswapx-normalized.json"; \
-		python3 hack/uniswapx-openapi-normalize.py < openapi/uniswapx-service.openapi.json > "$$tmp"; \
-		GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
-			generate --enable-post-process-file -i "$$tmp" -g go -o ./api/uniswapxservice --package-name uniswapxservice \
-			--additional-properties=useOneOfDiscriminatorLookup=true
-	cd api/uniswapxservice && rm -rf go.mod go.sum .gitignore .openapi-generator-ignore .travis.yml git_push.sh README.md api docs test .openapi-generator
+	python3 hack/uniswapx-openapi-normalize.py < openapi/uniswapx-service.openapi.json > $(UNISWAPX_NORMALIZED_SPEC)
+	$(call gen_openapi_client,$(UNISWAPX_NORMALIZED_SPEC),api/uniswapxservice,uniswapxservice,--additional-properties=useOneOfDiscriminatorLookup=true)
+	@rm -f $(UNISWAPX_NORMALIZED_SPEC)
 
 .PHONY: refresh-morpho-graphql-client
 refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient) from the vendored schema + operations
@@ -206,7 +246,7 @@ refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient)
 	@gofmt -w api/morphographql/generated.go
 
 .PHONY: openapi-client
-openapi-client: refresh-3f-client refresh-rfq-client refresh-lifi-client refresh-uniswapx-client ## Generate all OpenAPI clients
+openapi-client: refresh-3f-client refresh-rfq-client refresh-rfq-internal-client refresh-lifi-client refresh-uniswapx-client ## Generate all OpenAPI clients
 
 .PHONY: graphql-client
 graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients

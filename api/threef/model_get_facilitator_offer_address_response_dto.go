@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the GetFacilitatorOfferAddressResponseDto type satisfies the MappedNullable interface at compile time
@@ -24,7 +22,8 @@ type GetFacilitatorOfferAddressResponseDto struct {
 	// Facilitator address associated with the API key
 	Facilitator string `json:"facilitator"`
 	// Current offer address for the facilitator
-	OfferAddress string `json:"offerAddress"`
+	OfferAddress         string `json:"offerAddress"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _GetFacilitatorOfferAddressResponseDto GetFacilitatorOfferAddressResponseDto
@@ -108,43 +107,36 @@ func (o GetFacilitatorOfferAddressResponseDto) ToMap() (map[string]interface{}, 
 	toSerialize := map[string]interface{}{}
 	toSerialize["facilitator"] = o.Facilitator
 	toSerialize["offerAddress"] = o.OfferAddress
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *GetFacilitatorOfferAddressResponseDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"facilitator",
-		"offerAddress",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varGetFacilitatorOfferAddressResponseDto := _GetFacilitatorOfferAddressResponseDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varGetFacilitatorOfferAddressResponseDto)
+	err = json.Unmarshal(data, &varGetFacilitatorOfferAddressResponseDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = GetFacilitatorOfferAddressResponseDto(varGetFacilitatorOfferAddressResponseDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "facilitator")
+		delete(additionalProperties, "offerAddress")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

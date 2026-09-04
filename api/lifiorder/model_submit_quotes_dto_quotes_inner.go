@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SubmitQuotesDtoQuotesInner type satisfies the MappedNullable interface at compile time
@@ -40,7 +38,8 @@ type SubmitQuotesDtoQuotesInner struct {
 	// Exclusive solver address allowed to fill this quote. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.
 	ExclusiveFor *string `json:"exclusiveFor,omitempty"`
 	// Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote, served only to requests that carry no X-Integrator-Key header.
-	IntegratorKeyHash *string `json:"integratorKeyHash,omitempty" validate:"regexp=^[a-f0-9]{64}$"`
+	IntegratorKeyHash    *string `json:"integratorKeyHash,omitempty" validate:"regexp=^[a-f0-9]{64}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SubmitQuotesDtoQuotesInner SubmitQuotesDtoQuotesInner
@@ -350,49 +349,44 @@ func (o SubmitQuotesDtoQuotesInner) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.IntegratorKeyHash) {
 		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SubmitQuotesDtoQuotesInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"fromChain",
-		"toChain",
-		"fromAsset",
-		"toAsset",
-		"fromDecimals",
-		"toDecimals",
-		"ranges",
-		"expiry",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSubmitQuotesDtoQuotesInner := _SubmitQuotesDtoQuotesInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSubmitQuotesDtoQuotesInner)
+	err = json.Unmarshal(data, &varSubmitQuotesDtoQuotesInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SubmitQuotesDtoQuotesInner(varSubmitQuotesDtoQuotesInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "fromChain")
+		delete(additionalProperties, "toChain")
+		delete(additionalProperties, "fromAsset")
+		delete(additionalProperties, "toAsset")
+		delete(additionalProperties, "fromDecimals")
+		delete(additionalProperties, "toDecimals")
+		delete(additionalProperties, "ranges")
+		delete(additionalProperties, "expiry")
+		delete(additionalProperties, "exclusiveFor")
+		delete(additionalProperties, "integratorKeyHash")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

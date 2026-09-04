@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the LocalFaucetFundResponse type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &LocalFaucetFundResponse{}
 
 // LocalFaucetFundResponse struct for LocalFaucetFundResponse
 type LocalFaucetFundResponse struct {
-	RequestId     string                           `json:"requestId"`
-	WalletAddress string                           `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	FundedAssets  []LocalFaucetResponseAssetsInner `json:"fundedAssets"`
+	RequestId            string                                     `json:"requestId"`
+	WalletAddress        string                                     `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	FundedAssets         []LocalFaucetFundResponseFundedAssetsInner `json:"fundedAssets"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFaucetFundResponse LocalFaucetFundResponse
@@ -32,7 +31,7 @@ type _LocalFaucetFundResponse LocalFaucetFundResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetFundResponse(requestId string, walletAddress string, fundedAssets []LocalFaucetResponseAssetsInner) *LocalFaucetFundResponse {
+func NewLocalFaucetFundResponse(requestId string, walletAddress string, fundedAssets []LocalFaucetFundResponseFundedAssetsInner) *LocalFaucetFundResponse {
 	this := LocalFaucetFundResponse{}
 	this.RequestId = requestId
 	this.WalletAddress = walletAddress
@@ -97,9 +96,9 @@ func (o *LocalFaucetFundResponse) SetWalletAddress(v string) {
 }
 
 // GetFundedAssets returns the FundedAssets field value
-func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetResponseAssetsInner {
+func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetFundResponseFundedAssetsInner {
 	if o == nil {
-		var ret []LocalFaucetResponseAssetsInner
+		var ret []LocalFaucetFundResponseFundedAssetsInner
 		return ret
 	}
 
@@ -108,7 +107,7 @@ func (o *LocalFaucetFundResponse) GetFundedAssets() []LocalFaucetResponseAssetsI
 
 // GetFundedAssetsOk returns a tuple with the FundedAssets field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetResponseAssetsInner, bool) {
+func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetFundResponseFundedAssetsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -116,7 +115,7 @@ func (o *LocalFaucetFundResponse) GetFundedAssetsOk() ([]LocalFaucetResponseAsse
 }
 
 // SetFundedAssets sets field value
-func (o *LocalFaucetFundResponse) SetFundedAssets(v []LocalFaucetResponseAssetsInner) {
+func (o *LocalFaucetFundResponse) SetFundedAssets(v []LocalFaucetFundResponseFundedAssetsInner) {
 	o.FundedAssets = v
 }
 
@@ -133,44 +132,37 @@ func (o LocalFaucetFundResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["walletAddress"] = o.WalletAddress
 	toSerialize["fundedAssets"] = o.FundedAssets
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *LocalFaucetFundResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"requestId",
-		"walletAddress",
-		"fundedAssets",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varLocalFaucetFundResponse := _LocalFaucetFundResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varLocalFaucetFundResponse)
+	err = json.Unmarshal(data, &varLocalFaucetFundResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFaucetFundResponse(varLocalFaucetFundResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "walletAddress")
+		delete(additionalProperties, "fundedAssets")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

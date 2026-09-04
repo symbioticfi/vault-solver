@@ -22,8 +22,11 @@ type RouteMethodParameters struct {
 	Calldata *string `json:"calldata,omitempty"`
 	Value    *string `json:"value,omitempty"`
 	// EIP-55 checksummed Ethereum address.
-	To *string `json:"to,omitempty"`
+	To                   *string `json:"to,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _RouteMethodParameters RouteMethodParameters
 
 // NewRouteMethodParameters instantiates a new RouteMethodParameters object
 // This constructor will assign default values to properties that have it defined,
@@ -157,7 +160,35 @@ func (o RouteMethodParameters) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.To) {
 		toSerialize["to"] = o.To
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *RouteMethodParameters) UnmarshalJSON(data []byte) (err error) {
+	varRouteMethodParameters := _RouteMethodParameters{}
+
+	err = json.Unmarshal(data, &varRouteMethodParameters)
+
+	if err != nil {
+		return err
+	}
+
+	*o = RouteMethodParameters(varRouteMethodParameters)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "calldata")
+		delete(additionalProperties, "value")
+		delete(additionalProperties, "to")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableRouteMethodParameters struct {

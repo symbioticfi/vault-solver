@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SupportedChainDto type satisfies the MappedNullable interface at compile time
@@ -28,7 +26,8 @@ type SupportedChainDto struct {
 	// Human-readable name of the chain
 	Name string `json:"name"`
 	// Type of blockchain (EVM, SVM, TVM)
-	ChainType string `json:"chainType"`
+	ChainType            string `json:"chainType"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SupportedChainDto SupportedChainDto
@@ -164,45 +163,38 @@ func (o SupportedChainDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["chainId"] = o.ChainId
 	toSerialize["name"] = o.Name
 	toSerialize["chainType"] = o.ChainType
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SupportedChainDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"chainId",
-		"name",
-		"chainType",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSupportedChainDto := _SupportedChainDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSupportedChainDto)
+	err = json.Unmarshal(data, &varSupportedChainDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SupportedChainDto(varSupportedChainDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "chainType")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }
