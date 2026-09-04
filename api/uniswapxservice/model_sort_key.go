@@ -20,14 +20,12 @@ type SortKey string
 
 // List of SortKey
 const (
-	CREATED_AT                       SortKey = "createdAt"
-	SORTKEY_UNKNOWN_DEFAULT_OPEN_API SortKey = "unknown_default_open_api"
+	CREATED_AT SortKey = "createdAt"
 )
 
 // All allowed values of SortKey enum
 var AllowedSortKeyEnumValues = []SortKey{
 	"createdAt",
-	"unknown_default_open_api",
 }
 
 func (v *SortKey) UnmarshalJSON(src []byte) error {
@@ -44,8 +42,7 @@ func (v *SortKey) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	*v = SORTKEY_UNKNOWN_DEFAULT_OPEN_API
-	return nil
+	return fmt.Errorf("%+v is not a valid SortKey", value)
 }
 
 // NewSortKeyFromValue returns a pointer to a valid SortKey

@@ -158,13 +158,20 @@ environment.
 **Generated clients are deliberately tolerant of upstream drift**, because a third-party API adding or
 removing a field must not blank a whole feed (3F dropping `cadence` from one nested schema stopped the
 auction feed entirely). `OPENAPI_TOLERANT_PROPS` passes `disallowAdditionalPropertiesIfNotPresent=false`
-(unknown fields are kept in `AdditionalProperties` instead of erroring) and `enumUnknownDefaultCase=true`
-(a new server-side enum value decodes to a fallback case). The generator has no flag for the third case —
+(unknown fields are kept in `AdditionalProperties` instead of erroring). `enumUnknownDefaultCase` stays
+off: it would replace an unknown enum value with a placeholder and hide the real value from the
+"unknown status" errors that reveal a rename. The generator has no flag for the other case —
 a required property upstream has since removed — so `hack/openapi-relax-client.py` strips those checks
 after generation (and the strict decoder from the few schemas that declare `additionalProperties: false`,
-which the flag does not reach); it runs automatically from the `make` recipes. It deliberately leaves `oneOf`/`anyOf`
-variants strict, because the generator discriminates between them by seeing which variant fails to decode.
-Tolerance is not a substitute for noticing: the daily drift check is what surfaces the change.
+which the flag does not reach); it runs automatically from the `make` recipes and fails if the generator's
+template text stops matching. It deliberately leaves `oneOf`/`anyOf` variants strict, because the
+generator discriminates between them by seeing which variant fails to decode.
+The flip side: a required scalar the upstream drops now decodes as `""` or `0` instead of failing, and the
+generated `Get*Ok()` accessors cannot tell (they only report absence for optional and nullable fields).
+Code that acts on a required field must validate it where it is read and log at error when it is
+missing, the way the 3F offer reconcile and the RFQ order status reconcile do.
+Tolerance is not a substitute for noticing: the daily drift check is what surfaces the change, and a
+source that cannot be fetched counts as drift rather than a skipped check.
 
 Rules for every generated surface: the vendored artifact (ABI/spec/schema) is the **contract of record** — when upstream changes,
 re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps

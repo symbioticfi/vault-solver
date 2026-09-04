@@ -15,7 +15,9 @@ auction feed that way (VAULT-SOLVER-B), even though nothing reads that field. Th
 removes those loops after generation.
 
 Field types are left alone, so required fields keep their non-pointer Go types and simply
-zero-value when absent; callers already guard with the generated Get*Ok() accessors.
+zero-value when absent. The generated Get*Ok() accessors only detect absence for optional and
+nullable (pointer) fields; a required scalar that upstream drops reads as "" or 0, so code that
+depends on one must validate it where it is read.
 
 Unknown fields are mostly the generator flag's job (disallowAdditionalPropertiesIfNotPresent=false),
 but that flag only sets the default for schemas silent on additionalProperties. A schema that
@@ -130,6 +132,21 @@ def main(target: str) -> int:
             touched += 1
             total_required += n_required
             total_unknown += n_unknown
+    # The patterns above are tied to the generator's template text. If a generator bump changes it,
+    # fail here rather than silently committing a strict client.
+    leftovers = [
+        path.name
+        for path in files
+        if not declares_strict_type(path.read_text(), strict)
+        and (REQUIRED_BLOCK.search(path.read_text()) or UNKNOWN_FIELDS_CHECK.search(path.read_text()))
+    ]
+    if leftovers:
+        print(
+            f"openapi-relax-client: strict checks remain in {', '.join(leftovers)} "
+            "(generator template changed?)",
+            file=sys.stderr,
+        )
+        return 1
     print(
         f"openapi-relax-client: {root}: relaxed {touched} file(s) "
         f"({total_required} required-property checks, {total_unknown} explicit-strict unknown-field checks; "

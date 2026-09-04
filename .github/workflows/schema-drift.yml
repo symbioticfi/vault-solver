@@ -52,20 +52,24 @@ jobs:
             echo "<!-- drift-fingerprint: $fingerprint -->"
           } >> issue-body.md
 
+          # Assignment is best effort: an offboarded or renamed login must not stop the report.
+          assign() {
+            gh issue edit "$1" --add-assignee oxsteins --add-assignee alrxy >/dev/null \
+              || echo "::warning::could not assign issue #$1"
+          }
+
           existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
           if [ -z "$existing" ]; then
-            gh issue create --title "$title" --body-file issue-body.md \
-              --assignee oxsteins --assignee alrxy
+            created="$(gh issue create --title "$title" --body-file issue-body.md)"
+            assign "${created##*/}"
             exit 0
           fi
+          assign "$existing"
 
-          # Keep the assignees in place even if the issue was reassigned or they were cleared.
-          gh issue edit "$existing" --add-assignee oxsteins --add-assignee alrxy >/dev/null
-
-          latest="$(gh issue view "$existing" --json body,comments \
-            --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')"
-          if printf '%s' "$latest" | grep -qF "drift-fingerprint: $fingerprint"; then
-            echo "Drift unchanged since the last report on issue #$existing; not commenting again."
+          # The fingerprint is content-based, so any earlier post of this exact state counts.
+          if gh issue view "$existing" --json body,comments \
+              --jq '[.body] + [.comments[].body] | .[]' | grep -qF "drift-fingerprint: $fingerprint"; then
+            echo "This drift state was already reported on issue #$existing; not commenting again."
             exit 0
           fi
 

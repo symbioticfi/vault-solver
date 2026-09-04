@@ -106,7 +106,7 @@ func resolvedFromSingle(s *rfqbackendinternal.ResolveDiscountResponseOneOf) *Res
 		DiscountID:        s.GetDiscountId(),
 		Discount:          termsFromModel(s.GetDiscount()),
 		SignerSignature:   s.GetSignerSignature(),
-		ProtocolDeadline:  int64(s.GetProtocolDeadline()),
+		ProtocolDeadline:  s.GetProtocolDeadline(),
 		ProtocolSignature: s.GetProtocolSignature(),
 	}
 }
@@ -117,7 +117,7 @@ func resolvedFromBatchItem(requestID string, it *rfqbackendinternal.ResolveDisco
 		DiscountID:        it.GetDiscountId(),
 		Discount:          termsFromModel(it.GetDiscount()),
 		SignerSignature:   it.GetSignerSignature(),
-		ProtocolDeadline:  int64(it.GetProtocolDeadline()),
+		ProtocolDeadline:  it.GetProtocolDeadline(),
 		ProtocolSignature: it.GetProtocolSignature(),
 	}
 }
@@ -130,7 +130,7 @@ func termsFromModel(d rfqbackendinternal.ResolveDiscountResponseOneOfDiscount) T
 		Signer:        d.GetSigner(),
 		Protocol:      d.GetProtocol(),
 		Nonce:         d.GetNonce(),
-		Deadline:      int64(d.GetDeadline()),
+		Deadline:      d.GetDeadline(),
 	}
 }
 
@@ -159,7 +159,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			CollateralDecimals: int(d.GetCollateralDecimals()),
 			Discount:           d.GetDiscount(),
 			Signer:             d.GetSigner(),
-			Deadline:           int64(d.GetDeadline()),
+			Deadline:           d.GetDeadline(),
 			MaxRate:            d.GetMaxRate(),
 			MaxAssets:          d.GetMaxAssets(),
 		})

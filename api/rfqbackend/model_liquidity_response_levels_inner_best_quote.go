@@ -26,7 +26,7 @@ type LiquidityResponseLevelsInnerBestQuote struct {
 	FormattedAmountOut            string         `json:"formattedAmountOut"`
 	PriceImpactAmountOut          NullableString `json:"priceImpactAmountOut" validate:"regexp=^-?\\d+$"`
 	FormattedPriceImpactAmountOut NullableString `json:"formattedPriceImpactAmountOut" validate:"regexp=^-?\\d+(\\.\\d+)?$"`
-	PriceImpactBps                NullableInt32  `json:"priceImpactBps"`
+	PriceImpactBps                NullableInt64  `json:"priceImpactBps"`
 	AdditionalProperties          map[string]interface{}
 }
 
@@ -36,7 +36,7 @@ type _LiquidityResponseLevelsInnerBestQuote LiquidityResponseLevelsInnerBestQuot
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLiquidityResponseLevelsInnerBestQuote(solverId string, solverName string, filler string, amountOut string, formattedAmountOut string, priceImpactAmountOut NullableString, formattedPriceImpactAmountOut NullableString, priceImpactBps NullableInt32) *LiquidityResponseLevelsInnerBestQuote {
+func NewLiquidityResponseLevelsInnerBestQuote(solverId string, solverName string, filler string, amountOut string, formattedAmountOut string, priceImpactAmountOut NullableString, formattedPriceImpactAmountOut NullableString, priceImpactBps NullableInt64) *LiquidityResponseLevelsInnerBestQuote {
 	this := LiquidityResponseLevelsInnerBestQuote{}
 	this.SolverId = solverId
 	this.SolverName = solverName
@@ -230,10 +230,10 @@ func (o *LiquidityResponseLevelsInnerBestQuote) SetFormattedPriceImpactAmountOut
 }
 
 // GetPriceImpactBps returns the PriceImpactBps field value
-// If the value is explicit nil, the zero value for int32 will be returned
-func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBps() int32 {
+// If the value is explicit nil, the zero value for int64 will be returned
+func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBps() int64 {
 	if o == nil || o.PriceImpactBps.Get() == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -243,7 +243,7 @@ func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBps() int32 {
 // GetPriceImpactBpsOk returns a tuple with the PriceImpactBps field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBpsOk() (*int32, bool) {
+func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBpsOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -251,7 +251,7 @@ func (o *LiquidityResponseLevelsInnerBestQuote) GetPriceImpactBpsOk() (*int32, b
 }
 
 // SetPriceImpactBps sets field value
-func (o *LiquidityResponseLevelsInnerBestQuote) SetPriceImpactBps(v int32) {
+func (o *LiquidityResponseLevelsInnerBestQuote) SetPriceImpactBps(v int64) {
 	o.PriceImpactBps.Set(&v)
 }
 

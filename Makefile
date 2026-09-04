@@ -185,11 +185,11 @@ bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; p
 #   disallowAdditionalPropertiesIfNotPresent=false — models accept unknown fields and keep them in
 #     AdditionalProperties instead of erroring (drops DisallowUnknownFields from every model; the
 #     oneOf/anyOf helper in utils.go keeps it, which is what discriminates variants).
-#   enumUnknownDefaultCase=true — a new server-side enum value decodes to a fallback case instead
-#     of failing the response.
+# enumUnknownDefaultCase is deliberately off: it maps an unknown enum value to a placeholder, which
+# hides the real upstream value from the "unknown status" errors that reveal a rename.
 # The remaining strictness (a required property that upstream has since dropped) has no generator
 # flag; hack/openapi-relax-client.py strips those checks after generation.
-OPENAPI_TOLERANT_PROPS ?= disallowAdditionalPropertiesIfNotPresent=false,enumUnknownDefaultCase=true
+OPENAPI_TOLERANT_PROPS ?= disallowAdditionalPropertiesIfNotPresent=false
 
 define gen_openapi_client
 	GO_POST_PROCESS_FILE='gofmt -w' OPENAPI_GENERATOR_VERSION=$(OPENAPI_GENERATOR_VERSION) bash ./hack/openapi-generator-cli.sh \
@@ -206,16 +206,19 @@ refresh-3f-client: ## Generate the 3F API client (openapi-generator, Go) from th
 	$(call gen_openapi_client,openapi/3f-bf.openapi.json,api/threef,threef)
 
 .PHONY: refresh-rfq-client
-# `--type-mappings null=interface{}`: this spec has a property whose whole schema is `{type: null}`
-# (zod's z.null()), which openapi-generator 7.24.0 otherwise renders as the uncompilable Go type `nil`.
+# `null=interface{}`: this spec has a property whose whole schema is `{type: null}` (zod's z.null()),
+# which openapi-generator 7.24.0 otherwise renders as the uncompilable Go type `nil`.
+# `integer=int64`: the backend emits unformatted integers with a 2^53-1 maximum (deadlines), which
+# the generator would otherwise narrow to int32.
+RFQ_TYPE_MAPPINGS = --type-mappings null=interface{},integer=int64
 refresh-rfq-client: ## Generate the RFQ backend client (openapi-generator, Go) from the vendored spec
 	@rm -f api/rfqbackend/*.go
-	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend,--type-mappings null=interface{})
+	$(call gen_openapi_client,openapi/rfq-backend.openapi.json,api/rfqbackend,rfqbackend,$(RFQ_TYPE_MAPPINGS))
 
 .PHONY: refresh-rfq-internal-client
 refresh-rfq-internal-client: ## Generate the RFQ backend internal client from the vendored spec
 	@rm -f api/rfqbackendinternal/*.go
-	$(call gen_openapi_client,openapi/rfq-backend-internal.openapi.json,api/rfqbackendinternal,rfqbackendinternal)
+	$(call gen_openapi_client,openapi/rfq-backend-internal.openapi.json,api/rfqbackendinternal,rfqbackendinternal,$(RFQ_TYPE_MAPPINGS))
 
 .PHONY: refresh-lifi-client
 refresh-lifi-client: ## Generate the LI.FI order-server client (openapi-generator, Go) from the vendored spec
@@ -243,7 +246,7 @@ refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient)
 	@gofmt -w api/morphographql/generated.go
 
 .PHONY: openapi-client
-openapi-client: refresh-3f-client refresh-rfq-client refresh-lifi-client refresh-uniswapx-client ## Generate all OpenAPI clients
+openapi-client: refresh-3f-client refresh-rfq-client refresh-rfq-internal-client refresh-lifi-client refresh-uniswapx-client ## Generate all OpenAPI clients
 
 .PHONY: graphql-client
 graphql-client: refresh-morpho-graphql-client ## Generate GraphQL clients

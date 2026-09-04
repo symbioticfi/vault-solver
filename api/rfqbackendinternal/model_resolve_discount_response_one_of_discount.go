@@ -27,7 +27,7 @@ type ResolveDiscountResponseOneOfDiscount struct {
 	Protocol      string `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
 	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
-	Deadline             int32  `json:"deadline"`
+	Deadline             int64  `json:"deadline"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -37,7 +37,7 @@ type _ResolveDiscountResponseOneOfDiscount ResolveDiscountResponseOneOfDiscount
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewResolveDiscountResponseOneOfDiscount(adapter string, tokenToRedeem string, discount string, signer string, protocol string, nonce string, deadline int32) *ResolveDiscountResponseOneOfDiscount {
+func NewResolveDiscountResponseOneOfDiscount(adapter string, tokenToRedeem string, discount string, signer string, protocol string, nonce string, deadline int64) *ResolveDiscountResponseOneOfDiscount {
 	this := ResolveDiscountResponseOneOfDiscount{}
 	this.Adapter = adapter
 	this.TokenToRedeem = tokenToRedeem
@@ -202,9 +202,9 @@ func (o *ResolveDiscountResponseOneOfDiscount) SetNonce(v string) {
 }
 
 // GetDeadline returns the Deadline field value
-func (o *ResolveDiscountResponseOneOfDiscount) GetDeadline() int32 {
+func (o *ResolveDiscountResponseOneOfDiscount) GetDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -213,7 +213,7 @@ func (o *ResolveDiscountResponseOneOfDiscount) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value
 // and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOfDiscount) GetDeadlineOk() (*int32, bool) {
+func (o *ResolveDiscountResponseOneOfDiscount) GetDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -221,7 +221,7 @@ func (o *ResolveDiscountResponseOneOfDiscount) GetDeadlineOk() (*int32, bool) {
 }
 
 // SetDeadline sets field value
-func (o *ResolveDiscountResponseOneOfDiscount) SetDeadline(v int32) {
+func (o *ResolveDiscountResponseOneOfDiscount) SetDeadline(v int64) {
 	o.Deadline = v
 }
 

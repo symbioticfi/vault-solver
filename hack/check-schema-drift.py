@@ -78,18 +78,18 @@ def check(source: dict, report: list[str]) -> bool:
         live_raw = fetch_live(source)
     except subprocess.CalledProcessError as err:
         detail = (err.stderr or "").strip().splitlines()[-1:] or ["no stderr"]
-        report.append(f"- {name}: could not fetch live source — skipped this run ({detail[0]})")
-        return False
+        report.append(f"- {name}: could not fetch live source; treating as drift until it can be verified ({detail[0]})")
+        return True
     except subprocess.TimeoutExpired:
-        report.append(f"- {name}: fetching live source timed out — skipped this run")
-        return False
+        report.append(f"- {name}: fetching live source timed out; treating as drift until it can be verified")
+        return True
 
     try:
         live = normalize(live_raw, source["fetch"])
         current = normalize(vendored_path.read_text(), source["fetch"])
     except json.JSONDecodeError as err:
-        report.append(f"- {name}: live source is not valid JSON — skipped this run ({err})")
-        return False
+        report.append(f"- {name}: live source is not valid JSON; treating as drift until it can be verified ({err})")
+        return True
 
     if live == current:
         report.append(f"- {name}: up to date")

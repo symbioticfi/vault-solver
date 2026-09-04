@@ -535,7 +535,7 @@ func (a *RFQAPIService) ApiV1OrderPostExecute(r ApiApiV1OrderPostRequest) (*Crea
 type ApiApiV1OrdersGetRequest struct {
 	ctx         context.Context
 	ApiService  *RFQAPIService
-	limit       *int32
+	limit       *int64
 	cursor      *string
 	orderStatus *string
 	orderId     *string
@@ -548,7 +548,7 @@ type ApiApiV1OrdersGetRequest struct {
 	sort        *string
 }
 
-func (r ApiApiV1OrdersGetRequest) Limit(limit int32) ApiApiV1OrdersGetRequest {
+func (r ApiApiV1OrdersGetRequest) Limit(limit int64) ApiApiV1OrdersGetRequest {
 	r.limit = &limit
 	return r
 }

@@ -22,7 +22,7 @@ type LocalFaucetFundResponseFundedAssetsInner struct {
 	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Symbol               string `json:"symbol"`
 	Name                 string `json:"name"`
-	Decimals             int32  `json:"decimals"`
+	Decimals             int64  `json:"decimals"`
 	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
 	Kind                 string `json:"kind"`
 	AdditionalProperties map[string]interface{}
@@ -34,7 +34,7 @@ type _LocalFaucetFundResponseFundedAssetsInner LocalFaucetFundResponseFundedAsse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetFundResponseFundedAssetsInner(token string, symbol string, name string, decimals int32, amount string, kind string) *LocalFaucetFundResponseFundedAssetsInner {
+func NewLocalFaucetFundResponseFundedAssetsInner(token string, symbol string, name string, decimals int64, amount string, kind string) *LocalFaucetFundResponseFundedAssetsInner {
 	this := LocalFaucetFundResponseFundedAssetsInner{}
 	this.Token = token
 	this.Symbol = symbol
@@ -126,9 +126,9 @@ func (o *LocalFaucetFundResponseFundedAssetsInner) SetName(v string) {
 }
 
 // GetDecimals returns the Decimals field value
-func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimals() int32 {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimals() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -137,7 +137,7 @@ func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimals() int32 {
 
 // GetDecimalsOk returns a tuple with the Decimals field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimalsOk() (*int32, bool) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimalsOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -145,7 +145,7 @@ func (o *LocalFaucetFundResponseFundedAssetsInner) GetDecimalsOk() (*int32, bool
 }
 
 // SetDecimals sets field value
-func (o *LocalFaucetFundResponseFundedAssetsInner) SetDecimals(v int32) {
+func (o *LocalFaucetFundResponseFundedAssetsInner) SetDecimals(v int64) {
 	o.Decimals = v
 }
 

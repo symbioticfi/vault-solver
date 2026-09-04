@@ -23,7 +23,7 @@ type ResolveDiscountResponseOneOf1DiscountsInner struct {
 	DiscountId           string                               `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
 	Discount             ResolveDiscountResponseOneOfDiscount `json:"discount"`
 	SignerSignature      string                               `json:"signerSignature" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	ProtocolDeadline     int32                                `json:"protocolDeadline"`
+	ProtocolDeadline     int64                                `json:"protocolDeadline"`
 	ProtocolSignature    string                               `json:"protocolSignature" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	AdditionalProperties map[string]interface{}
 }
@@ -34,7 +34,7 @@ type _ResolveDiscountResponseOneOf1DiscountsInner ResolveDiscountResponseOneOf1D
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewResolveDiscountResponseOneOf1DiscountsInner(discountId string, discount ResolveDiscountResponseOneOfDiscount, signerSignature string, protocolDeadline int32, protocolSignature string) *ResolveDiscountResponseOneOf1DiscountsInner {
+func NewResolveDiscountResponseOneOf1DiscountsInner(discountId string, discount ResolveDiscountResponseOneOfDiscount, signerSignature string, protocolDeadline int64, protocolSignature string) *ResolveDiscountResponseOneOf1DiscountsInner {
 	this := ResolveDiscountResponseOneOf1DiscountsInner{}
 	this.DiscountId = discountId
 	this.Discount = discount
@@ -125,9 +125,9 @@ func (o *ResolveDiscountResponseOneOf1DiscountsInner) SetSignerSignature(v strin
 }
 
 // GetProtocolDeadline returns the ProtocolDeadline field value
-func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadline() int32 {
+func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -136,7 +136,7 @@ func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadline() int3
 
 // GetProtocolDeadlineOk returns a tuple with the ProtocolDeadline field value
 // and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadlineOk() (*int32, bool) {
+func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -144,7 +144,7 @@ func (o *ResolveDiscountResponseOneOf1DiscountsInner) GetProtocolDeadlineOk() (*
 }
 
 // SetProtocolDeadline sets field value
-func (o *ResolveDiscountResponseOneOf1DiscountsInner) SetProtocolDeadline(v int32) {
+func (o *ResolveDiscountResponseOneOf1DiscountsInner) SetProtocolDeadline(v int64) {
 	o.ProtocolDeadline = v
 }
 

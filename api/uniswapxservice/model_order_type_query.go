@@ -20,15 +20,14 @@ type OrderTypeQuery string
 
 // List of OrderTypeQuery
 const (
-	DUTCH                                   OrderTypeQuery = "Dutch"
-	DUTCH_V2                                OrderTypeQuery = "Dutch_V2"
-	DUTCH_V3                                OrderTypeQuery = "Dutch_V3"
-	LIMIT                                   OrderTypeQuery = "Limit"
-	RELAY                                   OrderTypeQuery = "Relay"
-	DUTCH_V1_V2                             OrderTypeQuery = "Dutch_V1_V2"
-	PRIORITY                                OrderTypeQuery = "Priority"
-	HYBRID                                  OrderTypeQuery = "Hybrid"
-	ORDERTYPEQUERY_UNKNOWN_DEFAULT_OPEN_API OrderTypeQuery = "unknown_default_open_api"
+	DUTCH       OrderTypeQuery = "Dutch"
+	DUTCH_V2    OrderTypeQuery = "Dutch_V2"
+	DUTCH_V3    OrderTypeQuery = "Dutch_V3"
+	LIMIT       OrderTypeQuery = "Limit"
+	RELAY       OrderTypeQuery = "Relay"
+	DUTCH_V1_V2 OrderTypeQuery = "Dutch_V1_V2"
+	PRIORITY    OrderTypeQuery = "Priority"
+	HYBRID      OrderTypeQuery = "Hybrid"
 )
 
 // All allowed values of OrderTypeQuery enum
@@ -41,7 +40,6 @@ var AllowedOrderTypeQueryEnumValues = []OrderTypeQuery{
 	"Dutch_V1_V2",
 	"Priority",
 	"Hybrid",
-	"unknown_default_open_api",
 }
 
 func (v *OrderTypeQuery) UnmarshalJSON(src []byte) error {
@@ -58,8 +56,7 @@ func (v *OrderTypeQuery) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	*v = ORDERTYPEQUERY_UNKNOWN_DEFAULT_OPEN_API
-	return nil
+	return fmt.Errorf("%+v is not a valid OrderTypeQuery", value)
 }
 
 // NewOrderTypeQueryFromValue returns a pointer to a valid OrderTypeQuery

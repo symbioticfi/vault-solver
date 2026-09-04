@@ -22,7 +22,7 @@ type PublicQuoteResponseQuotesInnerQuoteOrderInfo struct {
 	TokenIn  string                                  `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	AmountIn string                                  `json:"amountIn" validate:"regexp=^\\d+$"`
 	Outputs  []OrdersResponseOrdersInnerOutputsInner `json:"outputs"`
-	Deadline int32                                   `json:"deadline"`
+	Deadline int64                                   `json:"deadline"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
 	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
 	AdditionalProperties map[string]interface{}
@@ -34,7 +34,7 @@ type _PublicQuoteResponseQuotesInnerQuoteOrderInfo PublicQuoteResponseQuotesInne
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublicQuoteResponseQuotesInnerQuoteOrderInfo(tokenIn string, amountIn string, outputs []OrdersResponseOrdersInnerOutputsInner, deadline int32, nonce string) *PublicQuoteResponseQuotesInnerQuoteOrderInfo {
+func NewPublicQuoteResponseQuotesInnerQuoteOrderInfo(tokenIn string, amountIn string, outputs []OrdersResponseOrdersInnerOutputsInner, deadline int64, nonce string) *PublicQuoteResponseQuotesInnerQuoteOrderInfo {
 	this := PublicQuoteResponseQuotesInnerQuoteOrderInfo{}
 	this.TokenIn = tokenIn
 	this.AmountIn = amountIn
@@ -125,9 +125,9 @@ func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) SetOutputs(v []OrdersResp
 }
 
 // GetDeadline returns the Deadline field value
-func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadline() int32 {
+func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -136,7 +136,7 @@ func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value
 // and a boolean to check if the value has been set.
-func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadlineOk() (*int32, bool) {
+func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -144,7 +144,7 @@ func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) GetDeadlineOk() (*int32, 
 }
 
 // SetDeadline sets field value
-func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) SetDeadline(v int32) {
+func (o *PublicQuoteResponseQuotesInnerQuoteOrderInfo) SetDeadline(v int64) {
 	o.Deadline = v
 }
 

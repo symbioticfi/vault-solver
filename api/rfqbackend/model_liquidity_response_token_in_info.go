@@ -22,7 +22,7 @@ type LiquidityResponseTokenInInfo struct {
 	Address              string `json:"address" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Symbol               string `json:"symbol"`
 	Name                 string `json:"name"`
-	Decimals             int32  `json:"decimals"`
+	Decimals             int64  `json:"decimals"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -32,7 +32,7 @@ type _LiquidityResponseTokenInInfo LiquidityResponseTokenInInfo
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLiquidityResponseTokenInInfo(address string, symbol string, name string, decimals int32) *LiquidityResponseTokenInInfo {
+func NewLiquidityResponseTokenInInfo(address string, symbol string, name string, decimals int64) *LiquidityResponseTokenInInfo {
 	this := LiquidityResponseTokenInInfo{}
 	this.Address = address
 	this.Symbol = symbol
@@ -122,9 +122,9 @@ func (o *LiquidityResponseTokenInInfo) SetName(v string) {
 }
 
 // GetDecimals returns the Decimals field value
-func (o *LiquidityResponseTokenInInfo) GetDecimals() int32 {
+func (o *LiquidityResponseTokenInInfo) GetDecimals() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -133,7 +133,7 @@ func (o *LiquidityResponseTokenInInfo) GetDecimals() int32 {
 
 // GetDecimalsOk returns a tuple with the Decimals field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponseTokenInInfo) GetDecimalsOk() (*int32, bool) {
+func (o *LiquidityResponseTokenInInfo) GetDecimalsOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -141,7 +141,7 @@ func (o *LiquidityResponseTokenInInfo) GetDecimalsOk() (*int32, bool) {
 }
 
 // SetDecimals sets field value
-func (o *LiquidityResponseTokenInInfo) SetDecimals(v int32) {
+func (o *LiquidityResponseTokenInInfo) SetDecimals(v int64) {
 	o.Decimals = v
 }
 

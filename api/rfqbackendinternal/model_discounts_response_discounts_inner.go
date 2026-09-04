@@ -23,10 +23,10 @@ type DiscountsResponseDiscountsInner struct {
 	Adapter              string `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenToRedeem        string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Collateral           string `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	CollateralDecimals   int32  `json:"collateralDecimals"`
+	CollateralDecimals   int64  `json:"collateralDecimals"`
 	Discount             string `json:"discount" validate:"regexp=^\\d+$"`
 	Signer               string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Deadline             int32  `json:"deadline"`
+	Deadline             int64  `json:"deadline"`
 	MaxRate              string `json:"maxRate" validate:"regexp=^\\d+$"`
 	MaxAssets            string `json:"maxAssets" validate:"regexp=^\\d+$"`
 	AdditionalProperties map[string]interface{}
@@ -38,7 +38,7 @@ type _DiscountsResponseDiscountsInner DiscountsResponseDiscountsInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int32, discount string, signer string, deadline int32, maxRate string, maxAssets string) *DiscountsResponseDiscountsInner {
+func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int64, discount string, signer string, deadline int64, maxRate string, maxAssets string) *DiscountsResponseDiscountsInner {
 	this := DiscountsResponseDiscountsInner{}
 	this.DiscountId = discountId
 	this.Adapter = adapter
@@ -158,9 +158,9 @@ func (o *DiscountsResponseDiscountsInner) SetCollateral(v string) {
 }
 
 // GetCollateralDecimals returns the CollateralDecimals field value
-func (o *DiscountsResponseDiscountsInner) GetCollateralDecimals() int32 {
+func (o *DiscountsResponseDiscountsInner) GetCollateralDecimals() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -169,7 +169,7 @@ func (o *DiscountsResponseDiscountsInner) GetCollateralDecimals() int32 {
 
 // GetCollateralDecimalsOk returns a tuple with the CollateralDecimals field value
 // and a boolean to check if the value has been set.
-func (o *DiscountsResponseDiscountsInner) GetCollateralDecimalsOk() (*int32, bool) {
+func (o *DiscountsResponseDiscountsInner) GetCollateralDecimalsOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -177,7 +177,7 @@ func (o *DiscountsResponseDiscountsInner) GetCollateralDecimalsOk() (*int32, boo
 }
 
 // SetCollateralDecimals sets field value
-func (o *DiscountsResponseDiscountsInner) SetCollateralDecimals(v int32) {
+func (o *DiscountsResponseDiscountsInner) SetCollateralDecimals(v int64) {
 	o.CollateralDecimals = v
 }
 
@@ -230,9 +230,9 @@ func (o *DiscountsResponseDiscountsInner) SetSigner(v string) {
 }
 
 // GetDeadline returns the Deadline field value
-func (o *DiscountsResponseDiscountsInner) GetDeadline() int32 {
+func (o *DiscountsResponseDiscountsInner) GetDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -241,7 +241,7 @@ func (o *DiscountsResponseDiscountsInner) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value
 // and a boolean to check if the value has been set.
-func (o *DiscountsResponseDiscountsInner) GetDeadlineOk() (*int32, bool) {
+func (o *DiscountsResponseDiscountsInner) GetDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -249,7 +249,7 @@ func (o *DiscountsResponseDiscountsInner) GetDeadlineOk() (*int32, bool) {
 }
 
 // SetDeadline sets field value
-func (o *DiscountsResponseDiscountsInner) SetDeadline(v int32) {
+func (o *DiscountsResponseDiscountsInner) SetDeadline(v int64) {
 	o.Deadline = v
 }
 

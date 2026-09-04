@@ -20,14 +20,13 @@ type ErrorCode string
 
 // List of ErrorCode
 const (
-	ORDER_PARSE_FAIL                   ErrorCode = "ORDER_PARSE_FAIL"
-	INVALID_ORDER                      ErrorCode = "INVALID_ORDER"
-	TOO_MANY_OPEN_ORDERS               ErrorCode = "TOO_MANY_OPEN_ORDERS"
-	INTERNAL_ERROR                     ErrorCode = "INTERNAL_ERROR"
-	VALIDATION_ERROR                   ErrorCode = "VALIDATION_ERROR"
-	TOO_MANY_REQUESTS                  ErrorCode = "TOO_MANY_REQUESTS"
-	INVALID_TOKEN_IN_ADDRESS           ErrorCode = "INVALID_TOKEN_IN_ADDRESS"
-	ERRORCODE_UNKNOWN_DEFAULT_OPEN_API ErrorCode = "unknown_default_open_api"
+	ORDER_PARSE_FAIL         ErrorCode = "ORDER_PARSE_FAIL"
+	INVALID_ORDER            ErrorCode = "INVALID_ORDER"
+	TOO_MANY_OPEN_ORDERS     ErrorCode = "TOO_MANY_OPEN_ORDERS"
+	INTERNAL_ERROR           ErrorCode = "INTERNAL_ERROR"
+	VALIDATION_ERROR         ErrorCode = "VALIDATION_ERROR"
+	TOO_MANY_REQUESTS        ErrorCode = "TOO_MANY_REQUESTS"
+	INVALID_TOKEN_IN_ADDRESS ErrorCode = "INVALID_TOKEN_IN_ADDRESS"
 )
 
 // All allowed values of ErrorCode enum
@@ -39,7 +38,6 @@ var AllowedErrorCodeEnumValues = []ErrorCode{
 	"VALIDATION_ERROR",
 	"TOO_MANY_REQUESTS",
 	"INVALID_TOKEN_IN_ADDRESS",
-	"unknown_default_open_api",
 }
 
 func (v *ErrorCode) UnmarshalJSON(src []byte) error {
@@ -56,8 +54,7 @@ func (v *ErrorCode) UnmarshalJSON(src []byte) error {
 		}
 	}
 
-	*v = ERRORCODE_UNKNOWN_DEFAULT_OPEN_API
-	return nil
+	return fmt.Errorf("%+v is not a valid ErrorCode", value)
 }
 
 // NewErrorCodeFromValue returns a pointer to a valid ErrorCode

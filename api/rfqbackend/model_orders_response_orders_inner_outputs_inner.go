@@ -22,7 +22,7 @@ type OrdersResponseOrdersInnerOutputsInner struct {
 	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Recipient            string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
-	PortionBps           *int32 `json:"portionBps,omitempty"`
+	PortionBps           *int64 `json:"portionBps,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -121,9 +121,9 @@ func (o *OrdersResponseOrdersInnerOutputsInner) SetAmount(v string) {
 }
 
 // GetPortionBps returns the PortionBps field value if set, zero value otherwise.
-func (o *OrdersResponseOrdersInnerOutputsInner) GetPortionBps() int32 {
+func (o *OrdersResponseOrdersInnerOutputsInner) GetPortionBps() int64 {
 	if o == nil || IsNil(o.PortionBps) {
-		var ret int32
+		var ret int64
 		return ret
 	}
 	return *o.PortionBps
@@ -131,7 +131,7 @@ func (o *OrdersResponseOrdersInnerOutputsInner) GetPortionBps() int32 {
 
 // GetPortionBpsOk returns a tuple with the PortionBps field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInnerOutputsInner) GetPortionBpsOk() (*int32, bool) {
+func (o *OrdersResponseOrdersInnerOutputsInner) GetPortionBpsOk() (*int64, bool) {
 	if o == nil || IsNil(o.PortionBps) {
 		return nil, false
 	}
@@ -147,8 +147,8 @@ func (o *OrdersResponseOrdersInnerOutputsInner) HasPortionBps() bool {
 	return false
 }
 
-// SetPortionBps gets a reference to the given int32 and assigns it to the PortionBps field.
-func (o *OrdersResponseOrdersInnerOutputsInner) SetPortionBps(v int32) {
+// SetPortionBps gets a reference to the given int64 and assigns it to the PortionBps field.
+func (o *OrdersResponseOrdersInnerOutputsInner) SetPortionBps(v int64) {
 	o.PortionBps = &v
 }
 

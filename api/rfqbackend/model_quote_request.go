@@ -19,8 +19,8 @@ var _ MappedNullable = &QuoteRequest{}
 
 // QuoteRequest struct for QuoteRequest
 type QuoteRequest struct {
-	TokenInChainId       int32                      `json:"tokenInChainId"`
-	TokenOutChainId      int32                      `json:"tokenOutChainId"`
+	TokenInChainId       int64                      `json:"tokenInChainId"`
+	TokenOutChainId      int64                      `json:"tokenOutChainId"`
 	TokenIn              string                     `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenOut             string                     `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Type                 string                     `json:"type"`
@@ -39,7 +39,7 @@ type _QuoteRequest QuoteRequest
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteRequest(tokenInChainId int32, tokenOutChainId int32, tokenIn string, tokenOut string, type_ string, amount string, swapper string, outputs []QuoteRequestOutputsInner) *QuoteRequest {
+func NewQuoteRequest(tokenInChainId int64, tokenOutChainId int64, tokenIn string, tokenOut string, type_ string, amount string, swapper string, outputs []QuoteRequestOutputsInner) *QuoteRequest {
 	this := QuoteRequest{}
 	this.TokenInChainId = tokenInChainId
 	this.TokenOutChainId = tokenOutChainId
@@ -65,9 +65,9 @@ func NewQuoteRequestWithDefaults() *QuoteRequest {
 }
 
 // GetTokenInChainId returns the TokenInChainId field value
-func (o *QuoteRequest) GetTokenInChainId() int32 {
+func (o *QuoteRequest) GetTokenInChainId() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -76,7 +76,7 @@ func (o *QuoteRequest) GetTokenInChainId() int32 {
 
 // GetTokenInChainIdOk returns a tuple with the TokenInChainId field value
 // and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetTokenInChainIdOk() (*int32, bool) {
+func (o *QuoteRequest) GetTokenInChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -84,14 +84,14 @@ func (o *QuoteRequest) GetTokenInChainIdOk() (*int32, bool) {
 }
 
 // SetTokenInChainId sets field value
-func (o *QuoteRequest) SetTokenInChainId(v int32) {
+func (o *QuoteRequest) SetTokenInChainId(v int64) {
 	o.TokenInChainId = v
 }
 
 // GetTokenOutChainId returns the TokenOutChainId field value
-func (o *QuoteRequest) GetTokenOutChainId() int32 {
+func (o *QuoteRequest) GetTokenOutChainId() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -100,7 +100,7 @@ func (o *QuoteRequest) GetTokenOutChainId() int32 {
 
 // GetTokenOutChainIdOk returns a tuple with the TokenOutChainId field value
 // and a boolean to check if the value has been set.
-func (o *QuoteRequest) GetTokenOutChainIdOk() (*int32, bool) {
+func (o *QuoteRequest) GetTokenOutChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -108,7 +108,7 @@ func (o *QuoteRequest) GetTokenOutChainIdOk() (*int32, bool) {
 }
 
 // SetTokenOutChainId sets field value
-func (o *QuoteRequest) SetTokenOutChainId(v int32) {
+func (o *QuoteRequest) SetTokenOutChainId(v int64) {
 	o.TokenOutChainId = v
 }
 

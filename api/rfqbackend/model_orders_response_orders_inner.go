@@ -32,7 +32,7 @@ type OrdersResponseOrdersInner struct {
 	SettledAmounts       []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
 	EncodedOrder         *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	ProtocolSignature    *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Deadline             *int32                                         `json:"deadline,omitempty"`
+	Deadline             *int64                                         `json:"deadline,omitempty"`
 	Filler               *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	AdditionalProperties map[string]interface{}
 }
@@ -373,9 +373,9 @@ func (o *OrdersResponseOrdersInner) SetProtocolSignature(v string) {
 }
 
 // GetDeadline returns the Deadline field value if set, zero value otherwise.
-func (o *OrdersResponseOrdersInner) GetDeadline() int32 {
+func (o *OrdersResponseOrdersInner) GetDeadline() int64 {
 	if o == nil || IsNil(o.Deadline) {
-		var ret int32
+		var ret int64
 		return ret
 	}
 	return *o.Deadline
@@ -383,7 +383,7 @@ func (o *OrdersResponseOrdersInner) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetDeadlineOk() (*int32, bool) {
+func (o *OrdersResponseOrdersInner) GetDeadlineOk() (*int64, bool) {
 	if o == nil || IsNil(o.Deadline) {
 		return nil, false
 	}
@@ -399,8 +399,8 @@ func (o *OrdersResponseOrdersInner) HasDeadline() bool {
 	return false
 }
 
-// SetDeadline gets a reference to the given int32 and assigns it to the Deadline field.
-func (o *OrdersResponseOrdersInner) SetDeadline(v int32) {
+// SetDeadline gets a reference to the given int64 and assigns it to the Deadline field.
+func (o *OrdersResponseOrdersInner) SetDeadline(v int64) {
 	o.Deadline = &v
 }
 

@@ -301,10 +301,16 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		e.store.markStatus(orderID, statusExpired, txHash, "")
 	case backendOrderStatusOpen:
 		// still open; leave as-is for the next cycle
-	default:
+	case "error", "cancelled", "unverified", "insufficient-funds":
 		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
+	default:
+		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
+		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
+		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, "status", bo.OrderStatus)
 	}
 }
+
+var errUnknownOrderStatus = errors.New("unrecognized backend order status")
 
 // buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
 // strategy owns route economics; the solver assembles the fresh snapshot and enforces solver-owned

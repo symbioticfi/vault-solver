@@ -22,7 +22,7 @@ type QuoteRequestOutputsInner struct {
 	Token string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Defaults to swapper when omitted for backward compatibility.
 	Recipient            *string `json:"recipient,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	PortionBps           *int32  `json:"portionBps,omitempty"`
+	PortionBps           *int64  `json:"portionBps,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -103,9 +103,9 @@ func (o *QuoteRequestOutputsInner) SetRecipient(v string) {
 }
 
 // GetPortionBps returns the PortionBps field value if set, zero value otherwise.
-func (o *QuoteRequestOutputsInner) GetPortionBps() int32 {
+func (o *QuoteRequestOutputsInner) GetPortionBps() int64 {
 	if o == nil || IsNil(o.PortionBps) {
-		var ret int32
+		var ret int64
 		return ret
 	}
 	return *o.PortionBps
@@ -113,7 +113,7 @@ func (o *QuoteRequestOutputsInner) GetPortionBps() int32 {
 
 // GetPortionBpsOk returns a tuple with the PortionBps field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *QuoteRequestOutputsInner) GetPortionBpsOk() (*int32, bool) {
+func (o *QuoteRequestOutputsInner) GetPortionBpsOk() (*int64, bool) {
 	if o == nil || IsNil(o.PortionBps) {
 		return nil, false
 	}
@@ -129,8 +129,8 @@ func (o *QuoteRequestOutputsInner) HasPortionBps() bool {
 	return false
 }
 
-// SetPortionBps gets a reference to the given int32 and assigns it to the PortionBps field.
-func (o *QuoteRequestOutputsInner) SetPortionBps(v int32) {
+// SetPortionBps gets a reference to the given int64 and assigns it to the PortionBps field.
+func (o *QuoteRequestOutputsInner) SetPortionBps(v int64) {
 	o.PortionBps = &v
 }
 
