@@ -42,3 +42,54 @@ func TestSentryCore_ForwardsOnlyErrorAndAbove(t *testing.T) {
 		}
 	}
 }
+
+// The issue stream shows only the event title, so the logged error belongs in it. Grouping stays
+// on the static message (see the fingerprint in Write), so this cannot split one log site into
+// one issue per address or hash.
+func TestEventTitleAppendsLoggedError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+		want   string
+	}{
+		{name: "with error", fields: map[string]any{"error": "adapter.offerSigner() returned zero address", "adapter": "0xd8f6"}, want: "skipping adapter: resolution failed: adapter.offerSigner() returned zero address"},
+		{name: "no error field", fields: map[string]any{"adapter": "0xd8f6"}, want: "skipping adapter: resolution failed"},
+		{name: "empty error", fields: map[string]any{"error": ""}, want: "skipping adapter: resolution failed"},
+		{name: "non-string error", fields: map[string]any{"error": 42}, want: "skipping adapter: resolution failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eventTitle("skipping adapter: resolution failed", tc.fields); got != tc.want {
+				t.Fatalf("eventTitle = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEventTagsAttributeSolverAndLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		logger string
+		fields map[string]any
+		want   map[string]string
+	}{
+		{name: "process field wins", logger: "txmanager", fields: map[string]any{"solver": "rfq", "label": "rfq-fill"},
+			want: map[string]string{"logger": "txmanager", "solver": "rfq", "label": "rfq-fill"}},
+		{name: "logger name fallback", logger: "lifi.txmanager", fields: map[string]any{},
+			want: map[string]string{"logger": "lifi.txmanager", "solver": "lifi"}},
+		{name: "shared component in a multi-solver process", logger: "txmanager", fields: map[string]any{"label": "uniswapx-fill"},
+			want: map[string]string{"logger": "txmanager", "solver": "txmanager", "label": "uniswapx-fill"}},
+		{name: "nothing known", logger: "", fields: map[string]any{}, want: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := eventTags(tc.logger, tc.fields)
+			if len(got) != len(tc.want) {
+				t.Fatalf("eventTags = %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Fatalf("eventTags[%q] = %q, want %q (all: %v)", k, got[k], v, got)
+				}
+			}
+		})
+	}
+}

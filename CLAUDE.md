@@ -73,7 +73,14 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   a swallowed error is a bug. `panic` only for genuine programmer errors (e.g. a `mustPack` of a
   static, known-good ABI call), never for runtime/IO failures.
 - **Logging:** `logr.Logger` everywhere (backed by zap, wired only in `main`). Info level for
-  operational events; `V(1)` for debug detail. Structured key/values, not formatted strings.
+  operational events; `V(1)` for debug detail. Structured key/values, not formatted strings. Every line
+  names the integration it serves: with one configured solver `main` stamps the root logger with
+  `solver=<name>` (shared components such as `txmanager` included); with several, each solver's
+  `deps.Log` is stamped instead and the txmanager stamps each request's lifecycle logs from
+  `Request.Solver` (set it to the package `Name` at every `txmanager.Request{}` site) plus `label`.
+  Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
+  `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
+  so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
 - **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —

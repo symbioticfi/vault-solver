@@ -485,7 +485,7 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 		if !r.authorized {
 			s.log.Info("skipping adapter: solver is not an authorized offer signer",
 				"adapter", adapterAddr.Hex(),
-				"solver", s.signerAddr.Hex(),
+				"signer", s.signerAddr.Hex(),
 				"offerSigner", r.signer.Hex())
 			continue
 		}
