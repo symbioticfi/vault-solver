@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "Registry of every vendored third-party schema (contract-of-record) in this repo.",
+    "hack/check-schema-drift.py diffs each 'auto' entry against its live source daily in CI",
+    "(.github/workflows/schema-drift.yml) and fails if a vendored schema file is missing from",
+    "this list, so a newly added integration cannot silently escape drift detection.",
+    "When you vendor a new schema, add it here in the same commit.",
+    "",
+    "Covered: every integration's HTTP/GraphQL contract \u2014 3F, RFQ backend, LI.FI, UniswapX, Morpho \u2014",
+    "plus RedStone's WebSocket zod as a 'manual' entry (no public endpoint to diff).",
+    "",
+    "Deliberately out of scope (not a gap in this registry):",
+    "  - api/abi/*.json: vendored from local Foundry builds of the rfq repo and core-mirror, not from a",
+    "    live URL. Drift there is caught by those repos' own review/CI, and diffing would mean building",
+    "    Solidity in this job. Refresh with `make refresh-abi`.",
+    "  - LI.FI order-feed WebSocket payloads: not vendored at all today; the Go types are hand-written",
+    "    against observed frames. If LI.FI ever publishes that schema, vendor it and add an entry here."
+  ],
+  "sources": [
+    {
+      "name": "3F bridge facilitator (OpenAPI)",
+      "vendored": "openapi/3f-bf.openapi.json",
+      "mode": "auto",
+      "fetch": "json",
+      "url": "https://bf.dev.gcp.3f.xyz/docs/openapi.json",
+      "refresh": "make refresh-openapi && make refresh-3f-client"
+    },
+    {
+      "name": "RFQ backend (OpenAPI)",
+      "vendored": "openapi/rfq-backend.openapi.json",
+      "mode": "auto",
+      "fetch": "json",
+      "url": "https://swap.symbiotic.fi/api/v1/openapi.json",
+      "refresh": "make refresh-rfq-openapi && make refresh-rfq-client",
+      "note": "Discount listing/resolution is NOT here \u2014 it lives on the internal surface (entry below). Generation passes `--type-mappings null=interface{}` because this spec has a property whose whole schema is `{type: null}`, which openapi-generator otherwise renders as the uncompilable Go type `nil`."
+    },
+    {
+      "name": "RFQ backend internal (OpenAPI)",
+      "vendored": "openapi/rfq-backend-internal.openapi.json",
+      "mode": "auto",
+      "fetch": "json",
+      "url": "https://swap.symbiotic.fi/api/v1/openapi-internal.json",
+      "refresh": "make refresh-rfq-internal-openapi && make refresh-rfq-internal-client",
+      "note": "Discount listing/resolution lives on /api-internal/v1. The backend publishes this document from the PUBLIC prefix (the endpoints themselves stay unrouted there), so it can be vendored and drift-checked while the API remains unreachable from outside. Going unwatched is how the hex-to-decimal discount nonce change reached production unnoticed."
+    },
+    {
+      "name": "LI.FI order server (OpenAPI)",
+      "vendored": "openapi/lifi-order.openapi.json",
+      "mode": "auto",
+      "fetch": "scalar-html",
+      "url": "https://order-dev.li.fi/docs",
+      "refresh": "make refresh-lifi-openapi && make refresh-lifi-client",
+      "note": "Served inline in a Scalar HTML docs page; extracted by hack/scalar-openapi-extract.py."
+    },
+    {
+      "name": "UniswapX order pool (OpenAPI)",
+      "vendored": "openapi/uniswapx-service.openapi.json",
+      "mode": "auto",
+      "fetch": "json",
+      "url": "https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json",
+      "refresh": "make refresh-uniswapx-openapi && make refresh-uniswapx-client"
+    },
+    {
+      "name": "Morpho (GraphQL SDL)",
+      "vendored": "api/graphql/morpho/schema.graphql",
+      "mode": "auto",
+      "fetch": "graphql",
+      "url": "https://api.morpho.org/graphql",
+      "refresh": "make refresh-morpho-graphql-schema && make refresh-morpho-graphql-client"
+    },
+    {
+      "name": "RedStone Atom OEV integration guide (public docs)",
+      "vendored": "openapi/redstone-oev-atom-integration-guide.md",
+      "mode": "auto",
+      "fetch": "text",
+      "url": "https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md",
+      "refresh": "make refresh-redstone-guide",
+      "note": "RedStone's public contract-of-record for the Atom OEV WebSocket: it documents all five ops (subscribe/unsubscribe/auction/solve/liquidation-result), the auction timeout rules and the liquidations-mode positions payload. The zod file is richer but private, so this is the only RedStone surface we can diff automatically \u2014 watch it for wire-contract changes."
+    },
+    {
+      "name": "RedStone Atom OEV WebSocket (zod)",
+      "vendored": "openapi/redstone-oev-ws.zod.ts",
+      "mode": "manual",
+      "refresh": "ask RedStone for the current zod, then re-vendor verbatim",
+      "note": "Received via direct chat 2026-06-12; not published in any RedStone public repo (GitHub code search finds it only here), so there is no endpoint to diff. Its public counterpart is the integration guide entry above. Go structs in internal/solvers/redstoneoev/ are pinned to this file by tests, so drift surfaces as live-frame decode failures."
+    }
+  ]
+}

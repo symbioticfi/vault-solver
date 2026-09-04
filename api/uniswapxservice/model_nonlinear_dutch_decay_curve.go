@@ -19,9 +19,12 @@ var _ MappedNullable = &NonlinearDutchDecayCurve{}
 
 // NonlinearDutchDecayCurve Piecewise decay curve relative to the decay start block.
 type NonlinearDutchDecayCurve struct {
-	RelativeBlocks  []float32 `json:"relativeBlocks,omitempty"`
-	RelativeAmounts []string  `json:"relativeAmounts,omitempty"`
+	RelativeBlocks       []float32 `json:"relativeBlocks,omitempty"`
+	RelativeAmounts      []string  `json:"relativeAmounts,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _NonlinearDutchDecayCurve NonlinearDutchDecayCurve
 
 // NewNonlinearDutchDecayCurve instantiates a new NonlinearDutchDecayCurve object
 // This constructor will assign default values to properties that have it defined,
@@ -120,7 +123,34 @@ func (o NonlinearDutchDecayCurve) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.RelativeAmounts) {
 		toSerialize["relativeAmounts"] = o.RelativeAmounts
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *NonlinearDutchDecayCurve) UnmarshalJSON(data []byte) (err error) {
+	varNonlinearDutchDecayCurve := _NonlinearDutchDecayCurve{}
+
+	err = json.Unmarshal(data, &varNonlinearDutchDecayCurve)
+
+	if err != nil {
+		return err
+	}
+
+	*o = NonlinearDutchDecayCurve(varNonlinearDutchDecayCurve)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "relativeBlocks")
+		delete(additionalProperties, "relativeAmounts")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableNonlinearDutchDecayCurve struct {

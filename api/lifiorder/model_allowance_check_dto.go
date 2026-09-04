@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -30,7 +29,8 @@ type AllowanceCheckDto struct {
 	// Native spender address - InputSettlerEscrowLIFI
 	Spender string `json:"spender"`
 	// Required allowance amount as string-encoded integer
-	Required string `json:"required"`
+	Required             string `json:"required"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _AllowanceCheckDto AllowanceCheckDto
@@ -192,6 +192,11 @@ func (o AllowanceCheckDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["user"] = o.User
 	toSerialize["spender"] = o.Spender
 	toSerialize["required"] = o.Required
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -223,15 +228,24 @@ func (o *AllowanceCheckDto) UnmarshalJSON(data []byte) (err error) {
 
 	varAllowanceCheckDto := _AllowanceCheckDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varAllowanceCheckDto)
+	err = json.Unmarshal(data, &varAllowanceCheckDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = AllowanceCheckDto(varAllowanceCheckDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "user")
+		delete(additionalProperties, "spender")
+		delete(additionalProperties, "required")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

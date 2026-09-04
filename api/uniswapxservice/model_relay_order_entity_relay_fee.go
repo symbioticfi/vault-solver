@@ -22,12 +22,15 @@ type RelayOrderEntityRelayFee struct {
 	// EIP-55 checksummed Ethereum address.
 	Token *string `json:"token,omitempty"`
 	// uint256 encoded as a base-10 string.
-	StartAmount *string `json:"startAmount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	StartAmount *string `json:"startAmount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	EndAmount *string  `json:"endAmount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
-	StartTime *float32 `json:"startTime,omitempty"`
-	EndTime   *float32 `json:"endTime,omitempty"`
+	EndAmount            *string  `json:"endAmount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	StartTime            *float32 `json:"startTime,omitempty"`
+	EndTime              *float32 `json:"endTime,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _RelayOrderEntityRelayFee RelayOrderEntityRelayFee
 
 // NewRelayOrderEntityRelayFee instantiates a new RelayOrderEntityRelayFee object
 // This constructor will assign default values to properties that have it defined,
@@ -231,7 +234,37 @@ func (o RelayOrderEntityRelayFee) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.EndTime) {
 		toSerialize["endTime"] = o.EndTime
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *RelayOrderEntityRelayFee) UnmarshalJSON(data []byte) (err error) {
+	varRelayOrderEntityRelayFee := _RelayOrderEntityRelayFee{}
+
+	err = json.Unmarshal(data, &varRelayOrderEntityRelayFee)
+
+	if err != nil {
+		return err
+	}
+
+	*o = RelayOrderEntityRelayFee(varRelayOrderEntityRelayFee)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "startAmount")
+		delete(additionalProperties, "endAmount")
+		delete(additionalProperties, "startTime")
+		delete(additionalProperties, "endTime")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableRelayOrderEntityRelayFee struct {

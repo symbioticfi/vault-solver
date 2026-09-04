@@ -19,10 +19,13 @@ var _ MappedNullable = &OifQuotePreviewDtoOutputsInner{}
 
 // OifQuotePreviewDtoOutputsInner struct for OifQuotePreviewDtoOutputsInner
 type OifQuotePreviewDtoOutputsInner struct {
-	Receiver *string `json:"receiver,omitempty"`
-	Asset    *string `json:"asset,omitempty"`
-	Amount   *string `json:"amount,omitempty"`
+	Receiver             *string `json:"receiver,omitempty"`
+	Asset                *string `json:"asset,omitempty"`
+	Amount               *string `json:"amount,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _OifQuotePreviewDtoOutputsInner OifQuotePreviewDtoOutputsInner
 
 // NewOifQuotePreviewDtoOutputsInner instantiates a new OifQuotePreviewDtoOutputsInner object
 // This constructor will assign default values to properties that have it defined,
@@ -156,7 +159,35 @@ func (o OifQuotePreviewDtoOutputsInner) ToMap() (map[string]interface{}, error) 
 	if !IsNil(o.Amount) {
 		toSerialize["amount"] = o.Amount
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *OifQuotePreviewDtoOutputsInner) UnmarshalJSON(data []byte) (err error) {
+	varOifQuotePreviewDtoOutputsInner := _OifQuotePreviewDtoOutputsInner{}
+
+	err = json.Unmarshal(data, &varOifQuotePreviewDtoOutputsInner)
+
+	if err != nil {
+		return err
+	}
+
+	*o = OifQuotePreviewDtoOutputsInner(varOifQuotePreviewDtoOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "receiver")
+		delete(additionalProperties, "asset")
+		delete(additionalProperties, "amount")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableOifQuotePreviewDtoOutputsInner struct {

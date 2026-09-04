@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the ApprovalCheckRequest type satisfies the MappedNullable interface at compile time
@@ -21,10 +19,11 @@ var _ MappedNullable = &ApprovalCheckRequest{}
 
 // ApprovalCheckRequest struct for ApprovalCheckRequest
 type ApprovalCheckRequest struct {
-	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	ChainId       int32  `json:"chainId"`
-	Token         string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount        string `json:"amount" validate:"regexp=^\\\\d+$"`
+	WalletAddress        string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	ChainId              int64  `json:"chainId"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ApprovalCheckRequest ApprovalCheckRequest
@@ -33,7 +32,7 @@ type _ApprovalCheckRequest ApprovalCheckRequest
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewApprovalCheckRequest(walletAddress string, chainId int32, token string, amount string) *ApprovalCheckRequest {
+func NewApprovalCheckRequest(walletAddress string, chainId int64, token string, amount string) *ApprovalCheckRequest {
 	this := ApprovalCheckRequest{}
 	this.WalletAddress = walletAddress
 	this.ChainId = chainId
@@ -75,9 +74,9 @@ func (o *ApprovalCheckRequest) SetWalletAddress(v string) {
 }
 
 // GetChainId returns the ChainId field value
-func (o *ApprovalCheckRequest) GetChainId() int32 {
+func (o *ApprovalCheckRequest) GetChainId() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -86,7 +85,7 @@ func (o *ApprovalCheckRequest) GetChainId() int32 {
 
 // GetChainIdOk returns a tuple with the ChainId field value
 // and a boolean to check if the value has been set.
-func (o *ApprovalCheckRequest) GetChainIdOk() (*int32, bool) {
+func (o *ApprovalCheckRequest) GetChainIdOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -94,7 +93,7 @@ func (o *ApprovalCheckRequest) GetChainIdOk() (*int32, bool) {
 }
 
 // SetChainId sets field value
-func (o *ApprovalCheckRequest) SetChainId(v int32) {
+func (o *ApprovalCheckRequest) SetChainId(v int64) {
 	o.ChainId = v
 }
 
@@ -160,45 +159,38 @@ func (o ApprovalCheckRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize["chainId"] = o.ChainId
 	toSerialize["token"] = o.Token
 	toSerialize["amount"] = o.Amount
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *ApprovalCheckRequest) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"walletAddress",
-		"chainId",
-		"token",
-		"amount",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varApprovalCheckRequest := _ApprovalCheckRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varApprovalCheckRequest)
+	err = json.Unmarshal(data, &varApprovalCheckRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ApprovalCheckRequest(varApprovalCheckRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "walletAddress")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

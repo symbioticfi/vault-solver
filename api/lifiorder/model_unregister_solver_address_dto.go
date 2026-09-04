@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the UnregisterSolverAddressDto type satisfies the MappedNullable interface at compile time
@@ -22,7 +20,8 @@ var _ MappedNullable = &UnregisterSolverAddressDto{}
 // UnregisterSolverAddressDto struct for UnregisterSolverAddressDto
 type UnregisterSolverAddressDto struct {
 	// The address of the solver
-	Address string `json:"address"`
+	Address              string `json:"address"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _UnregisterSolverAddressDto UnregisterSolverAddressDto
@@ -80,42 +79,35 @@ func (o UnregisterSolverAddressDto) MarshalJSON() ([]byte, error) {
 func (o UnregisterSolverAddressDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["address"] = o.Address
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *UnregisterSolverAddressDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"address",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varUnregisterSolverAddressDto := _UnregisterSolverAddressDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varUnregisterSolverAddressDto)
+	err = json.Unmarshal(data, &varUnregisterSolverAddressDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = UnregisterSolverAddressDto(varUnregisterSolverAddressDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "address")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

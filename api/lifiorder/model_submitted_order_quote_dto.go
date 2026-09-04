@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SubmittedOrderQuoteDto type satisfies the MappedNullable interface at compile time
@@ -56,7 +54,8 @@ type SubmittedOrderQuoteDto struct {
 	// Associated order ID
 	OrderId NullableFloat32 `json:"orderId"`
 	// Solver ID
-	SolverId float32 `json:"solverId"`
+	SolverId             float32 `json:"solverId"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SubmittedOrderQuoteDto SubmittedOrderQuoteDto
@@ -560,59 +559,52 @@ func (o SubmittedOrderQuoteDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["user"] = o.User
 	toSerialize["orderId"] = o.OrderId.Get()
 	toSerialize["solverId"] = o.SolverId
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SubmittedOrderQuoteDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"createdAt",
-		"updatedAt",
-		"quoteId",
-		"fromChainNetworkId",
-		"toChainNetworkId",
-		"fromAssetAddress",
-		"toAssetAddress",
-		"fromAssetDecimals",
-		"toAssetDecimals",
-		"quote",
-		"inputAmount",
-		"outputAmount",
-		"expiry",
-		"exclusiveFor",
-		"user",
-		"orderId",
-		"solverId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSubmittedOrderQuoteDto := _SubmittedOrderQuoteDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSubmittedOrderQuoteDto)
+	err = json.Unmarshal(data, &varSubmittedOrderQuoteDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SubmittedOrderQuoteDto(varSubmittedOrderQuoteDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "updatedAt")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "fromChainNetworkId")
+		delete(additionalProperties, "toChainNetworkId")
+		delete(additionalProperties, "fromAssetAddress")
+		delete(additionalProperties, "toAssetAddress")
+		delete(additionalProperties, "fromAssetDecimals")
+		delete(additionalProperties, "toAssetDecimals")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "inputAmount")
+		delete(additionalProperties, "outputAmount")
+		delete(additionalProperties, "expiry")
+		delete(additionalProperties, "exclusiveFor")
+		delete(additionalProperties, "user")
+		delete(additionalProperties, "orderId")
+		delete(additionalProperties, "solverId")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

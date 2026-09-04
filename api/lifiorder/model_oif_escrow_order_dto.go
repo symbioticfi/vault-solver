@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -24,7 +23,8 @@ type OifEscrowOrderDto struct {
 	// Order type identifier for escrow-based execution
 	Type string `json:"type"`
 	// EIP-712 payload for escrow order
-	Payload Eip712PayloadDto `json:"payload"`
+	Payload              Eip712PayloadDto `json:"payload"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifEscrowOrderDto OifEscrowOrderDto
@@ -108,6 +108,11 @@ func (o OifEscrowOrderDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["type"] = o.Type
 	toSerialize["payload"] = o.Payload
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -136,15 +141,21 @@ func (o *OifEscrowOrderDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOifEscrowOrderDto := _OifEscrowOrderDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifEscrowOrderDto)
+	err = json.Unmarshal(data, &varOifEscrowOrderDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifEscrowOrderDto(varOifEscrowOrderDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "payload")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

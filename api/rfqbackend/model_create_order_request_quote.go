@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the CreateOrderRequestQuote type satisfies the MappedNullable interface at compile time
@@ -21,10 +19,10 @@ var _ MappedNullable = &CreateOrderRequestQuote{}
 
 // CreateOrderRequestQuote struct for CreateOrderRequestQuote
 type CreateOrderRequestQuote struct {
-	QuoteId           string                                           `json:"quoteId"`
-	SlippageTolerance float32                                          `json:"slippageTolerance"`
-	AggregatedOutputs []PublicQuoteResponseQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
-	OrderInfo         CreateOrderRequestQuoteOrderInfo                 `json:"orderInfo"`
+	QuoteId              string                                          `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	AggregatedOutputs    []CreateOrderRequestQuoteAggregatedOutputsInner `json:"aggregatedOutputs"`
+	OrderInfo            CreateOrderRequestQuoteOrderInfo                `json:"orderInfo"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuote CreateOrderRequestQuote
@@ -33,10 +31,9 @@ type _CreateOrderRequestQuote CreateOrderRequestQuote
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCreateOrderRequestQuote(quoteId string, slippageTolerance float32, aggregatedOutputs []PublicQuoteResponseQuoteAggregatedOutputsInner, orderInfo CreateOrderRequestQuoteOrderInfo) *CreateOrderRequestQuote {
+func NewCreateOrderRequestQuote(quoteId string, aggregatedOutputs []CreateOrderRequestQuoteAggregatedOutputsInner, orderInfo CreateOrderRequestQuoteOrderInfo) *CreateOrderRequestQuote {
 	this := CreateOrderRequestQuote{}
 	this.QuoteId = quoteId
-	this.SlippageTolerance = slippageTolerance
 	this.AggregatedOutputs = aggregatedOutputs
 	this.OrderInfo = orderInfo
 	return &this
@@ -74,34 +71,10 @@ func (o *CreateOrderRequestQuote) SetQuoteId(v string) {
 	o.QuoteId = v
 }
 
-// GetSlippageTolerance returns the SlippageTolerance field value
-func (o *CreateOrderRequestQuote) GetSlippageTolerance() float32 {
-	if o == nil {
-		var ret float32
-		return ret
-	}
-
-	return o.SlippageTolerance
-}
-
-// GetSlippageToleranceOk returns a tuple with the SlippageTolerance field value
-// and a boolean to check if the value has been set.
-func (o *CreateOrderRequestQuote) GetSlippageToleranceOk() (*float32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.SlippageTolerance, true
-}
-
-// SetSlippageTolerance sets field value
-func (o *CreateOrderRequestQuote) SetSlippageTolerance(v float32) {
-	o.SlippageTolerance = v
-}
-
 // GetAggregatedOutputs returns the AggregatedOutputs field value
-func (o *CreateOrderRequestQuote) GetAggregatedOutputs() []PublicQuoteResponseQuoteAggregatedOutputsInner {
+func (o *CreateOrderRequestQuote) GetAggregatedOutputs() []CreateOrderRequestQuoteAggregatedOutputsInner {
 	if o == nil {
-		var ret []PublicQuoteResponseQuoteAggregatedOutputsInner
+		var ret []CreateOrderRequestQuoteAggregatedOutputsInner
 		return ret
 	}
 
@@ -110,7 +83,7 @@ func (o *CreateOrderRequestQuote) GetAggregatedOutputs() []PublicQuoteResponseQu
 
 // GetAggregatedOutputsOk returns a tuple with the AggregatedOutputs field value
 // and a boolean to check if the value has been set.
-func (o *CreateOrderRequestQuote) GetAggregatedOutputsOk() ([]PublicQuoteResponseQuoteAggregatedOutputsInner, bool) {
+func (o *CreateOrderRequestQuote) GetAggregatedOutputsOk() ([]CreateOrderRequestQuoteAggregatedOutputsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -118,7 +91,7 @@ func (o *CreateOrderRequestQuote) GetAggregatedOutputsOk() ([]PublicQuoteRespons
 }
 
 // SetAggregatedOutputs sets field value
-func (o *CreateOrderRequestQuote) SetAggregatedOutputs(v []PublicQuoteResponseQuoteAggregatedOutputsInner) {
+func (o *CreateOrderRequestQuote) SetAggregatedOutputs(v []CreateOrderRequestQuoteAggregatedOutputsInner) {
 	o.AggregatedOutputs = v
 }
 
@@ -157,48 +130,39 @@ func (o CreateOrderRequestQuote) MarshalJSON() ([]byte, error) {
 func (o CreateOrderRequestQuote) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["quoteId"] = o.QuoteId
-	toSerialize["slippageTolerance"] = o.SlippageTolerance
 	toSerialize["aggregatedOutputs"] = o.AggregatedOutputs
 	toSerialize["orderInfo"] = o.OrderInfo
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *CreateOrderRequestQuote) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"quoteId",
-		"slippageTolerance",
-		"aggregatedOutputs",
-		"orderInfo",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varCreateOrderRequestQuote := _CreateOrderRequestQuote{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varCreateOrderRequestQuote)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuote)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuote(varCreateOrderRequestQuote)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "aggregatedOutputs")
+		delete(additionalProperties, "orderInfo")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

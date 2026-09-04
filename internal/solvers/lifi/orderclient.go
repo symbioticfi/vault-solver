@@ -85,14 +85,15 @@ func (c *orderClient) ensureSupportedContracts(
 	if err != nil {
 		return apiErr("get supported contracts", httpResp, err)
 	}
-	if current != nil && supportsConfiguredContracts(current.Data, chain, inputSettler, outputSettler) {
+	// The client tolerates a dropped field by zero-valuing it, and PUT replaces the whole registered
+	// set, so an incomplete snapshot must not be merged or the missing kinds would be deregistered.
+	if current == nil || current.Data.Oracle == nil || current.Data.InputSettler == nil || current.Data.OutputSettler == nil {
+		return errors.New("get supported contracts: incomplete snapshot; refusing to replace the registered set")
+	}
+	if supportsConfiguredContracts(current.Data, chain, inputSettler, outputSettler) {
 		return nil
 	}
-	contracts := lifiorder.ContractsByKindDto{}
-	if current != nil {
-		contracts = current.Data
-	}
-	return c.replaceSupportedContracts(ctx, supportedContractsDTO(contracts, chain, inputSettler, outputSettler))
+	return c.replaceSupportedContracts(ctx, supportedContractsDTO(current.Data, chain, inputSettler, outputSettler))
 }
 
 func chainRef(chainID int64) string {

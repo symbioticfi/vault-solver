@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OrdersResponseOrdersInner type satisfies the MappedNullable interface at compile time
@@ -21,20 +19,22 @@ var _ MappedNullable = &OrdersResponseOrdersInner{}
 
 // OrdersResponseOrdersInner struct for OrdersResponseOrdersInner
 type OrdersResponseOrdersInner struct {
-	Type              string                                          `json:"type"`
-	OrderId           string                                          `json:"orderId"`
-	OrderStatus       string                                          `json:"orderStatus"`
-	QuoteId           string                                          `json:"quoteId"`
-	Swapper           string                                          `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TxHash            NullableString                                  `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Nonce             string                                          `json:"nonce" validate:"regexp=^\\\\d+$"`
-	Input             PublicQuoteResponseQuoteAggregatedOutputsInner  `json:"input"`
-	Outputs           []PublicQuoteResponseQuoteOrderInfoOutputsInner `json:"outputs"`
-	SettledAmounts    []OrdersResponseOrdersInnerSettledAmountsInner  `json:"settledAmounts"`
-	EncodedOrder      *string                                         `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	ProtocolSignature *string                                         `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Deadline          *int32                                          `json:"deadline,omitempty"`
-	Filler            *string                                         `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Type        string         `json:"type"`
+	OrderId     string         `json:"orderId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	OrderStatus string         `json:"orderStatus"`
+	QuoteId     string         `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
+	Swapper     string         `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TxHash      NullableString `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce                string                                         `json:"nonce" validate:"regexp=^\\d+$"`
+	Input                CreateOrderRequestQuoteAggregatedOutputsInner  `json:"input"`
+	Outputs              []OrdersResponseOrdersInnerOutputsInner        `json:"outputs"`
+	SettledAmounts       []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
+	EncodedOrder         *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	ProtocolSignature    *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Deadline             *int64                                         `json:"deadline,omitempty"`
+	Filler               *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OrdersResponseOrdersInner OrdersResponseOrdersInner
@@ -43,7 +43,7 @@ type _OrdersResponseOrdersInner OrdersResponseOrdersInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input PublicQuoteResponseQuoteAggregatedOutputsInner, outputs []PublicQuoteResponseQuoteOrderInfoOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
+func NewOrdersResponseOrdersInner(type_ string, orderId string, orderStatus string, quoteId string, swapper string, txHash NullableString, nonce string, input CreateOrderRequestQuoteAggregatedOutputsInner, outputs []OrdersResponseOrdersInnerOutputsInner, settledAmounts []OrdersResponseOrdersInnerSettledAmountsInner) *OrdersResponseOrdersInner {
 	this := OrdersResponseOrdersInner{}
 	this.Type = type_
 	this.OrderId = orderId
@@ -237,9 +237,9 @@ func (o *OrdersResponseOrdersInner) SetNonce(v string) {
 }
 
 // GetInput returns the Input field value
-func (o *OrdersResponseOrdersInner) GetInput() PublicQuoteResponseQuoteAggregatedOutputsInner {
+func (o *OrdersResponseOrdersInner) GetInput() CreateOrderRequestQuoteAggregatedOutputsInner {
 	if o == nil {
-		var ret PublicQuoteResponseQuoteAggregatedOutputsInner
+		var ret CreateOrderRequestQuoteAggregatedOutputsInner
 		return ret
 	}
 
@@ -248,7 +248,7 @@ func (o *OrdersResponseOrdersInner) GetInput() PublicQuoteResponseQuoteAggregate
 
 // GetInputOk returns a tuple with the Input field value
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetInputOk() (*PublicQuoteResponseQuoteAggregatedOutputsInner, bool) {
+func (o *OrdersResponseOrdersInner) GetInputOk() (*CreateOrderRequestQuoteAggregatedOutputsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -256,14 +256,14 @@ func (o *OrdersResponseOrdersInner) GetInputOk() (*PublicQuoteResponseQuoteAggre
 }
 
 // SetInput sets field value
-func (o *OrdersResponseOrdersInner) SetInput(v PublicQuoteResponseQuoteAggregatedOutputsInner) {
+func (o *OrdersResponseOrdersInner) SetInput(v CreateOrderRequestQuoteAggregatedOutputsInner) {
 	o.Input = v
 }
 
 // GetOutputs returns the Outputs field value
-func (o *OrdersResponseOrdersInner) GetOutputs() []PublicQuoteResponseQuoteOrderInfoOutputsInner {
+func (o *OrdersResponseOrdersInner) GetOutputs() []OrdersResponseOrdersInnerOutputsInner {
 	if o == nil {
-		var ret []PublicQuoteResponseQuoteOrderInfoOutputsInner
+		var ret []OrdersResponseOrdersInnerOutputsInner
 		return ret
 	}
 
@@ -272,7 +272,7 @@ func (o *OrdersResponseOrdersInner) GetOutputs() []PublicQuoteResponseQuoteOrder
 
 // GetOutputsOk returns a tuple with the Outputs field value
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]PublicQuoteResponseQuoteOrderInfoOutputsInner, bool) {
+func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]OrdersResponseOrdersInnerOutputsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -280,7 +280,7 @@ func (o *OrdersResponseOrdersInner) GetOutputsOk() ([]PublicQuoteResponseQuoteOr
 }
 
 // SetOutputs sets field value
-func (o *OrdersResponseOrdersInner) SetOutputs(v []PublicQuoteResponseQuoteOrderInfoOutputsInner) {
+func (o *OrdersResponseOrdersInner) SetOutputs(v []OrdersResponseOrdersInnerOutputsInner) {
 	o.Outputs = v
 }
 
@@ -373,9 +373,9 @@ func (o *OrdersResponseOrdersInner) SetProtocolSignature(v string) {
 }
 
 // GetDeadline returns the Deadline field value if set, zero value otherwise.
-func (o *OrdersResponseOrdersInner) GetDeadline() int32 {
+func (o *OrdersResponseOrdersInner) GetDeadline() int64 {
 	if o == nil || IsNil(o.Deadline) {
-		var ret int32
+		var ret int64
 		return ret
 	}
 	return *o.Deadline
@@ -383,7 +383,7 @@ func (o *OrdersResponseOrdersInner) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *OrdersResponseOrdersInner) GetDeadlineOk() (*int32, bool) {
+func (o *OrdersResponseOrdersInner) GetDeadlineOk() (*int64, bool) {
 	if o == nil || IsNil(o.Deadline) {
 		return nil, false
 	}
@@ -399,8 +399,8 @@ func (o *OrdersResponseOrdersInner) HasDeadline() bool {
 	return false
 }
 
-// SetDeadline gets a reference to the given int32 and assigns it to the Deadline field.
-func (o *OrdersResponseOrdersInner) SetDeadline(v int32) {
+// SetDeadline gets a reference to the given int64 and assigns it to the Deadline field.
+func (o *OrdersResponseOrdersInner) SetDeadline(v int64) {
 	o.Deadline = &v
 }
 
@@ -468,51 +468,48 @@ func (o OrdersResponseOrdersInner) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Filler) {
 		toSerialize["filler"] = o.Filler
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OrdersResponseOrdersInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"type",
-		"orderId",
-		"orderStatus",
-		"quoteId",
-		"swapper",
-		"txHash",
-		"nonce",
-		"input",
-		"outputs",
-		"settledAmounts",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOrdersResponseOrdersInner := _OrdersResponseOrdersInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOrdersResponseOrdersInner)
+	err = json.Unmarshal(data, &varOrdersResponseOrdersInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OrdersResponseOrdersInner(varOrdersResponseOrdersInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "orderId")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "settledAmounts")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "protocolSignature")
+		delete(additionalProperties, "deadline")
+		delete(additionalProperties, "filler")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

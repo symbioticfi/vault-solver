@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the RegisterAccountV1Dto type satisfies the MappedNullable interface at compile time
@@ -28,7 +26,8 @@ type RegisterAccountV1Dto struct {
 	// Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Must be unique across all solvers.
 	Account string `json:"account"`
 	// CAIP-2 chain identifier for the account. Supported chains: GET /chains/supported.
-	Chain string `json:"chain"`
+	Chain                string `json:"chain"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _RegisterAccountV1Dto RegisterAccountV1Dto
@@ -164,45 +163,38 @@ func (o RegisterAccountV1Dto) ToMap() (map[string]interface{}, error) {
 	toSerialize["signature"] = o.Signature
 	toSerialize["account"] = o.Account
 	toSerialize["chain"] = o.Chain
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *RegisterAccountV1Dto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"message",
-		"signature",
-		"account",
-		"chain",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varRegisterAccountV1Dto := _RegisterAccountV1Dto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varRegisterAccountV1Dto)
+	err = json.Unmarshal(data, &varRegisterAccountV1Dto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = RegisterAccountV1Dto(varRegisterAccountV1Dto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "message")
+		delete(additionalProperties, "signature")
+		delete(additionalProperties, "account")
+		delete(additionalProperties, "chain")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }
