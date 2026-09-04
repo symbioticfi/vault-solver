@@ -60,7 +60,9 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 	for _, f := range fields {
 		f.AddTo(enc)
 	}
-	sentry.WithScope(func(scope *sentry.Scope) {
+	// The global hub's scope stack is not goroutine-safe; each write gets its own clone.
+	hub := sentry.CurrentHub().Clone()
+	hub.WithScope(func(scope *sentry.Scope) {
 		if len(enc.Fields) > 0 {
 			scope.SetContext("log", enc.Fields)
 		}
@@ -74,7 +76,7 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 		// Group by solver and static message, not the title: the title carries the error text so
 		// the issue stream shows the cause, while one log site in one solver still maps to one issue.
 		scope.SetFingerprint([]string{tags["solver"], e.Message})
-		sentry.CaptureMessage(eventTitle(e.Message, enc.Fields))
+		hub.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
 }

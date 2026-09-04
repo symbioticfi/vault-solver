@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -138,6 +139,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ReportFatal: reportFatal,
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
 	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
 		solverDeps := deps
@@ -149,6 +151,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			return err
 		}
 		solvers = append(solvers, slv)
+		solverLogs = append(solverLogs, solverDeps.Log)
 		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
 	}
 	if requiresTxManager {
@@ -202,8 +205,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
 		})
 	}
-	for _, slv := range solvers {
-		g.Go(func() error { return solver.Run(gctx, slv, log) })
+	for i, slv := range solvers {
+		g.Go(func() error { return solver.Run(gctx, slv, solverLogs[i]) })
 	}
 
 	var (

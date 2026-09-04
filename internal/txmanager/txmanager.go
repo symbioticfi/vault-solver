@@ -129,19 +129,13 @@ type pendingTransaction struct {
 	receiptCursor     int
 	nonceConflictHash common.Hash
 	originalHash      common.Hash
-	// receiptReadFailures counts consecutive failed receipt lookups. The first failure of a streak
-	// is logged at error, the rest at debug, and the error repeats every
-	// receiptFailureReminderInterval while the streak lasts, so a stuck RPC produces one alert per
-	// pending transaction plus a periodic reminder rather than one per poll, and an outage that
-	// never recovers cannot go quiet.
-	receiptReadFailures    int
-	receiptReadFailedAt    time.Time
-	receiptReadLastAlertAt time.Time
-	result                 chan<- Result
-	resultOnce             sync.Once
-	cancelDeadline         time.Time
-	cancelRequested        chan struct{}
-	cancelOnce             sync.Once
+	receiptReads      readStreak
+	obsolescenceReads readStreak
+	result            chan<- Result
+	resultOnce        sync.Once
+	cancelDeadline    time.Time
+	cancelRequested   chan struct{}
+	cancelOnce        sync.Once
 }
 
 type txAttempt struct {
@@ -842,13 +836,16 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			}
 			obsolete, err := m.requestObsolete(ctx, pending.req)
 			if err != nil {
-				m.log.Error(err, "pending transaction obsolescence check unavailable; retaining lifecycle",
+				pending.obsolescenceReads.failed(m.log, err,
+					"pending transaction obsolescence check unavailable; retaining lifecycle",
 					"label", pending.req.Label,
 					"hash", pending.originalHash.Hex(),
 					"nonce", pending.nonce,
 				)
 				continue
 			}
+			pending.obsolescenceReads.recovered(m.log, "pending transaction obsolescence checks recovered",
+				"label", pending.req.Label, "nonce", pending.nonce)
 			if !obsolete {
 				continue
 			}
@@ -883,51 +880,20 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 	return obsolete, nil
 }
 
-// noteReceiptReadFailed records a failed receipt lookup: the first failure of a streak is an error,
-// later ones are debug with the running count, since the condition is already reported.
-func (m *Manager) noteReceiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
-	pending.receiptReadFailures++
-	fields := make([]any, 0, 16)
-	fields = append(fields,
+func (m *Manager) receiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
+	pending.receiptReads.failed(m.log, err, "pending transaction receipt unavailable",
 		"label", pending.req.Label,
 		"hash", attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
 		"nonce", pending.nonce,
 		"cancellation", attempt.cancellation,
 		"rpcTimeout", m.receiptReadTimeout().String(),
-		"consecutiveFailures", pending.receiptReadFailures,
 	)
-	now := time.Now()
-	if pending.receiptReadFailures == 1 {
-		pending.receiptReadFailedAt, pending.receiptReadLastAlertAt = now, now
-		m.log.Error(err, "pending transaction receipt unavailable", fields...)
-		return
-	}
-	if now.Sub(pending.receiptReadLastAlertAt) >= receiptFailureReminderInterval {
-		pending.receiptReadLastAlertAt = now
-		m.log.Error(err, "pending transaction receipt still unavailable",
-			append(fields, "since", now.Sub(pending.receiptReadFailedAt).Round(time.Second).String())...)
-		return
-	}
-	m.log.V(1).Info("pending transaction receipt still unavailable", append(fields, "error", err.Error())...)
 }
 
-// receiptFailureReminderInterval is how often an unrecovered receipt read streak is re-raised at
-// error level. A variable so tests can shorten it.
-var receiptFailureReminderInterval = 5 * time.Minute
-
-// noteReceiptReadRecovered closes a failure streak, if one was open, with how long it lasted.
-func (m *Manager) noteReceiptReadRecovered(pending *pendingTransaction) {
-	if pending.receiptReadFailures == 0 {
-		return
-	}
-	m.log.Info("pending transaction receipt reads recovered",
-		"label", pending.req.Label,
-		"nonce", pending.nonce,
-		"consecutiveFailures", pending.receiptReadFailures,
-		"outage", time.Since(pending.receiptReadFailedAt).Round(time.Millisecond).String(),
-	)
-	pending.receiptReadFailures = 0
+func (m *Manager) receiptReadsRecovered(pending *pendingTransaction) {
+	pending.receiptReads.recovered(m.log, "pending transaction receipt reads recovered",
+		"label", pending.req.Label, "nonce", pending.nonce)
 }
 
 func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
@@ -938,6 +904,13 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		return Result{}, false
 	}
 	start := pending.receiptCursor % attempts
+	// Failures are judged per sweep, not per hash: with several tracked attempts one hash answering
+	// while another times out must not restart the streak every poll.
+	var (
+		readErr     error
+		readAttempt txAttempt
+		readOK      bool
+	)
 	for checked := range attempts {
 		if lookupCtx.Err() != nil {
 			break
@@ -947,14 +920,17 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		attempt := pending.attempts[i]
 		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
 		if errors.Is(err, ethereum.NotFound) {
-			m.noteReceiptReadRecovered(pending)
+			readOK = true
 			continue
 		}
 		if err != nil {
-			m.noteReceiptReadFailed(pending, attempt, err)
+			if readErr == nil {
+				readErr, readAttempt = err, attempt
+			}
 			continue
 		}
-		m.noteReceiptReadRecovered(pending)
+		readOK = true
+		m.receiptReadsRecovered(pending)
 		if err := validateReceipt(attempt.hash, receipt); err != nil {
 			m.log.Error(err, "invalid pending transaction receipt",
 				"label", pending.req.Label,
@@ -1037,6 +1013,12 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 			"confirmations", confirmations,
 		)
 		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
+	}
+	switch {
+	case readErr != nil:
+		m.receiptReadFailed(pending, readAttempt, readErr)
+	case readOK:
+		m.receiptReadsRecovered(pending)
 	}
 	return Result{}, false
 }
@@ -1737,18 +1719,29 @@ func (m *Manager) waitForConfirmations(
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 
+	var headReads, receiptReads, ancestryReads readStreak
+	missing := 0
 	for {
 		headBefore, headErr := m.confirmationHead(ctx)
 		if headErr != nil {
-			m.log.Error(headErr, "confirmation head unavailable", "hash", hash.Hex())
+			headReads.failed(m.log, headErr, "confirmation head unavailable", "hash", hash.Hex())
+		} else {
+			headReads.recovered(m.log, "confirmation head reads recovered", "hash", hash.Hex())
 		}
 		refreshed, err := m.confirmationReceipt(ctx, hash)
-		if err != nil {
-			if errors.Is(err, errReceiptReorged) {
+		switch {
+		case errors.Is(err, errReceiptReorged):
+			// One null can be a lagging upstream rather than a reorg; require two in a row.
+			missing++
+			if missing >= 2 {
 				return receipt, err
 			}
-			m.log.Error(err, "receipt confirmation check unavailable", "hash", hash.Hex())
-		} else {
+			m.log.Info("confirmed receipt missing; rechecking before treating it as a reorg", "hash", hash.Hex())
+		case err != nil:
+			receiptReads.failed(m.log, err, "receipt confirmation check unavailable", "hash", hash.Hex())
+		default:
+			missing = 0
+			receiptReads.recovered(m.log, "receipt confirmation reads recovered", "hash", hash.Hex())
 			receipt = refreshed
 			if headErr == nil {
 				head := headBefore.Number.Uint64()
@@ -1758,11 +1751,12 @@ func (m *Manager) waitForConfirmations(
 						if errors.Is(err, errReceiptReorged) {
 							return receipt, err
 						}
-						m.log.Error(err, "receipt ancestry check unavailable", "hash", hash.Hex())
+						ancestryReads.failed(m.log, err, "receipt ancestry check unavailable", "hash", hash.Hex())
 					} else {
+						ancestryReads.recovered(m.log, "receipt ancestry reads recovered", "hash", hash.Hex())
 						headAfter, afterErr := m.confirmationHead(ctx)
 						if afterErr != nil {
-							m.log.Error(afterErr, "confirmation head unavailable", "hash", hash.Hex())
+							headReads.failed(m.log, afterErr, "confirmation head unavailable", "hash", hash.Hex())
 						} else if headBefore.Hash() == headAfter.Hash() {
 							return receipt, nil
 						}

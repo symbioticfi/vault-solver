@@ -1,23 +1,44 @@
 package txmanager
 
 import (
+	"context"
+	"errors"
 	"math/big"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 )
 
-// A stuck RPC used to produce one error per poll per pending transaction (1,400 events in an hour
-// from three pods). A failure streak is now one error at its start, debug while it lasts, and one
-// info line with the count and duration when reads recover.
-func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
-	var logs []string
-	logger := funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1})
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 3}
-	m := New(
+func newLogCapture(verbosity int) (*[]string, logr.Logger) {
+	logs := &[]string{}
+	return logs, funcr.NewJSON(func(entry string) { *logs = append(*logs, entry) }, funcr.Options{Verbosity: verbosity})
+}
+
+// countLogs counts entries carrying msg, split by whether they were written at error level (funcr
+// emits "level" for Info calls only).
+func countLogs(logs []string, msg string) (errorLevel, other int) {
+	for _, entry := range logs {
+		if !strings.Contains(entry, `"msg":"`+msg+`"`) {
+			continue
+		}
+		if strings.Contains(entry, `"level":`) {
+			other++
+		} else {
+			errorLevel++
+		}
+	}
+	return errorLevel, other
+}
+
+func newStreakManager(t *testing.T, b Backend, logger logr.Logger) *Manager {
+	t.Helper()
+	return New(
 		b, mustSigner(t), big.NewInt(11155111),
 		Config{
 			MaxFeeGwei:          100,
@@ -27,10 +48,12 @@ func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
 		},
 		logger,
 	)
-	startManagerForTest(t, m)
+}
 
+func sendAndWait(t *testing.T, m *Manager, label string) {
+	t.Helper()
 	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "receipt streak",
+		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: label,
 	})
 	if !accepted {
 		t.Fatal("transaction was not accepted")
@@ -38,26 +61,25 @@ func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
 	if got := <-result; got.Err != nil {
 		t.Fatalf("result: %v", got.Err)
 	}
+}
 
-	count := func(substr string) int {
-		n := 0
-		for _, entry := range logs {
-			if strings.Contains(entry, substr) {
-				n++
-			}
-		}
-		return n
+// A stuck RPC used to produce one error per poll per pending transaction (1,400 events in an hour
+// from three pods). A failure streak is now one error at its start, debug while it lasts, and one
+// info line with the count and duration when reads recover.
+func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
+	logs, logger := newLogCapture(1)
+	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 3}
+	m := newStreakManager(t, b, logger)
+	startManagerForTest(t, m)
+	sendAndWait(t, m, "receipt streak")
+
+	if errs, debug := countLogs(*logs, "pending transaction receipt unavailable"); errs != 1 || debug != 2 {
+		t.Fatalf("receipt unavailable lines: error=%d debug=%d, want 1 and 2; logs:\n%s", errs, debug, strings.Join(*logs, "\n"))
 	}
-	if got := count(`"pending transaction receipt unavailable"`); got != 1 {
-		t.Fatalf("error-level receipt log lines = %d, want 1; logs:\n%s", got, strings.Join(logs, "\n"))
+	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 1 {
+		t.Fatalf("recovery lines = %d, want 1; logs:\n%s", info, strings.Join(*logs, "\n"))
 	}
-	if got := count(`"pending transaction receipt still unavailable"`); got != 2 {
-		t.Fatalf("debug follow-up lines = %d, want 2; logs:\n%s", got, strings.Join(logs, "\n"))
-	}
-	if got := count(`"pending transaction receipt reads recovered"`); got != 1 {
-		t.Fatalf("recovery lines = %d, want 1; logs:\n%s", got, strings.Join(logs, "\n"))
-	}
-	for _, entry := range logs {
+	for _, entry := range *logs {
 		if strings.Contains(entry, "reads recovered") && !strings.Contains(entry, `"consecutiveFailures":3`) {
 			t.Fatalf("recovery line should carry the streak length: %s", entry)
 		}
@@ -65,53 +87,83 @@ func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
 }
 
 // An outage that never recovers must not go quiet after its first error: the streak is re-raised at
-// error level every receiptFailureReminderInterval with how long it has lasted.
+// error level every readFailureReminderInterval with how long it has lasted.
 func TestReceiptReadFailuresRemindWhileUnrecovered(t *testing.T) {
-	previous := receiptFailureReminderInterval
-	receiptFailureReminderInterval = 0
-	t.Cleanup(func() { receiptFailureReminderInterval = previous })
+	previous := readFailureReminderInterval
+	readFailureReminderInterval = 0
+	t.Cleanup(func() { readFailureReminderInterval = previous })
 
-	var logs []string
-	logger := funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
+	logs, logger := newLogCapture(0)
 	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 4}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{
-			MaxFeeGwei:          100,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Second,
-			PendingTimeout:      time.Second,
-		},
-		logger,
-	)
+	m := newStreakManager(t, b, logger)
 	startManagerForTest(t, m)
+	sendAndWait(t, m, "receipt reminder")
 
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "receipt reminder",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
+	errs, _ := countLogs(*logs, "pending transaction receipt unavailable")
+	if errs != 4 {
+		t.Fatalf("error-level lines = %d, want 4; logs:\n%s", errs, strings.Join(*logs, "\n"))
 	}
-	if got := <-result; got.Err != nil {
-		t.Fatalf("result: %v", got.Err)
-	}
-
-	first, reminders := 0, 0
-	for _, entry := range logs {
-		if !strings.Contains(entry, `"error"`) {
-			continue
-		}
-		switch {
-		case strings.Contains(entry, `"pending transaction receipt unavailable"`):
-			first++
-		case strings.Contains(entry, `"pending transaction receipt still unavailable"`):
+	reminders := 0
+	for _, entry := range *logs {
+		if strings.Contains(entry, `"since"`) {
 			reminders++
-			if !strings.Contains(entry, `"since"`) {
-				t.Fatalf("reminder should say how long the streak has lasted: %s", entry)
-			}
 		}
 	}
-	if first != 1 || reminders != 3 {
-		t.Fatalf("error-level lines: first=%d reminders=%d, want 1 and 3; logs:\n%s", first, reminders, strings.Join(logs, "\n"))
+	if reminders != 3 {
+		t.Fatalf("reminder lines with streak duration = %d, want 3; logs:\n%s", reminders, strings.Join(*logs, "\n"))
+	}
+}
+
+// splitReceiptBackend answers NotFound for every hash except one, which errors a fixed number of times.
+type splitReceiptBackend struct {
+	*mockBackend
+
+	failing  common.Hash
+	failures atomic.Int32
+	limit    int32
+}
+
+func (b *splitReceiptBackend) TransactionReceipt(ctx context.Context, h common.Hash) (*types.Receipt, error) {
+	if h == b.failing && b.failures.Add(1) <= b.limit {
+		return nil, errors.New("receipt rpc timeout")
+	}
+	return b.mockBackend.TransactionReceipt(ctx, h)
+}
+
+// After a fee replacement two hashes are polled per sweep. One answering while the other fails must
+// count as one continuing streak, not a recovery plus a fresh error every sweep.
+func TestReceiptReadStreakSpansAttempts(t *testing.T) {
+	logs, logger := newLogCapture(1)
+	mk := func(nonce uint64, tip int64) *types.Transaction {
+		return types.NewTx(&types.DynamicFeeTx{
+			ChainID: big.NewInt(11155111), Nonce: nonce, GasTipCap: big.NewInt(tip), GasFeeCap: big.NewInt(tip * 2),
+			Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
+		})
+	}
+	first, replacement := mk(7, 1), mk(7, 2)
+	b := &splitReceiptBackend{mockBackend: newMockBackend(), failing: replacement.Hash(), limit: 3}
+	m := newStreakManager(t, b, logger)
+	pending := &pendingTransaction{
+		req: Request{Label: "split"}, nonce: 7, originalHash: first.Hash(),
+		attempts: []txAttempt{{hash: first.Hash(), tx: first}, {hash: replacement.Hash(), tx: replacement}},
+	}
+
+	for range 3 {
+		if _, done := m.receiptResult(t.Context(), pending); done {
+			t.Fatal("lifecycle completed without a receipt")
+		}
+	}
+	if errs, debug := countLogs(*logs, "pending transaction receipt unavailable"); errs != 1 || debug != 2 {
+		t.Fatalf("receipt unavailable lines: error=%d debug=%d, want 1 and 2; logs:\n%s", errs, debug, strings.Join(*logs, "\n"))
+	}
+	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 0 {
+		t.Fatalf("recovered while one hash still failed; logs:\n%s", strings.Join(*logs, "\n"))
+	}
+
+	if _, done := m.receiptResult(t.Context(), pending); done {
+		t.Fatal("lifecycle completed without a receipt")
+	}
+	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 1 {
+		t.Fatalf("recovery lines = %d, want 1; logs:\n%s", info, strings.Join(*logs, "\n"))
 	}
 }
