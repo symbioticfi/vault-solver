@@ -99,6 +99,15 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		return nil, errors.Errorf("unsupported non-onchain order type %q: %w", event.OrderType, errOrderUnsupported)
 	}
 
+	// Classify by chain before reading any address: the feed carries every network LI.FI serves
+	// (a Solana settler is a base58 program id), and an order for another chain is never actionable here.
+	originChainID, err := parseUint(event.Order.OriginChainId, "order.originChainId")
+	if err != nil {
+		return nil, err
+	}
+	if originChainID.Cmp(big.NewInt(chainID)) != 0 {
+		return nil, errors.Errorf("%w: originChainId %s, configuredChainId %d", errOrderForDifferentChain, originChainID, chainID)
+	}
 	inputSettler, err := parseAddress(event.InputSettler, "inputSettler")
 	if err != nil {
 		return nil, err

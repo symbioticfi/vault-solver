@@ -313,3 +313,19 @@ func testTerminalAPIOrder(hash common.Hash, status string, txHash common.Hash) m
 	}
 	return order
 }
+
+func TestOrderClientSurfacesErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"\"sort\" may only be gt(0).","errorCode":"VALIDATION_ERROR"}`))
+	}))
+	defer server.Close()
+
+	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
+	client.requestGap = 0
+	_, err := client.openOrders(context.Background(), 1, nil)
+	if err == nil || !strings.Contains(err.Error(), `may only be gt(0)`) || strings.Contains(err.Error(), "%!s") {
+		t.Fatalf("err = %v, want the response detail", err)
+	}
+}
