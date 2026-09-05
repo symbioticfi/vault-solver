@@ -31,6 +31,9 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Compile solver-owned E2E package
+        run: make test-e2e-suite
+
   lint:
     runs-on: ubuntu-latest
     steps:

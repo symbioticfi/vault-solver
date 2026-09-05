@@ -23,6 +23,10 @@ are listed under [Solvers](#solvers).
   one unresolved signed lifecycle across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
+- **`e2e/`** — solver-owned Go outcome tests and independent settlement arithmetic, compiled by the
+  pinned E2E infrastructure into a static test binary.
+- **`hack/e2e-init.sh`** — immutable pin and on-demand checkout for the private Anvil/Docker E2E
+  infrastructure; ordinary source checkouts contain no private gitlinks.
 
 State is intentionally minimal — positions, liquidity, and readiness are read from on-chain views and
 the relevant protocol API on each tick; no database.
@@ -353,6 +357,7 @@ operator-controlled fallback.
 ## Requirements
 
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).
+- Node 24 and pnpm 10 only for private E2E infrastructure unit tests.
 - For regenerating codegen: `make tools` (installs pinned `abigen`, `golangci-lint`). OpenAPI clients use
   the Java openapi-generator, downloaded on demand by `hack/openapi-generator-cli.sh` (needs a JRE).
 - A reachable EVM RPC endpoint and a signing key (see Configuration).
@@ -363,7 +368,9 @@ operator-controlled fallback.
 make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
+make test-e2e-suite   # compile the tagged solver-owned Go E2E package
 make test-txmanager-anvil # real pending replacement/cancellation against local Anvil
+make test-e2e E2E_PROFILE=rfq # local RFQ direct + signed-discount flows
 make lint             # golangci-lint
 ./bin/vault-solver run --config config/3f.example.yaml
 ```
@@ -375,6 +382,46 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ```bash
 ./bin/vault-solver run --config config/3f.example.yaml --debug
 ```
+
+## Local end-to-end tests
+
+Protocol assertions live in the public, solver-owned Go package under [`e2e/`](e2e). The package
+exposes the build-tagged `TestE2E` entrypoint; ordinary `go test ./...` runs its pure arithmetic tests,
+while the E2E runner compiles the network tests in Docker with `-tags=e2e`. RFQ, LI.FI, and UniswapX
+each prove direct (`external`) and backend-signed discount (`internal`) settlement; 3F proves offer
+through redeem, and RedStone OEV proves auction through liquidation. Settlement math is recomputed
+independently instead of calling the production strategies. All signer identities are public deterministic
+Anvil fixtures and must never hold assets or permissions outside disposable local chains.
+
+The private
+[`rfq-integration/feat/vault-solver-e2e`](https://github.com/symbioticfi/rfq-integration/tree/feat/vault-solver-e2e)
+repository owns the reusable Docker/Anvil infrastructure, deployments, protocol fixtures, readiness,
+mode transitions, diagnostics, and cleanup. It is pinned by [`hack/e2e-init.sh`](hack/e2e-init.sh) and
+cloned on demand into the ignored `/.e2e/` directory. The solver checkout is supplied only as a Docker
+build context: runtime receives a static test binary, a read-only deployment manifest, and a separate
+writable artifact directory.
+
+```bash
+make test-e2e-suite           # compile the build-tagged Go E2E package
+make test-e2e E2E_PROFILE=rfq # one infrastructure profile
+make test-e2e                 # all five profiles
+make test-e2e-harness         # Go package + infrastructure unit tests (Node 24 + pnpm 10)
+```
+
+The Make targets initialize the exact pinned infrastructure revision automatically. No private submodule
+is registered in this public repository, so normal and recursive clones remain public-only. The private
+harness pins `rfq-backend` and `rfq-indexer`, builds both locally, and runs them with Postgres. Its backend
+overlay replaces the private devkit surface and installs only from npmjs; no internal package registry,
+prebuilt service image, live key, or live RPC endpoint is required. The runner tears stacks down on
+success, captures generated configs and test artifacts under `/tmp/vault-solver-e2e/<profile>`, and can
+retain a failed stack with `VAULT_SOLVER_E2E_KEEP_STACK=1`.
+
+Pull requests targeting `stage` or `main` run the five profiles in parallel. Because this repository is
+public, its repository-scoped `GITHUB_TOKEN` cannot clone the private harness. The workflow requests a
+read-only GitHub App token scoped to `rfq-integration`, `rfq-backend`, and `rfq-indexer`. Configure the
+`Integration tests` Actions environment with its client ID in the `APP_CLIENT_ID` variable and its
+private key in the `APP_PRIVATE_KEY` secret. Secrets are not exposed to fork or Dependabot pull
+requests, so the private E2E jobs are skipped for those events.
 
 ## Observability
 
