@@ -188,7 +188,7 @@ func (c *orderClient) fetchOrderHashBatch(
 		defer httpResponse.Body.Close()
 	}
 	if err != nil {
-		return errors.Errorf("GET /orders by hash: %w", err)
+		return apiErr("GET /orders by hash", httpResponse, err)
 	}
 	if response == nil {
 		return errors.New("GET /orders by hash: empty response")
@@ -242,9 +242,21 @@ func (c *orderClient) executeOrderRequest(
 		defer httpResponse.Body.Close()
 	}
 	if err != nil {
-		return nil, errors.Errorf("GET /orders: %w", err)
+		return nil, apiErr("GET /orders", httpResponse, err)
 	}
 	return response, nil
+}
+
+// apiErr reports the status line and response body: the generated client formats the error
+// model's pointer fields with %s, which renders as %!s(*string=0x...) instead of the detail.
+func apiErr(what string, resp *http.Response, err error) error {
+	var genErr *uniswapxservice.GenericOpenAPIError
+	if resp != nil && errors.As(err, &genErr) {
+		if body := strings.TrimSpace(string(genErr.Body())); body != "" {
+			return errors.Errorf("%s: %s: %s", what, resp.Status, body)
+		}
+	}
+	return errors.Errorf("%s: %w", what, err)
 }
 
 func orderTerminalFromAPI(
