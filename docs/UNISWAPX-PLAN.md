@@ -142,7 +142,7 @@ assertion because the PR19 ABI has no getter.
   `fill/failure` and `fill/not_admitted`, while txmanager remains authoritative for detailed outcomes, gas,
   fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
-  `exclusive_order_poll`, and `public_order_poll` boundaries. Partial pagination or a safe, incomplete
+  `exclusive_order_poll`, and `public_order_poll` boundaries. A truncated order snapshot or a safe, incomplete
   discount fallback is `degraded`; exclusive reconciliation failures are `error` because they invalidate
   readiness. An epoch/planning discard or cancellation is `skipped`. Fill planning and transaction
   submission are outside these source timers.
@@ -515,9 +515,11 @@ no push abstraction is carried before a second real delivery source exists.
 
 **POLL — `GET https://api.uniswap.org/v2/orders`** (mainnet), **≤6 RPS**. The exact Beta polling
 transport remains an onboarding confirmation item (§10.4):
-- Query: `orderStatus=open&filler=<us>&chainId=<id>` (+ `limit, cursor, sortKey=createdAt, sort, desc,
-  orderHash(es), swapper, pair`). `orderStatus ∈ {open, expired, error, cancelled, filled, insufficient-funds}`.
-- Response: `{ orders: OrderEntity[], cursor? }`; under upstream spec version 2.0.0, a Dutch V2 variant is
+- Query: `orderStatus=open&filler=<us>&chainId=<id>` (+ `limit, orderHash(es), swapper, pair`).
+  `orderStatus ∈ {open, expired, error, cancelled, filled, insufficient-funds}`. `/orders` no longer accepts
+  cursor-based pagination or alternative sort/filter values.
+- Response: `{ orders: OrderEntity[] }`, a single newest-first snapshot capped at 50 rows. Under upstream
+  spec version 2.0.0, a Dutch V2 variant is
   the typed `DutchV2OrderEntity` with `encodedOrder`, `signature`, nested
   `cosignerData{decayStartTime, decayEndTime, exclusiveFiller, inputOverride, outputOverrides[]}`,
   `cosignature`, `createdAt`, `input`, `outputs[]`, `orderHash`, `chainId`, `swapper`, optional `txHash`,
@@ -525,8 +527,11 @@ transport remains an onboarding confirmation item (§10.4):
   `SignedOrder{order, sig}` — directly fillable.
 
 **Ingestion design:** poll at 500–1000ms, inside the 6 RPS budget. Exclusive V2 then public V2 are fetched
-independently under one limiter; each source has bounded pagination. Dedup by `orderHash`. Both sources use
-the configured V2 Reactor/Executor pair and `GET /orders`; there is no legacy `/limit-orders` runtime path.
+independently under one limiter. Dedup by `orderHash`. Both sources use the configured V2 Reactor/Executor
+pair and `GET /orders`; there is no legacy `/limit-orders` runtime path. A 50-row response may be truncated:
+the rows are still processed, but the poll is degraded and exclusive quote publication stays blocked. Recent
+all-status recovery filters `createdAt` locally and accepts a 50-row snapshot only when its oldest row reaches
+the recovery cutoff; otherwise history remains unknown and quoting stays fail-closed.
 After each successful exclusive poll, tracked obligations past `decayStartTime` are reconciled by hash in
 bounded batches through the same endpoint. Only a canonical successful fill whose block time is at or before
 the deadline discharges the obligation. This includes another filler's soft override. A later fill by any
@@ -630,8 +635,10 @@ is economic, not just gas:
   described in §2.2.
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
   `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
-  poll, the solver also reads recent filler history across all statuses so an order that became terminal while
-  absent is recovered. History/parse uncertainty stops quoting instead of silently clearing obligations.
+  poll, the solver also reads the newest filler snapshot across all statuses and filters it locally so an order
+  that became terminal while absent is recovered. The upstream endpoint is capped at 50 rows, so a snapshot
+  that does not reach the recovery cutoff remains incomplete. History/parse uncertainty stops quoting instead
+  of silently clearing obligations.
   Expired obligations are reconciled in batches against terminal order state and a canonical fill receipt at
   the shared tx manager's configured confirmation depth.
   Only a successful on-chain fill at or before the deadline clears the obligation; this makes another

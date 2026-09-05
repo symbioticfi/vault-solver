@@ -33,10 +33,6 @@ type ApiOrdersGetRequest struct {
 	executeAddress *string
 	orderType      *OrderTypeQuery
 	pair           *string
-	sortKey        *SortKey
-	sort           *string
-	desc           *bool
-	cursor         *string
 	chainId        *ChainId
 }
 
@@ -94,30 +90,6 @@ func (r ApiOrdersGetRequest) Pair(pair string) ApiOrdersGetRequest {
 	return r
 }
 
-// Order the query results by the sort key. Required when sort or desc is provided.
-func (r ApiOrdersGetRequest) SortKey(sortKey SortKey) ApiOrdersGetRequest {
-	r.sortKey = &sortKey
-	return r
-}
-
-// Sort query. For example: &#x60;sort&#x3D;gt(UNIX_TIMESTAMP)&#x60;, &#x60;sort&#x3D;between(1675872827, 1675872930)&#x60;, or &#x60;lt(1675872930)&#x60;.
-func (r ApiOrdersGetRequest) Sort(sort string) ApiOrdersGetRequest {
-	r.sort = &sort
-	return r
-}
-
-// Boolean to sort query results by descending sort key.
-func (r ApiOrdersGetRequest) Desc(desc bool) ApiOrdersGetRequest {
-	r.desc = &desc
-	return r
-}
-
-// Cursor param to page through results. This will be returned in the previous query if the results have been paginated.
-func (r ApiOrdersGetRequest) Cursor(cursor string) ApiOrdersGetRequest {
-	r.cursor = &cursor
-	return r
-}
-
 // Filter by chain id. Cannot be combined with swapper.
 func (r ApiOrdersGetRequest) ChainId(chainId ChainId) ApiOrdersGetRequest {
 	r.chainId = &chainId
@@ -131,7 +103,7 @@ func (r ApiOrdersGetRequest) Execute() (*GetOrdersResponse, *http.Response, erro
 /*
 OrdersGet Retrieve UniswapX orders
 
-Retrieve orders filtered by query parameter(s). At least one of `orderHash`, `orderHashes`, `chainId`, `orderStatus`, `swapper`, `filler`, or `pair` must be provided. Not supported in combination: `swapper` with `chainId`; `orderHashes` with `sortKey`. `sortKey` is required whenever `sort` or `desc` is provided. The shape of each entry in `orders` depends on the order's type; filter with `orderType` to receive a single shape.
+Retrieve orders filtered by query parameter(s). At least one of `orderHash`, `orderHashes`, `chainId`, `orderStatus`, `swapper`, `filler`, or `pair` must be provided. `swapper` cannot be combined with `chainId`. Results are a single page of the newest orders (`createdAt` descending, at most 50); there is no pagination or alternative ordering: `sortKey=createdAt`, `sort=gt(0)` and `desc=true` are accepted and ignored, any other value or any `cursor` returns 400. To enumerate limit orders beyond one page use /limit-orders. The shape of each entry in `orders` depends on the order's type; filter with `orderType` to receive a single shape.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiOrdersGetRequest
@@ -191,18 +163,6 @@ func (a *OrdersAPIService) OrdersGetExecute(r ApiOrdersGetRequest) (*GetOrdersRe
 	}
 	if r.pair != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "pair", r.pair, "form", "")
-	}
-	if r.sortKey != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "sortKey", r.sortKey, "form", "")
-	}
-	if r.sort != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "sort", r.sort, "form", "")
-	}
-	if r.desc != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "desc", r.desc, "form", "")
-	}
-	if r.cursor != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
 	}
 	if r.chainId != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "chainId", r.chainId, "form", "")

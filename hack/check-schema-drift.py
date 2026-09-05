@@ -34,9 +34,11 @@ TIMEOUT = 90
 
 
 def normalize(text: str, fetch: str) -> str:
-    """Canonical form for comparison: JSON gets key-sorted, text is left alone."""
+    """Canonical form for comparison: JSON is sorted; GraphQL has one final newline."""
     if fetch in ("json", "scalar-html"):
         return json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
+    if fetch == "graphql":
+        return text.rstrip() + "\n"
     return text
 
 
