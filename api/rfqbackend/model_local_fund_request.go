@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the LocalFundRequest type satisfies the MappedNullable interface at compile time
@@ -21,7 +19,8 @@ var _ MappedNullable = &LocalFundRequest{}
 
 // LocalFundRequest struct for LocalFundRequest
 type LocalFundRequest struct {
-	WalletAddress string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	WalletAddress        string `json:"walletAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFundRequest LocalFundRequest
@@ -79,42 +78,35 @@ func (o LocalFundRequest) MarshalJSON() ([]byte, error) {
 func (o LocalFundRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["walletAddress"] = o.WalletAddress
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *LocalFundRequest) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"walletAddress",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varLocalFundRequest := _LocalFundRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varLocalFundRequest)
+	err = json.Unmarshal(data, &varLocalFundRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFundRequest(varLocalFundRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "walletAddress")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

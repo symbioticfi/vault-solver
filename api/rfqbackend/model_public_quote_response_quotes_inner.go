@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PublicQuoteResponseQuotesInner type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInner{}
 
 // PublicQuoteResponseQuotesInner struct for PublicQuoteResponseQuotesInner
 type PublicQuoteResponseQuotesInner struct {
-	Solver        PublicQuoteResponseQuotesInnerSolver `json:"solver"`
-	Quote         PublicQuoteResponseQuote             `json:"quote"`
-	SignatureData PublicQuoteResponseSignatureData     `json:"signatureData"`
+	Solver               PublicQuoteResponseQuotesInnerSolver        `json:"solver"`
+	Quote                PublicQuoteResponseQuotesInnerQuote         `json:"quote"`
+	SignatureData        PublicQuoteResponseQuotesInnerSignatureData `json:"signatureData"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInner PublicQuoteResponseQuotesInner
@@ -32,7 +31,7 @@ type _PublicQuoteResponseQuotesInner PublicQuoteResponseQuotesInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublicQuoteResponseQuotesInner(solver PublicQuoteResponseQuotesInnerSolver, quote PublicQuoteResponseQuote, signatureData PublicQuoteResponseSignatureData) *PublicQuoteResponseQuotesInner {
+func NewPublicQuoteResponseQuotesInner(solver PublicQuoteResponseQuotesInnerSolver, quote PublicQuoteResponseQuotesInnerQuote, signatureData PublicQuoteResponseQuotesInnerSignatureData) *PublicQuoteResponseQuotesInner {
 	this := PublicQuoteResponseQuotesInner{}
 	this.Solver = solver
 	this.Quote = quote
@@ -73,9 +72,9 @@ func (o *PublicQuoteResponseQuotesInner) SetSolver(v PublicQuoteResponseQuotesIn
 }
 
 // GetQuote returns the Quote field value
-func (o *PublicQuoteResponseQuotesInner) GetQuote() PublicQuoteResponseQuote {
+func (o *PublicQuoteResponseQuotesInner) GetQuote() PublicQuoteResponseQuotesInnerQuote {
 	if o == nil {
-		var ret PublicQuoteResponseQuote
+		var ret PublicQuoteResponseQuotesInnerQuote
 		return ret
 	}
 
@@ -84,7 +83,7 @@ func (o *PublicQuoteResponseQuotesInner) GetQuote() PublicQuoteResponseQuote {
 
 // GetQuoteOk returns a tuple with the Quote field value
 // and a boolean to check if the value has been set.
-func (o *PublicQuoteResponseQuotesInner) GetQuoteOk() (*PublicQuoteResponseQuote, bool) {
+func (o *PublicQuoteResponseQuotesInner) GetQuoteOk() (*PublicQuoteResponseQuotesInnerQuote, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -92,14 +91,14 @@ func (o *PublicQuoteResponseQuotesInner) GetQuoteOk() (*PublicQuoteResponseQuote
 }
 
 // SetQuote sets field value
-func (o *PublicQuoteResponseQuotesInner) SetQuote(v PublicQuoteResponseQuote) {
+func (o *PublicQuoteResponseQuotesInner) SetQuote(v PublicQuoteResponseQuotesInnerQuote) {
 	o.Quote = v
 }
 
 // GetSignatureData returns the SignatureData field value
-func (o *PublicQuoteResponseQuotesInner) GetSignatureData() PublicQuoteResponseSignatureData {
+func (o *PublicQuoteResponseQuotesInner) GetSignatureData() PublicQuoteResponseQuotesInnerSignatureData {
 	if o == nil {
-		var ret PublicQuoteResponseSignatureData
+		var ret PublicQuoteResponseQuotesInnerSignatureData
 		return ret
 	}
 
@@ -108,7 +107,7 @@ func (o *PublicQuoteResponseQuotesInner) GetSignatureData() PublicQuoteResponseS
 
 // GetSignatureDataOk returns a tuple with the SignatureData field value
 // and a boolean to check if the value has been set.
-func (o *PublicQuoteResponseQuotesInner) GetSignatureDataOk() (*PublicQuoteResponseSignatureData, bool) {
+func (o *PublicQuoteResponseQuotesInner) GetSignatureDataOk() (*PublicQuoteResponseQuotesInnerSignatureData, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -116,7 +115,7 @@ func (o *PublicQuoteResponseQuotesInner) GetSignatureDataOk() (*PublicQuoteRespo
 }
 
 // SetSignatureData sets field value
-func (o *PublicQuoteResponseQuotesInner) SetSignatureData(v PublicQuoteResponseSignatureData) {
+func (o *PublicQuoteResponseQuotesInner) SetSignatureData(v PublicQuoteResponseQuotesInnerSignatureData) {
 	o.SignatureData = v
 }
 
@@ -133,44 +132,37 @@ func (o PublicQuoteResponseQuotesInner) ToMap() (map[string]interface{}, error) 
 	toSerialize["solver"] = o.Solver
 	toSerialize["quote"] = o.Quote
 	toSerialize["signatureData"] = o.SignatureData
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *PublicQuoteResponseQuotesInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"solver",
-		"quote",
-		"signatureData",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPublicQuoteResponseQuotesInner := _PublicQuoteResponseQuotesInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInner)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInner(varPublicQuoteResponseQuotesInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "solver")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "signatureData")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

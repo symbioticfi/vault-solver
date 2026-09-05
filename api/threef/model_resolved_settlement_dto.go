@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the ResolvedSettlementDto type satisfies the MappedNullable interface at compile time
@@ -21,12 +19,11 @@ var _ MappedNullable = &ResolvedSettlementDto{}
 
 // ResolvedSettlementDto struct for ResolvedSettlementDto
 type ResolvedSettlementDto struct {
-	// Settlement cadence label
-	Cadence string `json:"cadence"`
 	// Settlement delay label
 	Delay string `json:"delay"`
 	// Settlement delay in whole days or null if not parseable
-	DelayDays NullableFloat32 `json:"delayDays"`
+	DelayDays            NullableFloat32 `json:"delayDays"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ResolvedSettlementDto ResolvedSettlementDto
@@ -35,9 +32,8 @@ type _ResolvedSettlementDto ResolvedSettlementDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewResolvedSettlementDto(cadence string, delay string, delayDays NullableFloat32) *ResolvedSettlementDto {
+func NewResolvedSettlementDto(delay string, delayDays NullableFloat32) *ResolvedSettlementDto {
 	this := ResolvedSettlementDto{}
-	this.Cadence = cadence
 	this.Delay = delay
 	this.DelayDays = delayDays
 	return &this
@@ -49,30 +45,6 @@ func NewResolvedSettlementDto(cadence string, delay string, delayDays NullableFl
 func NewResolvedSettlementDtoWithDefaults() *ResolvedSettlementDto {
 	this := ResolvedSettlementDto{}
 	return &this
-}
-
-// GetCadence returns the Cadence field value
-func (o *ResolvedSettlementDto) GetCadence() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Cadence
-}
-
-// GetCadenceOk returns a tuple with the Cadence field value
-// and a boolean to check if the value has been set.
-func (o *ResolvedSettlementDto) GetCadenceOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Cadence, true
-}
-
-// SetCadence sets field value
-func (o *ResolvedSettlementDto) SetCadence(v string) {
-	o.Cadence = v
 }
 
 // GetDelay returns the Delay field value
@@ -135,47 +107,38 @@ func (o ResolvedSettlementDto) MarshalJSON() ([]byte, error) {
 
 func (o ResolvedSettlementDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["cadence"] = o.Cadence
 	toSerialize["delay"] = o.Delay
 	toSerialize["delayDays"] = o.DelayDays.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *ResolvedSettlementDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"cadence",
-		"delay",
-		"delayDays",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varResolvedSettlementDto := _ResolvedSettlementDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varResolvedSettlementDto)
+	err = json.Unmarshal(data, &varResolvedSettlementDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ResolvedSettlementDto(varResolvedSettlementDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "delay")
+		delete(additionalProperties, "delayDays")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SubmitQuotesDtoQuotesInnerRangesInner type satisfies the MappedNullable interface at compile time
@@ -28,7 +26,8 @@ type SubmitQuotesDtoQuotesInnerRangesInner struct {
 	// Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.  Full formula:      outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )  Example (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).
 	Quote string `json:"quote" validate:"regexp=^(0|[1-9]\\d*)(\\.\\d+)?$"`
 	// The fixed cost to add to the quote (as a fee). Should be expressed in \"fromAsset\" units
-	FixedCost *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9]\\d*)$"`
+	FixedCost            *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9]\\d*)$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SubmitQuotesDtoQuotesInnerRangesInner SubmitQuotesDtoQuotesInnerRangesInner
@@ -173,44 +172,38 @@ func (o SubmitQuotesDtoQuotesInnerRangesInner) ToMap() (map[string]interface{}, 
 	if !IsNil(o.FixedCost) {
 		toSerialize["fixedCost"] = o.FixedCost
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SubmitQuotesDtoQuotesInnerRangesInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"minAmount",
-		"maxAmount",
-		"quote",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSubmitQuotesDtoQuotesInnerRangesInner := _SubmitQuotesDtoQuotesInnerRangesInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSubmitQuotesDtoQuotesInnerRangesInner)
+	err = json.Unmarshal(data, &varSubmitQuotesDtoQuotesInnerRangesInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SubmitQuotesDtoQuotesInnerRangesInner(varSubmitQuotesDtoQuotesInnerRangesInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "minAmount")
+		delete(additionalProperties, "maxAmount")
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "fixedCost")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

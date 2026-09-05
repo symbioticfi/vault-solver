@@ -25,7 +25,7 @@ type DutchOrderEntity struct {
 	// EIP-712 signature over the order.
 	Signature *string `json:"signature,omitempty" validate:"regexp=^0x[0-9a-fA-F]{130}$"`
 	// Permit2 nonce, uint256 encoded as a base-10 string.
-	Nonce       *string      `json:"nonce,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	Nonce       *string      `json:"nonce,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	OrderHash   *string      `json:"orderHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
 	OrderStatus *OrderStatus `json:"orderStatus,omitempty"`
 	ChainId     *ChainId     `json:"chainId,omitempty"`
@@ -40,9 +40,12 @@ type DutchOrderEntity struct {
 	// Defined when the order has a quote request associated with it.
 	RequestId *string `json:"requestId,omitempty"`
 	// Transaction hash of the fill. Defined once the order has been filled.
-	TxHash         *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
-	SettledAmounts []SettledAmount `json:"settledAmounts,omitempty"`
+	TxHash               *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	SettledAmounts       []SettledAmount `json:"settledAmounts,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _DutchOrderEntity DutchOrderEntity
 
 // NewDutchOrderEntity instantiates a new DutchOrderEntity object
 // This constructor will assign default values to properties that have it defined,
@@ -596,7 +599,47 @@ func (o DutchOrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SettledAmounts) {
 		toSerialize["settledAmounts"] = o.SettledAmounts
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *DutchOrderEntity) UnmarshalJSON(data []byte) (err error) {
+	varDutchOrderEntity := _DutchOrderEntity{}
+
+	err = json.Unmarshal(data, &varDutchOrderEntity)
+
+	if err != nil {
+		return err
+	}
+
+	*o = DutchOrderEntity(varDutchOrderEntity)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "signature")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "orderHash")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "settledAmounts")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableDutchOrderEntity struct {

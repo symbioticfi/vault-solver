@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -25,7 +24,8 @@ type OifUserOpenIntentOrderDto struct {
 	Type         string                                `json:"type"`
 	OpenIntentTx OifUserOpenIntentOrderDtoOpenIntentTx `json:"openIntentTx"`
 	// Allowance and balance checks that must hold prior to execution. For Solana origins this array is empty; SPL transfers happen inside the open instruction.
-	Checks ChecksDto `json:"checks"`
+	Checks               ChecksDto `json:"checks"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifUserOpenIntentOrderDto OifUserOpenIntentOrderDto
@@ -135,6 +135,11 @@ func (o OifUserOpenIntentOrderDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["type"] = o.Type
 	toSerialize["openIntentTx"] = o.OpenIntentTx
 	toSerialize["checks"] = o.Checks
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -164,15 +169,22 @@ func (o *OifUserOpenIntentOrderDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOifUserOpenIntentOrderDto := _OifUserOpenIntentOrderDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifUserOpenIntentOrderDto)
+	err = json.Unmarshal(data, &varOifUserOpenIntentOrderDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifUserOpenIntentOrderDto(varOifUserOpenIntentOrderDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "openIntentTx")
+		delete(additionalProperties, "checks")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

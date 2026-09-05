@@ -19,8 +19,11 @@ var _ MappedNullable = &PriorityOrderEntityCosignerData{}
 
 // PriorityOrderEntityCosignerData struct for PriorityOrderEntityCosignerData
 type PriorityOrderEntityCosignerData struct {
-	AuctionTargetBlock *float32 `json:"auctionTargetBlock,omitempty"`
+	AuctionTargetBlock   *float32 `json:"auctionTargetBlock,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _PriorityOrderEntityCosignerData PriorityOrderEntityCosignerData
 
 // NewPriorityOrderEntityCosignerData instantiates a new PriorityOrderEntityCosignerData object
 // This constructor will assign default values to properties that have it defined,
@@ -84,7 +87,33 @@ func (o PriorityOrderEntityCosignerData) ToMap() (map[string]interface{}, error)
 	if !IsNil(o.AuctionTargetBlock) {
 		toSerialize["auctionTargetBlock"] = o.AuctionTargetBlock
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *PriorityOrderEntityCosignerData) UnmarshalJSON(data []byte) (err error) {
+	varPriorityOrderEntityCosignerData := _PriorityOrderEntityCosignerData{}
+
+	err = json.Unmarshal(data, &varPriorityOrderEntityCosignerData)
+
+	if err != nil {
+		return err
+	}
+
+	*o = PriorityOrderEntityCosignerData(varPriorityOrderEntityCosignerData)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "auctionTargetBlock")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullablePriorityOrderEntityCosignerData struct {

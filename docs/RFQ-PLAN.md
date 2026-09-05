@@ -403,11 +403,11 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   `backendUrl` is the backend **host root**; the TS filler's base URL already includes the path. Set
   each deployment's `backendUrl` accordingly (mismatch ⇒ 404 on every backend call).
 - **Internal discounts path** — the discounts API is internal-only and served under `/api-internal/v1`
-  (orders stay on `/api/v1`). Rather than regenerate the client for a routing detail,
-  the shared discounts client rewrites generated `/api/v1/discount(s)` requests to
-  `/api-internal/v1/...` at its transport boundary; orders pass through unchanged. RFQ uses it through
-  `internal/liquidlane/discounts`; LIFI reuses the same client and validation for its discount-backed
-  fills. Covered by httptest assertions.
+  (orders stay on `/api/v1`). The backend publishes it as a separate document at
+  `/api/v1/openapi-internal.json`, vendored as `openapi/rfq-backend-internal.openapi.json` and
+  generated into `api/rfqbackendinternal`, so the shared discounts client calls the internal paths
+  directly. RFQ uses it through `internal/liquidlane/discounts`; LIFI reuses the same client and
+  validation for its discount-backed fills. Covered by httptest assertions.
 - The `{adapter, tokenToRedeem}` discount-resolve selector exists in TS types but is unused by
   execution (both sides resolve by `discountId`); Go omits it. Cosmetic.
 

@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the DutchV3OrderEntityOutputsInner type satisfies the MappedNullable interface at compile time
@@ -24,14 +22,15 @@ type DutchV3OrderEntityOutputsInner struct {
 	// EIP-55 checksummed Ethereum address.
 	Token string `json:"token"`
 	// uint256 encoded as a base-10 string.
-	StartAmount string                    `json:"startAmount" validate:"regexp=^[0-9]{1,78}$"`
+	StartAmount string                    `json:"startAmount" validate:"regexp=^[0-9]{1\\,78}$"`
 	Curve       *NonlinearDutchDecayCurve `json:"curve,omitempty"`
 	// EIP-55 checksummed Ethereum address.
 	Recipient string `json:"recipient"`
 	// uint256 encoded as a base-10 string.
-	MinAmount *string `json:"minAmount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	MinAmount *string `json:"minAmount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	AdjustmentPerGweiBaseFee *string `json:"adjustmentPerGweiBaseFee,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	AdjustmentPerGweiBaseFee *string `json:"adjustmentPerGweiBaseFee,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	AdditionalProperties     map[string]interface{}
 }
 
 type _DutchV3OrderEntityOutputsInner DutchV3OrderEntityOutputsInner
@@ -246,44 +245,40 @@ func (o DutchV3OrderEntityOutputsInner) ToMap() (map[string]interface{}, error) 
 	if !IsNil(o.AdjustmentPerGweiBaseFee) {
 		toSerialize["adjustmentPerGweiBaseFee"] = o.AdjustmentPerGweiBaseFee
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *DutchV3OrderEntityOutputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-		"startAmount",
-		"recipient",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varDutchV3OrderEntityOutputsInner := _DutchV3OrderEntityOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varDutchV3OrderEntityOutputsInner)
+	err = json.Unmarshal(data, &varDutchV3OrderEntityOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = DutchV3OrderEntityOutputsInner(varDutchV3OrderEntityOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "startAmount")
+		delete(additionalProperties, "curve")
+		delete(additionalProperties, "recipient")
+		delete(additionalProperties, "minAmount")
+		delete(additionalProperties, "adjustmentPerGweiBaseFee")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

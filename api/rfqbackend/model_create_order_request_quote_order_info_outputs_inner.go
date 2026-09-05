@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the CreateOrderRequestQuoteOrderInfoOutputsInner type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &CreateOrderRequestQuoteOrderInfoOutputsInner{}
 
 // CreateOrderRequestQuoteOrderInfoOutputsInner struct for CreateOrderRequestQuoteOrderInfoOutputsInner
 type CreateOrderRequestQuoteOrderInfoOutputsInner struct {
-	Token     string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Amount    string `json:"amount" validate:"regexp=^\\\\d+$"`
-	Recipient string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
+	Recipient            string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuoteOrderInfoOutputsInner CreateOrderRequestQuoteOrderInfoOutputsInner
@@ -133,44 +132,37 @@ func (o CreateOrderRequestQuoteOrderInfoOutputsInner) ToMap() (map[string]interf
 	toSerialize["token"] = o.Token
 	toSerialize["amount"] = o.Amount
 	toSerialize["recipient"] = o.Recipient
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *CreateOrderRequestQuoteOrderInfoOutputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-		"amount",
-		"recipient",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varCreateOrderRequestQuoteOrderInfoOutputsInner := _CreateOrderRequestQuoteOrderInfoOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varCreateOrderRequestQuoteOrderInfoOutputsInner)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuoteOrderInfoOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuoteOrderInfoOutputsInner(varCreateOrderRequestQuoteOrderInfoOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "recipient")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

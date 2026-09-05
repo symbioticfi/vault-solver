@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OutputDto type satisfies the MappedNullable interface at compile time
@@ -30,7 +28,8 @@ type OutputDto struct {
 	// For exact-input: ignored by the quote decoder and not used for quoting. For exact-output: exact amount user wants to receive and is used for quoting
 	Amount NullableString `json:"amount,omitempty"`
 	// Optional calldata describing how the receiver will consume the output. Enables composability with other protocols
-	Calldata *string `json:"calldata,omitempty"`
+	Calldata             *string `json:"calldata,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OutputDto OutputDto
@@ -221,44 +220,39 @@ func (o OutputDto) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Calldata) {
 		toSerialize["calldata"] = o.Calldata
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OutputDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"chain",
-		"receiver",
-		"asset",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOutputDto := _OutputDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOutputDto)
+	err = json.Unmarshal(data, &varOutputDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OutputDto(varOutputDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "receiver")
+		delete(additionalProperties, "asset")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "calldata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

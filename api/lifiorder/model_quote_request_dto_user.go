@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the QuoteRequestDtoUser type satisfies the MappedNullable interface at compile time
@@ -24,7 +22,8 @@ type QuoteRequestDtoUser struct {
 	// CAIP-2 chain identifier. For Ethereum, is eip155:${chainId}. CAIP-2 Namespaces: https://namespaces.chainagnostic.org
 	Chain string `json:"chain"`
 	// CAIP-10 address in CAIP-2 namespace format. For Ethereum, is checksummed address.
-	Address string `json:"address"`
+	Address              string `json:"address"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _QuoteRequestDtoUser QuoteRequestDtoUser
@@ -108,43 +107,36 @@ func (o QuoteRequestDtoUser) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["chain"] = o.Chain
 	toSerialize["address"] = o.Address
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *QuoteRequestDtoUser) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"chain",
-		"address",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varQuoteRequestDtoUser := _QuoteRequestDtoUser{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varQuoteRequestDtoUser)
+	err = json.Unmarshal(data, &varQuoteRequestDtoUser)
 
 	if err != nil {
 		return err
 	}
 
 	*o = QuoteRequestDtoUser(varQuoteRequestDtoUser)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "address")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

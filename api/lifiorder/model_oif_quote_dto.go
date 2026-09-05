@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OifQuoteDto type satisfies the MappedNullable interface at compile time
@@ -38,7 +36,8 @@ type OifQuoteDto struct {
 	// Whether the quote supports partial fills
 	PartialFill bool `json:"partialFill"`
 	// Metadata for the order, potentially contains provider specific data
-	Metadata OifQuoteMetadataDto `json:"metadata"`
+	Metadata             OifQuoteMetadataDto `json:"metadata"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifQuoteDto OifQuoteDto
@@ -350,45 +349,43 @@ func (o OifQuoteDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["failureHandling"] = o.FailureHandling
 	toSerialize["partialFill"] = o.PartialFill
 	toSerialize["metadata"] = o.Metadata
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OifQuoteDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"preview",
-		"failureHandling",
-		"partialFill",
-		"metadata",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOifQuoteDto := _OifQuoteDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifQuoteDto)
+	err = json.Unmarshal(data, &varOifQuoteDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifQuoteDto(varOifQuoteDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "order")
+		delete(additionalProperties, "validUntil")
+		delete(additionalProperties, "eta")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "provider")
+		delete(additionalProperties, "preview")
+		delete(additionalProperties, "failureHandling")
+		delete(additionalProperties, "partialFill")
+		delete(additionalProperties, "metadata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

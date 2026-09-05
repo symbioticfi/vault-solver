@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the LiquidityResponse type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,12 @@ var _ MappedNullable = &LiquidityResponse{}
 
 // LiquidityResponse struct for LiquidityResponse
 type LiquidityResponse struct {
-	TokenIn  string                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenOut string                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Quotes   []LiquidityResponseQuotesInner `json:"quotes"`
+	TokenIn              string                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenOut             string                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenInInfo          LiquidityResponseTokenInInfo   `json:"tokenInInfo"`
+	TokenOutInfo         LiquidityResponseTokenInInfo   `json:"tokenOutInfo"`
+	Levels               []LiquidityResponseLevelsInner `json:"levels"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LiquidityResponse LiquidityResponse
@@ -32,11 +33,13 @@ type _LiquidityResponse LiquidityResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLiquidityResponse(tokenIn string, tokenOut string, quotes []LiquidityResponseQuotesInner) *LiquidityResponse {
+func NewLiquidityResponse(tokenIn string, tokenOut string, tokenInInfo LiquidityResponseTokenInInfo, tokenOutInfo LiquidityResponseTokenInInfo, levels []LiquidityResponseLevelsInner) *LiquidityResponse {
 	this := LiquidityResponse{}
 	this.TokenIn = tokenIn
 	this.TokenOut = tokenOut
-	this.Quotes = quotes
+	this.TokenInInfo = tokenInInfo
+	this.TokenOutInfo = tokenOutInfo
+	this.Levels = levels
 	return &this
 }
 
@@ -96,28 +99,76 @@ func (o *LiquidityResponse) SetTokenOut(v string) {
 	o.TokenOut = v
 }
 
-// GetQuotes returns the Quotes field value
-func (o *LiquidityResponse) GetQuotes() []LiquidityResponseQuotesInner {
+// GetTokenInInfo returns the TokenInInfo field value
+func (o *LiquidityResponse) GetTokenInInfo() LiquidityResponseTokenInInfo {
 	if o == nil {
-		var ret []LiquidityResponseQuotesInner
+		var ret LiquidityResponseTokenInInfo
 		return ret
 	}
 
-	return o.Quotes
+	return o.TokenInInfo
 }
 
-// GetQuotesOk returns a tuple with the Quotes field value
+// GetTokenInInfoOk returns a tuple with the TokenInInfo field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetQuotesOk() ([]LiquidityResponseQuotesInner, bool) {
+func (o *LiquidityResponse) GetTokenInInfoOk() (*LiquidityResponseTokenInInfo, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.Quotes, true
+	return &o.TokenInInfo, true
 }
 
-// SetQuotes sets field value
-func (o *LiquidityResponse) SetQuotes(v []LiquidityResponseQuotesInner) {
-	o.Quotes = v
+// SetTokenInInfo sets field value
+func (o *LiquidityResponse) SetTokenInInfo(v LiquidityResponseTokenInInfo) {
+	o.TokenInInfo = v
+}
+
+// GetTokenOutInfo returns the TokenOutInfo field value
+func (o *LiquidityResponse) GetTokenOutInfo() LiquidityResponseTokenInInfo {
+	if o == nil {
+		var ret LiquidityResponseTokenInInfo
+		return ret
+	}
+
+	return o.TokenOutInfo
+}
+
+// GetTokenOutInfoOk returns a tuple with the TokenOutInfo field value
+// and a boolean to check if the value has been set.
+func (o *LiquidityResponse) GetTokenOutInfoOk() (*LiquidityResponseTokenInInfo, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.TokenOutInfo, true
+}
+
+// SetTokenOutInfo sets field value
+func (o *LiquidityResponse) SetTokenOutInfo(v LiquidityResponseTokenInInfo) {
+	o.TokenOutInfo = v
+}
+
+// GetLevels returns the Levels field value
+func (o *LiquidityResponse) GetLevels() []LiquidityResponseLevelsInner {
+	if o == nil {
+		var ret []LiquidityResponseLevelsInner
+		return ret
+	}
+
+	return o.Levels
+}
+
+// GetLevelsOk returns a tuple with the Levels field value
+// and a boolean to check if the value has been set.
+func (o *LiquidityResponse) GetLevelsOk() ([]LiquidityResponseLevelsInner, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Levels, true
+}
+
+// SetLevels sets field value
+func (o *LiquidityResponse) SetLevels(v []LiquidityResponseLevelsInner) {
+	o.Levels = v
 }
 
 func (o LiquidityResponse) MarshalJSON() ([]byte, error) {
@@ -132,45 +183,42 @@ func (o LiquidityResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["tokenIn"] = o.TokenIn
 	toSerialize["tokenOut"] = o.TokenOut
-	toSerialize["quotes"] = o.Quotes
+	toSerialize["tokenInInfo"] = o.TokenInInfo
+	toSerialize["tokenOutInfo"] = o.TokenOutInfo
+	toSerialize["levels"] = o.Levels
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *LiquidityResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"tokenIn",
-		"tokenOut",
-		"quotes",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varLiquidityResponse := _LiquidityResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varLiquidityResponse)
+	err = json.Unmarshal(data, &varLiquidityResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LiquidityResponse(varLiquidityResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "tokenOut")
+		delete(additionalProperties, "tokenInInfo")
+		delete(additionalProperties, "tokenOutInfo")
+		delete(additionalProperties, "levels")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -83,7 +83,8 @@ func (s *Solver) submitFill(
 		"cancelAt", cancelAtUnix,
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
+		Solver: Name,
+		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, order, calldata.OrderID)

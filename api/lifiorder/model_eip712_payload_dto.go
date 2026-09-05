@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -30,7 +29,8 @@ type Eip712PayloadDto struct {
 	// The message object
 	Message map[string]interface{} `json:"message"`
 	// EIP-712 types used to construct the digest
-	Types map[string]interface{} `json:"types"`
+	Types                map[string]interface{} `json:"types"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _Eip712PayloadDto Eip712PayloadDto
@@ -192,6 +192,11 @@ func (o Eip712PayloadDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["primaryType"] = o.PrimaryType
 	toSerialize["message"] = o.Message
 	toSerialize["types"] = o.Types
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -223,15 +228,24 @@ func (o *Eip712PayloadDto) UnmarshalJSON(data []byte) (err error) {
 
 	varEip712PayloadDto := _Eip712PayloadDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varEip712PayloadDto)
+	err = json.Unmarshal(data, &varEip712PayloadDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = Eip712PayloadDto(varEip712PayloadDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "signatureType")
+		delete(additionalProperties, "domain")
+		delete(additionalProperties, "primaryType")
+		delete(additionalProperties, "message")
+		delete(additionalProperties, "types")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

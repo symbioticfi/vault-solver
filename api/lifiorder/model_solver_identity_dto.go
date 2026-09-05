@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SolverIdentityDto type satisfies the MappedNullable interface at compile time
@@ -30,7 +28,8 @@ type SolverIdentityDto struct {
 	// Solver address in its chain-native string form
 	Address string `json:"address"`
 	// Associated solver ID
-	SolverId float32 `json:"solverId"`
+	SolverId             float32 `json:"solverId"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SolverIdentityDto SolverIdentityDto
@@ -192,46 +191,39 @@ func (o SolverIdentityDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["updatedAt"] = o.UpdatedAt
 	toSerialize["address"] = o.Address
 	toSerialize["solverId"] = o.SolverId
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SolverIdentityDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"createdAt",
-		"updatedAt",
-		"address",
-		"solverId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSolverIdentityDto := _SolverIdentityDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSolverIdentityDto)
+	err = json.Unmarshal(data, &varSolverIdentityDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SolverIdentityDto(varSolverIdentityDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "updatedAt")
+		delete(additionalProperties, "address")
+		delete(additionalProperties, "solverId")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

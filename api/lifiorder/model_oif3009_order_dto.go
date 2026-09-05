@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -26,7 +25,8 @@ type Oif3009OrderDto struct {
 	// EIP-3009 Transfer With Authorization typed data
 	Payload Eip712PayloadDto `json:"payload"`
 	// Additional metadata for nonce verification and order tracking
-	Metadata map[string]interface{} `json:"metadata"`
+	Metadata             map[string]interface{} `json:"metadata"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _Oif3009OrderDto Oif3009OrderDto
@@ -136,6 +136,11 @@ func (o Oif3009OrderDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["type"] = o.Type
 	toSerialize["payload"] = o.Payload
 	toSerialize["metadata"] = o.Metadata
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -165,15 +170,22 @@ func (o *Oif3009OrderDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOif3009OrderDto := _Oif3009OrderDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOif3009OrderDto)
+	err = json.Unmarshal(data, &varOif3009OrderDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = Oif3009OrderDto(varOif3009OrderDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "payload")
+		delete(additionalProperties, "metadata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OfferDto type satisfies the MappedNullable interface at compile time
@@ -44,7 +42,8 @@ type OfferDto struct {
 	// Offer expiration timestamp (uint256)
 	Expiration string `json:"expiration"`
 	// EIP-712 signature or null if unsigned
-	Signature NullableString `json:"signature"`
+	Signature            NullableString `json:"signature"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OfferDto OfferDto
@@ -394,53 +393,46 @@ func (o OfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["nonce"] = o.Nonce
 	toSerialize["expiration"] = o.Expiration
 	toSerialize["signature"] = o.Signature.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OfferDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"auctionId",
-		"status",
-		"maker",
-		"requestId",
-		"asset",
-		"vault",
-		"amount",
-		"expectedReturn",
-		"nonce",
-		"expiration",
-		"signature",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOfferDto := _OfferDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOfferDto)
+	err = json.Unmarshal(data, &varOfferDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OfferDto(varOfferDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "auctionId")
+		delete(additionalProperties, "status")
+		delete(additionalProperties, "maker")
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "asset")
+		delete(additionalProperties, "vault")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "expectedReturn")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "expiration")
+		delete(additionalProperties, "signature")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

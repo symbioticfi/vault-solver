@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OifQuoteRequestDtoIntentInputsInner type satisfies the MappedNullable interface at compile time
@@ -26,8 +24,9 @@ type OifQuoteRequestDtoIntentInputsInner struct {
 	// Asset address in EIP-7930 interoperable format
 	Asset string `json:"asset"`
 	// Amount as string-encoded integer (optional for quote requests)
-	Amount *string                                  `json:"amount,omitempty"`
-	Lock   *OifQuoteRequestDtoIntentInputsInnerLock `json:"lock,omitempty"`
+	Amount               *string                                  `json:"amount,omitempty"`
+	Lock                 *OifQuoteRequestDtoIntentInputsInnerLock `json:"lock,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifQuoteRequestDtoIntentInputsInner OifQuoteRequestDtoIntentInputsInner
@@ -181,43 +180,38 @@ func (o OifQuoteRequestDtoIntentInputsInner) ToMap() (map[string]interface{}, er
 	if !IsNil(o.Lock) {
 		toSerialize["lock"] = o.Lock
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OifQuoteRequestDtoIntentInputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"user",
-		"asset",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOifQuoteRequestDtoIntentInputsInner := _OifQuoteRequestDtoIntentInputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifQuoteRequestDtoIntentInputsInner)
+	err = json.Unmarshal(data, &varOifQuoteRequestDtoIntentInputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifQuoteRequestDtoIntentInputsInner(varOifQuoteRequestDtoIntentInputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "user")
+		delete(additionalProperties, "asset")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "lock")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }
