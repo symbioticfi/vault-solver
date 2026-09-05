@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -28,7 +27,8 @@ type OpenIntentEvmTxDto struct {
 	// Transaction calldata as hex string
 	Data string `json:"data"`
 	// Gas required for execution as a decimal string
-	GasRequired string `json:"gasRequired"`
+	GasRequired          string `json:"gasRequired"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OpenIntentEvmTxDto OpenIntentEvmTxDto
@@ -164,6 +164,11 @@ func (o OpenIntentEvmTxDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["to"] = o.To
 	toSerialize["data"] = o.Data
 	toSerialize["gasRequired"] = o.GasRequired
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -194,15 +199,23 @@ func (o *OpenIntentEvmTxDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOpenIntentEvmTxDto := _OpenIntentEvmTxDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOpenIntentEvmTxDto)
+	err = json.Unmarshal(data, &varOpenIntentEvmTxDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OpenIntentEvmTxDto(varOpenIntentEvmTxDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "to")
+		delete(additionalProperties, "data")
+		delete(additionalProperties, "gasRequired")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

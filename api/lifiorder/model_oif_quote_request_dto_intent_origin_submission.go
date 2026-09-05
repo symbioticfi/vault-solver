@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the OifQuoteRequestDtoIntentOriginSubmission type satisfies the MappedNullable interface at compile time
@@ -24,7 +22,8 @@ type OifQuoteRequestDtoIntentOriginSubmission struct {
 	// Who submits the origin transaction
 	Mode string `json:"mode"`
 	// Acceptable signing/authorization schemes for interoperability
-	Schemes []string `json:"schemes,omitempty"`
+	Schemes              []string `json:"schemes,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OifQuoteRequestDtoIntentOriginSubmission OifQuoteRequestDtoIntentOriginSubmission
@@ -117,42 +116,36 @@ func (o OifQuoteRequestDtoIntentOriginSubmission) ToMap() (map[string]interface{
 	if !IsNil(o.Schemes) {
 		toSerialize["schemes"] = o.Schemes
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *OifQuoteRequestDtoIntentOriginSubmission) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"mode",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varOifQuoteRequestDtoIntentOriginSubmission := _OifQuoteRequestDtoIntentOriginSubmission{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOifQuoteRequestDtoIntentOriginSubmission)
+	err = json.Unmarshal(data, &varOifQuoteRequestDtoIntentOriginSubmission)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OifQuoteRequestDtoIntentOriginSubmission(varOifQuoteRequestDtoIntentOriginSubmission)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "mode")
+		delete(additionalProperties, "schemes")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

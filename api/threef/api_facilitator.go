@@ -303,7 +303,7 @@ func (r ApiAdminControllerSetFacilitatorOfferAddressV1Request) Execute() (*SetFa
 /*
 AdminControllerSetFacilitatorOfferAddressV1 Set facilitator offer address
 
-Updates the offer address for the facilitator associated with the provided API key.
+Updates the offer address for the facilitator associated with the provided API key. An address that has ever created an offer cannot be assigned, whatever the status of those offers.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiAdminControllerSetFacilitatorOfferAddressV1Request

@@ -73,7 +73,14 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   a swallowed error is a bug. `panic` only for genuine programmer errors (e.g. a `mustPack` of a
   static, known-good ABI call), never for runtime/IO failures.
 - **Logging:** `logr.Logger` everywhere (backed by zap, wired only in `main`). Info level for
-  operational events; `V(1)` for debug detail. Structured key/values, not formatted strings.
+  operational events; `V(1)` for debug detail. Structured key/values, not formatted strings. Every line
+  names the integration it serves: with one configured solver `main` stamps the root logger with
+  `solver=<name>` (shared components such as `txmanager` included); with several, each solver's
+  `deps.Log` is stamped instead and the txmanager stamps each request's lifecycle logs from
+  `Request.Solver` (set it to the package `Name` at every `txmanager.Request{}` site) plus `label`.
+  Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
+  `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
+  so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
 - **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —
@@ -135,12 +142,43 @@ Three instances of the same pattern — **vendor → generate → commit, regene
   (e.g. 7.12.0 for an OpenAPI 3.1 spec with numeric `exclusiveMinimum` / `type:[…,null]` unions, which
   `oapi-codegen`/kin-openapi and `ogen` reject). The recipe strips the generator's non-package cruft
   (its `go.mod`/docs/test/etc.), keeping only the Go client so it joins the main module.
+- **Internal API surfaces get their own client.** The RFQ backend serves discount listing/resolution on `/api-internal/v1` and publishes that document from the public prefix, so it is vendored (`make refresh-rfq-internal-openapi`) and generated separately (`make refresh-rfq-internal-client` → `api/rfqbackendinternal`). Generate from the surface's own spec rather than rewriting paths at runtime: the client then addresses the real endpoints, and the spec is drift-checked like any other.
 - **GraphQL clients (schema SDL + operations → genqlient).** Vendor the upstream schema SDL under
   `api/graphql/<name>/` (`make refresh-morpho-graphql-schema` pulls Morpho's live schema), keep named
   operation documents under `operations/`, then `make refresh-morpho-graphql-client` runs pinned
   `genqlient` into `api/<client>/` and emits `operations.json` for review/safelisting. The generated package
   is the shared binding; hand-written adapters that parse generated response types into domain types live in
   the owning integration until reuse proves they belong elsewhere.
+
+**Every new integration registers its schema for drift detection.** `hack/schema-sources.json` is the
+registry of every vendored contract-of-record; `hack/check-schema-drift.py` diffs each entry against its
+live source daily in CI (`.github/workflows/schema-drift.yml`) and **fails when a schema file under
+`openapi/` or `api/graphql/*/schema.graphql` is not registered**, so a new integration cannot silently
+escape monitoring. When you vendor a schema, in the same change: add the `make refresh-<name>-openapi`
+(or `-schema`) target that pulls it, add the `make refresh-<name>-client` target that generates from it,
+and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `graphql`,
+`text`), and the `refresh` command to run when it drifts. Use `mode: "manual"` when there is no public
+endpoint to diff (RedStone's zod, shared privately); the checker skips those but keeps them listed so the
+gap is recorded rather than rediscovered. Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per
+environment.
+
+**Generated clients are deliberately tolerant of upstream drift**, because a third-party API adding or
+removing a field must not blank a whole feed (3F dropping `cadence` from one nested schema stopped the
+auction feed entirely). `OPENAPI_TOLERANT_PROPS` passes `disallowAdditionalPropertiesIfNotPresent=false`
+(unknown fields are kept in `AdditionalProperties` instead of erroring). `enumUnknownDefaultCase` stays
+off: it would replace an unknown enum value with a placeholder and hide the real value from the
+"unknown status" errors that reveal a rename. The generator has no flag for the other case —
+a required property upstream has since removed — so `hack/openapi-relax-client.py` strips those checks
+after generation (and the strict decoder from the few schemas that declare `additionalProperties: false`,
+which the flag does not reach); it runs automatically from the `make` recipes and fails if the generator's
+template text stops matching. It deliberately leaves `oneOf`/`anyOf` variants strict, because the
+generator discriminates between them by seeing which variant fails to decode.
+The flip side: a required scalar the upstream drops now decodes as `""` or `0` instead of failing, and the
+generated `Get*Ok()` accessors cannot tell (they only report absence for optional and nullable fields).
+Code that acts on a required field must validate it where it is read and log at error when it is
+missing, the way the 3F offer reconcile and the RFQ order status reconcile do.
+Tolerance is not a substitute for noticing: the daily drift check is what surfaces the change, and a
+source that cannot be fetched counts as drift rather than a skipped check.
 
 Rules for every generated surface: the vendored artifact (ABI/spec/schema) is the **contract of record** — when upstream changes,
 re-vendor + regenerate in the same change rather than patching generated Go. The integration code wraps

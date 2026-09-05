@@ -11,7 +11,6 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -28,7 +27,8 @@ type OpenIntentTronTxDto struct {
 	// Full ABI calldata (selector + args) as a 0x-prefixed hex string. Pass it as `data` (without the 0x prefix) to the fullnode HTTP endpoint wallet/triggersmartcontract, or with tronweb 6.x as `triggerSmartContract(to, \"\", { feeLimit, input: data }, [], owner)`.
 	Data string `json:"data"`
 	// Suggested fee_limit in SUN as a decimal string. A cap on energy spend, not an estimate.
-	FeeLimit string `json:"feeLimit"`
+	FeeLimit             string `json:"feeLimit"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _OpenIntentTronTxDto OpenIntentTronTxDto
@@ -164,6 +164,11 @@ func (o OpenIntentTronTxDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["to"] = o.To
 	toSerialize["data"] = o.Data
 	toSerialize["feeLimit"] = o.FeeLimit
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
@@ -194,15 +199,23 @@ func (o *OpenIntentTronTxDto) UnmarshalJSON(data []byte) (err error) {
 
 	varOpenIntentTronTxDto := _OpenIntentTronTxDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varOpenIntentTronTxDto)
+	err = json.Unmarshal(data, &varOpenIntentTronTxDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = OpenIntentTronTxDto(varOpenIntentTronTxDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chain")
+		delete(additionalProperties, "to")
+		delete(additionalProperties, "data")
+		delete(additionalProperties, "feeLimit")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

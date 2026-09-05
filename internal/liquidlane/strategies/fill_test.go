@@ -147,6 +147,17 @@ func TestFillRouteReservationsAggregatesAndClonesInput(t *testing.T) {
 	}
 }
 
+func TestPlannedSurplusUsesExpectedOutput(t *testing.T) {
+	t.Parallel()
+	routes := []FillRoute{{
+		ExpectedAmountOut: big.NewInt(110),
+		MinAmountOut:      big.NewInt(100),
+	}}
+	if got := PlannedSurplus(routes, big.NewInt(100)); got.Cmp(big.NewInt(10)) != 0 {
+		t.Fatalf("planned surplus = %s, want 10", got)
+	}
+}
+
 func TestFillRouteWireOmitsInternalCandidateID(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(FillRoute{CandidateID: "internal", RouteID: "route"})

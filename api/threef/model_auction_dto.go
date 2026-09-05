@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the AuctionDto type satisfies the MappedNullable interface at compile time
@@ -44,7 +42,8 @@ type AuctionDto struct {
 	// Auction direction derived from the first facility-intent operation, or null if no operation has been recorded yet
 	Direction NullableString `json:"direction"`
 	// Omitted unless domain=true is provided; when requested, resolved request-contract EIP-712 domain metadata or null if unavailable
-	Eip712Domain NullableAuctionEip712DomainDto `json:"eip712Domain,omitempty"`
+	Eip712Domain         NullableAuctionEip712DomainDto `json:"eip712Domain,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _AuctionDto AuctionDto
@@ -424,52 +423,46 @@ func (o AuctionDto) ToMap() (map[string]interface{}, error) {
 	if o.Eip712Domain.IsSet() {
 		toSerialize["eip712Domain"] = o.Eip712Domain.Get()
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *AuctionDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"requestId",
-		"amountRequested",
-		"solve_start_time",
-		"maxRate",
-		"status",
-		"asset",
-		"depositAsset",
-		"vault",
-		"settlement",
-		"direction",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varAuctionDto := _AuctionDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varAuctionDto)
+	err = json.Unmarshal(data, &varAuctionDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = AuctionDto(varAuctionDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "amountRequested")
+		delete(additionalProperties, "solve_start_time")
+		delete(additionalProperties, "maxRate")
+		delete(additionalProperties, "status")
+		delete(additionalProperties, "asset")
+		delete(additionalProperties, "depositAsset")
+		delete(additionalProperties, "vault")
+		delete(additionalProperties, "settlement")
+		delete(additionalProperties, "direction")
+		delete(additionalProperties, "eip712Domain")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

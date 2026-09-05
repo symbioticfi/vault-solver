@@ -426,3 +426,37 @@ func TestOrderClientListRecoverableOrdersPaginationLimit(t *testing.T) {
 		})
 	}
 }
+
+// PUT replaces the whole registered set, so a snapshot missing a kind (the tolerant client
+// zero-values a dropped field) must not be merged and pushed back.
+func TestOrderClientEnsureSupportedContractsRejectsIncompleteSnapshot(t *testing.T) {
+	for name, body := range map[string]string{
+		"no data":        `{}`,
+		"missing a kind": `{"data":{"oracle":[],"inputSettler":[]}}`,
+		"null kind":      `{"data":{"oracle":[],"inputSettler":[],"outputSettler":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var methods []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				methods = append(methods, r.Method)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			err := client.ensureSupportedContracts(
+				context.Background(),
+				11155111,
+				common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				common.HexToAddress("0x2222222222222222222222222222222222222222"),
+			)
+			if err == nil || !strings.Contains(err.Error(), "incomplete snapshot") {
+				t.Fatalf("err = %v, want incomplete snapshot", err)
+			}
+			if len(methods) != 1 || methods[0] != http.MethodGet {
+				t.Fatalf("methods = %v, want only GET", methods)
+			}
+		})
+	}
+}

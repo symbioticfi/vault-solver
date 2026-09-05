@@ -18,6 +18,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
@@ -70,6 +73,37 @@ func TestFallbackTransport_FallsOverOn5xx(t *testing.T) {
 	}
 	if gotBody != `{"jsonrpc":"2.0"}` {
 		t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
+	}
+}
+
+func TestFallbackTransport_FallsOverOn3xx(t *testing.T) {
+	var primaryHits, fallbackHits int
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHits++
+		_, _ = io.WriteString(w, `fallback`)
+	}))
+	defer fallback.Close()
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits++
+		w.Header().Set("Location", "https://redirect.invalid")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer primary.Close()
+
+	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read response: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "fallback" {
+		t.Fatalf("response = (%d, %q), want fallback 200", resp.StatusCode, body)
+	}
+	if primaryHits != 1 || fallbackHits != 1 {
+		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
 	}
 }
 
@@ -590,8 +624,8 @@ func rpcRecorder(methods *[]string, result func(method string) string) *httptest
 }
 
 // TestDial_WriteRPCRoutesBroadcastsAndNonces confirms a separate writeRpcUrl carries the
-// transaction broadcast and both startup nonce reads. The write endpoint's chain id is validated once;
-// block number and every other read stay on the primary endpoint. This is the mevblocker-style split:
+// transaction broadcast, sender telemetry, and both startup nonce reads. The write endpoint's chain id is
+// validated once; block number and every other read stay on the primary endpoint. This is the mevblocker-style split:
 // private submissions and their nonce view share one endpoint while ordinary reads use a normal RPC.
 func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	var readMethods, writeMethods []string
@@ -606,15 +640,24 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		if m == "eth_chainId" {
 			return `"0x7a69"`
 		}
-		if m == "eth_getTransactionCount" {
+		if m == rpcMethodGetTransactionCount {
 			return `"0x2"`
+		}
+		if m == rpcMethodGetBalance {
+			return `"0x3"`
 		}
 		return `"0x0000000000000000000000000000000000000000000000000000000000000001"`
 	})
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	rpcMetrics, err := NewRPCMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := DialWithMetrics(
+		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics, logr.Discard(),
+	)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -635,6 +678,11 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	} else if nonce != 2 {
 		t.Fatalf("NonceAt = %d, want 2", nonce)
 	}
+	if balance, err := c.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil); err != nil {
+		t.Fatalf("TransactionSenderBalanceAt: %v", err)
+	} else if balance.Cmp(big.NewInt(3)) != 0 {
+		t.Fatalf("TransactionSenderBalanceAt = %s, want 3", balance)
+	}
 	// A broadcast hits the write endpoint only.
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   big.NewInt(31337),
@@ -650,8 +698,11 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	if !slices.Contains(writeMethods, "eth_sendRawTransaction") {
 		t.Fatalf("write endpoint did not receive the broadcast, saw: %v", writeMethods)
 	}
-	if !slices.Contains(writeMethods, "eth_getTransactionCount") {
+	if !slices.Contains(writeMethods, rpcMethodGetTransactionCount) {
 		t.Fatalf("write endpoint did not receive startup nonce reads, saw: %v", writeMethods)
+	}
+	if !slices.Contains(writeMethods, rpcMethodGetBalance) {
+		t.Fatalf("write endpoint did not receive the sender balance read, saw: %v", writeMethods)
 	}
 	if !slices.Contains(writeMethods, "eth_chainId") {
 		t.Fatalf("write endpoint chain id was not validated, saw: %v", writeMethods)
@@ -659,11 +710,103 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 	if slices.Contains(writeMethods, "eth_blockNumber") {
 		t.Fatalf("reads leaked onto the write endpoint: %v", writeMethods)
 	}
-	if slices.Contains(readMethods, "eth_sendRawTransaction") || slices.Contains(readMethods, "eth_getTransactionCount") {
+	if slices.Contains(readMethods, rpcMethodSendRawTransaction) ||
+		slices.Contains(readMethods, rpcMethodGetTransactionCount) ||
+		slices.Contains(readMethods, rpcMethodGetBalance) {
 		t.Fatalf("write-side operation leaked onto the read endpoint: %v", readMethods)
 	}
 	if !slices.Contains(readMethods, "eth_blockNumber") {
 		t.Fatalf("read endpoint did not receive the read, saw: %v", readMethods)
+	}
+	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
+		rpcRoleWrite, rpcMethodGetBalance, string(rpcOutcomeSuccess),
+	), 1)
+	metricstest.RequireValue(t, rpcMetrics.requests.WithLabelValues(
+		rpcRoleRead, "eth_blockNumber", string(rpcOutcomeSuccess),
+	), 1)
+}
+
+func TestDialDoesNotFollowRPCRedirects(t *testing.T) {
+	targetHits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x7a69"}`))
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	reg := prometheus.NewRegistry()
+	metrics, err := NewRPCMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	client, err := DialWithMetrics(
+		t.Context(), []string{redirect.URL}, "", multicall, metrics, logr.Discard(),
+	)
+	if client != nil || err == nil {
+		t.Fatalf("redirecting Dial = (%v, %v), want nil/error", client, err)
+	}
+	if targetHits != 0 {
+		t.Fatalf("redirect target hits = %d, want 0", targetHits)
+	}
+	metricstest.RequireValue(t, metrics.requests.WithLabelValues(
+		rpcRoleShared, rpcMethodChainID, string(rpcOutcomeHTTP3xx),
+	), 1)
+}
+
+func TestTransactionSenderBalanceFallsBackWhenWriteRPCRejectsRead(t *testing.T) {
+	var readMethods, writeMethods []string
+	read := rpcRecorder(&readMethods, func(method string) string {
+		if method == "eth_chainId" {
+			return `"0x7a69"`
+		}
+		if method == rpcMethodGetBalance {
+			return `"0x4"`
+		}
+		return `"0x0"`
+	})
+	defer read.Close()
+	write := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode write request: %v", err)
+			return
+		}
+		writeMethods = append(writeMethods, request.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if request.Method == "eth_chainId" {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(request.ID) + `,"result":"0x7a69"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(request.ID) + `,"error":{"code":-32601,"message":"method not supported"}}`))
+	}))
+	defer write.Close()
+
+	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
+	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer client.Close()
+
+	balance, err := client.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil)
+	if err != nil {
+		t.Fatalf("TransactionSenderBalanceAt: %v", err)
+	}
+	if balance.Cmp(big.NewInt(4)) != 0 {
+		t.Fatalf("TransactionSenderBalanceAt = %s, want 4", balance)
+	}
+	if countMethod(writeMethods, rpcMethodGetBalance) != 1 || countMethod(readMethods, rpcMethodGetBalance) != 1 {
+		t.Fatalf("balance attempts = write %v, read %v; want one on each", writeMethods, readMethods)
 	}
 }
 
@@ -820,5 +963,37 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	}
 	if !slices.Contains(methods, "eth_sendRawTransaction") {
 		t.Fatalf("primary endpoint did not receive the broadcast, saw: %v", methods)
+	}
+}
+
+// A receipt lookup for a transaction sent through a private relay returns null from every public
+// upstream until it is mined; eRPC would retry that null across upstreams past our read budget.
+func TestFallbackTransport_OptsPendingLookupsOutOfERPCEmptyRetry(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":null}`)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		method string
+		want   string
+	}{
+		{method: "eth_getTransactionReceipt", want: "false"},
+		{method: "eth_getTransactionByHash", want: "false"},
+		{method: "eth_blockNumber", want: ""},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"` + tc.method + `","params":[]}`
+			resp, err := roundTrip(t, mustEndpoints(t, srv.URL), body)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			_ = resp.Body.Close()
+			if v := got.Get(erpcRetryEmptyHeader); v != tc.want {
+				t.Fatalf("%s header = %q, want %q", erpcRetryEmptyHeader, v, tc.want)
+			}
+		})
 	}
 }

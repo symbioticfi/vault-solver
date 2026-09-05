@@ -48,19 +48,32 @@ type wsClient struct {
 	dialer *websocket.Dialer
 	header http.Header
 	send   chan []byte
+	// onConnectionState receives true only after every subscription frame has been sent. The
+	// callback may be invoked by Run while metrics are concurrently scraped, so it must be safe for
+	// concurrent use.
+	onConnectionState func(bool)
 }
 
-func newWSClient(cfg wsConfig, log logr.Logger, onMsg func(context.Context, []byte)) *wsClient {
+func newWSClient(
+	cfg wsConfig,
+	log logr.Logger,
+	onMsg func(context.Context, []byte),
+	onConnectionState func(bool),
+) *wsClient {
 	cfg.withDefaults()
 	h := http.Header{}
 	h.Set("x-api-key", cfg.APIKey)
+	if onConnectionState == nil {
+		onConnectionState = func(bool) {}
+	}
 	return &wsClient{
-		cfg:    cfg,
-		log:    log.WithName("ws"),
-		onMsg:  onMsg,
-		dialer: &websocket.Dialer{HandshakeTimeout: cfg.HandshakeTimeout},
-		header: h,
-		send:   make(chan []byte, 8),
+		cfg:               cfg,
+		log:               log.WithName("ws"),
+		onMsg:             onMsg,
+		dialer:            &websocket.Dialer{HandshakeTimeout: cfg.HandshakeTimeout},
+		header:            h,
+		send:              make(chan []byte, 8),
+		onConnectionState: onConnectionState,
 	}
 }
 
@@ -108,6 +121,8 @@ func (w *wsClient) Run(ctx context.Context) error {
 // serveOnce dials, subscribes, and runs the read/write pumps until the connection drops, rotates, or
 // ctx is cancelled.
 func (w *wsClient) serveOnce(ctx context.Context) error {
+	// A failed dial or subscription must leave the client visibly disconnected throughout backoff.
+	w.onConnectionState(false)
 	conn, resp, err := w.dialer.DialContext(ctx, w.cfg.URL, w.header)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close() // handshake response body; not used
@@ -131,6 +146,7 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 			return errors.Errorf("subscribe %s: %w", topic, werr)
 		}
 	}
+	w.onConnectionState(true)
 	w.log.Info("subscribed", "topics", w.cfg.Topics)
 
 	errCh := make(chan error, 2)
@@ -146,6 +162,8 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 	case e := <-errCh:
 		retErr = e
 	}
+	// Publish teardown before closing/joining the pumps so a blocked pump cannot leave a stale 1.
+	w.onConnectionState(false)
 	// Tear the connection down and JOIN both pumps before returning, so no pump goroutine — and no
 	// second reader competing for w.send — outlives this connection into the next reconnect.
 	cancel()

@@ -13,12 +13,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -90,7 +89,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
 				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-				Nonce:    "0x1", Deadline: termsDeadline,
+				Nonce:    "1", Deadline: termsDeadline,
 			},
 			SignerSignature: "0x01", ProtocolDeadline: protocolDeadline, ProtocolSignature: "0x02",
 		},
@@ -240,7 +239,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 				Adapter: discountRoute.Adapter.Hex(), TokenToRedeem: discountRoute.TokenIn.Hex(), Discount: "0",
 				Signer:   common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
 				Protocol: common.HexToAddress("0x6666666666666666666666666666666666666666").Hex(),
-				Nonce:    "0x1", Deadline: deadline,
+				Nonce:    "1", Deadline: deadline,
 			},
 			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
 		},
@@ -516,7 +515,10 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if reservations := fixture.strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	fixture.txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	fixture.txm.result <- txmanager.Result{
+		Hash:    common.HexToHash("0x2"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 	result := <-pending.result
 	fixture.solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
 	if fixture.solver.capacity.Len() != 0 {
@@ -553,7 +555,10 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 		t.Fatal("accepted transaction lifecycle did not block quoting after fill planning completed")
 	}
 
-	fixture.txm.complete(txmanager.Result{Hash: common.HexToHash("0x2")})
+	fixture.txm.complete(txmanager.Result{
+		Hash:    common.HexToHash("0x2"),
+		Outcome: txmanager.OutcomeConfirmed,
+	})
 	select {
 	case err := <-done:
 		if err != nil {
@@ -603,7 +608,10 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 		t.Fatalf("fill loop returned before accepted lifecycle completed: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	fixture.txm.result <- txmanager.Result{Hash: common.HexToHash("0x2")}
+	fixture.txm.result <- txmanager.Result{
+		Hash:    common.HexToHash("0x2"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -682,12 +690,9 @@ func TestFillLoopDefersQueuedOrderWhileNonceLaneUnavailable(t *testing.T) {
 func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	fixture.order.Source = orderSourcePublicV2
-	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
-	metrics, err := newUniswapXMetrics(prometheus.NewRegistry(), fixture.solver.ready)
-	if err != nil {
-		t.Fatalf("metrics: %v", err)
-	}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
 	fixture.solver.metrics = metrics
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
 	fixture.solver.inFlight[fixture.order.Hash] = true
 	fixture.solver.setPendingReservations(
 		fixture.order.Hash,
@@ -698,6 +703,7 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	fixture.solver.completePendingFill(uniswapFillCompletion{
 		fill: pending,
 		result: txmanager.Result{
+			Outcome:     txmanager.OutcomeSubmissionError,
 			Err:         errors.New("transaction was not admitted"),
 			NotAdmitted: true,
 		},
@@ -710,9 +716,36 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 		fixture.solver.localBlockUntil.Load() != 0 {
 		t.Fatal("not-admitted fill counted toward retry or fade breaker failures")
 	}
-	if got := testutil.ToFloat64(metrics.fills.WithLabelValues("not-admitted")); got != 1 {
-		t.Fatalf("not-admitted fill metric = %v, want 1", got)
-	}
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "fill", liquidlane.FillOutcomeNotAdmitted, 1,
+	)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+}
+
+func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	fixture.order.Source = orderSourcePublicV2
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 2, Window: time.Minute}
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+	fixture.solver.metrics = metrics
+	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.setPendingReservations(
+		fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+	)
+
+	fixture.solver.completePendingFill(uniswapFillCompletion{
+		fill: &pendingUniswapFill{order: fixture.order},
+		result: txmanager.Result{
+			Outcome: txmanager.OutcomeReverted,
+			Err:     errors.New("fill reverted"),
+		},
+	})
+
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 1)
+	metricstest.RequireWorkflowEventCount(
+		t, reg, Name, "fill", liquidlane.FillOutcomeNotAdmitted, 0,
+	)
 }
 
 func waitForExecutionCondition(t *testing.T, condition func() bool) {
@@ -744,5 +777,35 @@ func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {
 
 	if solver.localBlockUntil.Load() == 0 {
 		t.Fatal("public execution failure did not open the ordinary local breaker")
+	}
+}
+
+func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
+	hash := common.HexToHash("0x1234")
+	order := &resolvedOrder{Hash: hash, Source: orderSourcePublicV2}
+	solver := &Solver{
+		log:      logr.Discard(),
+		filled:   make(map[common.Hash]time.Time),
+		retryAt:  make(map[common.Hash]time.Time),
+		inFlight: map[common.Hash]bool{hash: true},
+		attempts: make(map[common.Hash]int),
+	}
+
+	solver.completePendingFill(uniswapFillCompletion{
+		fill: &pendingUniswapFill{order: order},
+		result: txmanager.Result{
+			Outcome: txmanager.OutcomeIncludedUnconfirmed,
+			Err:     errors.New("confirmation wait failed"),
+		},
+	})
+
+	if _, done := solver.filled[hash]; !done {
+		t.Fatal("included fill was not completed")
+	}
+	if _, retrying := solver.retryAt[hash]; retrying {
+		t.Fatal("included fill was scheduled for retry")
+	}
+	if solver.localBlockUntil.Load() != 0 {
+		t.Fatal("included fill opened the local breaker")
 	}
 }

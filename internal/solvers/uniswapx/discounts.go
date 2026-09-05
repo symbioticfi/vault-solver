@@ -20,6 +20,12 @@ type advertisedRouteFilter struct {
 	tokenOut common.Address
 }
 
+type discountRouteSet struct {
+	routes   []liquidlane.Route
+	listed   *liquiddiscounts.List
+	complete bool
+}
+
 func (s *Solver) listDiscounts(ctx context.Context) (*liquiddiscounts.List, error) {
 	if s.discounts == nil {
 		return &liquiddiscounts.List{}, nil
@@ -33,7 +39,7 @@ func (s *Solver) quoteRoutesWithDiscounts(
 	ctx context.Context,
 	configured []liquidlane.Route,
 	now time.Time,
-) ([]liquidlane.Route, *liquiddiscounts.List, error) {
+) (discountRouteSet, error) {
 	filter := advertisedRouteFilter{}
 	if s.cfg.quoteScopesToAdapters() {
 		filter.adapters = adapterSet(s.cfg.Adapters)
@@ -47,9 +53,10 @@ func (s *Solver) fillRoutesWithDiscounts(
 	tokenIn, tokenOut common.Address,
 	now time.Time,
 ) ([]liquidlane.Route, *liquiddiscounts.List, error) {
-	return s.routesWithDiscounts(ctx, configured, now, advertisedRouteFilter{
+	result, err := s.routesWithDiscounts(ctx, configured, now, advertisedRouteFilter{
 		tokenIn: tokenIn, tokenOut: tokenOut,
 	})
+	return result.routes, result.listed, err
 }
 
 func (s *Solver) routesWithDiscounts(
@@ -57,16 +64,18 @@ func (s *Solver) routesWithDiscounts(
 	configured []liquidlane.Route,
 	now time.Time,
 	filter advertisedRouteFilter,
-) ([]liquidlane.Route, *liquiddiscounts.List, error) {
+) (discountRouteSet, error) {
 	if !s.cfg.usesDiscounts() {
-		return configured, nil, nil
+		return discountRouteSet{routes: configured, complete: true}, nil
 	}
 	listed, err := s.listDiscounts(ctx)
 	if err != nil {
-		return configured, nil, err
+		return discountRouteSet{routes: configured}, err
 	}
-	dynamic := s.resolveAdvertisedRoutes(ctx, listed, configured, now, filter)
-	return mergeRoutes(configured, dynamic), listed, nil
+	dynamic, complete := s.resolveAdvertisedRoutes(ctx, listed, configured, now, filter)
+	return discountRouteSet{
+		routes: mergeRoutes(configured, dynamic), listed: listed, complete: complete,
+	}, nil
 }
 
 func (s *Solver) resolveAdvertisedRoutes(
@@ -75,8 +84,8 @@ func (s *Solver) resolveAdvertisedRoutes(
 	configured []liquidlane.Route,
 	now time.Time,
 	filter advertisedRouteFilter,
-) []liquidlane.Route {
-	offers, _ := liquiddiscounts.LiveOffers(listed, now)
+) ([]liquidlane.Route, bool) {
+	offers, issues := liquiddiscounts.LiveOffers(listed, now)
 	type routeKey struct {
 		adapter  common.Address
 		tokenIn  common.Address
@@ -128,17 +137,19 @@ func (s *Solver) resolveAdvertisedRoutes(
 		orderedAdapters = append(orderedAdapters, adapter)
 	}
 	if len(orderedAdapters) == 0 {
-		return nil
+		return nil, len(issues) == 0 && skipped == 0
 	}
 	slices.SortFunc(orderedAdapters, func(a, b common.Address) int { return a.Cmp(b) })
 
 	routes := s.resolveAdvertisedAdapters(ctx, orderedAdapters)
 	resolved := make([]liquidlane.Route, 0, len(expected))
+	resolvedKeys := make(map[routeKey]bool, len(expected))
 	for _, route := range routes {
-		if !expected[routeKey{
+		key := routeKey{
 			adapter: route.Adapter, tokenIn: route.TokenIn,
 			tokenOut: route.TokenOut, decimals: route.TokenOutDecimals,
-		}] {
+		}
+		if !expected[key] {
 			continue
 		}
 		if err := s.reader.validateGasTokens([]liquidlane.Route{route}); err != nil {
@@ -152,8 +163,10 @@ func (s *Solver) resolveAdvertisedRoutes(
 			continue
 		}
 		resolved = append(resolved, route)
+		resolvedKeys[key] = true
 	}
-	return resolved
+	complete := len(issues) == 0 && skipped == 0 && len(resolvedKeys) == len(expected)
+	return resolved, complete
 }
 
 func (s *Solver) resolveAdvertisedAdapters(

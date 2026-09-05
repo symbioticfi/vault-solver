@@ -114,7 +114,6 @@ func Registered() []string {
 // Run executes a solver until it returns or ctx is cancelled. A context cancellation is treated
 // as a clean shutdown, not an error.
 func Run(ctx context.Context, s Solver, log logr.Logger) error {
-	log = log.WithValues("solver", s.Name())
 	log.Info("solver running")
 	err := s.Run(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {

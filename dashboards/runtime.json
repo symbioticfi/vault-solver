@@ -1,0 +1,3964 @@
+{
+  "annotations": [
+    {
+      "kind": "AnnotationQuery",
+      "spec": {
+        "query": {
+          "kind": "DataQuery",
+          "group": "grafana",
+          "version": "v0",
+          "datasource": {
+            "name": "-- Grafana --"
+          },
+          "spec": {}
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "builtIn": true,
+        "legacyOptions": {
+          "type": "dashboard"
+        }
+      }
+    }
+  ],
+  "cursorSync": "Crosshair",
+  "description": "Fleet-safe runtime view designed for many Kubernetes pods. Fixed-card summaries do not multiply by instance; instance, signer, solver, and RPC topology is row-based and scrolls at constant text size. Every RPC and txmanager aggregation retains pod and instance. Endpoint is a pod-local ordinal; URLs and key material are never exported. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, pod, job, and instance. Requires the metric families documented in the repository README.",
+  "editable": true,
+  "elements": {
+    "panel-10": {
+      "kind": "Panel",
+      "spec": {
+        "id": 10,
+        "title": "CPU usage",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "rate(process_cpu_seconds_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])",
+                      "instant": false,
+                      "legendFormat": "{{pod}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-11": {
+      "kind": "Panel",
+      "spec": {
+        "id": 11,
+        "title": "Memory",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "process_resident_memory_bytes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 resident",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "go_memstats_heap_alloc_bytes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 heap allocated",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "bytes",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-12": {
+      "kind": "Panel",
+      "spec": {
+        "id": 12,
+        "title": "Runtime pressure",
+        "description": "Process-local concurrency and file descriptor pressure.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "go_goroutines{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 goroutines",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "process_open_fds{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 open FDs",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "id": 14,
+        "title": "RPC call counts",
+        "description": "Logical JSON-RPC calls in the selected range; these are counts, not rates.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (namespace, instance, pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-15": {
+      "kind": "Panel",
+      "spec": {
+        "id": 15,
+        "title": "RPC errors: what failed",
+        "description": "Bounded error classes by method. rpc_error is a returned JSON-RPC error (for example a revert), distinct from transport failure.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (namespace, instance, pod, role, method, outcome) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",outcome!=\"success\"}[$__range]))) > 0",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{role}} \u00b7 {{method}} \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "sm",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-16": {
+      "kind": "Panel",
+      "spec": {
+        "id": 16,
+        "title": "Endpoint attempt counts",
+        "description": "Each endpoint ordinal is local to one instance and role. URLs are deliberately absent from labels.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (namespace, instance, pod, role, endpoint, outcome) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{role}}[{{endpoint}}] \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-17": {
+      "kind": "Panel",
+      "spec": {
+        "id": 17,
+        "title": "RPC latency",
+        "description": "End-to-end request latency through response-body consumption.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.50, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 p50 \u00b7 {{role}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.95, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 p95 \u00b7 {{role}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.99, sum by (namespace, le, instance, pod, role) (rate(solver_bot_rpc_request_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 p99 \u00b7 {{role}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-18": {
+      "kind": "Panel",
+      "spec": {
+        "id": 18,
+        "title": "RPC in-flight",
+        "description": "Calls whose response body has not completed.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "solver_bot_rpc_inflight{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{role}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "area",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-19": {
+      "kind": "Panel",
+      "spec": {
+        "id": 19,
+        "title": "RPC success age",
+        "description": "Age of the last successful logical request by role.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - solver_bot_rpc_last_successful_request_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_rpc_last_successful_request_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{role}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-2": {
+      "kind": "Panel",
+      "spec": {
+        "id": 2,
+        "title": "Instances",
+        "description": "Selected active runtime instances.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(max by (namespace, job, pod, instance) (solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "text": {
+                "valueSize": 36
+              },
+              "textMode": "value",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-20": {
+      "kind": "Panel",
+      "spec": {
+        "id": 20,
+        "title": "Fallback overhead",
+        "description": "Selected-range counts. Extra attempts are endpoint attempts beyond logical calls.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, instance, pod) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 logical calls",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, instance, pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 endpoint attempts",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(sum by (namespace, instance, pod) (increase(solver_bot_rpc_attempts_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) - sum by (namespace, instance, pod) (increase(solver_bot_rpc_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])), 0)",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 extra attempts",
+                      "range": false
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "area",
+              "justifyMode": "auto",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "textMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-22": {
+      "kind": "Panel",
+      "spec": {
+        "id": 22,
+        "title": "Transaction outcomes",
+        "description": "Terminal logical transaction counts by operation and outcome.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "sm",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-23": {
+      "kind": "Panel",
+      "spec": {
+        "id": 23,
+        "title": "Admission and in-flight",
+        "description": "Current accepted work plus selected-range pre-admission rejections.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (namespace, job, instance, pod, label) (solver_bot_txmanager_inflight{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 inflight \u00b7 {{label}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, label, reason) (increase(solver_bot_txmanager_admission_rejections_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 rejected \u00b7 {{label}} \u00b7 {{reason}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-24": {
+      "kind": "Panel",
+      "spec": {
+        "id": 24,
+        "title": "Lifecycle latency",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(histogram_quantile(0.50, sum by (namespace, le, job, instance, pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 p50 \u00b7 {{label}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label) (rate(solver_bot_txmanager_lifecycle_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 p95 \u00b7 {{label}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-25": {
+      "kind": "Panel",
+      "spec": {
+        "id": 25,
+        "title": "Phase latency p95",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label, phase) (rate(solver_bot_txmanager_phase_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{phase}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-26": {
+      "kind": "Panel",
+      "spec": {
+        "id": 26,
+        "title": "Gas used",
+        "description": "Receipt gas units in the selected range.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_gas_used_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-27": {
+      "kind": "Panel",
+      "spec": {
+        "id": 27,
+        "title": "Fees paid",
+        "description": "Actual receipt gasUsed \u00d7 effectiveGasPrice, not an estimate.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, label, outcome) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / 1e18) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "sm",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-28": {
+      "kind": "Panel",
+      "spec": {
+        "id": 28,
+        "title": "Replacements and cancellations",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, label, kind) (increase(solver_bot_txmanager_replacements_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 {{label}} \u00b7 {{kind}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-29": {
+      "kind": "Panel",
+      "spec": {
+        "id": 29,
+        "title": "Sender balance history",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(solver_bot_txmanager_account_balance_wei{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH",
+                "decimals": 5,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-3": {
+      "kind": "Panel",
+      "spec": {
+        "id": 3,
+        "title": "Unready",
+        "description": "Selected runtime instances whose shared readiness gate is closed.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) - sum(max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}))",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "text": {
+                "valueSize": 36
+              },
+              "textMode": "value",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 1,
+                      "color": "red"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-30": {
+      "kind": "Panel",
+      "spec": {
+        "id": 30,
+        "title": "Sender nonce history",
+        "description": "",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(solver_bot_txmanager_account_latest_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 mined",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(solver_bot_txmanager_account_pending_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 pending",
+                      "range": true
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-31": {
+      "kind": "Panel",
+      "spec": {
+        "id": 31,
+        "title": "Account snapshot health",
+        "description": "Refresh counts and retained snapshot age; failed refreshes do not zero balance or nonce gauges.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "((sum by (namespace, job, instance, pod, outcome) (increase(solver_bot_txmanager_account_refreshes_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))) > 0) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 refresh \u00b7 {{outcome}}",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(clamp_min(time() - solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0) * (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > bool 0)) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "{{pod}} \u00b7 snapshot age",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "gradient",
+              "maxVizHeight": 300,
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "namePlacement": "auto",
+              "orientation": "horizontal",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "showUnfilled": true,
+              "sizing": "auto",
+              "valueMode": "color"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-32": {
+      "kind": "Panel",
+      "spec": {
+        "id": 32,
+        "title": "Solver assignment",
+        "description": "Config-time solver membership by execution pod and process; this is topology rather than traffic inference.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "organize",
+                "spec": {
+                  "id": "organize",
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "Value": true,
+                      "__name__": true,
+                      "job": true,
+                      "solver_bot_solver_info": true
+                    },
+                    "indexByName": {
+                      "instance": 1,
+                      "pod": 0,
+                      "solver": 2
+                    },
+                    "renameByName": {
+                      "instance": "Instance",
+                      "pod": "Pod",
+                      "solver": "Solver"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "md",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                },
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Pod"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 150
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Instance"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 285
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Solver"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 280
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-33": {
+      "kind": "Panel",
+      "spec": {
+        "id": 33,
+        "title": "RPC endpoint health",
+        "description": "Freshness by execution pod, role, and role-local endpoint ordinal. Never means a configured fallback has not yet been needed successfully. Configured RPC URLs are intentionally never exported.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} > 0), 0) or ((solver_bot_rpc_last_successful_attempt_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} == 0) - 1)",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "organize",
+                "spec": {
+                  "id": "organize",
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true,
+                      "job": true
+                    },
+                    "indexByName": {
+                      "Value": 4,
+                      "endpoint": 3,
+                      "instance": 1,
+                      "pod": 0,
+                      "role": 2
+                    },
+                    "renameByName": {
+                      "Value": "Last success age",
+                      "endpoint": "Endpoint",
+                      "instance": "Instance",
+                      "pod": "Pod",
+                      "role": "Role"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "md",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {
+                        "text": "Never",
+                        "color": "orange"
+                      }
+                    }
+                  }
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 60,
+                      "color": "orange"
+                    },
+                    {
+                      "value": 300,
+                      "color": "red"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                },
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Pod"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 130
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Instance"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 245
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Role"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 85
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Endpoint"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 85
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Last success age"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 1
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 150
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {
+                        "type": "color-text"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-6": {
+      "kind": "Panel",
+      "spec": {
+        "id": 6,
+        "title": "Fleet instance status",
+        "description": "One row per selected execution pod/process. Rows remain fixed-size as the fleet grows; the table scrolls instead of shrinking values. Metric drops expose code/spec drift in bounded workflow instrumentation.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, job, pod, instance) (solver_bot_service_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Ready",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, job, pod, instance) (time() - process_start_time_seconds{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Uptime",
+                      "range": false
+                    }
+                  },
+                  "refId": "B",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, job, pod, instance) (solver_bot_txmanager_account_balance_wei{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} / 1e18)",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Balance",
+                      "range": false
+                    }
+                  },
+                  "refId": "C",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, job, pod, instance) (clamp_min(solver_bot_txmanager_account_pending_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"} - solver_bot_txmanager_account_latest_nonce{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, 0))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Nonce gap",
+                      "range": false
+                    }
+                  },
+                  "refId": "D",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, job, pod, instance, address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Signer",
+                      "range": false
+                    }
+                  },
+                  "refId": "E",
+                  "hidden": false
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, job, pod, instance) (increase(solver_bot_workflow_dropped_observations_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range]))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "Metric drops",
+                      "range": false
+                    }
+                  },
+                  "refId": "F",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "merge",
+                "spec": {
+                  "id": "merge",
+                  "options": {}
+                }
+              },
+              {
+                "kind": "organize",
+                "spec": {
+                  "id": "organize",
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "Value #E": true,
+                      "job": true
+                    },
+                    "indexByName": {
+                      "Value #A": 3,
+                      "Value #B": 4,
+                      "Value #C": 5,
+                      "Value #D": 6,
+                      "address": 2,
+                      "instance": 1,
+                      "pod": 0,
+                      "Value #F": 7
+                    },
+                    "renameByName": {
+                      "Value #A": "Ready",
+                      "Value #B": "Uptime",
+                      "Value #C": "Balance",
+                      "Value #D": "Nonce gap",
+                      "address": "Signer",
+                      "instance": "Instance",
+                      "pod": "Pod",
+                      "Value #F": "Metric drops"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "cellHeight": "md",
+              "enablePagination": true,
+              "footer": {
+                "countRows": false,
+                "fields": "",
+                "reducer": [
+                  "sum"
+                ],
+                "show": false
+              },
+              "showHeader": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                },
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Pod"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 140
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Instance"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 270
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Signer"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 390
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Ready"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 110
+                    },
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "0": {
+                              "color": "red",
+                              "text": "Not ready"
+                            },
+                            "1": {
+                              "color": "green",
+                              "text": "Ready"
+                            }
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {
+                        "type": "color-text"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Uptime"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "s"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 0
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 120
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Balance"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "suffix: ETH"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 5
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 150
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Nonce gap"
+                  },
+                  "properties": [
+                    {
+                      "id": "decimals",
+                      "value": 0
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 110
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {
+                            "color": "green"
+                          },
+                          {
+                            "color": "orange",
+                            "value": 1
+                          },
+                          {
+                            "color": "red",
+                            "value": 2
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {
+                        "type": "color-text"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-7": {
+      "kind": "Panel",
+      "spec": {
+        "id": 7,
+        "title": "Configured solvers",
+        "description": "Solver memberships across the selected runtime instances.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "text": {
+                "valueSize": 36
+              },
+              "textMode": "value",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "blue"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-8": {
+      "kind": "Panel",
+      "spec": {
+        "id": 8,
+        "title": "Transaction signers",
+        "description": "Distinct process-scoped transaction-sender identities in the selected fleet.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              },
+              "text": {
+                "valueSize": 36
+              },
+              "textMode": "value",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "purple"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "thresholds"
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-34": {
+      "kind": "Panel",
+      "spec": {
+        "id": 34,
+        "title": "Admission wait p95",
+        "description": "Leading indicator for nonce-lane saturation, split by request label and terminal admission outcome.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(histogram_quantile(0.95, sum by (namespace, le, job, instance, pod, label, outcome) (rate(solver_bot_txmanager_admission_wait_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))) * on (namespace, job, instance, pod) group_left (address) (solver_bot_txmanager_account_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})",
+                      "instant": false,
+                      "legendFormat": "{{pod}} \u00b7 {{outcome}} \u00b7 {{label}}",
+                      "range": true
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 12,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    }
+  },
+  "layout": {
+    "kind": "RowsLayout",
+    "spec": {
+      "rows": [
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Fleet overview",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-2"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 6,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-3"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-7"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-8"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 4,
+                      "width": 24,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-6"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 11,
+                      "width": 12,
+                      "height": 9,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-32"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 11,
+                      "width": 12,
+                      "height": 9,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-33"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Process",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-10"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-11"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-12"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "RPC by instance and endpoint role",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-14"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-15"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-16"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-17"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 16,
+                      "width": 6,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-18"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 6,
+                      "y": 16,
+                      "width": 10,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-19"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 16,
+                      "width": 8,
+                      "height": 6,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-20"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Txmanager by instance and signer",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-22"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-23"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-24"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 8,
+                      "width": 12,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-25"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 16,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-26"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 16,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-27"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 16,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-28"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 24,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-29"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 24,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-30"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 24,
+                      "width": 8,
+                      "height": 7,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-31"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-34"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "links": [
+    {
+      "title": "Vault Solver dashboards",
+      "type": "dashboards",
+      "icon": "dashboard",
+      "tooltip": "",
+      "tags": [
+        "vault-solver-compact"
+      ],
+      "asDropdown": true,
+      "targetBlank": false,
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "liveNow": false,
+  "preload": false,
+  "tags": [
+    "dashboard-schema-v2",
+    "fleet",
+    "kubernetes",
+    "rpc",
+    "runtime",
+    "signer",
+    "solver-metrics",
+    "vault-solver-compact"
+  ],
+  "timeSettings": {
+    "timezone": "browser",
+    "from": "now-1h",
+    "to": "now",
+    "autoRefresh": "5s",
+    "autoRefreshIntervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "hideTimepicker": false,
+    "fiscalYearStartMonth": 0
+  },
+  "title": "Vault Solver \u2014 Fleet Runtime, RPC & Signers",
+  "variables": [
+    {
+      "kind": "DatasourceVariable",
+      "spec": {
+        "name": "datasource",
+        "pluginId": "prometheus",
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "label": "Datasource",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "allowCustomValue": true
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "namespace",
+        "label": "Namespace",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info, namespace)",
+            "refId": "PrometheusVariableQueryEditor-namespace"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info, namespace)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "pod_regex",
+        "label": "Pods",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\"}, pod)",
+            "refId": "PrometheusVariableQueryEditor-pod"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\"}, pod)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "job",
+        "label": "Prometheus job",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\"}, job)",
+            "refId": "PrometheusVariableQueryEditor-job"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\"}, job)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "instance",
+        "label": "Instances",
+        "hide": "dontHide",
+        "refresh": "onDashboardLoad",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {
+            "name": "${datasource}"
+          },
+          "spec": {
+            "query": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\"}, instance)",
+            "refId": "PrometheusVariableQueryEditor-instance"
+          }
+        },
+        "regex": "",
+        "sort": "alphabeticalAsc",
+        "definition": "label_values(solver_bot_build_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\"}, instance)",
+        "options": [],
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "allValue": ".*"
+      }
+    }
+  ],
+  "uid": "vault-solver-runtime"
+}

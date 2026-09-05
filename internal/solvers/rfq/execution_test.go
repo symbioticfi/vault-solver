@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -11,9 +12,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -25,10 +28,11 @@ type fakeBackend struct {
 	discounts    *discountsResponse
 	resolveCalls int
 	listCalls    int
+	orderListErr error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
-	return f.open, nil
+	return f.open, f.orderListErr
 }
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
@@ -104,6 +108,13 @@ type fakeTxm struct {
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
 	f.lastReq = req
 	return f.result
+}
+
+func confirmedTxResult() txmanager.Result {
+	return txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeConfirmed,
+	}
 }
 
 func strPtr(s string) *string { return &s }
@@ -191,7 +202,7 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 
 func TestExecution_DirectFillHappyPath(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -210,7 +221,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 
 func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
@@ -232,7 +243,7 @@ func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) 
 
 func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
@@ -280,7 +291,7 @@ func TestRFQFillDeadline(t *testing.T) {
 func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	st, be := fillFixtures(t)
 	be.executable.Outputs[0].Amount = "899999"
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
@@ -295,13 +306,86 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 func TestExecution_RevertMarksFailed(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted on-chain")}}
+	txm := &fakeTxm{result: txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeReverted,
+		Err:     errors.New("tx reverted on-chain"),
+	}}
 	e := newExec(t, st, be, txm)
 
 	e.syncOnce(context.Background())
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
+	}
+}
+
+func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  txmanager.Result
+		outcome string
+	}{
+		{
+			name: "reverted",
+			result: txmanager.Result{
+				Outcome: txmanager.OutcomeReverted,
+				Err:     errors.New("tx reverted on-chain"),
+			},
+			outcome: liquidlane.FillOutcomeFailure,
+		},
+		{
+			name: "not admitted",
+			result: txmanager.Result{
+				Outcome:     txmanager.OutcomeSubmissionError,
+				Err:         errors.New("admission rejected"),
+				NotAdmitted: true,
+			},
+			outcome: liquidlane.FillOutcomeNotAdmitted,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			reg := prometheus.NewRegistry()
+			metrics, err := newRFQMetrics(reg, st, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := newExec(t, st, be, &fakeTxm{result: test.result})
+			e.metrics = metrics
+
+			e.syncOnce(t.Context())
+
+			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+				t.Fatalf("status = %v, want failed", rec)
+			}
+			for _, outcome := range []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted} {
+				want := float64(0)
+				if outcome == test.outcome {
+					want = 1
+				}
+				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", outcome, want)
+			}
+		})
+	}
+}
+
+func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
+	st, be := fillFixtures(t)
+	be.order.OrderStatus = "open"
+	txm := &fakeTxm{result: txmanager.Result{
+		Hash:    common.HexToHash("0xdead"),
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
+	}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(context.Background())
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusSubmitted {
+		t.Fatalf("status = %v, want submitted", rec)
 	}
 }
 
@@ -314,11 +398,11 @@ func TestExecution_DiscountFill(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_700,
+			Nonce:    "1", Deadline: 4_102_444_700,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_750, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
@@ -360,11 +444,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_750,
+			Nonce:    "1", Deadline: 4_102_444_750,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_700, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
@@ -399,11 +483,11 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 			TokenToRedeem: tIn.Hex(), Discount: "500",
 			Signer:   "0x00000000000000000000000000000000000000a1",
 			Protocol: "0x00000000000000000000000000000000000000a2",
-			Nonce:    "0x1", Deadline: 4_102_444_800,
+			Nonce:    "1", Deadline: 4_102_444_800,
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 4_102_444_800, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: txmanager.Result{Hash: common.HexToHash("0xdead")}}
+	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
@@ -544,5 +628,25 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("buildFillPlan = %+v, want nil", got)
+	}
+}
+
+// The tolerant client decodes a dropped or renamed orderStatus as "" instead of failing. Treating that
+// as terminal used to mark the order failed, which the store re-arms, so the fill was re-submitted.
+func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
+	for _, status := range []string{"", "brand-new-status"} {
+		t.Run(fmt.Sprintf("status %q", status), func(t *testing.T) {
+			st := newStore(func() time.Time { return time.Unix(0, 0) })
+			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			st.markStatus("o1", statusSubmitted, common.HexToHash("0x1"), "")
+			be := &fakeBackend{order: &backendOrder{OrderID: "o1", OrderStatus: status}}
+			e := newExec(t, st, be, &fakeTxm{})
+
+			e.reconcileTerminalStatus(t.Context(), "o1")
+
+			if got := st.order("o1").Status; got != statusSubmitted {
+				t.Fatalf("status = %q, want %q", got, statusSubmitted)
+			}
+		})
 	}
 }

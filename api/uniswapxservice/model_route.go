@@ -20,17 +20,20 @@ var _ MappedNullable = &Route{}
 // Route Classic-route quote metadata associated with the order's quote.
 type Route struct {
 	// uint256 encoded as a base-10 string.
-	Quote *string `json:"quote,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	Quote *string `json:"quote,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	QuoteGasAdjusted *string `json:"quoteGasAdjusted,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	QuoteGasAdjusted *string `json:"quoteGasAdjusted,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	GasPriceWei *string `json:"gasPriceWei,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	GasPriceWei *string `json:"gasPriceWei,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	GasUseEstimateQuote *string `json:"gasUseEstimateQuote,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	GasUseEstimateQuote *string `json:"gasUseEstimateQuote,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	GasUseEstimate   *string                `json:"gasUseEstimate,omitempty" validate:"regexp=^[0-9]{1,78}$"`
-	MethodParameters *RouteMethodParameters `json:"methodParameters,omitempty"`
+	GasUseEstimate       *string                `json:"gasUseEstimate,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	MethodParameters     *RouteMethodParameters `json:"methodParameters,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _Route Route
 
 // NewRoute instantiates a new Route object
 // This constructor will assign default values to properties that have it defined,
@@ -269,7 +272,38 @@ func (o Route) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.MethodParameters) {
 		toSerialize["methodParameters"] = o.MethodParameters
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *Route) UnmarshalJSON(data []byte) (err error) {
+	varRoute := _Route{}
+
+	err = json.Unmarshal(data, &varRoute)
+
+	if err != nil {
+		return err
+	}
+
+	*o = Route(varRoute)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "quoteGasAdjusted")
+		delete(additionalProperties, "gasPriceWei")
+		delete(additionalProperties, "gasUseEstimateQuote")
+		delete(additionalProperties, "gasUseEstimate")
+		delete(additionalProperties, "methodParameters")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableRoute struct {

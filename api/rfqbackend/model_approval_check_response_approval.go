@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the ApprovalCheckResponseApproval type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &ApprovalCheckResponseApproval{}
 
 // ApprovalCheckResponseApproval struct for ApprovalCheckResponseApproval
 type ApprovalCheckResponseApproval struct {
-	To    string `json:"to" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Data  string `json:"data" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	Value string `json:"value"`
+	To                   string `json:"to" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Data                 string `json:"data" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Value                string `json:"value"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ApprovalCheckResponseApproval ApprovalCheckResponseApproval
@@ -133,44 +132,37 @@ func (o ApprovalCheckResponseApproval) ToMap() (map[string]interface{}, error) {
 	toSerialize["to"] = o.To
 	toSerialize["data"] = o.Data
 	toSerialize["value"] = o.Value
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *ApprovalCheckResponseApproval) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"to",
-		"data",
-		"value",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varApprovalCheckResponseApproval := _ApprovalCheckResponseApproval{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varApprovalCheckResponseApproval)
+	err = json.Unmarshal(data, &varApprovalCheckResponseApproval)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ApprovalCheckResponseApproval(varApprovalCheckResponseApproval)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "to")
+		delete(additionalProperties, "data")
+		delete(additionalProperties, "value")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

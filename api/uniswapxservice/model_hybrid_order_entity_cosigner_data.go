@@ -21,7 +21,10 @@ var _ MappedNullable = &HybridOrderEntityCosignerData{}
 type HybridOrderEntityCosignerData struct {
 	AuctionTargetBlock     *float32 `json:"auctionTargetBlock,omitempty"`
 	SupplementalPriceCurve []string `json:"supplementalPriceCurve,omitempty"`
+	AdditionalProperties   map[string]interface{}
 }
+
+type _HybridOrderEntityCosignerData HybridOrderEntityCosignerData
 
 // NewHybridOrderEntityCosignerData instantiates a new HybridOrderEntityCosignerData object
 // This constructor will assign default values to properties that have it defined,
@@ -120,7 +123,34 @@ func (o HybridOrderEntityCosignerData) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SupplementalPriceCurve) {
 		toSerialize["supplementalPriceCurve"] = o.SupplementalPriceCurve
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *HybridOrderEntityCosignerData) UnmarshalJSON(data []byte) (err error) {
+	varHybridOrderEntityCosignerData := _HybridOrderEntityCosignerData{}
+
+	err = json.Unmarshal(data, &varHybridOrderEntityCosignerData)
+
+	if err != nil {
+		return err
+	}
+
+	*o = HybridOrderEntityCosignerData(varHybridOrderEntityCosignerData)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "auctionTargetBlock")
+		delete(additionalProperties, "supplementalPriceCurve")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableHybridOrderEntityCosignerData struct {

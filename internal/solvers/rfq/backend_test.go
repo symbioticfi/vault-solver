@@ -76,7 +76,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
-			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"0x2","deadline":1900000000},` +
+			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"2","deadline":1900000000},` +
 			`"signerSignature":"0xdead","protocolDeadline":1900000001,"protocolSignature":"0xbeef"}`))
 	}))
 	defer srv.Close()
@@ -90,7 +90,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
 	}
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" ||
-		res.Discount.Discount != "123" || res.Discount.Nonce != "0x2" ||
+		res.Discount.Discount != "123" || res.Discount.Nonce != "2" ||
 		res.Discount.Deadline != 1900000000 {
 		t.Fatalf("discount terms = %+v", res.Discount)
 	}
@@ -107,7 +107,7 @@ func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
-			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"0x2","deadline":1900000000},` +
+			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"2","deadline":1900000000},` +
 			`"signerSignature":"0xdead","protocolDeadline":1900000001,"protocolSignature":"0xbeef"}]}`))
 	}))
 	defer srv.Close()
@@ -127,7 +127,7 @@ func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"1","signer":"0x0000000000000000000000000000000000000aaa",` +
-			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"0x2","deadline":1900000000},` +
+			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"2","deadline":1900000000},` +
 			`"signerSignature":"0xdead","protocolDeadline":1900000001,"protocolSignature":"0xbeef"}`
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000","discounts":[` +

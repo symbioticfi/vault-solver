@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the ErrorResponse type satisfies the MappedNullable interface at compile time
@@ -21,7 +19,8 @@ var _ MappedNullable = &ErrorResponse{}
 
 // ErrorResponse struct for ErrorResponse
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error                ErrorResponseError `json:"error"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ErrorResponse ErrorResponse
@@ -30,7 +29,7 @@ type _ErrorResponse ErrorResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewErrorResponse(error_ string) *ErrorResponse {
+func NewErrorResponse(error_ ErrorResponseError) *ErrorResponse {
 	this := ErrorResponse{}
 	this.Error = error_
 	return &this
@@ -45,9 +44,9 @@ func NewErrorResponseWithDefaults() *ErrorResponse {
 }
 
 // GetError returns the Error field value
-func (o *ErrorResponse) GetError() string {
+func (o *ErrorResponse) GetError() ErrorResponseError {
 	if o == nil {
-		var ret string
+		var ret ErrorResponseError
 		return ret
 	}
 
@@ -56,7 +55,7 @@ func (o *ErrorResponse) GetError() string {
 
 // GetErrorOk returns a tuple with the Error field value
 // and a boolean to check if the value has been set.
-func (o *ErrorResponse) GetErrorOk() (*string, bool) {
+func (o *ErrorResponse) GetErrorOk() (*ErrorResponseError, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -64,7 +63,7 @@ func (o *ErrorResponse) GetErrorOk() (*string, bool) {
 }
 
 // SetError sets field value
-func (o *ErrorResponse) SetError(v string) {
+func (o *ErrorResponse) SetError(v ErrorResponseError) {
 	o.Error = v
 }
 
@@ -79,42 +78,35 @@ func (o ErrorResponse) MarshalJSON() ([]byte, error) {
 func (o ErrorResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["error"] = o.Error
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *ErrorResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"error",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varErrorResponse := _ErrorResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varErrorResponse)
+	err = json.Unmarshal(data, &varErrorResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ErrorResponse(varErrorResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "error")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -19,10 +19,13 @@ var _ MappedNullable = &PutSupportedContractsDto{}
 
 // PutSupportedContractsDto struct for PutSupportedContractsDto
 type PutSupportedContractsDto struct {
-	Oracle        []QuoteRequestDtoIntentMetadataOracleInner `json:"oracle,omitempty"`
-	InputSettler  []QuoteRequestDtoIntentMetadataOracleInner `json:"inputSettler,omitempty"`
-	OutputSettler []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
+	Oracle               []QuoteRequestDtoIntentMetadataOracleInner `json:"oracle,omitempty"`
+	InputSettler         []QuoteRequestDtoIntentMetadataOracleInner `json:"inputSettler,omitempty"`
+	OutputSettler        []QuoteRequestDtoIntentMetadataOracleInner `json:"outputSettler,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _PutSupportedContractsDto PutSupportedContractsDto
 
 // NewPutSupportedContractsDto instantiates a new PutSupportedContractsDto object
 // This constructor will assign default values to properties that have it defined,
@@ -156,7 +159,35 @@ func (o PutSupportedContractsDto) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.OutputSettler) {
 		toSerialize["outputSettler"] = o.OutputSettler
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *PutSupportedContractsDto) UnmarshalJSON(data []byte) (err error) {
+	varPutSupportedContractsDto := _PutSupportedContractsDto{}
+
+	err = json.Unmarshal(data, &varPutSupportedContractsDto)
+
+	if err != nil {
+		return err
+	}
+
+	*o = PutSupportedContractsDto(varPutSupportedContractsDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "oracle")
+		delete(additionalProperties, "inputSettler")
+		delete(additionalProperties, "outputSettler")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullablePutSupportedContractsDto struct {

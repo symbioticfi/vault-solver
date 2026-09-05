@@ -12,6 +12,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
+const backendOrderStatusOpen = "open"
+
 // backendOrder is one order row from the RFQ backend (GET /orders), projected from the generated
 // rfqbackend.OrdersResponseOrdersInner. The optional fields (encodedOrder/protocolSignature/deadline/
 // filler) are populated only for executable orders; the generated model exposes them as pointers, so
@@ -75,12 +77,11 @@ func closeResp(resp *http.Response) {
 
 // listOpenOrders lists open orders assigned to filler.
 func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error) {
-	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100, so the int→int32
-	// narrowing is safe.
+	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100.
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		Filler(filler).
-		OrderStatus("open").
-		Limit(int32(limit))
+		OrderStatus(backendOrderStatusOpen).
+		Limit(int64(limit))
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
@@ -94,7 +95,7 @@ func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler 
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		OrderId(orderID).
 		Filler(filler).
-		OrderStatus("open")
+		OrderStatus(backendOrderStatusOpen)
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
@@ -164,7 +165,7 @@ func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
 		bo.ProtocolSignature = v
 	}
 	if v, ok := o.GetDeadlineOk(); ok {
-		d := int64(*v)
+		d := *v
 		bo.Deadline = &d
 	}
 	if v, ok := o.GetFillerOk(); ok {

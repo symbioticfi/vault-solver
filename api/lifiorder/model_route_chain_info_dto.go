@@ -11,9 +11,7 @@ API version: 0.0.19
 package lifiorder
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the RouteChainInfoDto type satisfies the MappedNullable interface at compile time
@@ -28,7 +26,8 @@ type RouteChainInfoDto struct {
 	// Human-readable name of the chain
 	Name string `json:"name"`
 	// Whether the chain is currently active
-	IsActive bool `json:"isActive"`
+	IsActive             bool `json:"isActive"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _RouteChainInfoDto RouteChainInfoDto
@@ -164,45 +163,38 @@ func (o RouteChainInfoDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["chainId"] = o.ChainId
 	toSerialize["name"] = o.Name
 	toSerialize["isActive"] = o.IsActive
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *RouteChainInfoDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"chainType",
-		"chainId",
-		"name",
-		"isActive",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varRouteChainInfoDto := _RouteChainInfoDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varRouteChainInfoDto)
+	err = json.Unmarshal(data, &varRouteChainInfoDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = RouteChainInfoDto(varRouteChainInfoDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chainType")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "isActive")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

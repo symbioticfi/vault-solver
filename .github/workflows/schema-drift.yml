@@ -1,0 +1,76 @@
+name: schema-drift
+
+# Third-party schemas (3F, RFQ backend, LI.FI, UniswapX, Morpho, RedStone) change without notice.
+# Generated clients tolerate added/removed fields (hack/openapi-relax-client.py), but semantic drift
+# — a renamed field, a changed enum, new pagination rules — still needs a human. This job diffs every
+# vendored schema registered in hack/schema-sources.json against its live source daily, and fails if
+# a vendored schema is not registered at all, so future integrations are covered automatically.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      # Needed by the GraphQL sources, which are fetched with `go run .../gqlfetch`.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Diff vendored schemas against live sources
+        id: drift
+        run: python3 hack/check-schema-drift.py --report drift-report.md
+
+      - name: Open or update the drift issue
+        if: steps.drift.outputs.status == 'drift'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="schemas: vendored third-party schemas have drifted"
+
+          # Drift often persists for days (an upstream change nobody has adopted yet), so the report
+          # carries a fingerprint of its own content: an unchanged state is not re-posted, and the
+          # issue stays a running log of distinct states rather than a daily heartbeat.
+          fingerprint="$(sha256sum drift-report.md | cut -c1-16)"
+          cp drift-report.md issue-body.md
+          {
+            echo
+            echo "Each drifted entry above names the \`make\` target that refreshes it. After refreshing,"
+            echo "regenerate the client and check whether any field we actually read changed shape or meaning."
+            echo
+            echo "_Posted automatically by .github/workflows/schema-drift.yml (run $GITHUB_RUN_ID)._"
+            echo "<!-- drift-fingerprint: $fingerprint -->"
+          } >> issue-body.md
+
+          # Assignment is best effort: an offboarded or renamed login must not stop the report.
+          assign() {
+            gh issue edit "$1" --add-assignee oxsteins --add-assignee alrxy >/dev/null \
+              || echo "::warning::could not assign issue #$1"
+          }
+
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            created="$(gh issue create --title "$title" --body-file issue-body.md)"
+            assign "${created##*/}"
+            exit 0
+          fi
+          assign "$existing"
+
+          # The fingerprint is content-based, so any earlier post of this exact state counts.
+          if gh issue view "$existing" --json body,comments \
+              --jq '[.body] + [.comments[].body] | .[]' | grep -qF "drift-fingerprint: $fingerprint"; then
+            echo "This drift state was already reported on issue #$existing; not commenting again."
+            exit 0
+          fi
+
+          gh issue comment "$existing" --body-file issue-body.md

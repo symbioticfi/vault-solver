@@ -76,7 +76,7 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 	}
 
 	wantHash := common.HexToHash("0xdead")
-	txm.result <- txmanager.Result{Hash: wantHash}
+	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -147,7 +147,7 @@ func TestRunReportsListenerFailureBeforeDrainingAcceptedExecution(t *testing.T) 
 	}
 
 	wantHash := common.HexToHash("0xbeef")
-	txm.result <- txmanager.Result{Hash: wantHash}
+	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
 	select {
 	case err := <-done:
 		if !errors.Is(err, listenerErr) {

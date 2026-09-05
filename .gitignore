@@ -31,3 +31,12 @@ dev-account.local.txt
 
 # Local debug tooling (not part of the solver)
 /cmd/3f-debug/
+
+# Python bytecode from hack/ scripts
+__pycache__/
+
+# Build intermediate written by make refresh-uniswapx-client
+openapi/.*.normalized.openapi.json
+
+# Written by hack/check-schema-drift.py (and the schema-drift CI job) in the working tree
+drift-report.md

@@ -71,6 +71,8 @@ type TxManagerConfig struct {
 	TipGwei float64 `yaml:"tipGwei"`
 	// BroadcastTimeoutMs bounds one transaction submission RPC call independently of replacement cadence.
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
+	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.
+	AccountPollIntervalMs int `yaml:"accountPollIntervalMs"`
 	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
@@ -91,6 +93,7 @@ const DefaultConfirmations = 2
 
 const (
 	DefaultBroadcastTimeoutMs    = 5_000
+	DefaultAccountPollIntervalMs = 30_000
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
 	DefaultShutdownTimeoutMs     = 60_000
@@ -137,6 +140,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TxManager.BroadcastTimeoutMs == 0 {
 		c.TxManager.BroadcastTimeoutMs = DefaultBroadcastTimeoutMs
+	}
+	if c.TxManager.AccountPollIntervalMs == 0 {
+		c.TxManager.AccountPollIntervalMs = DefaultAccountPollIntervalMs
 	}
 	if c.TxManager.ReplacementIntervalMs == 0 {
 		c.TxManager.ReplacementIntervalMs = DefaultReplacementIntervalMs
@@ -205,6 +211,9 @@ func (c TxManagerConfig) validate(required bool) error {
 	}
 	if c.BroadcastTimeoutMs <= 0 {
 		return errors.New("txManager.broadcastTimeoutMs must be positive")
+	}
+	if c.AccountPollIntervalMs <= 0 {
+		return errors.New("txManager.accountPollIntervalMs must be positive")
 	}
 	if c.ReplacementIntervalMs <= 0 {
 		return errors.New("txManager.replacementIntervalMs must be positive")

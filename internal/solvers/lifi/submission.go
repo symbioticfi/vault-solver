@@ -83,7 +83,8 @@ func (s *Solver) submitFill(
 		"cancelAt", cancelAtUnix,
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		To: s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
+		Solver: Name,
+		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, order, calldata.OrderID)
@@ -117,8 +118,11 @@ func (s *Solver) submitFill(
 		"requestMaxFeePerGas", bigString(maxFeePerGas),
 	)
 	return &pendingFill{
-		order: order, orderID: calldata.OrderID, reservationKey: reservationKey,
-		result: result,
+		order:          order,
+		orderID:        calldata.OrderID,
+		reservationKey: reservationKey,
+		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
+		result:         result,
 	}, nil
 }
 
@@ -150,17 +154,47 @@ func (s *Solver) fillRequestObsolete(
 func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
-	if completion.result.Err == nil {
+	outcome := completion.result.Outcome
+	if outcome == txmanager.OutcomeConfirmed {
+		s.observeFillAmounts(completion.result, fill)
 		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return
 	}
-	s.log.Error(completion.result.Err, "order fill failed",
+	if outcome == txmanager.OutcomeIncludedUnconfirmed {
+		s.observeFillAmounts(completion.result, fill)
+		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+		)
+		return
+	}
+	err := completion.result.Err
+	if err == nil {
+		err = errors.Errorf("unknown transaction outcome %q", outcome)
+	}
+	s.log.Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,
 		"onChainOrderId", fill.orderID.Hex(),
 		"quoteId", fill.order.QuoteID,
 		"tx", completion.result.Hash.Hex(),
 		"notAdmitted", completion.result.NotAdmitted,
+	)
+}
+
+func (s *Solver) observeFillAmounts(result txmanager.Result, fill *pendingFill) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.fillAmounts.Observe(
+		result.Receipt,
+		fill.order.TokenIn,
+		fill.order.AmountIn,
+		fill.order.TokenOut,
+		fill.order.OutputAmount,
+		fill.plannedSurplus,
 	)
 }
 

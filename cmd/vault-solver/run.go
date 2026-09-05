@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -57,6 +58,12 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	for i, s := range cfg.Solvers {
 		solverNames[i] = s.Name
 	}
+	// With one solver per process (the deployed shape), stamp every line, shared components such as
+	// txmanager included, with the integration it serves. With several, each solver's own logger is
+	// stamped below instead, and shared components attribute work through the request label.
+	if len(solverNames) == 1 {
+		log = log.WithValues("solver", solverNames[0])
+	}
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,
@@ -66,17 +73,32 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
-	metrics := observability.NewMetrics()
+	metrics, health := observability.NewMetrics()
 	metrics.SetBuildInfo(version.Version, version.Commit)
-	health := &observability.Health{}
-	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics, health)
-	go observability.ServeUntil(ctx, httpSrv, log)
+	metrics.SetSolvers(solverNames)
+	httpSrv := observability.NewHTTPServer(cfg.Observability.Addr, metrics)
+	observabilityCtx, stopObservability := context.WithCancel(context.WithoutCancel(ctx))
+	observabilityDone := make(chan struct{})
+	go func() {
+		defer close(observabilityDone)
+		observability.ServeUntil(observabilityCtx, httpSrv, log)
+	}()
+	defer func() {
+		stopObservability()
+		<-observabilityDone
+	}()
 	log.Info("observability server listening", "addr", cfg.Observability.Addr)
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
+	rpcMetrics, err := chain.NewRPCMetrics(metrics.Registerer())
+	if err != nil {
+		return err
+	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
-	chainClient, err := chain.Dial(ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, log)
+	chainClient, err := chain.DialWithMetrics(
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics, log,
+	)
 	if err != nil {
 		return err
 	}
@@ -93,15 +115,20 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
 	// Shared, nonce-serialized transaction sender.
-	txm := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
+	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
+	if err != nil {
+		return err
+	}
+	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
 		TipGwei:             cfg.TxManager.TipGwei,
 		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
+		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-	}, log)
+	}, txMetrics, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
@@ -112,13 +139,19 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ReportFatal: reportFatal,
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
 	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
-		slv, err := solver.New(sc.Name, sc.Config, deps)
+		solverDeps := deps
+		if len(cfg.Solvers) > 1 {
+			solverDeps.Log = log.WithValues("solver", sc.Name)
+		}
+		slv, err := solver.New(sc.Name, sc.Config, solverDeps)
 		if err != nil {
 			return err
 		}
 		solvers = append(solvers, slv)
+		solverLogs = append(solverLogs, solverDeps.Log)
 		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
 	}
 	if requiresTxManager {
@@ -172,8 +205,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
 		})
 	}
-	for _, slv := range solvers {
-		g.Go(func() error { return solver.Run(gctx, slv, log) })
+	for i, slv := range solvers {
+		g.Go(func() error { return solver.Run(gctx, slv, solverLogs[i]) })
 	}
 
 	var (
