@@ -1,0 +1,64 @@
+name: Integration tests
+
+on:
+  pull_request:
+    branches:
+      - stage
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    environment: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # pin@v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: symbioticfi
+          repositories: |
+            rfq-integration
+            rfq-indexer
+            rfq-backend
+          permission-contents: read
+
+      - name: Checkout vault-solver repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # pin@v7.0.1
+        with:
+          path: vault-solver
+
+      - name: Checkout symbioticfi/rfq-integration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # pin@v7.0.1
+        with:
+          repository: symbioticfi/rfq-integration
+          token: ${{ steps.app-token.outputs.token }}
+          path: rfq-integration
+
+      - name: Checkout symbioticfi/rfq-indexer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # pin@v7.0.1
+        with:
+          repository: symbioticfi/rfq-indexer
+          token: ${{ steps.app-token.outputs.token }}
+          path: rfq-indexer
+
+      - name: Checkout symbioticfi/rfq-backend
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # pin@v7.0.1
+        with:
+          repository: symbioticfi/rfq-backend
+          token: ${{ steps.app-token.outputs.token }}
+          path: rfq-backend
+
+      - name: List dirs
+        run: |
+          ls -la
+
+      - name: Run integration tests
+        working-directory: rfq-integration
+        run: |
+          ls -la
+          # ./scripts/tests.sh
