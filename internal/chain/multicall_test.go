@@ -71,7 +71,7 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 				response := map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x7a69"}
 				switch request.Method {
 				case "eth_chainId":
-				case "eth_call":
+				case rpcMethodCall:
 					calls++
 					if len(request.Params) != 2 || string(request.Params[1]) != `"latest"` {
 						t.Errorf("expected latest eth_call, got %s", request.Params)
