@@ -42,7 +42,7 @@ func logRequests(next http.Handler, log logr.Logger) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		log.Info("request",
-			"method", r.Method, "route", routeLabel(r.URL.Path), "status", rec.status,
+			httpMethodLabel, r.Method, httpRouteLabel, routeLabel(r.URL.Path), httpStatusLabel, rec.status,
 			"durationMs", time.Since(start).Milliseconds(), "requestId", id)
 	})
 }
@@ -55,7 +55,7 @@ func recoverPanics(next http.Handler, log logr.Logger) http.Handler {
 		defer func() {
 			if v := recover(); v != nil {
 				log.Error(errors.Errorf("panic: %v", v), "recovered panic in quote server",
-					"method", r.Method, "path", r.URL.Path, "requestId", requestID(r.Context()))
+					httpMethodLabel, r.Method, "path", r.URL.Path, "requestId", requestID(r.Context()))
 				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}()

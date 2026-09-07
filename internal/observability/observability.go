@@ -19,6 +19,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+const (
+	eventLabel       = "event"
+	metricsNamespace = "solver_bot"
+)
+
 // NewLogger builds the production (JSON) zap logger behind the logr interface and returns a flush
 // func. When debug is true the level is lowered to Debug so logr V(1) calls are emitted; otherwise
 // they're dropped. main is the only place that should reference a concrete logging backend.
@@ -58,7 +63,7 @@ func NewMetrics() (*Metrics, *Health) {
 	health := &Health{}
 	buildInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: "solver_bot",
+			Namespace: metricsNamespace,
 			Name:      "build_info",
 			Help:      "Build metadata; constant 1, labeled by version and commit.",
 		},
@@ -66,14 +71,14 @@ func NewMetrics() (*Metrics, *Health) {
 	)
 	solverInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Namespace: "solver_bot",
+			Namespace: metricsNamespace,
 			Name:      "solver_info",
 			Help:      "Configured solver membership; constant 1 for each solver in this runtime.",
 		},
 		[]string{"solver"},
 	)
 	serviceReady := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "solver_bot",
+		Namespace: metricsNamespace,
 		Name:      "service_ready",
 		Help:      "1 when the process admits work through its readiness gate; 0 otherwise.",
 	}, health.readyValue)

@@ -97,28 +97,28 @@ type v2HashABIs struct {
 
 func mustV2OrderArguments() abi.Arguments {
 	components := []abi.ArgumentMarshaling{
-		{Name: "info", Type: "tuple", Components: []abi.ArgumentMarshaling{
-			{Name: "reactor", Type: "address"}, {Name: "swapper", Type: "address"},
-			{Name: "nonce", Type: "uint256"}, {Name: "deadline", Type: "uint256"},
-			{Name: "additionalValidationContract", Type: "address"},
+		{Name: "info", Type: abiTupleType, Components: []abi.ArgumentMarshaling{
+			{Name: "reactor", Type: abiAddressType}, {Name: "swapper", Type: abiAddressType},
+			{Name: "nonce", Type: abiUint256Type}, {Name: "deadline", Type: abiUint256Type},
+			{Name: "additionalValidationContract", Type: abiAddressType},
 			{Name: "additionalValidationData", Type: "bytes"},
 		}},
-		{Name: "cosigner", Type: "address"},
-		{Name: "baseInput", Type: "tuple", Components: []abi.ArgumentMarshaling{
-			{Name: "token", Type: "address"}, {Name: "startAmount", Type: "uint256"}, {Name: "endAmount", Type: "uint256"},
+		{Name: "cosigner", Type: abiAddressType},
+		{Name: "baseInput", Type: abiTupleType, Components: []abi.ArgumentMarshaling{
+			{Name: "token", Type: abiAddressType}, {Name: "startAmount", Type: abiUint256Type}, {Name: "endAmount", Type: abiUint256Type},
 		}},
 		{Name: "baseOutputs", Type: "tuple[]", Components: []abi.ArgumentMarshaling{
-			{Name: "token", Type: "address"}, {Name: "startAmount", Type: "uint256"},
-			{Name: "endAmount", Type: "uint256"}, {Name: "recipient", Type: "address"},
+			{Name: "token", Type: abiAddressType}, {Name: "startAmount", Type: abiUint256Type},
+			{Name: "endAmount", Type: abiUint256Type}, {Name: "recipient", Type: abiAddressType},
 		}},
-		{Name: "cosignerData", Type: "tuple", Components: []abi.ArgumentMarshaling{
-			{Name: "decayStartTime", Type: "uint256"}, {Name: "decayEndTime", Type: "uint256"},
-			{Name: "exclusiveFiller", Type: "address"}, {Name: "exclusivityOverrideBps", Type: "uint256"},
-			{Name: "inputOverride", Type: "uint256"}, {Name: "outputOverrides", Type: "uint256[]"},
+		{Name: "cosignerData", Type: abiTupleType, Components: []abi.ArgumentMarshaling{
+			{Name: "decayStartTime", Type: abiUint256Type}, {Name: "decayEndTime", Type: abiUint256Type},
+			{Name: "exclusiveFiller", Type: abiAddressType}, {Name: "exclusivityOverrideBps", Type: abiUint256Type},
+			{Name: "inputOverride", Type: abiUint256Type}, {Name: "outputOverrides", Type: "uint256[]"},
 		}},
 		{Name: "cosignature", Type: "bytes"},
 	}
-	t, err := abi.NewType("tuple", "V2DutchOrder", components)
+	t, err := abi.NewType(abiTupleType, "V2DutchOrder", components)
 	if err != nil {
 		panic(err)
 	}
@@ -126,10 +126,10 @@ func mustV2OrderArguments() abi.Arguments {
 }
 
 func mustV2CosignerDataArguments() abi.Arguments {
-	t, err := abi.NewType("tuple", "CosignerData", []abi.ArgumentMarshaling{
-		{Name: "decayStartTime", Type: "uint256"}, {Name: "decayEndTime", Type: "uint256"},
-		{Name: "exclusiveFiller", Type: "address"}, {Name: "exclusivityOverrideBps", Type: "uint256"},
-		{Name: "inputOverride", Type: "uint256"}, {Name: "outputOverrides", Type: "uint256[]"},
+	t, err := abi.NewType(abiTupleType, "CosignerData", []abi.ArgumentMarshaling{
+		{Name: "decayStartTime", Type: abiUint256Type}, {Name: "decayEndTime", Type: abiUint256Type},
+		{Name: "exclusiveFiller", Type: abiAddressType}, {Name: "exclusivityOverrideBps", Type: abiUint256Type},
+		{Name: "inputOverride", Type: abiUint256Type}, {Name: "outputOverrides", Type: "uint256[]"},
 	})
 	if err != nil {
 		panic(err)
@@ -142,11 +142,11 @@ func mustV2HashArguments() v2HashABIs {
 	if err != nil {
 		panic(err)
 	}
-	addressType, err := abi.NewType("address", "", nil)
+	addressType, err := abi.NewType(abiAddressType, "", nil)
 	if err != nil {
 		panic(err)
 	}
-	uintType, err := abi.NewType("uint256", "", nil)
+	uintType, err := abi.NewType(abiUint256Type, "", nil)
 	if err != nil {
 		panic(err)
 	}

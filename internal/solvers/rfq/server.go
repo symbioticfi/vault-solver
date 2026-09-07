@@ -67,7 +67,7 @@ func (s *server) handler() http.Handler {
 	}, s.handleHealth)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "quote", Method: http.MethodPost, Path: "/quote", Summary: "Request a filler quote",
+		OperationID: quoteOperation, Method: http.MethodPost, Path: "/quote", Summary: "Request a filler quote",
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
 

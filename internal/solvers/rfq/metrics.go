@@ -13,6 +13,15 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
+const (
+	httpStatusLabel = "status"
+
+	httpRouteLabel = "route"
+
+	httpMethodLabel = "method"
+	quoteOperation  = "quote"
+)
+
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
 	orderPollObserver *observability.OperationObserver
@@ -37,7 +46,7 @@ func newRFQMetrics(
 	})
 	for _, outcome := range quoteDecisionOutcomes {
 		spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-			Event: "quote", Outcomes: []string{string(outcome)},
+			Event: quoteOperation, Outcomes: []string{string(outcome)},
 		})
 	}
 	spec.Events = append(spec.Events,
@@ -45,7 +54,7 @@ func newRFQMetrics(
 		observability.WorkflowEventSpec{Event: "order_poll", Outcomes: []string{"success"}},
 	)
 	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
-		Event: "quote", Kinds: []string{"input", "output"},
+		Event: quoteOperation, Kinds: []string{"input", "output"},
 	})
 	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
 	if err != nil {
@@ -57,12 +66,12 @@ func newRFQMetrics(
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rfq_filler_http_requests_total",
 			Help: "Deprecated compatibility counter for total RFQ filler HTTP requests; use rfq_filler_http_request_duration_seconds_count.",
-		}, []string{"method", "route", "status"}),
+		}, []string{httpMethodLabel, httpRouteLabel, httpStatusLabel}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "rfq_filler_http_request_duration_seconds",
 			Help:    "RFQ filler HTTP request count and duration in seconds.",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}, []string{"method", "route", "status"}),
+		}, []string{httpMethodLabel, httpRouteLabel, httpStatusLabel}),
 		activeOrders: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "rfq_active_orders",
 			Help: "RFQ orders currently queued, submitting, or awaiting backend settlement.",
@@ -90,7 +99,7 @@ func newRFQMetrics(
 
 func (m *rfqMetrics) observeQuoteDecision(outcome quoteDecisionOutcome) {
 	if m != nil {
-		m.workflow.ObserveEventAt("quote", boundedQuoteDecisionOutcome(outcome), 1, m.now())
+		m.workflow.ObserveEventAt(quoteOperation, boundedQuoteDecisionOutcome(outcome), 1, m.now())
 	}
 }
 
@@ -117,7 +126,7 @@ func (m *rfqMetrics) addQuotedAmount(token common.Address, side string, amount *
 	if token == (common.Address{}) || amount == nil || amount.Sign() <= 0 {
 		return
 	}
-	m.workflow.AddAmount("quote", token.Hex(), side, amount)
+	m.workflow.AddAmount(quoteOperation, token.Hex(), side, amount)
 }
 
 func (m *rfqMetrics) observeWin() {
@@ -140,16 +149,16 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		labels := prometheus.Labels{
-			"method": methodLabel(r.Method),
-			"route":  routeLabel(r.URL.Path),
-			"status": strconv.Itoa(rec.status),
+			httpMethodLabel: methodLabel(r.Method),
+			httpRouteLabel:  routeLabel(r.URL.Path),
+			httpStatusLabel: strconv.Itoa(rec.status),
 		}
 		m.requests.With(labels).Inc()
 		m.duration.With(labels).Observe(time.Since(start).Seconds())
 	})
 }
 
-// methodLabel bounds arbitrary HTTP methods to the methods served by this process.
+// httpMethodLabel bounds arbitrary HTTP methods to the methods served by this process.
 func methodLabel(method string) string {
 	switch method {
 	case http.MethodGet, http.MethodPost:
@@ -175,7 +184,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// routeLabel maps a path to a bounded set of route labels (known routes, else "other").
+// httpRouteLabel maps a path to a bounded set of route labels (known routes, else "other").
 func routeLabel(path string) string {
 	switch path {
 	case "/health", "/quote", "/openapi.json", "/openapi.yaml", "/docs":

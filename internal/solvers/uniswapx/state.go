@@ -64,7 +64,7 @@ func (s *Solver) setPendingReservations(hash common.Hash, reservations liquidlan
 	}
 	s.log.V(1).Info(
 		"fill capacity reserved",
-		"orderHash", hash.Hex(),
+		orderHashField, hash.Hex(),
 		"capacityGroups", len(reservations),
 		"pendingFills", s.capacity.Len(),
 	)
@@ -81,7 +81,7 @@ func (s *Solver) clearPendingReservations(hash common.Hash) {
 	}
 	s.log.V(1).Info(
 		"fill capacity released",
-		"orderHash", hash.Hex(),
+		orderHashField, hash.Hex(),
 		"pendingFills", s.capacity.Len(),
 	)
 	s.requestQuoteRefresh()
@@ -168,7 +168,7 @@ func (s *Solver) trackExclusiveObligation(
 	if updated {
 		s.log.V(1).Info(
 			"exclusive obligation tracked",
-			"orderHash", obligation.hash.Hex(),
+			orderHashField, obligation.hash.Hex(),
 			"quoteId", quoteID,
 			"exclusiveUntil", obligation.deadline.Unix(),
 		)
@@ -291,7 +291,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		}
 		s.log.Info(
 			"exclusive order settled before exclusivity ended",
-			"orderHash", decision.hash.Hex(),
+			orderHashField, decision.hash.Hex(),
 			"tx", decision.txHash.Hex(),
 			"filledAt", decision.filledAt.Unix(),
 			"exclusiveUntil", decision.deadline.Unix(),
@@ -299,7 +299,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	}
 	for _, decision := range historicalMissed {
 		fields := []any{
-			"orderHash", decision.hash.Hex(),
+			orderHashField, decision.hash.Hex(),
 			"status", decision.status,
 			"exclusiveUntil", decision.deadline.Unix(),
 			"origin", "startup-recovery",
@@ -327,7 +327,7 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 			s.observeExclusiveOutcome(exclusiveOutcomeMissed)
 		}
 		fields := []any{
-			"orderHash", decision.hash.Hex(),
+			orderHashField, decision.hash.Hex(),
 			"status", decision.status,
 			"exclusiveUntil", decision.deadline.Unix(),
 			"blockUntil", s.exclusiveBlockUntil.Load(),

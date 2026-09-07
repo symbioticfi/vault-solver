@@ -307,7 +307,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
-		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, "status", bo.OrderStatus)
+		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, httpStatusLabel, bo.OrderStatus)
 	}
 }
 
