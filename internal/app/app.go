@@ -109,7 +109,7 @@ func Run(ctx context.Context, path string, debug *bool) error {
 	if err != nil {
 		return err
 	}
-	txm := txmanager.NewWithMetrics(rpc, key, rpc.ChainID(), transactionConfig(cfg.TxManager), txMetrics, log)
+	txm := txmanager.New(rpc, key, rpc.ChainID(), transactionConfig(cfg.TxManager), txMetrics, log)
 	deps := solver.Deps{Chain: rpc, Signer: key, TxManager: txm, Metrics: metrics, Log: log, ReportFatal: fail}
 	services := make([]service, 0, len(cfg.Solvers))
 	sends := false

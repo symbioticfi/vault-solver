@@ -30,7 +30,7 @@ func TestAccountMetricsActivateOnlyWhenManagerStarts(t *testing.T) {
 	metrics, err := NewMetrics(reg)
 	testcheck.NoError(t, err)
 	sgnr := mustSigner(t)
-	manager := NewWithMetrics(
+	manager := New(
 		newMockBackend(), sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard(),
 	)
 
@@ -67,7 +67,7 @@ func TestAccountMetricsRetainLastSuccessfulSnapshot(t *testing.T) {
 	metrics.account.now = func() time.Time { return time.Unix(123, 0) }
 	sgnr := mustSigner(t)
 	metrics.bindAccount(sgnr.Address())
-	manager := NewWithMetrics(backend, sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard())
+	manager := New(backend, sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard())
 
 	manager.refreshAccount(t.Context())
 	want := accountSnapshot{

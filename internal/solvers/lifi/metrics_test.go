@@ -25,19 +25,18 @@ func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
 	inbox.beginRecovery()
 	inbox.markRecoveryRetry(metricOrder("recovery-retry", 1_150, 1_175), 0)
 
-	capacityRetries := newReservationRetryQueue(2)
-	testcheck.NoError(t, capacityRetries.enqueue(metricOrder("capacity", 1_200, 1_250), 0))
+	retries := newOrderRetries(2, 2)
+	testcheck.NoError(t, retries.enqueueCapacity(metricOrder("capacity", 1_200, 1_250), 0))
 
-	depositRetries := newOrderDepositRetryQueue(2)
-	testcheck.NoError(t, depositRetries.schedule(metricOrder("deposit", 1_020, 1_030), time.Unix(1_000, 0)))
+	testcheck.NoError(t, retries.scheduleDeposit(metricOrder("deposit", 1_020, 1_030), time.Unix(1_000, 0)))
 
 	stopInbox := metrics.trackOrderQueue(orderQueueInbox, inbox.orderQueueSnapshot)
 	stopRecovery := metrics.trackOrderQueue(
 		orderQueueRecoveryRetry,
 		inbox.recoveryRetryQueueSnapshot,
 	)
-	stopCapacity := metrics.trackOrderQueue(orderQueueCapacityRetry, capacityRetries.orderQueueSnapshot)
-	stopDeposit := metrics.trackOrderQueue(orderQueueDepositRetry, depositRetries.orderQueueSnapshot)
+	stopCapacity := metrics.trackOrderQueue(orderQueueCapacityRetry, func() orderQueueSnapshot { return retries.snapshot().capacity })
+	stopDeposit := metrics.trackOrderQueue(orderQueueDepositRetry, func() orderQueueSnapshot { return retries.snapshot().deposit })
 	assertOrderQueueSnapshots(t, metrics.orderQueueMetrics, map[orderQueue]orderQueueSnapshot{
 		orderQueueInbox:         {backlog: 2, nearestDeadline: 1_300},
 		orderQueueRecoveryRetry: {backlog: 1, nearestDeadline: 1_150},
@@ -45,14 +44,14 @@ func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
 		orderQueueDepositRetry:  {backlog: 1, nearestDeadline: 1_020},
 	})
 
-	readyAt, ok := depositRetries.nextReadyAt()
+	readyAt, ok := retries.nextDepositAt()
 	if !ok {
 		t.Fatal("deposit retry was not scheduled")
 	}
-	if order, err := depositRetries.popReady(readyAt); err != nil || order == nil {
+	if order, err := retries.popDeposit(readyAt); err != nil || order == nil {
 		t.Fatalf("pop deposit retry = %+v, %v", order, err)
 	}
-	if snapshot := depositRetries.orderQueueSnapshot(); snapshot != (orderQueueSnapshot{}) {
+	if snapshot := retries.snapshot().deposit; snapshot != (orderQueueSnapshot{}) {
 		t.Fatalf("deposit retry processing snapshot = %+v, want no queued order", snapshot)
 	}
 
@@ -89,13 +88,12 @@ func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 
 	const iterations = 256
 	inbox := newOrderInbox(iterations)
-	capacityRetries := newReservationRetryQueue(1)
-	depositRetries := newOrderDepositRetryQueue(1)
+	retries := newOrderRetries(1, 1)
 	stopInbox := metrics.trackOrderQueue(orderQueueInbox, inbox.orderQueueSnapshot)
 	defer stopInbox()
-	stopCapacity := metrics.trackOrderQueue(orderQueueCapacityRetry, capacityRetries.orderQueueSnapshot)
+	stopCapacity := metrics.trackOrderQueue(orderQueueCapacityRetry, func() orderQueueSnapshot { return retries.snapshot().capacity })
 	defer stopCapacity()
-	stopDeposit := metrics.trackOrderQueue(orderQueueDepositRetry, depositRetries.orderQueueSnapshot)
+	stopDeposit := metrics.trackOrderQueue(orderQueueDepositRetry, func() orderQueueSnapshot { return retries.snapshot().deposit })
 	defer stopDeposit()
 
 	started := make(chan struct{})
@@ -109,25 +107,25 @@ func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 				done <- err
 				return
 			}
-			if err := capacityRetries.enqueue(order, uint64(index)); err != nil {
+			if err := retries.enqueueCapacity(order, uint64(index)); err != nil {
 				done <- err
 				return
 			}
-			capacityRetries.popReady(uint64(index + 1))
-			if err := depositRetries.schedule(order, now); err != nil {
+			retries.popCapacity(uint64(index + 1))
+			if err := retries.scheduleDeposit(order, now); err != nil {
 				done <- err
 				return
 			}
-			readyAt, ok := depositRetries.nextReadyAt()
+			readyAt, ok := retries.nextDepositAt()
 			if !ok {
 				done <- errors.New("deposit retry was not scheduled")
 				return
 			}
-			if _, err := depositRetries.popReady(readyAt); err != nil {
+			if _, err := retries.popDeposit(readyAt); err != nil {
 				done <- err
 				return
 			}
-			depositRetries.finish(order)
+			retries.finishDeposit(order)
 			runtime.Gosched()
 		}
 		done <- nil

@@ -31,7 +31,7 @@ type liquidReader interface {
 	ReadInventory(ctx context.Context, routes []liquidlane.Route) ([]liquidlane.Inventory, error)
 	ReadFillQuotes(ctx context.Context, routes []liquidlane.Route, tokenIn common.Address, amountIn *big.Int) ([]liquidlane.FillQuote, error)
 	FilterAuthorizedRoutes(ctx context.Context, routes []liquidlane.Route, executor common.Address) ([]liquidlane.Route, error)
-	ReadGasSnapshot(ctx context.Context, routes []liquidlane.Route) (*liquidlanegas.Snapshot, error)
+	ReadAdapterState(ctx context.Context, addresses []common.Address, executor common.Address, gasRoutes []liquidlane.Route) ([]liquidlane.Auth, *liquidlanegas.Snapshot, error)
 }
 
 type gasReader interface {
@@ -88,31 +88,29 @@ func assemble[T any](ctx context.Context, r *Reader, routes []liquidlane.Route, 
 	now time.Time, physical []T, routeOf func(T) liquidlane.Route,
 ) (View[T], error) {
 	view := View[T]{Physical: physical}
-	if len(physical) > 0 {
-		observed := make([]liquidlane.Route, len(physical))
-		for i, item := range physical {
-			observed[i] = routeOf(item)
-		}
-		authorized, err := r.FilterAuthorizedRoutes(ctx, observed, executor)
-		if err != nil {
-			return View[T]{}, err
-		}
-		allowed := make(map[liquidlane.RouteID]struct{}, len(authorized))
-		for _, route := range authorized {
-			allowed[route.ID] = struct{}{}
-		}
-		for _, item := range physical {
-			if _, ok := allowed[routeOf(item).ID]; ok {
-				view.Direct = append(view.Direct, item)
-			}
+	addresses := make([]common.Address, len(physical))
+	for i, item := range physical {
+		addresses[i] = routeOf(item).Adapter
+	}
+	gasRoutes := routes
+	if r.gas == nil {
+		gasRoutes = nil
+	}
+	auth, gas, err := r.ReadAdapterState(ctx, addresses, executor, gasRoutes)
+	if err != nil {
+		return View[T]{}, err
+	}
+	allowed := make(map[common.Address]bool, len(auth))
+	for _, item := range auth {
+		allowed[item.Adapter] = item.Authorized
+	}
+	for _, item := range physical {
+		if allowed[routeOf(item).Adapter] {
+			view.Direct = append(view.Direct, item)
 		}
 	}
 	if r.gas == nil {
 		return view, nil
-	}
-	gas, err := r.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return View[T]{}, err
 	}
 	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
 	if err != nil {

@@ -94,6 +94,45 @@ func TestFindFillQuoteRequiresExactRouteAndAmount(t *testing.T) {
 	}
 }
 
+func TestBindFillQuoteOwnsCurrentAmountsAndSignedIdentity(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	base := liquidlane.FillQuote{Inventory: testPhysicalInventory(), AmountIn: big.NewInt(1_000),
+		GrossAmountOut: big.NewInt(1_000), MinDiscount: big.NewInt(100_000)}
+	id := common.HexToHash(testOfferID)
+	candidate := base.Inventory
+	candidate.MaxAssets, candidate.DiscountID = big.NewInt(2_000), &id
+	signed := &Signed{DiscountID: id, Adapter: base.Adapter,
+		Terms:            SignedTerms{TokenToRedeem: base.TokenIn, Discount: big.NewInt(100_000), Deadline: big.NewInt(now.Add(time.Minute).Unix())},
+		ProtocolDeadline: big.NewInt(now.Add(2 * time.Minute).Unix())}
+	bound, err := BindFillQuote(candidate, signed, base, now)
+	if err != nil || bound == nil || bound.MaxAssets.Int64() != 1_000 || bound.MaxAmountOut.Int64() != 900 ||
+		!bound.ValidUntil.Equal(now.Add(time.Minute)) {
+		t.Fatalf("bound=%+v err=%v", bound, err)
+	}
+	originals := make(map[*big.Int]string)
+	for _, amount := range []*big.Int{base.MaxAssets, candidate.MaxAssets, candidate.MaxRate,
+		base.AdapterMinDiscount, base.AmountIn, base.GrossAmountOut, base.MinDiscount} {
+		originals[amount] = amount.String()
+	}
+	for _, amount := range []*big.Int{bound.MaxAssets, bound.MaxRate, bound.AdapterMinDiscount,
+		bound.AmountIn, bound.GrossAmountOut, bound.MinDiscount} {
+		amount.Add(amount, big.NewInt(1))
+	}
+	for amount, want := range originals {
+		if amount.String() != want {
+			t.Fatal("bound quote aliases an input amount")
+		}
+	}
+	*bound.DiscountID = common.Hash{}
+	if id != common.HexToHash(testOfferID) {
+		t.Fatal("bound quote aliases its candidate identity")
+	}
+	candidate.DiscountID = nil
+	if _, err := BindFillQuote(candidate, signed, base, now); err == nil {
+		t.Fatal("accepted a candidate without signed identity")
+	}
+}
+
 func TestResolveSelectedBindsFreshTermsToExactPhysicalQuote(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	base := testPhysicalInventory()

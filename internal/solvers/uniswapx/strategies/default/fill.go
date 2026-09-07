@@ -3,27 +3,12 @@ package defaultstrategy
 import (
 	"context"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
-
-	"github.com/go-errors/errors"
-
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
 func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
-	if input.AmountIn == nil || input.AmountIn.Sign() <= 0 {
-		return nil, errors.New("amountIn: must be positive")
-	}
-	if input.OutputAmount == nil || input.OutputAmount.Sign() <= 0 {
-		return nil, errors.New("outputAmount: must be positive")
-	}
-	if input.AmountIn.Cmp(s.policy.MinAmount) < 0 {
-		input.Trace.Decline(
-			"fill", "amount-below-minimum",
-			"amountIn", input.AmountIn.String(),
-			"minAmount", s.policy.MinAmount.String(),
-		)
-		return nil, nil
+	if ready, err := input.CheckAmounts(s.policy.MinAmount); err != nil || !ready {
+		return nil, err
 	}
 	validAfter := input.ChainTime.Add(s.policy.ExecutionBuffer)
 	if input.Deadline != 0 && int64(input.Deadline) <= validAfter.Unix() {
@@ -34,29 +19,7 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		)
 		return nil, nil
 	}
-	maxRoutes := types.MaxRoutes
-	if input.RequireSingleRoute {
-		maxRoutes = 1
-	}
-	gasPricing, err := planning.NewGasPricing(
-		input.MaxFeePerGas,
-		input.TokenOut,
-		input.GasPrices,
-		input.GasSnapshot,
-		s.policy.InventoryReserveBps,
-		types.LiquidLaneGasEnvelope(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	allocation, err := planning.SolveFill(planning.FillTask{
-		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
-		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
-		MaxRoutes: maxRoutes, PriceBufferBps: s.policy.PriceBufferBps,
-		InventoryReserveBps: s.policy.InventoryReserveBps,
-		GasPricing:          &gasPricing,
-		Trace:               input.Trace,
-	})
+	allocation, err := input.Allocate(s.policy, types.LiquidLaneGasEnvelope(), types.MaxRoutes)
 	if err != nil || allocation == nil {
 		return nil, err
 	}

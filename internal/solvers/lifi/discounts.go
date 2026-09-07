@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/symbioticfi/vault-solver/internal/bigmath"
-
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -118,23 +116,20 @@ func (s *Solver) resolveFillDiscount(ctx context.Context, candidate liquidlane.I
 		s.log.Error(err, "private discounts: resolve", "discountId", id)
 		return discountResolution{}
 	}
-	signed, err := discounts.ParseAndValidate(resolved, discounts.Selection{
-		DiscountID: *candidate.DiscountID, Adapter: candidate.Adapter, TokenIn: candidate.TokenIn,
-	}, base, now)
+	signed, err := discounts.ParseSigned(resolved)
 	if err != nil {
 		s.logInvalidDiscount(id, err)
 		return discountResolution{}
 	}
-	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
-	if amountOut.Sign() <= 0 {
+	quote, err := discounts.BindFillQuote(candidate, signed, base, now)
+	if err != nil {
+		s.logInvalidDiscount(id, err)
 		return discountResolution{}
 	}
-	candidate.ValidUntil = discounts.ValidUntil(signed)
-	return discountResolution{signed: signed, quote: &liquidlane.FillQuote{
-		Inventory: candidate, AmountIn: bigmath.Clone(base.AmountIn),
-		GrossAmountOut: bigmath.Clone(base.GrossAmountOut), MaxAmountOut: amountOut,
-		MinDiscount: bigmath.Clone(base.MinDiscount),
-	}}
+	if quote == nil || quote.MaxAmountOut.Sign() <= 0 {
+		return discountResolution{}
+	}
+	return discountResolution{signed: signed, quote: quote}
 }
 
 func (s *Solver) logInvalidDiscount(discountID string, err error) {

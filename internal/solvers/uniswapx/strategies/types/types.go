@@ -59,23 +59,11 @@ type Quote struct {
 }
 
 type FillInput struct {
-	OrderID string `json:"orderId"`
-	QuoteID string `json:"quoteId"`
+	planning.FillInput
 
-	TokenIn            common.Address `json:"tokenIn"`
-	TokenOut           common.Address `json:"tokenOut"`
-	AmountIn           *big.Int       `json:"amountIn"`
-	OutputAmount       *big.Int       `json:"outputAmount"`
-	Deadline           uint32         `json:"deadline"`
-	RequireSingleRoute bool           `json:"requireSingleRoute"`
-
-	Quotes       []liquidlane.FillQuote          `json:"quotes"`
-	Reservations liquidlane.CapacityReservations `json:"reservations"`
-	GasSnapshot  *liquidlanegas.Snapshot         `json:"gasSnapshot"`
-	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
-	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
-	ChainTime    time.Time                       `json:"chainTime"`
-	Trace        planning.DecisionTrace          `json:"-"`
+	OrderID  string `json:"orderId"`
+	QuoteID  string `json:"quoteId"`
+	Deadline uint32 `json:"deadline"`
 }
 
 type FillPlan struct {

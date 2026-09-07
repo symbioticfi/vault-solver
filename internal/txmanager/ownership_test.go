@@ -31,7 +31,7 @@ func (s *heldSigner) SignTx(ctx context.Context, tx *types.Transaction, id *big.
 func TestShutdownBoundsInitialSignerAndNeverBroadcastsLate(t *testing.T) {
 	backend := newMockBackend()
 	key := &heldSigner{Signer: mustSigner(t), entered: make(chan struct{}), release: make(chan struct{})}
-	m := New(backend, key, big.NewInt(11155111), Config{ShutdownTimeout: 10 * time.Millisecond}, logr.Discard())
+	m := New(backend, key, big.NewInt(11155111), Config{ShutdownTimeout: 10 * time.Millisecond}, nil, logr.Discard())
 	ctx, cancel := context.WithCancel(t.Context())
 	stopped := make(chan struct{})
 	go func() { m.Start(ctx); close(stopped) }()
@@ -62,7 +62,7 @@ func TestShutdownBoundsInitialSignerAndNeverBroadcastsLate(t *testing.T) {
 func TestEstimateGasRejectsOverflow(t *testing.T) {
 	backend := newMockBackend()
 	backend.gasEstimate = ^uint64(0)
-	manager := newTestManager(t, backend)
+	manager := startTestManager(t, backend, Config{PollInterval: time.Millisecond}, nil)
 	if _, err := manager.estimateGas(context.Background(), Request{}); err == nil {
 		t.Fatal("overflowing gas estimate was accepted")
 	}

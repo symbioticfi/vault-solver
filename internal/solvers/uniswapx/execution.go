@@ -195,13 +195,20 @@ func (s *Solver) prepareFill(
 		transactionMaxFee = new(big.Int).Set(maxFee)
 	}
 	fillInput := strategytypes.FillInput{
+		FillInput: planning.FillInput{
+			TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
+			RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn),
+			Quotes:             snapshot.Direct,
+			Reservations:       s.capacity.Snapshot(),
+			GasSnapshot:        snapshot.GasSnapshot,
+			GasPrices:          snapshot.GasPrices,
+			MaxFeePerGas:       pricingMaxFee, ChainTime: now,
+			Trace: planning.NewDecisionTrace(s.log, "source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID),
+		},
+
 		OrderID: order.Hash.Hex(), QuoteID: order.QuoteID,
-		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
-		Deadline:           order.Deadline,
-		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
-		Reservations: s.capacity.Snapshot(),
-		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
-		Trace: planning.NewDecisionTrace(s.log, "source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID),
+
+		Deadline: order.Deadline,
 	}
 	plan, err := s.strategy.DecideFill(ctx, fillInput)
 	if err != nil {
@@ -303,11 +310,9 @@ func (s *Solver) buildExecutorCalldata(
 			return nil, time.Time{}, errors.Errorf("reprice selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
 		signed, err := s.resolveDiscount(ctx, liquiddiscounts.Selection{
-			DiscountID:   *route.DiscountID,
-			Adapter:      route.Adapter,
-			TokenIn:      order.TokenIn,
-			TokenOut:     order.TokenOut,
-			AmountIn:     route.AmountIn,
+			DiscountID: *route.DiscountID,
+			Adapter:    route.Adapter,
+			TokenIn:    order.TokenIn, TokenOut: order.TokenOut, AmountIn: route.AmountIn,
 			MinAmountOut: route.MinAmountOut,
 		}, physicalQuotes, now)
 		if err != nil {

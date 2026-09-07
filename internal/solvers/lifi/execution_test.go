@@ -59,87 +59,70 @@ func TestOrderInboxDoesNotBlockAndPreservesOrder(t *testing.T) {
 	testcheck.ReceiveWithin(t, done, time.Second, "inbox did not stop after cancellation")
 }
 
-func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
-	tests := []byte{dutchAuctionContextType, exclusiveDutchAuctionContextType}
-	for _, contextType := range tests {
-		t.Run(hexutil.Encode([]byte{contextType}), func(t *testing.T) {
+func TestParseOrderMessageLogsIgnoredOrders(t *testing.T) {
+	foreignSettler := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
+	type testCase struct {
+		name         string
+		mutate       func(*testing.T, map[string]any)
+		want, absent []string
+	}
+	tests := []testCase{
+		{
+			name: "foreign chain",
+			mutate: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				order := mapField(t, body, "order")
+				order["originChainId"], order["inputOracle"] = "1", foreignSettler.Hex()
+				output := sliceField(t, order, "outputs")[0].(map[string]any)
+				output["chainId"], output["oracle"], output["settler"] = "1", hexID(foreignSettler), hexID(foreignSettler)
+			},
+			want:   []string{"order feed: ignored order for another chain", "order is for a different chain"},
+			absent: []string{`"error"`},
+		},
+		{
+			name: "target mismatch",
+			mutate: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				mapField(t, body, "order")["inputOracle"] = foreignSettler.Hex()
+			},
+			want:   []string{"order feed: ignored order", "does not match outputSettler", `"error"`},
+			absent: []string{"another chain"},
+		},
+	}
+	for _, contextType := range []byte{dutchAuctionContextType, exclusiveDutchAuctionContextType} {
+		tests = append(tests, testCase{
+			name: hexutil.Encode([]byte{contextType}),
+			mutate: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+				output["context"] = hexutil.Encode([]byte{contextType})
+			},
+			want: []string{"ignored unsupported Dutch auction", hexutil.Encode([]byte{contextType})},
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cfg := testLifiConfig()
-			body := testOrderBody(t, cfg)
-			output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
-			output["context"] = hexutil.Encode([]byte{contextType})
-			raw, err := json.Marshal(body)
-			testcheck.NoError(t, err, "marshal order: %v")
-
+			raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) { tt.mutate(t, body) })
 			var logs []string
-			solver := &Solver{
-				cfg:     cfg,
-				chainID: 11155111,
-				log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+			solver := &Solver{cfg: cfg, chainID: 11155111,
+				log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
 			if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
 				t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 			}
 			logged := strings.Join(logs, "\n")
-			if !strings.Contains(logged, "ignored unsupported Dutch auction") ||
-				!strings.Contains(logged, hexutil.Encode([]byte{contextType})) {
-				t.Fatalf("unsupported auction log = %s", logged)
+			for _, want := range tt.want {
+				if !strings.Contains(logged, want) {
+					t.Errorf("log missing %q: %s", want, logged)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(logged, absent) {
+					t.Errorf("log contains %q: %s", absent, logged)
+				}
 			}
 		})
-	}
-}
-
-func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
-	cfg := testLifiConfig()
-	foreignSettler := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
-	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
-		order := mapField(t, body, "order")
-		order["originChainId"] = "1"
-		order["inputOracle"] = foreignSettler.Hex()
-		output := sliceField(t, order, "outputs")[0].(map[string]any)
-		output["chainId"] = "1"
-		output["oracle"] = hexID(foreignSettler)
-		output["settler"] = hexID(foreignSettler)
-	})
-
-	var logs []string
-	solver := &Solver{
-		cfg:     cfg,
-		chainID: 11155111,
-		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
-	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
-		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
-	}
-	logged := strings.Join(logs, "\n")
-	if !strings.Contains(logged, "order feed: ignored order for another chain") ||
-		!strings.Contains(logged, "order is for a different chain") ||
-		strings.Contains(logged, `"error"`) {
-		t.Fatalf("foreign order log = %s", logged)
-	}
-}
-
-func TestParseOrderMessageKeepsTargetMismatchAtError(t *testing.T) {
-	cfg := testLifiConfig()
-	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
-		mapField(t, body, "order")["inputOracle"] =
-			common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17").Hex()
-	})
-
-	var logs []string
-	solver := &Solver{
-		cfg:     cfg,
-		chainID: 11155111,
-		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
-	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
-		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
-	}
-	logged := strings.Join(logs, "\n")
-	if !strings.Contains(logged, "order feed: ignored order") ||
-		!strings.Contains(logged, "does not match outputSettler") ||
-		!strings.Contains(logged, `"error"`) ||
-		strings.Contains(logged, "another chain") {
-		t.Fatalf("target mismatch log = %s", logged)
 	}
 }
 
@@ -380,27 +363,27 @@ func TestOrderInboxBoundsLimitedRecoveryRetriesAcrossOrderInstances(t *testing.T
 }
 
 func TestReservationRetryQueueIsBoundedFIFO(t *testing.T) {
-	retries := newReservationRetryQueue(2)
+	retries := newOrderRetries(2, 1)
 	first := &submittedOrder{OrderID: "first"}
 	second := &submittedOrder{OrderID: "second"}
-	testcheck.NoError(t, retries.enqueue(first, 0))
-	if err := retries.enqueue(first, 0); err != nil || retries.len() != 1 {
-		t.Fatalf("duplicate enqueue: len=%d err=%v", retries.len(), err)
+	testcheck.NoError(t, retries.enqueueCapacity(first, 0))
+	if err := retries.enqueueCapacity(first, 0); err != nil || len(retries.capacity) != 1 {
+		t.Fatalf("duplicate enqueue: len=%d err=%v", len(retries.capacity), err)
 	}
-	testcheck.NoError(t, retries.enqueue(second, 1))
-	if err := retries.enqueue(&submittedOrder{OrderID: "dropped-newest"}, 1); !errors.Is(err, errOrderRetryFull) {
+	testcheck.NoError(t, retries.enqueueCapacity(second, 1))
+	if err := retries.enqueueCapacity(&submittedOrder{OrderID: "dropped-newest"}, 1); !errors.Is(err, errOrderRetryFull) {
 		t.Fatalf("overflow error = %v, want %v", err, errOrderRetryFull)
 	}
-	if order := retries.popReady(0); order != nil {
+	if order := retries.popCapacity(0); order != nil {
 		t.Fatalf("retry before reservation change = %+v", order)
 	}
-	if order := retries.popReady(1); order != first {
+	if order := retries.popCapacity(1); order != first {
 		t.Fatalf("first ready retry = %+v, want first", order)
 	}
-	if order := retries.popReady(1); order != nil {
+	if order := retries.popCapacity(1); order != nil {
 		t.Fatalf("second retry ran in its enqueue generation: %+v", order)
 	}
-	if order := retries.popReady(2); order != second {
+	if order := retries.popCapacity(2); order != second {
 		t.Fatalf("second ready retry = %+v, want second", order)
 	}
 }
@@ -410,16 +393,7 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{hold: true}
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	solver := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	barrier := &submittedOrder{processed: make(chan struct{})}
 	orders := make(chan *submittedOrder, 2)
 	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
@@ -456,16 +430,7 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		&fakeLifiTxSender{},
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	solver := fixture.solver(&fakeLifiTxSender{}, strategy, lifiOrderStatusDeposited)
 	solver.reader = fakeLifiReader{statusErr: errors.New("temporary status failure")}
 	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	orders := make(chan *submittedOrder, 1)
@@ -497,6 +462,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 	for _, test := range []struct {
 		name                string
 		statuses            []uint8
+		copies              int
 		wantDepositDeferred float64
 	}{
 		{
@@ -519,6 +485,11 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 			},
 			wantDepositDeferred: 1,
 		},
+		{
+			name: "duplicate while waiting", copies: 2,
+			statuses:            []uint8{lifiOrderStatusNone, lifiOrderStatusDeposited, lifiOrderStatusDeposited},
+			wantDepositDeferred: 1,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := immediateTestSetup(t)
@@ -526,16 +497,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 			testcheck.NoError(t, err, "New strategy: %v")
 			submitted := make(chan struct{}, 1)
 			txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
-			solver := newProcessTestSolver(
-				fixture.cfg,
-				fixture.caller,
-				txm,
-				strategy,
-				fixture.tokenIn,
-				fixture.tokenOut,
-				fixture.adapter,
-				test.statuses[0],
-			)
+			solver := fixture.solver(txm, strategy, test.statuses[0])
 			reg := prometheus.NewRegistry()
 			metrics, err := newLIFIMetrics(reg, nil, "")
 			testcheck.NoError(t, err, "newLIFIMetrics: %v")
@@ -548,8 +510,11 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				return test.statuses[index], nil
 			}
 			solver.reader = reader
-			orders := make(chan *submittedOrder, 1)
-			orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+			orders := make(chan *submittedOrder, max(1, test.copies))
+			order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+			for range cap(orders) {
+				orders <- order
+			}
 			done := make(chan error, 1)
 			go func() {
 				done <- solver.runOrderWorker(
@@ -587,16 +552,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		&fakeLifiTxSender{},
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusNone,
-	)
+	solver := fixture.solver(&fakeLifiTxSender{}, strategy, lifiOrderStatusNone)
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
 	testcheck.NoError(t, err)
@@ -637,74 +593,13 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "queue_drop", string(orderQueueDepositRetry), 1)
 }
 
-func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
-	fixture := immediateTestSetup(t)
-	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	testcheck.NoError(t, err, "New strategy: %v")
-	submitted := make(chan struct{}, 1)
-	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusNone,
-	)
-	solver.wallNow = time.Now
-	var statusReads atomic.Int32
-	reader := solver.reader.(fakeLifiReader)
-	reader.statusFn = func() (uint8, error) {
-		if statusReads.Add(1) == 1 {
-			return lifiOrderStatusNone, nil
-		}
-		return lifiOrderStatusDeposited, nil
-	}
-	solver.reader = reader
-	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
-	orders := make(chan *submittedOrder, 2)
-	orders <- order
-	orders <- order
-	done := make(chan error, 1)
-	go func() {
-		done <- solver.runOrderWorker(
-			t.Context(),
-			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-			orders,
-			nil,
-			nil,
-		)
-	}()
-
-	testcheck.ReceiveWithin(t, submitted, 3*time.Second, "worker did not fill the retried order")
-	close(orders)
-	testcheck.NoError(t, <-done, "runOrderWorker: %v")
-	if got := statusReads.Load(); got != 3 {
-		t.Fatalf("status reads = %d, duplicate delivery was not coalesced", got)
-	}
-	if len(txm.reqs) != 1 {
-		t.Fatalf("fill submissions = %d, want 1", len(txm.reqs))
-	}
-}
-
 func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	submitted := make(chan struct{}, 1)
 	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusNone,
-	)
+	solver := fixture.solver(txm, strategy, lifiOrderStatusNone)
 	solver.wallNow = time.Now
 	first := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	first.OrderID = "waiting"
@@ -783,16 +678,7 @@ func TestOrderWorkerDepositRetryDoesNotHoldRecoveryBarrier(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		&fakeLifiTxSender{},
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusNone,
-	)
+	solver := fixture.solver(&fakeLifiTxSender{}, strategy, lifiOrderStatusNone)
 	solver.wallNow = time.Now
 	barrier := &submittedOrder{processed: make(chan struct{})}
 	orders := make(chan *submittedOrder, 2)
@@ -830,16 +716,7 @@ func TestOrderWorkerDropsDepositRetriesWhenIntakeStops(t *testing.T) {
 			strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 			testcheck.NoError(t, err, "New strategy: %v")
 			txm := &fakeLifiTxSender{}
-			solver := newProcessTestSolver(
-				fixture.cfg,
-				fixture.caller,
-				txm,
-				strategy,
-				fixture.tokenIn,
-				fixture.tokenOut,
-				fixture.adapter,
-				lifiOrderStatusNone,
-			)
+			solver := fixture.solver(txm, strategy, lifiOrderStatusNone)
 			solver.wallNow = time.Now
 			statusRead := make(chan struct{}, 1)
 			reader := solver.reader.(fakeLifiReader)
@@ -917,16 +794,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 		_, _ = w.Write(testListedOrdersPageJSON(t, orders, len(orders), 0))
 	}))
 	defer orderServer.Close()
-	solver := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		&fakeLifiTxSender{},
-		webhookstrategy.New(client),
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	solver := fixture.solver(&fakeLifiTxSender{}, webhookstrategy.New(client), lifiOrderStatusDeposited)
 	solver.orders = newOrderClient(orderServer.URL, "test-key", time.Second, 11155111)
 	operationReg := prometheus.NewRegistry()
 	operationMetrics, err := newLIFIMetrics(operationReg, nil, "")

@@ -314,13 +314,21 @@ func (s *Solver) prepareFill(ctx context.Context, routes []route, order *submitt
 	}
 	quotes := append(append([]liquidlane.FillQuote(nil), observation.snapshots.Direct...), private...)
 	prepared.input = types.FillInput{
+		FillInput: planning.FillInput{
+			TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: bigmath.Clone(order.AmountIn), OutputAmount: bigmath.Clone(order.OutputAmount),
+			RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn),
+			Quotes:             quotes,
+			Reservations:       reservations,
+			GasSnapshot:        observation.snapshots.GasSnapshot,
+			GasPrices:          observation.snapshots.GasPrices,
+			MaxFeePerGas:       pricingFee, ChainTime: observation.chainTime,
+			Trace: planning.NewDecisionTrace(log),
+		},
+
 		OrderID: order.OrderID, QuoteID: order.QuoteID, Solver: s.cfg.Executor,
-		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: bigmath.Clone(order.AmountIn),
-		OutputAmount: bigmath.Clone(order.OutputAmount), OutputContext: append([]byte(nil), order.Output.Context...),
-		Expires: order.Order.Expires, FillDeadline: order.Order.FillDeadline,
-		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: quotes, Reservations: reservations,
-		GasSnapshot: observation.snapshots.GasSnapshot, GasPrices: observation.snapshots.GasPrices,
-		MaxFeePerGas: pricingFee, ChainTime: observation.chainTime, Trace: planning.NewDecisionTrace(log),
+
+		OutputContext: append([]byte(nil), order.Output.Context...),
+		Expires:       order.Order.Expires, FillDeadline: order.Order.FillDeadline,
 	}
 	log.V(1).Info("order fill snapshot loaded", "routes", len(pair), "fillQuotes", len(quotes),
 		"directQuotes", len(observation.snapshots.Direct), "physicalQuotes", len(observation.snapshots.Physical),

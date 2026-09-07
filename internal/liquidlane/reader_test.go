@@ -1,8 +1,10 @@
 package liquidlane
 
 import (
+	"bytes"
 	"context"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,9 +21,11 @@ import (
 
 type scriptedLiquidLaneBackend struct {
 	latest [][]chain.CallResult
+	calls  [][]chain.Call
 }
 
-func (b *scriptedLiquidLaneBackend) Multicall(_ context.Context, _ []chain.Call) ([]chain.CallResult, error) {
+func (b *scriptedLiquidLaneBackend) Multicall(_ context.Context, calls []chain.Call) ([]chain.CallResult, error) {
+	b.calls = append(b.calls, calls)
 	result := b.latest[0]
 	b.latest = b.latest[1:]
 	return result, nil
@@ -310,6 +314,62 @@ func TestReaderReadFillQuotesKeepsAmountSpecificFillWhenRateRoundsToZero(t *test
 	}
 }
 
+func TestReaderSharesRolesWithoutExpandingAuthorizationScope(t *testing.T) {
+	first, second := testReaderRoute(1), testReaderRoute(2)
+	second.Vault = first.Vault
+	owner, filler := common.Address{10}, common.Address{11}
+	for _, rolesKnown := range []bool{true, false} {
+		t.Run(strconv.FormatBool(rolesKnown), func(t *testing.T) {
+			roles := []chain.CallResult{
+				successOutput(t, "marketMaker", common.Address{}), successOutput(t, "owner", owner),
+				successOutput(t, "marketMaker", owner), successOutput(t, "owner", owner),
+				successVaultOutput(t, "freeAssets", big.NewInt(200)), successVaultOutput(t, "withdrawable", big.NewInt(150)),
+			}
+			var followup []chain.CallResult
+			if rolesKnown {
+				followup = append(followup, successOutput(t, "isFiller", true),
+					successOutput(t, "acquireBalance", big.NewInt(30)), successOutput(t, "acquireBalance", big.NewInt(70)))
+			} else {
+				roles[0] = chain.CallResult{}
+			}
+			followup = append(followup, successOutput(t, "acquireBalance", big.NewInt(20)))
+			backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{roles, followup}}
+			reader := &Reader{chain: backend}
+			auth, gas, err := reader.ReadAdapterState(t.Context(), []common.Address{first.Adapter, first.Adapter}, filler, []Route{first, second, first})
+			testcheck.NoError(t, err)
+			if rolesKnown {
+				if len(auth) != 1 || !auth[0].Authorized || !auth[0].IsFiller || auth[0].MarketMaker != (common.Address{}) || auth[0].Owner != owner {
+					t.Fatalf("authorization = %+v", auth)
+				}
+				if got := gas.Adapters[first.Adapter].Acquire[first.TokenIn]; got == nil || got.Int64() != 100 {
+					t.Fatalf("first acquire = %v", got)
+				}
+			} else if len(auth) != 0 || gas.Adapters[first.Adapter] != nil {
+				t.Fatalf("failed role read produced state: auth=%+v gas=%+v", auth, gas.Adapters)
+			}
+			if len(gas.Vaults) != 1 || gas.Adapters[second.Adapter].Acquire[second.TokenIn].Int64() != 20 {
+				t.Fatalf("healthy gas state = %+v", gas)
+			}
+			rolesRead := map[common.Address]int{}
+			for _, batch := range backend.calls {
+				for _, call := range batch {
+					if bytes.Equal(call.Data, llAdapter.PackOwner()) || bytes.Equal(call.Data, llAdapter.PackMarketMaker()) {
+						rolesRead[call.Target]++
+					}
+					if bytes.Equal(call.Data[:4], llAdapter.PackIsFiller(common.Address{}, filler)[:4]) {
+						if call.Target != first.Adapter || !bytes.Equal(call.Data, llAdapter.PackIsFiller(common.Address{}, filler)) {
+							t.Fatalf("unexpected authorization call: %+v", call)
+						}
+					}
+				}
+			}
+			if rolesRead[first.Adapter] != 2 || rolesRead[second.Adapter] != 2 {
+				t.Fatalf("repeated role reads: %+v", rolesRead)
+			}
+		})
+	}
+}
+
 func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testing.T) {
 	route := testReaderRoute(1)
 	secondRoute := testReaderRoute(2)
@@ -319,10 +379,10 @@ func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testin
 	marketMaker := common.HexToAddress("0x0000000000000000000000000000000000000b11")
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
 		{
-			successOutput(t, "owner", owner),
 			successOutput(t, "marketMaker", marketMaker),
 			successOutput(t, "owner", owner),
 			successOutput(t, "marketMaker", marketMaker),
+			successOutput(t, "owner", owner),
 			successVaultOutput(t, "freeAssets", big.NewInt(200)),
 			successVaultOutput(t, "withdrawable", big.NewInt(150)),
 		},
@@ -334,7 +394,7 @@ func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testin
 		},
 	}}
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
-	snapshot, err := r.ReadGasSnapshot(context.Background(), []Route{route, secondRoute})
+	_, snapshot, err := r.ReadAdapterState(t.Context(), nil, common.Address{}, []Route{route, secondRoute})
 	testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 	if len(snapshot.Vaults) != 1 || snapshot.Vaults[route.Vault].FreeAssets.String() != "200" ||
 		snapshot.Vaults[route.Vault].Withdrawable.String() != "150" {
@@ -351,8 +411,8 @@ func TestReaderReadGasSnapshotReadsZeroMarketMakerKey(t *testing.T) {
 	owner := common.HexToAddress("0x0000000000000000000000000000000000000a11")
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
 		{
-			successOutput(t, "owner", owner),
 			successOutput(t, "marketMaker", common.Address{}),
+			successOutput(t, "owner", owner),
 			successVaultOutput(t, "freeAssets", big.NewInt(200)),
 			successVaultOutput(t, "withdrawable", big.NewInt(150)),
 		},
@@ -363,7 +423,7 @@ func TestReaderReadGasSnapshotReadsZeroMarketMakerKey(t *testing.T) {
 	}}
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
-	snapshot, err := r.ReadGasSnapshot(t.Context(), []Route{route})
+	_, snapshot, err := r.ReadAdapterState(t.Context(), nil, common.Address{}, []Route{route})
 	testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 	if got := snapshot.Adapters[route.Adapter].Acquire[route.TokenIn]; got == nil || got.String() != "30" {
 		t.Fatalf("acquire balance = %v, want 30", got)
@@ -390,7 +450,7 @@ func TestReaderReadGasSnapshotTreatsInvalidAcquireBalanceAsUnavailable(t *testin
 			}}
 			r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
-			snapshot, err := r.ReadGasSnapshot(context.Background(), []Route{route})
+			_, snapshot, err := r.ReadAdapterState(t.Context(), nil, common.Address{}, []Route{route})
 			testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 			if amount := snapshot.Adapters[route.Adapter].Acquire[route.TokenIn]; amount != nil {
 				t.Fatalf("acquire balance = %v, want unavailable", amount)
@@ -408,9 +468,8 @@ func TestReaderReadAdapterSnapshotCombinesSharedFacts(t *testing.T) {
 		{successOutput(t, "getTokensToRedeemLength", big.NewInt(1))},
 		{successOutput(t, "tokensToRedeem", route.TokenIn)},
 		{successOutput(t, "paused", false)},
-		{successOutput(t, "marketMaker", owner), successOutput(t, "owner", owner)},
 		{
-			successOutput(t, "owner", owner), successOutput(t, "marketMaker", owner),
+			successOutput(t, "marketMaker", owner), successOutput(t, "owner", owner),
 			successVaultOutput(t, "freeAssets", big.NewInt(200)),
 			successVaultOutput(t, "withdrawable", big.NewInt(150)),
 		},
@@ -455,9 +514,8 @@ func TestReaderReadAdapterSnapshotKeepsZeroCapacityRoutes(t *testing.T) {
 			successOutput(t, "tokensToRedeem", second.TokenIn),
 		},
 		{successOutput(t, "paused", false)},
-		{successOutput(t, "marketMaker", owner), successOutput(t, "owner", owner)},
 		{
-			successOutput(t, "owner", owner), successOutput(t, "marketMaker", owner),
+			successOutput(t, "marketMaker", owner), successOutput(t, "owner", owner),
 			successVaultOutput(t, "freeAssets", big.NewInt(200)),
 			successVaultOutput(t, "withdrawable", big.NewInt(150)),
 		},
@@ -509,8 +567,8 @@ func TestReaderReadAuthUsesDirectRolesAndDelegatedFiller(t *testing.T) {
 	}
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
 		{
-			successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
-			successOutput(t, "marketMaker", marketMaker), successOutput(t, "owner", filler),
+			successOutput(t, "marketMaker", filler), successOutput(t, "marketMaker", marketMaker),
+			successOutput(t, "owner", owner), successOutput(t, "owner", filler),
 			successOutput(t, "marketMaker", marketMaker), successOutput(t, "owner", owner),
 		},
 		{successOutput(t, "isFiller", true)},
@@ -565,8 +623,8 @@ func TestReaderFilterAuthorizedRoutesDropsUnauthorizedAdapters(t *testing.T) {
 	routes := []Route{testReaderRoute(1), testReaderRoute(2)}
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{
 		{
-			successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
-			successOutput(t, "marketMaker", marketMaker), successOutput(t, "owner", owner),
+			successOutput(t, "marketMaker", filler), successOutput(t, "marketMaker", marketMaker),
+			successOutput(t, "owner", owner), successOutput(t, "owner", owner),
 		},
 		{successOutput(t, "isFiller", false)},
 	}}

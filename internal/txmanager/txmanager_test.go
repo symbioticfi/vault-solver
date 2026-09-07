@@ -222,16 +222,15 @@ func startManagerForTest(t *testing.T, m *Manager) {
 	})
 }
 
-func newTestManager(t *testing.T, b Backend) *Manager {
+// newTestManager builds an unstarted manager; each scenario controls when its worker starts.
+func newTestManager(t *testing.T, backend Backend, config Config) *Manager {
 	t.Helper()
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{Confirmations: 0, PollInterval: time.Millisecond}, logr.Discard())
-	startManagerForTest(t, m)
-	return m
+	return New(backend, mustSigner(t), big.NewInt(11155111), config, nil, logr.Discard())
 }
 
 func TestSend_HappyPath(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	res := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), Data: []byte{0x01}, Label: "test"})
 	if res.Err != nil {
@@ -258,7 +257,7 @@ func TestSend_HappyPath(t *testing.T) {
 
 func TestMaxFeePerGasMatchesSendFeePolicy(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	fee, err := m.MaxFeePerGas(context.Background())
 	testcheck.NoError(t, err, "MaxFeePerGas: %v")
@@ -282,7 +281,7 @@ func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			b := newMockBackend()
 			b.tip, b.tipErr = test.tip, test.tipErr
-			m := New(b, mustSigner(t), big.NewInt(11155111), Config{TipGwei: 1}, logr.Discard())
+			m := newTestManager(t, b, Config{TipGwei: 1})
 			limit := big.NewInt(40_500_000_000)
 
 			fees, err := m.currentFees(t.Context(), limit)
@@ -307,7 +306,7 @@ func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
 		{big.NewInt(1_500_000_000)},
 	}}
 	b.tip = big.NewInt(1_500)
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	limit := big.NewInt(40_500_000_000)
 
 	fees, err := m.currentFees(t.Context(), limit)
@@ -353,7 +352,7 @@ func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
 func TestCurrentFeesRejectConfiguredFloorAboveFeeHeadroom(t *testing.T) {
 	b := newMockBackend()
 	b.tip = big.NewInt(30_000_000_000)
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{TipGwei: 21}, logr.Discard())
+	m := newTestManager(t, b, Config{TipGwei: 21})
 
 	_, err := m.currentFees(t.Context(), big.NewInt(40_500_000_000))
 	if err == nil || !strings.Contains(err.Error(), "priority fee floor") {
@@ -363,11 +362,7 @@ func TestCurrentFeesRejectConfiguredFloorAboveFeeHeadroom(t *testing.T) {
 
 func TestMaxFeeGweiRejectsCurrentBaseFeeAboveCap(t *testing.T) {
 	b := newMockBackend()
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{MaxFeeGwei: 10, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{MaxFeeGwei: 10, PollInterval: time.Millisecond})
 	if _, err := m.MaxFeePerGas(t.Context()); err == nil {
 		t.Fatal("expected max fee cap below current base fee to fail")
 	}
@@ -399,7 +394,7 @@ func TestValidateFeeHeadroom(t *testing.T) {
 
 func TestSend_ReservesReplacementHeadroomInsideRequestCap(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	res := m.Send(context.Background(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "capped",
@@ -423,7 +418,7 @@ func TestSend_ReservesReplacementHeadroomInsideRequestCap(t *testing.T) {
 
 func TestSend_RejectsRequestCapWithoutReplacementHeadroom(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	res := m.Send(context.Background(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "capped",
@@ -442,7 +437,7 @@ func TestSend_RejectsRequestCapWithoutReplacementHeadroom(t *testing.T) {
 
 func TestBroadcastRejectsExpiredRequest(t *testing.T) {
 	b := newMockBackend()
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	_, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000,
 		CancelAt: time.Now().Add(-time.Second), Label: "expired",
@@ -454,7 +449,7 @@ func TestBroadcastRejectsExpiredRequest(t *testing.T) {
 
 func TestBroadcastRejectsObsoleteRequestBeforeSigning(t *testing.T) {
 	b := newMockBackend()
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	checks := 0
 
 	_, err := m.broadcast(t.Context(), Request{
@@ -477,7 +472,7 @@ func TestBroadcastRejectsObsoleteRequestBeforeSigning(t *testing.T) {
 
 func TestBroadcastContinuesWhenObsolescenceIsUnknown(t *testing.T) {
 	b := newMockBackend()
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	checkErr := errors.New("status RPC unavailable")
 
 	pending, err := m.broadcast(t.Context(), Request{
@@ -501,7 +496,7 @@ func TestBroadcastTimeout(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := New(nil, nil, nil, Config{
 				BroadcastTimeout: test.configured, ReplacementInterval: 2 * time.Millisecond,
-			}, logr.Discard())
+			}, nil, logr.Discard())
 			if got := m.cfg.BroadcastTimeout; got != test.want {
 				t.Fatalf("broadcast timeout = %s, want %s", got, test.want)
 			}
@@ -511,7 +506,7 @@ func TestBroadcastTimeout(t *testing.T) {
 
 func TestSend_SequentialNoncesMonotonic(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	for i, wantNonce := range []uint64{7, 8, 9} {
 		res := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21000})
@@ -526,10 +521,7 @@ func TestSend_SequentialNoncesMonotonic(t *testing.T) {
 
 func TestSendAsyncKeepsFutureNonceUnsignedUntilPriorConfirmation(t *testing.T) {
 	b := newMockBackend()
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{Confirmations: 2, PollInterval: time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Start(ctx)
@@ -599,10 +591,7 @@ func TestSendAsyncKeepsFutureNonceUnsignedUntilPriorConfirmation(t *testing.T) {
 
 func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 	b := newMockBackend()
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 1, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{Confirmations: 1, PollInterval: time.Millisecond})
 	if !m.Idle() {
 		t.Fatal("new manager is not idle")
 	}
@@ -671,7 +660,7 @@ func TestIdleTracksActiveAndWaitingRequests(t *testing.T) {
 }
 
 func TestLaneStateSignalsBusyAndIdleEdges(t *testing.T) {
-	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, newMockBackend(), Config{})
 	changes, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	if !m.LaneReady() {
@@ -709,7 +698,7 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 			name: "manager stopped",
 			manager: func(t *testing.T) *Manager {
 				t.Helper()
-				m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+				m := newTestManager(t, newMockBackend(), Config{})
 				ctx, cancel := context.WithCancel(t.Context())
 				cancel()
 				done := make(chan struct{})
@@ -727,7 +716,7 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 			name: "expired before admission",
 			manager: func(t *testing.T) *Manager {
 				t.Helper()
-				return New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+				return newTestManager(t, newMockBackend(), Config{})
 			},
 			request: Request{
 				To: common.HexToAddress("0xabc"), CancelAt: time.Now().Add(-time.Second), Label: "expired",
@@ -762,7 +751,7 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 
 func TestSendAsyncWaitsForNonceConflictToClear(t *testing.T) {
 	b := newMockBackend()
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	m := newTestManager(t, b, Config{PollInterval: time.Millisecond})
 	m.markNonceConflict(7, common.HexToHash("0x1234"))
 	startManagerForTest(t, m)
 
@@ -810,7 +799,7 @@ func TestSendAsyncWaitsForNonceConflictToClear(t *testing.T) {
 
 func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
 	t.Run("request deadline", func(t *testing.T) {
-		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m := newTestManager(t, newMockBackend(), Config{})
 		m.markNonceConflict(7, common.HexToHash("0x1234"))
 		result, accepted := m.SendAsync(t.Context(), Request{
 			To:       common.HexToAddress("0xabc"),
@@ -830,7 +819,7 @@ func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
 	})
 
 	t.Run("caller context", func(t *testing.T) {
-		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m := newTestManager(t, newMockBackend(), Config{})
 		m.markNonceConflict(7, common.HexToHash("0x1234"))
 		ctx, cancel := context.WithCancel(t.Context())
 		type submission struct {
@@ -853,7 +842,7 @@ func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
 	})
 
 	t.Run("manager stop", func(t *testing.T) {
-		m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+		m := newTestManager(t, newMockBackend(), Config{})
 		m.markNonceConflict(7, common.HexToHash("0x1234"))
 		managerCtx, cancelManager := context.WithCancel(t.Context())
 		managerDone := make(chan struct{})
@@ -891,10 +880,7 @@ func TestSendAsyncNonceConflictWaitHonorsCancellation(t *testing.T) {
 
 func TestSendAsyncCanCompleteAtInclusion(t *testing.T) {
 	b := newMockBackend()
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{Confirmations: 2, PollInterval: time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Start(ctx)
@@ -915,15 +901,11 @@ func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 		mockBackend:        newMockBackend(),
 		receiptOnSameNonce: 2,
 	}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: 2 * time.Millisecond,
-			PendingTimeout:      time.Second,
-		},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{
+		PollInterval:        time.Millisecond,
+		ReplacementInterval: 2 * time.Millisecond,
+		PendingTimeout:      time.Second,
+	})
 	feeCap, err := m.MaxFeePerGas(t.Context())
 	testcheck.NoError(t, err, "MaxFeePerGas: %v")
 	startManagerForTest(t, m)
@@ -965,11 +947,7 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 		errors.New("temporary broadcast failure"),
 		errors.New("temporary exact rebroadcast failure"),
 	}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{MaxFeeGwei: 100, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{MaxFeeGwei: 100, PollInterval: time.Millisecond})
 	original := feeQuote{
 		baseFee: big.NewInt(20_000_000_000),
 		tip:     big.NewInt(1_000_000_000),
@@ -983,7 +961,7 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 		fees:  cloneFeeQuote(original),
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	firstBump := bumpFee(original.maxFee)
 	if pending.fees.maxFee.Cmp(firstBump) != 0 {
 		t.Fatalf("ambiguous replacement max fee = %s, want %s", pending.fees.maxFee, firstBump)
@@ -993,14 +971,14 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 	}
 	firstHash := pending.attempts[0].hash
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != firstHash || attempted[1].Hash() != firstHash ||
 		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
 		t.Fatalf("exact replacement retry = %v, pending %+v", transactionHashes(attempted), pending)
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	if len(pending.attempts) != 2 {
 		t.Fatalf("post-retry replacement attempts = %+v", pending.attempts)
 	}
@@ -1014,7 +992,7 @@ func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{io.ErrUnexpectedEOF}
 	s := mustSigner(t)
-	m := New(b, s, big.NewInt(11155111), Config{MaxFeeGwei: 100}, logr.Discard())
+	m := New(b, s, big.NewInt(11155111), Config{MaxFeeGwei: 100}, nil, logr.Discard())
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000, Label: "shutdown",
 	})
@@ -1023,7 +1001,7 @@ func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
 	pending.cancelRequested = make(chan struct{})
 	requestCancellation(pending)
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[1].Hash() == attempted[0].Hash() {
 		t.Fatalf("cancellation attempts = %v, want a new same-nonce transaction", transactionHashes(attempted))
@@ -1037,9 +1015,9 @@ func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
 
 func TestCancellationSignalDoesNotSendBackToBackReplacements(t *testing.T) {
 	b := &replacementBackend{mockBackend: newMockBackend()}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{
+	m := newTestManager(t, b, Config{
 		MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: time.Second,
-	}, logr.Discard())
+	})
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "simultaneous cancellation",
 	})
@@ -1065,13 +1043,13 @@ func TestExactRebroadcastNonceTooLowReconcilesOriginalReceipt(t *testing.T) {
 	b := &replacementNonceRaceBackend{
 		mockBackend: newMockBackend(), publishOwnedReceipt: true, firstSendErr: io.ErrUnexpectedEOF,
 	}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 100}, logr.Discard())
+	m := newTestManager(t, b, Config{MaxFeeGwei: 100})
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "exact retry inclusion",
 	})
 	testcheck.NoError(t, err, "broadcast: %v")
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != attempted[1].Hash() || len(pending.attempts) != 1 {
 		t.Fatalf("nonce-low exact retry = %v, tracked = %+v", transactionHashes(attempted), pending.attempts)
@@ -1089,7 +1067,7 @@ func TestExactRebroadcastSlack(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	m := New(nil, nil, nil, Config{
 		BroadcastTimeout: 5 * time.Second, ReplacementInterval: 5 * time.Second,
-	}, logr.Discard())
+	}, nil, logr.Discard())
 	for name, test := range map[string]struct {
 		deadline time.Time
 		want     bool
@@ -1108,13 +1086,13 @@ func TestExactRebroadcastSlack(t *testing.T) {
 
 func TestCappedNormalRebroadcastStopsAtCancellationDeadline(t *testing.T) {
 	b := &cappedRebroadcastDeadlineBackend{mockBackend: newMockBackend()}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard())
+	m := newTestManager(t, b, Config{MaxFeeGwei: 50})
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "capped deadline",
 	})
 	testcheck.NoError(t, err, "broadcast: %v")
 	pending.cancelDeadline = time.Now().Add(time.Second)
-	if !m.rebroadcastLatestAttempt(t.Context(), pending, false) ||
+	if !m.rebroadcastLatestAttempt(t.Context(), pending) ||
 		!b.deadlineOK || !b.deadline.Equal(pending.cancelDeadline) {
 		t.Fatalf("capped rebroadcast deadline = (%s, %v), want %s", b.deadline, b.deadlineOK, pending.cancelDeadline)
 	}
@@ -1124,7 +1102,7 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 	b := newMockBackend()
 	s := mustSigner(t)
 	m := New(
-		b, s, big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard(),
+		b, s, big.NewInt(11155111), Config{MaxFeeGwei: 50}, nil, logr.Discard(),
 	)
 	unsigned := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7,
@@ -1141,10 +1119,11 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 			tip:     big.NewInt(1_000_000_000),
 			maxFee:  gweiToWei(50),
 		},
-		attempts: []txAttempt{{hash: signed.Hash(), tx: signed, cancellation: true}},
+		cancelling: true,
+		attempts:   []txAttempt{{hash: signed.Hash(), tx: signed, cancellation: true}},
 	}
 
-	m.tryReplace(t.Context(), pending, true)
+	m.tryReplace(t.Context(), pending)
 	if b.sendCalls != 1 || len(b.sent) != 1 {
 		t.Fatalf("exact rebroadcast calls/sent = %d/%d, want 1/1", b.sendCalls, len(b.sent))
 	}
@@ -1156,11 +1135,7 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 func TestNormalFeeLimitReservesOneCancellationBump(t *testing.T) {
 	b := newMockBackend()
 	b.baseFee = big.NewInt(30_000_000_000)
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{MaxFeeGwei: 50, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{MaxFeeGwei: 50, PollInterval: time.Millisecond})
 
 	fees, err := m.currentFees(t.Context(), m.normalFeeLimit(Request{}))
 	testcheck.NoError(t, err, "fees: %v")
@@ -1204,7 +1179,7 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 			b := newMockBackend()
 			b.baseFee = test.current.baseFee
 			b.history = constantFeeHistory(test.current.tip)
-			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+			m := newTestManager(t, b, Config{})
 
 			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50))
 			if test.wantErr {
@@ -1226,7 +1201,7 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 func TestInitializeRejectsUnknownPendingNonceGap(t *testing.T) {
 	b := newMockBackend()
 	b.pendingNonce = b.latestNonce + 1
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 
 	err := m.Initialize(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "unmanaged pending nonce gap") {
@@ -1250,7 +1225,7 @@ func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing
 			ReplacementInterval: 2 * time.Millisecond,
 			PendingTimeout:      20 * time.Millisecond,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	startManagerForTest(t, m)
 
@@ -1303,7 +1278,7 @@ func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T
 			ReplacementInterval: time.Hour,
 			PendingTimeout:      time.Hour,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	startManagerForTest(t, m)
 
@@ -1358,7 +1333,7 @@ func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T
 
 func TestValidRequestReceiptWinsBeforePendingObsolescenceCheck(t *testing.T) {
 	b := newMockBackend()
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 	var checks atomic.Int64
 
 	result := m.Send(t.Context(), Request{
@@ -1390,7 +1365,7 @@ func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
 			ReplacementInterval: time.Second,
 			PendingTimeout:      30 * time.Millisecond,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	startManagerForTest(t, m)
 
@@ -1426,12 +1401,18 @@ func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
 
 func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 	sgnr := mustSigner(t)
-	b := &blockedFeeBackend{replacementBackend: &replacementBackend{
-		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
+	b := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
+	var block atomic.Bool
+	backend := &headerBackend{Backend: b, read: func(ctx context.Context, number *big.Int) (*types.Header, error) {
+		if block.Load() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return b.HeaderByNumber(ctx, number)
 	}}
 	b.tip = big.NewInt(1_500)
 	m := New(
-		b, sgnr, big.NewInt(11155111),
+		backend, sgnr, big.NewInt(11155111),
 		Config{
 			MaxFeeGwei:          50,
 			TipGwei:             1,
@@ -1439,7 +1420,7 @@ func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 			ReplacementInterval: 10 * time.Millisecond,
 			PendingTimeout:      time.Second,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	startManagerForTest(t, m)
 
@@ -1451,7 +1432,7 @@ func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 		t.Fatal("transaction was not accepted")
 	}
 	waitForSentTransactions(t, b.mockBackend, 1)
-	b.block.Store(true)
+	block.Store(true)
 
 	if got := testcheck.ReceiveWithin(t, result, 300*time.Millisecond, "CancelAt did not promptly cancel the nonce"); got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
 		t.Fatalf("cancellation result = %+v", got)
@@ -1468,7 +1449,7 @@ func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 	tests := map[string]func(*mockBackend) Backend{
 		"receipt disappears": func(b *mockBackend) Backend {
-			return &disappearingReceiptBackend{mockBackend: b}
+			return disappearingReceipts(b)
 		},
 		"receipt reorgs during head read": func(b *mockBackend) Backend {
 			b.reorgOnHeadRead = true
@@ -1482,10 +1463,7 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 	for name, backend := range tests {
 		t.Run(name, func(t *testing.T) {
 			b := newMockBackend()
-			m := New(
-				backend(b), mustSigner(t), big.NewInt(11155111),
-				Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-			)
+			m := newTestManager(t, backend(b), Config{Confirmations: 2, PollInterval: time.Millisecond})
 			tx := types.NewTx(&types.DynamicFeeTx{
 				ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
 				Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
@@ -1518,10 +1496,7 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 	})
 	receipt := successfulReceipt(tx, 100)
 	b.receipts[tx.Hash()] = receipt
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{Confirmations: 2, PollInterval: time.Millisecond})
 
 	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
 	if err != nil || got != receipt {
@@ -1546,10 +1521,7 @@ func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 	receipt.BlockHash = forkedReceiptHeader(100, "fallback").Hash()
 	backend := &mixedForkBackend{mockBackend: newMockBackend()}
 	backend.receipts[tx.Hash()] = receipt
-	m := New(
-		backend, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, backend, Config{Confirmations: 2, PollInterval: time.Millisecond})
 
 	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
 	if got != receipt || !errors.Is(err, errReceiptReorged) {
@@ -1558,17 +1530,13 @@ func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 }
 
 func TestTransientReceiptErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 1}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{
-			MaxFeeGwei:          100,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Second,
-			PendingTimeout:      time.Second,
-		},
-		logr.Discard(),
-	)
+	b := failReceiptReads(newMockBackend(), 1)
+	m := newTestManager(t, b, Config{
+		MaxFeeGwei:          100,
+		PollInterval:        time.Millisecond,
+		ReplacementInterval: time.Second,
+		PendingTimeout:      time.Second,
+	})
 	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
@@ -1593,11 +1561,14 @@ func TestReceiptLookupTimeoutDoesNotStarveOlderAttempt(t *testing.T) {
 		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
 	})
 	b.receipts[older.Hash()] = successfulReceipt(older, b.head)
-	backend := &blockedReceiptHashBackend{mockBackend: b, hash: newest.Hash()}
-	m := New(
-		backend, mustSigner(t), big.NewInt(11155111),
-		Config{ReplacementInterval: 2 * time.Millisecond}, logr.Discard(),
-	)
+	backend := &receiptBackend{Backend: b, read: func(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+		if hash == newest.Hash() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return b.TransactionReceipt(ctx, hash)
+	}}
+	m := newTestManager(t, backend, Config{ReplacementInterval: 2 * time.Millisecond})
 	pending := &pendingTransaction{
 		req: Request{Label: "fair receipt lookup"}, nonce: 7,
 		attempts: []txAttempt{{hash: older.Hash()}, {hash: newest.Hash()}},
@@ -1632,7 +1603,7 @@ func TestMalformedReceiptDoesNotCompleteLifecycle(t *testing.T) {
 			receipt := successfulReceipt(tx, b.head)
 			mutate(receipt)
 			b.receipts[tx.Hash()] = receipt
-			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+			m := newTestManager(t, b, Config{})
 			pending := &pendingTransaction{
 				req: Request{Label: "malformed receipt"}, nonce: 7,
 				attempts: []txAttempt{{hash: tx.Hash()}},
@@ -1651,12 +1622,10 @@ func TestMalformedReceiptDoesNotCompleteLifecycle(t *testing.T) {
 }
 
 func TestTransientConfirmationHeadErrorKeepsTrackingPendingTransaction(t *testing.T) {
-	b := &transientHeadErrorBackend{mockBackend: newMockBackend()}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
+	b := newMockBackend()
+	var headFailures atomic.Int64
+	backend := failHeadReads(b, &headFailures)
+	m := newTestManager(t, backend, Config{Confirmations: 2, PollInterval: time.Millisecond})
 	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
@@ -1665,10 +1634,8 @@ func TestTransientConfirmationHeadErrorKeepsTrackingPendingTransaction(t *testin
 	if !accepted {
 		t.Fatal("transaction was not accepted")
 	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	b.errorMu.Lock()
-	b.blockFailures = 1
-	b.errorMu.Unlock()
+	waitForSentTransactions(t, b, 1)
+	headFailures.Store(1)
 	b.mu.Lock()
 	b.head = 102
 	b.mu.Unlock()
@@ -1703,38 +1670,6 @@ func waitForAdmissionDemand(t *testing.T, m *Manager, want int64) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("admission demand = %d, want %d", m.admissionDemand.Load(), want)
-}
-
-type receiptErrorBackend struct {
-	*mockBackend
-
-	errorMu         sync.Mutex
-	receiptFailures int
-}
-
-type transientHeadErrorBackend struct {
-	*mockBackend
-
-	errorMu       sync.Mutex
-	blockFailures int
-}
-
-type blockedReceiptHashBackend struct {
-	*mockBackend
-
-	hash common.Hash
-}
-
-type blockedFeeBackend struct {
-	*replacementBackend
-
-	block atomic.Bool
-}
-
-type disappearingReceiptBackend struct {
-	*mockBackend
-
-	receiptReads atomic.Int64
 }
 
 type mixedForkBackend struct{ *mockBackend }
@@ -1778,24 +1713,6 @@ func forkedReceiptHeader(number uint64, fork string) *types.Header {
 	}
 	actual, _ := receiptHeaderCache.LoadOrStore(key, header)
 	return types.CopyHeader(actual.(*types.Header))
-}
-
-func (b *blockedFeeBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	if b.block.Load() {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	return b.mockBackend.HeaderByNumber(ctx, number)
-}
-
-func (b *disappearingReceiptBackend) TransactionReceipt(
-	ctx context.Context,
-	hash common.Hash,
-) (*types.Receipt, error) {
-	if b.receiptReads.Add(1) > 1 {
-		return nil, ethereum.NotFound
-	}
-	return b.mockBackend.TransactionReceipt(ctx, hash)
 }
 
 type acceptedThenNonceLowBackend struct {
@@ -1958,39 +1875,6 @@ func (s *shutdownBlockingSigner) SignTx(
 	return s.Signer.SignTx(ctx, tx, chainID)
 }
 
-func (b *blockedReceiptHashBackend) TransactionReceipt(
-	ctx context.Context,
-	hash common.Hash,
-) (*types.Receipt, error) {
-	if hash == b.hash {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	return b.mockBackend.TransactionReceipt(ctx, hash)
-}
-
-func (b *receiptErrorBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	b.errorMu.Lock()
-	if b.receiptFailures > 0 {
-		b.receiptFailures--
-		b.errorMu.Unlock()
-		return nil, errors.New("temporary receipt failure")
-	}
-	b.errorMu.Unlock()
-	return b.mockBackend.TransactionReceipt(ctx, hash)
-}
-
-func (b *transientHeadErrorBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	b.errorMu.Lock()
-	if b.blockFailures > 0 {
-		b.blockFailures--
-		b.errorMu.Unlock()
-		return nil, errors.New("temporary head failure")
-	}
-	b.errorMu.Unlock()
-	return b.mockBackend.HeaderByNumber(ctx, number)
-}
-
 type replacementBackend struct {
 	*mockBackend
 
@@ -2055,7 +1939,7 @@ func receiptTestHeader(block uint64) *types.Header {
 }
 
 func TestLaneStateSubscriptionsFanOutWithoutStealingEdges(t *testing.T) {
-	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, newMockBackend(), Config{})
 	first, unsubscribeFirst := m.SubscribeLaneState()
 	second, unsubscribeSecond := m.SubscribeLaneState()
 	defer unsubscribeSecond()
@@ -2084,15 +1968,11 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		mockBackend:         newMockBackend(),
 		publishOwnedReceipt: true,
 	}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{
-			Confirmations:       2,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: 10 * time.Millisecond,
-		},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{
+		Confirmations:       2,
+		PollInterval:        time.Millisecond,
+		ReplacementInterval: 10 * time.Millisecond,
+	})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
@@ -2100,7 +1980,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 	})
 	testcheck.NoError(t, err, "initial broadcast: %v")
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	if !m.Available() {
 		t.Fatal("owned canonical inclusion paused the nonce lane")
 	}
@@ -2121,10 +2001,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 
 func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 	b := &replacementNonceRaceBackend{mockBackend: newMockBackend()}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{ReplacementInterval: 10 * time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{ReplacementInterval: 10 * time.Millisecond})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
@@ -2132,7 +2009,7 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 	})
 	testcheck.NoError(t, err, "initial broadcast: %v")
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	if m.Available() {
 		t.Fatal("unexplained nonce consumption left the nonce lane available")
 	}
@@ -2144,17 +2021,14 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 
 func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T) {
 	b := &replacementNonceRaceBackend{mockBackend: newMockBackend()}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{Confirmations: 2, PollInterval: time.Millisecond})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "delayed inclusion race",
 	})
 	testcheck.NoError(t, err, "initial broadcast: %v")
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	if m.Available() {
 		t.Fatal("replacement nonce conflict did not pause the lane")
 	}
@@ -2193,7 +2067,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{errors.New("replacement transaction underpriced")}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 
@@ -2224,10 +2098,7 @@ func TestInitialReplacementUnderpricedPausesTransactionLane(t *testing.T) {
 func TestNonceTooLowWithExactReceiptReconcilesAndResumes(t *testing.T) {
 	receiptGate := make(chan struct{})
 	b := &acceptedThenNonceLowBackend{mockBackend: newMockBackend(), receiptGate: receiptGate}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{PollInterval: time.Millisecond}, logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{PollInterval: time.Millisecond})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	startManagerForTest(t, m)
@@ -2296,7 +2167,7 @@ func TestConcurrentNoncePauseStopsSignedBytesBeforeBroadcast(t *testing.T) {
 	s := &blockingTxSigner{
 		Signer: mustSigner(t), entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	m := New(b, s, big.NewInt(11155111), Config{}, logr.Discard())
+	m := New(b, s, big.NewInt(11155111), Config{}, nil, logr.Discard())
 	result := make(chan error, 1)
 	go func() {
 		_, err := m.broadcast(t.Context(), Request{
@@ -2319,7 +2190,7 @@ func TestConcurrentNoncePauseStopsSignedBytesBeforeBroadcast(t *testing.T) {
 func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{io.ErrUnexpectedEOF}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "ambiguous",
@@ -2334,7 +2205,7 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 		t.Fatalf("next nonce = %d, want 8 while exact hash remains tracked", m.nonce)
 	}
 	originalHash, originalFees := pending.originalHash, cloneFeeQuote(pending.fees)
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != originalHash || attempted[1].Hash() != originalHash ||
 		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
@@ -2343,7 +2214,7 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 	if pending.fees.maxFee.Cmp(originalFees.maxFee) != 0 || pending.fees.tip.Cmp(originalFees.tip) != 0 {
 		t.Fatalf("exact retry changed fees: got %+v want %+v", pending.fees, originalFees)
 	}
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending)
 	attempted = b.attemptedTransactions()
 	if len(attempted) != 3 || attempted[2].Hash() == originalHash || len(pending.attempts) != 2 ||
 		pending.fees.maxFee.Cmp(bumpFee(originalFees.maxFee)) != 0 {
@@ -2354,7 +2225,7 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 func TestDefiniteBroadcastRejectionDoesNotConsumeNonce(t *testing.T) {
 	b := newMockBackend()
 	b.sendErrs = []error{errors.New("insufficient funds for gas * price + value")}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "rejected"}
 
 	if pending, err := m.broadcast(t.Context(), req); err == nil || pending != nil {
@@ -2384,7 +2255,7 @@ func TestKnownTransactionErrorClassificationIsNarrow(t *testing.T) {
 func TestSend_GasEstimateFailurePropagates(t *testing.T) {
 	b := newMockBackend()
 	b.gasEstimate = 0 // forces EstimateGas to error
-	m := newTestManager(t, b)
+	m := startTestManager(t, b, Config{PollInterval: time.Millisecond}, nil)
 
 	res := m.Send(context.Background(), Request{To: common.HexToAddress("0xabc"), Label: "noestimate"})
 	if res.Err == nil {
@@ -2394,7 +2265,7 @@ func TestSend_GasEstimateFailurePropagates(t *testing.T) {
 
 func TestSend_RevertedReceiptIsError(t *testing.T) {
 	rb := &revertingBackend{mockBackend: newMockBackend()}
-	m := New(rb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	m := newTestManager(t, rb, Config{PollInterval: time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Start(ctx)
@@ -2451,13 +2322,7 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 				armed:       true,
 				cancel:      func() { cancelConfirmation(context.Canceled) },
 			}
-			manager := New(
-				interruptingBackend,
-				mustSigner(t),
-				big.NewInt(11155111),
-				Config{Confirmations: 1, PollInterval: time.Millisecond},
-				logr.Discard(),
-			)
+			manager := newTestManager(t, interruptingBackend, Config{Confirmations: 1, PollInterval: time.Millisecond})
 			pending := &pendingTransaction{
 				req:   Request{To: to, Label: "failed receipt"},
 				nonce: 7,
@@ -2552,7 +2417,7 @@ func (b *blockingEstimateBackend) EstimateGas(ctx context.Context, _ ethereum.Ca
 // cancellation while the tx still lands on-chain (which would read as "not sent").
 func TestSend_CallerCancelAfterEnqueueStillReturnsResult(t *testing.T) {
 	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
-	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	m := newTestManager(t, bb, Config{PollInterval: time.Millisecond})
 	startManagerForTest(t, m) // manager context lives until test cleanup; the caller's is cancelled below
 
 	callerCtx, cancelCaller := context.WithCancel(context.Background())
@@ -2576,7 +2441,7 @@ func TestSend_CallerCancelAfterEnqueueStillReturnsResult(t *testing.T) {
 
 func TestStartCancelInterruptsPreSignRPC(t *testing.T) {
 	b := &blockingEstimateBackend{mockBackend: newMockBackend(), entered: make(chan struct{})}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	m := newTestManager(t, b, Config{})
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	defer cancelManager()
 	startDone := make(chan struct{})
@@ -2610,7 +2475,7 @@ func TestStartCancelInterruptsInitialSigner(t *testing.T) {
 	}
 	m := New(
 		b, s, big.NewInt(11155111),
-		Config{ShutdownTimeout: 20 * time.Millisecond}, logr.Discard(),
+		Config{ShutdownTimeout: 20 * time.Millisecond}, nil, logr.Discard(),
 	)
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
@@ -2649,7 +2514,7 @@ func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 			PendingTimeout:      time.Hour,
 			ShutdownTimeout:     time.Second,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
@@ -2706,16 +2571,12 @@ func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
 func TestStartCancelBoundsUnresolvedNonceConflict(t *testing.T) {
 	receiptGate := make(chan struct{})
 	b := &acceptedThenNonceLowBackend{mockBackend: newMockBackend(), receiptGate: receiptGate}
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Hour,
-			PendingTimeout:      time.Hour,
-			ShutdownTimeout:     20 * time.Millisecond,
-		},
-		logr.Discard(),
-	)
+	m := newTestManager(t, b, Config{
+		PollInterval:        time.Millisecond,
+		ReplacementInterval: time.Hour,
+		PendingTimeout:      time.Hour,
+		ShutdownTimeout:     20 * time.Millisecond,
+	})
 	laneStateChanges, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	managerCtx, cancelManager := context.WithCancel(t.Context())
@@ -2766,7 +2627,7 @@ func TestStartCancelBoundsCancellationWriteOutage(t *testing.T) {
 			PendingTimeout:      time.Hour,
 			ShutdownTimeout:     20 * time.Millisecond,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
@@ -2823,7 +2684,7 @@ func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
 			PendingTimeout:      time.Hour,
 			ShutdownTimeout:     20 * time.Millisecond,
 		},
-		logr.Discard(),
+		nil, logr.Discard(),
 	)
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	startDone := make(chan struct{})
@@ -2863,7 +2724,7 @@ func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
 
 func TestTrySendRejectsWhileTransactionIsActive(t *testing.T) {
 	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
-	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	m := newTestManager(t, bb, Config{PollInterval: time.Millisecond})
 	startManagerForTest(t, m)
 
 	type tryResult struct {

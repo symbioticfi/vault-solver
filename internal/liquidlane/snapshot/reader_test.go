@@ -30,24 +30,6 @@ func (f *fakeLiquidReader) ReadInventory(context.Context, []liquidlane.Route) ([
 	return f.inventory, nil
 }
 
-func (f *fakeLiquidReader) FilterAuthorized(
-	_ context.Context,
-	inventory []liquidlane.Inventory,
-	_ common.Address,
-) ([]liquidlane.Inventory, error) {
-	allowed := make(map[liquidlane.RouteID]bool, len(f.authorized))
-	for _, route := range f.authorized {
-		allowed[route.ID] = true
-	}
-	out := make([]liquidlane.Inventory, 0, len(inventory))
-	for _, item := range inventory {
-		if allowed[item.ID] {
-			out = append(out, item)
-		}
-	}
-	return out, nil
-}
-
 func (f *fakeLiquidReader) ReadFillQuotes(
 	context.Context,
 	[]liquidlane.Route,
@@ -65,9 +47,18 @@ func (f *fakeLiquidReader) FilterAuthorizedRoutes(
 	return f.authorized, nil
 }
 
-func (f *fakeLiquidReader) ReadGasSnapshot(context.Context, []liquidlane.Route) (*liquidlanegas.Snapshot, error) {
+func (f *fakeLiquidReader) ReadAdapterState(_ context.Context, _ []common.Address, _ common.Address,
+	gasRoutes []liquidlane.Route,
+) ([]liquidlane.Auth, *liquidlanegas.Snapshot, error) {
+	auth := make([]liquidlane.Auth, len(f.authorized))
+	for i, route := range f.authorized {
+		auth[i] = liquidlane.Auth{Adapter: route.Adapter, Authorized: true}
+	}
+	if gasRoutes == nil {
+		return auth, nil, nil
+	}
 	f.gasReads++
-	return f.gas, nil
+	return auth, f.gas, nil
 }
 
 type fakeGasReader struct {
@@ -91,8 +82,8 @@ func (f *fakeGasReader) Read(
 
 func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	t.Parallel()
-	routeA := liquidlane.Route{ID: "a", TokenOut: common.HexToAddress("0xa"), TokenOutDecimals: 6}
-	routeB := liquidlane.Route{ID: "b", TokenOut: common.HexToAddress("0xb"), TokenOutDecimals: 18}
+	routeA := liquidlane.Route{ID: "a", Adapter: common.Address{1}, TokenOut: common.HexToAddress("0xa"), TokenOutDecimals: 6}
+	routeB := liquidlane.Route{ID: "b", Adapter: common.Address{2}, TokenOut: common.HexToAddress("0xb"), TokenOutDecimals: 18}
 	liquid := &fakeLiquidReader{
 		routes: []liquidlane.Route{routeA, routeB}, authorized: []liquidlane.Route{routeB},
 		inventory: []liquidlane.Inventory{{Route: routeA}, {Route: routeB}},

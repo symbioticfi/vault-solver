@@ -271,6 +271,15 @@ func decodeAuction(t *testing.T) AuctionMessage {
 	return a
 }
 
+// freshAuction aligns the captured frame and cached state with wall-clock dispatch.
+func freshAuction(t *testing.T, s *Solver) AuctionMessage {
+	t.Helper()
+	auction := decodeAuction(t)
+	auction.Timestamp = time.Now().UnixMilli()
+	setSnapshotBlockTime(t, s, auction.Timestamp)
+	return auction
+}
+
 func setAuctionPrice(a *AuctionMessage, price string) {
 	a.Payload.Prices = map[string]string{seedOracleHex: price}
 }
@@ -327,6 +336,9 @@ func TestBuildBidHappyPath(t *testing.T) {
 	}
 	if d.solve.Data.Nonce != "8" { // on-chain 7, next is strictly greater
 		t.Fatalf("nonce = %q, want 8", d.solve.Data.Nonce)
+	}
+	if d.solve.Data.MaxTxGasPrice != s.cfg.MaxTxGasPrice.String() {
+		t.Fatalf("maxTxGasPrice = %q, want configured cap %s", d.solve.Data.MaxTxGasPrice, s.cfg.MaxTxGasPrice)
 	}
 	// Full sign path: the LiquidationSig must recover to our signer over the EXECUTOR_V6 digest the
 	// Executor verifies (keccak(opData) bound into the digest, EIP-191 wrapped).
@@ -423,22 +435,6 @@ func TestBuildBidWithoutGasAccountingUsesGrossSelectionAndFixedBid(t *testing.T)
 	}
 }
 
-func TestBuildBidSignsConfiguredGasPriceCap(t *testing.T) {
-	s, _ := seededSolver(t)
-	s.cfg.MaxTxGasPrice = big.NewInt(1_000_000_000)
-
-	d := s.buildBid(t.Context(), decodeAuction(t), auctionClock())
-	if d.skip != "" {
-		t.Fatalf("expected bid, got skip %q", d.skip)
-	}
-	if d.solve.Data.MaxTxGasPrice != s.cfg.MaxTxGasPrice.String() {
-		t.Fatalf("maxTxGasPrice = %q, want configured cap %s", d.solve.Data.MaxTxGasPrice, s.cfg.MaxTxGasPrice)
-	}
-	if got := recoverSolveSigner(t, s, d.solve.Data); got != s.deps.Signer.Address() {
-		t.Fatalf("recovered %s, want signer %s", got, s.deps.Signer.Address())
-	}
-}
-
 // TestBuildBidPriceSource proves buildBid trusts the auction frame price: a healthy frame skips, while a
 // liquidatable frame drives a full sized bid.
 func TestBuildBidPriceSource(t *testing.T) {
@@ -468,15 +464,6 @@ func TestBuildBidPriceSource(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestBuildBidLetsStrategyOwnCallbackFunding(t *testing.T) {
-	s, _ := seededSolver(t)
-	seedDefaultDecisionStateWithCallbackBalance(t, s, big.NewInt(1), auctionClock()())
-
-	if d := s.buildBid(t.Context(), decodeAuction(t), auctionClock()); d.skip != "callback_balance" {
-		t.Fatalf("callback balance is strategy-owned; skip = %q, want callback_balance", d.skip)
 	}
 }
 
@@ -740,10 +727,8 @@ func TestFullAuctionLifecycle(t *testing.T) {
 	}
 
 	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing enqueued.
-	a := decodeAuction(t)
+	a := freshAuction(t, s)
 	a.ID = "9999aaaa-0000-1111-2222-333344445555"
-	a.Timestamp = time.Now().UnixMilli()
-	setSnapshotBlockTime(t, s, a.Timestamp)
 	s.handleMessage(t.Context(), marshal(a))
 	expectNoSend(t, s, "breaker tripped")
 }
@@ -798,10 +783,8 @@ func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 	}
 	defer close(blocking.release)
 
-	a := decodeAuction(t)
+	a := freshAuction(t, s)
 	setAuctionPrice(&a, seedLiquidatablePrice)
-	a.Timestamp = time.Now().UnixMilli()
-	setSnapshotBlockTime(t, s, a.Timestamp)
 	s.strategy = blocking
 
 	done := make(chan struct{})
@@ -846,15 +829,11 @@ func TestDryRunSuppressesSend(t *testing.T) {
 	s.dryRun = true
 
 	// Real metrics on a fresh registry so we can read the would-bid counter back.
-	reg := prometheus.NewRegistry()
-	m, err := newMetrics(reg, defaultStrategyName, s.wonReservationMetrics)
-	testcheck.NoError(t, err, "newMetrics: %v")
+	m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
 	s.metrics = m
 
-	a := decodeAuction(t)
+	a := freshAuction(t, s)
 	setAuctionPrice(&a, seedLiquidatablePrice)
-	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
-	setSnapshotBlockTime(t, s, a.Timestamp)
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
 	if f := drainSend(s); f != nil {
@@ -868,19 +847,15 @@ func TestDryRunSuppressesSend(t *testing.T) {
 
 func TestDroppedBidReleasesReservation(t *testing.T) {
 	s, _ := seededSolver(t)
-	reg := prometheus.NewRegistry()
-	m, err := newMetrics(reg, defaultStrategyName, s.wonReservationMetrics)
-	testcheck.NoError(t, err, "newMetrics: %v")
+	m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
 	s.metrics = m
 	for range cap(s.ws.send) {
 		if !s.ws.Send(t.Context(), []byte("occupied"), time.Time{}) {
 			t.Fatal("failed to fill send buffer")
 		}
 	}
-	a := decodeAuction(t)
+	a := freshAuction(t, s)
 	setAuctionPrice(&a, seedLiquidatablePrice)
-	a.Timestamp = time.Now().UnixMilli()
-	setSnapshotBlockTime(t, s, a.Timestamp)
 
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
@@ -894,31 +869,13 @@ func TestDroppedBidReleasesReservation(t *testing.T) {
 func TestMetricsCarryStrategyLabel(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m, err := newMetrics(reg, "webhook", nil)
-	testcheck.NoError(t, err, "newMetrics: %v")
+	testcheck.NoError(t, err)
 	m.auctionDecision("strategy_skip", 0)
-	families, err := reg.Gather()
-	testcheck.NoError(t, err, "gather metrics: %v")
-	for _, family := range families {
-		if family.GetName() != "solver_bot_workflow_events_total" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			hasOutcome := false
-			hasStrategy := false
-			for _, label := range metric.GetLabel() {
-				switch label.GetName() {
-				case "outcome":
-					hasOutcome = label.GetValue() == "strategy_skip"
-				case "strategy":
-					hasStrategy = label.GetValue() == "webhook"
-				}
-			}
-			if hasOutcome && hasStrategy {
-				return
-			}
-		}
+	if got := metricstest.FamilyValue(t, reg, "solver_bot_workflow_events_total", map[string]string{
+		"solver": Name, "strategy": "webhook", "event": "auction", "outcome": "strategy_skip",
+	}); got != 1 {
+		t.Fatalf("webhook strategy skip count = %v, want 1", got)
 	}
-	t.Fatal("workflow auction event missing strategy label")
 }
 
 // TestHandleAuctionEmptyIdDropped pins the auction identity invariant: RedStone auctions must carry an id.
@@ -926,11 +883,9 @@ func TestMetricsCarryStrategyLabel(t *testing.T) {
 func TestHandleAuctionEmptyIdDropped(t *testing.T) {
 	s, _ := seededSolver(t)
 
-	a := decodeAuction(t)
+	a := freshAuction(t, s)
 	setAuctionPrice(&a, seedLiquidatablePrice)
-	a.ID = ""                            // the frame carries no id
-	a.Timestamp = time.Now().UnixMilli() // freshly emitted so the too_late gate doesn't drop it
-	setSnapshotBlockTime(t, s, a.Timestamp)
+	a.ID = "" // the frame carries no id
 
 	if f := drainSend(s); f != nil {
 		t.Fatalf("precondition: send channel should be empty, got %s", f)
@@ -1171,9 +1126,7 @@ func TestHandleMessageDropsAuctionWhileDecisionIsBusy(t *testing.T) {
 	s.metrics = m
 	blocking := &blockingBidStrategy{started: make(chan struct{}, 1), release: make(chan struct{})}
 	defer close(blocking.release)
-	a := decodeAuction(t)
-	a.Timestamp = time.Now().UnixMilli()
-	setSnapshotBlockTime(t, s, a.Timestamp)
+	a := freshAuction(t, s)
 	s.strategy = blocking
 	m.now = func() time.Time { return time.Unix(123, 0) }
 	s.handleMessage(t.Context(), marshal(a))

@@ -10,7 +10,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+
 	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -29,6 +31,19 @@ func TestWebhookStrategyDelegatesOneQuoteAndCurrentFill(t *testing.T) {
 		case decideQuoteRoute:
 			_ = json.NewEncoder(w).Encode(types.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)})
 		case decideFillRoute:
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				return
+			}
+			for key, want := range map[string]string{"tokenIn": `"` + tokenIn.Hex() + `"`, "tokenOut": `"` + tokenOut.Hex() + `"`, "amountIn": "100", "outputAmount": "90"} {
+				if string(body[key]) != want {
+					t.Errorf("fill field %s = %s, want %s", key, body[key], want)
+				}
+			}
+			if _, nested := body["FillInput"]; nested {
+				t.Error("fill input must remain flat JSON")
+			}
 			_ = json.NewEncoder(w).Encode(types.FillPlan{Routes: []types.FillRoute{{
 				RouteID: route.ID, AmountIn: big.NewInt(100), ExpectedAmountOut: big.NewInt(100),
 				MinAmountOut: big.NewInt(90), ReservedAmountOut: big.NewInt(100),
@@ -48,8 +63,10 @@ func TestWebhookStrategyDelegatesOneQuoteAndCurrentFill(t *testing.T) {
 	}
 	inventory := liquidlane.Inventory{Route: route, MaxAssets: big.NewInt(100)}
 	plan, err := strategy.DecideFill(t.Context(), types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), OutputAmount: big.NewInt(90),
-		Quotes: []liquidlane.FillQuote{{Inventory: inventory, AmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100)}},
+		FillInput: planning.FillInput{
+			TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), OutputAmount: big.NewInt(90),
+			Quotes: []liquidlane.FillQuote{{Inventory: inventory, AmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100)}},
+		},
 	})
 	if err != nil || plan == nil || len(plan.Routes) != 1 || plan.Routes[0].RouteID != route.ID {
 		t.Fatalf("plan = %+v, err %v", plan, err)

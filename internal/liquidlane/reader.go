@@ -317,95 +317,124 @@ func (r *Reader) readLiquidity(ctx context.Context, routes []Route, amountIn *bi
 	return out, nil
 }
 
-// ReadGasSnapshot returns the latest adapter-local acquire balances and shared vault liquidity needed
-// to predict LiquidLane swap gas. Partially unread state remains absent and is priced as RouteUnknown.
-func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidlanegas.Snapshot, error) {
-	routes = compactRoutes(routes)
-	if len(routes) == 0 {
-		return nil, nil
+// ReadAdapterState shares one owner/market-maker observation between direct authorization
+// and gas accounting. Only addresses need authorization; gasRoutes may cover a wider universe.
+// Failed rows remain absent, and nil gasRoutes disables gas reads entirely. No state is cached.
+func (r *Reader) ReadAdapterState(ctx context.Context, addresses []common.Address, filler common.Address,
+	gasRoutes []Route,
+) ([]Auth, *liquidlanegas.Snapshot, error) {
+	addresses = dedupeAddresses(addresses)
+	if filler == (common.Address{}) {
+		addresses = nil
 	}
-	var adapters []Route
+	gasRoutes = compactRoutes(gasRoutes)
+	adapters := append([]common.Address(nil), addresses...)
 	var vaults []common.Address
-	seenAdapters, seenVaults := make(map[common.Address]bool), make(map[common.Address]bool)
-	for _, route := range routes {
-		if !seenAdapters[route.Adapter] {
-			adapters = append(adapters, route)
-			seenAdapters[route.Adapter] = true
-		}
-		if !seenVaults[route.Vault] {
-			vaults = append(vaults, route.Vault)
-			seenVaults[route.Vault] = true
-		}
+	for _, route := range gasRoutes {
+		adapters = append(adapters, route.Adapter)
+		vaults = append(vaults, route.Vault)
+	}
+	adapters, vaults = dedupeAddresses(adapters), dedupeAddresses(vaults)
+	if len(adapters) == 0 {
+		return nil, nil, nil
 	}
 	calls := make([]chain.Call, 0, 2*(len(adapters)+len(vaults)))
-	for _, route := range adapters {
+	for _, address := range adapters {
 		calls = append(calls,
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()})
+			chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
+			chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackOwner()})
 	}
 	for _, vault := range vaults {
 		calls = append(calls,
 			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackFreeAssets()},
 			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackWithdrawable()})
 	}
-	results, err := r.checkedMulticall(ctx, "gas state head", calls)
+	results, err := r.checkedMulticall(ctx, "adapter state", calls)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := &liquidlanegas.Snapshot{Adapters: make(map[common.Address]*liquidlanegas.AdapterState), Vaults: make(map[common.Address]*liquidlanegas.VaultState)}
-	holders := make(map[common.Address][]common.Address)
-	for index, route := range adapters {
-		ownerResult, makerResult := results[2*index], results[2*index+1]
-		owner, ownerErr := chain.Decode(ownerResult, llAdapter.UnpackOwner)
-		maker, makerErr := chain.Decode(makerResult, llAdapter.UnpackMarketMaker)
-		if ownerErr != nil || makerErr != nil {
-			continue
+	roles := make(map[common.Address]Auth, len(adapters))
+	for i, address := range adapters {
+		maker, makerErr := chain.Decode(results[2*i], llAdapter.UnpackMarketMaker)
+		owner, ownerErr := chain.Decode(results[2*i+1], llAdapter.UnpackOwner)
+		if makerErr == nil && ownerErr == nil {
+			roles[address] = Auth{Adapter: address, MarketMaker: maker, Owner: owner, Authorized: filler == maker || filler == owner}
 		}
-		holders[route.Adapter] = []common.Address{owner}
-		// The zero market-maker key is valid; deduplicate equality, never nonzero-ness.
-		if maker != owner {
-			holders[route.Adapter] = append(holders[route.Adapter], maker)
-		}
-		out.Adapters[route.Adapter] = &liquidlanegas.AdapterState{Vault: route.Vault, Acquire: make(map[common.Address]*big.Int)}
 	}
-	for index, vault := range vaults {
-		base := 2 * (len(adapters) + index)
-		freeResult, withdrawResult := results[base], results[base+1]
-		free, freeErr := chain.Decode(freeResult, vaultV2b.UnpackFreeAssets)
-		withdrawable, withdrawErr := chain.Decode(withdrawResult, vaultV2b.UnpackWithdrawable)
-		if freeErr != nil || withdrawErr != nil || free == nil || withdrawable == nil {
-			continue
+	var gas *liquidlanegas.Snapshot
+	if len(gasRoutes) > 0 {
+		gas = &liquidlanegas.Snapshot{Adapters: make(map[common.Address]*liquidlanegas.AdapterState), Vaults: make(map[common.Address]*liquidlanegas.VaultState)}
+		for i, vault := range vaults {
+			offset := 2 * (len(adapters) + i)
+			free, freeErr := chain.Decode(results[offset], vaultV2b.UnpackFreeAssets)
+			withdrawable, withdrawErr := chain.Decode(results[offset+1], vaultV2b.UnpackWithdrawable)
+			if freeErr == nil && withdrawErr == nil && free != nil && withdrawable != nil {
+				gas.Vaults[vault] = &liquidlanegas.VaultState{FreeAssets: free, Withdrawable: withdrawable}
+			}
 		}
-		out.Vaults[vault] = &liquidlanegas.VaultState{FreeAssets: free, Withdrawable: withdrawable}
 	}
 	calls = nil
+	var auth []Auth
+	var delegated []int
+	for _, address := range addresses {
+		role, ok := roles[address]
+		if !ok {
+			continue
+		}
+		if !role.Authorized {
+			delegated = append(delegated, len(auth))
+			// Zero marketMaker remains a valid delegation key; never replace it with owner.
+			calls = append(calls, chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackIsFiller(role.MarketMaker, filler)})
+		}
+		auth = append(auth, role)
+	}
 	var owners []Route
-	for _, route := range routes {
-		for _, holder := range holders[route.Adapter] {
+	for _, route := range gasRoutes {
+		role, ok := roles[route.Adapter]
+		if !ok {
+			continue
+		}
+		if gas.Adapters[route.Adapter] == nil {
+			gas.Adapters[route.Adapter] = &liquidlanegas.AdapterState{Vault: route.Vault, Acquire: make(map[common.Address]*big.Int)}
+		}
+		// Equality is the only duplicate case: the zero market-maker key is a valid holder.
+		for _, holder := range dedupeHolders(role.Owner, role.MarketMaker) {
 			calls = append(calls, chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackAcquireBalance(route.TokenIn, holder)})
 			owners = append(owners, route)
 		}
 	}
 	if len(calls) == 0 {
-		return out, nil
+		return auth, gas, nil
 	}
-	results, err = r.checkedMulticall(ctx, "gas state acquire", calls)
+	results, err = r.checkedMulticall(ctx, "adapter access and acquire", calls)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for index, result := range results {
-		amount, err := chain.Decode(result, llAdapter.UnpackAcquireBalance)
+	for i, index := range delegated {
+		allowed, err := chain.Decode(results[i], llAdapter.UnpackIsFiller)
+		if err == nil {
+			auth[index].Authorized, auth[index].IsFiller = allowed, allowed
+		}
+	}
+	for i, route := range owners {
+		amount, err := chain.Decode(results[len(delegated)+i], llAdapter.UnpackAcquireBalance)
 		if err != nil || amount == nil || amount.Sign() < 0 {
 			continue
 		}
-		route := owners[index]
-		balances := out.Adapters[route.Adapter].Acquire
+		balances := gas.Adapters[route.Adapter].Acquire
 		if balances[route.TokenIn] == nil {
 			balances[route.TokenIn] = new(big.Int)
 		}
 		balances[route.TokenIn].Add(balances[route.TokenIn], amount)
 	}
-	return out, nil
+	return auth, gas, nil
+}
+
+func dedupeHolders(owner, maker common.Address) []common.Address {
+	if owner == maker {
+		return []common.Address{owner}
+	}
+	return []common.Address{owner, maker}
 }
 
 func (r *Reader) checkedMulticall(ctx context.Context, operation string, calls []chain.Call) ([]chain.CallResult, error) {
@@ -437,16 +466,12 @@ func (r *Reader) ReadAdapterSnapshot(ctx context.Context, address, filler common
 	if !known {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter pause state unresolved")
 	}
-	auth, err := r.ReadAuth(ctx, addresses, filler)
+	auth, gas, err := r.ReadAdapterState(ctx, addresses, filler, routes)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
 	if len(auth) != 1 || auth[0].Adapter != address {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter authorization unresolved")
-	}
-	gas, err := r.ReadGasSnapshot(ctx, routes)
-	if err != nil {
-		return AdapterSnapshot{}, err
 	}
 	adapter, vault := gas.Adapters[address], gas.Vaults[routes[0].Vault]
 	if adapter == nil || vault == nil {
@@ -562,52 +587,8 @@ func (r *Reader) authorizedAdapters(
 }
 
 func (r *Reader) ReadAuth(ctx context.Context, addresses []common.Address, filler common.Address) ([]Auth, error) {
-	addresses = dedupeAddresses(addresses)
-	if filler == (common.Address{}) || len(addresses) == 0 {
-		return nil, nil
-	}
-	calls := make([]chain.Call, 0, 2*len(addresses))
-	for _, address := range addresses {
-		calls = append(calls, chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
-			chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackOwner()})
-	}
-	rows, err := r.checkedMulticall(ctx, "authorization", calls)
-	if err != nil {
-		return nil, err
-	}
-	authorized := make([]Auth, 0, len(addresses))
-	var delegated []int
-	var checks []chain.Call
-	for index, address := range addresses {
-		makerResult, ownerResult := rows[2*index], rows[2*index+1]
-		maker, makerErr := chain.Decode(makerResult, llAdapter.UnpackMarketMaker)
-		owner, ownerErr := chain.Decode(ownerResult, llAdapter.UnpackOwner)
-		if makerErr != nil || ownerErr != nil {
-			continue
-		}
-		entry := Auth{Adapter: address, MarketMaker: maker, Owner: owner, Authorized: filler == maker || filler == owner}
-		if !entry.Authorized {
-			delegated = append(delegated, len(authorized))
-			// Zero marketMaker remains a valid delegation key; never replace it with owner.
-			checks = append(checks, chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackIsFiller(maker, filler)})
-		}
-		authorized = append(authorized, entry)
-	}
-	if len(checks) == 0 {
-		return authorized, nil
-	}
-	rows, err = r.checkedMulticall(ctx, "filler authorization", checks)
-	if err != nil {
-		return nil, err
-	}
-	for index, row := range rows {
-		allowed, err := chain.Decode(row, llAdapter.UnpackIsFiller)
-		if err == nil {
-			entry := &authorized[delegated[index]]
-			entry.Authorized, entry.IsFiller = allowed, allowed
-		}
-	}
-	return authorized, nil
+	auth, _, err := r.ReadAdapterState(ctx, addresses, filler, nil)
+	return auth, err
 }
 
 func unpaused(result chain.CallResult) bool {

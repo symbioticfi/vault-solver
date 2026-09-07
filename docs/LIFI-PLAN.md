@@ -966,7 +966,9 @@ Quote reconciliation visits the sorted union of existing and desired pairs and r
 remote writes for reconciliation. The WebSocket owns its socket and joins connection work before
 reconnecting. `orderServer.maxMessageBytes` limits input to 1 MiB by default.
 
-Retry scheduling is owned by the order worker. Metrics read atomic immutable queue observations;
+Retry scheduling is held in one worker-owned `orderRetries` state. Capacity FIFO and timed deposit
+indices retain independent membership and limits; a replay may wait for both reasons. One immutable
+observation holds both queues, and a mutation only recomputes the changed queue. Metrics read it atomically;
 they never inspect the worker's mutable maps or lists. Deposit retry state remains indexed while a
 retry is executing, preserving the original retry window across feed replays. Capacity retries retain
 FIFO generation ordering and cannot release the recovery barrier until their earlier generation drains.
@@ -983,3 +985,7 @@ whole curve. Each interval computes one guaranteed rate/loss floor and uses it f
 input search and endpoint pricing. Endpoint rates use `liquidlane.MaxRateForAmountOut`: the exact
 maximum integer rate is `ceil((amountOut + 1) * 10^(18 + inDecimals - outDecimals) / amountIn) - 1`, including the exactly divisible boundary.
 The same physical-route exclusivity, gas bounds, buffers and expiry rules still constrain every range.
+
+Default fill allocation embeds the shared `planning.FillInput` for amounts, current quotes, gas and
+reservations. LI.FI still validates both order deadlines and resolves its output context before
+allocation, and still marks malformed input errors permanent. The strategy webhook JSON is unchanged.

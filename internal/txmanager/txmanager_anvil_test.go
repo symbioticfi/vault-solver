@@ -39,7 +39,7 @@ func testAnvilReplacement(t *testing.T) {
 			ReplacementInterval: 200 * time.Millisecond,
 			PendingTimeout:      5 * time.Second,
 		},
-		testr.New(t),
+		nil, testr.New(t),
 	)
 	go manager.Start(t.Context())
 
@@ -87,7 +87,7 @@ func testAnvilCancellation(t *testing.T) {
 			ReplacementInterval: 5 * time.Second,
 			PendingTimeout:      300 * time.Millisecond,
 		},
-		testr.New(t),
+		nil, testr.New(t),
 	)
 	go manager.Start(t.Context())
 

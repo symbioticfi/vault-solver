@@ -306,10 +306,17 @@ when assembling successful results.
 
 Fresh signed discounts bind both their selected identity and the physical quote's adapter, token pair
 and exact input amount where supplied. Resolution and quote refresh use this same validation boundary.
+`discounts.BindFillQuote` owns binding signed terms to a bounded current quote in both initial LI.FI
+resolution and later refreshes, including copied amounts and adapter minimum-discount facts. RFQ
+settlement and UniswapX selected-route repricing keep their distinct contracts and generated encoders.
 
 LI.FI and UniswapX default strategies store one validated `planning.ExecutionPolicy`; raw YAML
 strings do not survive construction. The common policy owns price/inventory buffers, minimum input
-and the execution safety window. Gas pricing uses the same owned snapshot for exact cost and the
+and the execution safety window. LI.FI and UniswapX embed a common `planning.FillInput`,
+which owns positive/minimum amount checks and policy-aware fill allocation with gas pricing. Their
+webhook JSON remains flat with the same field names. Order deadlines, output contexts, permanent-error
+classification and final output requirements remain integration-owned. A shared test-only contract
+suite runs route selection, shared capacity, reservations and private alternatives through both real strategies. Gas pricing uses the same owned snapshot for exact cost and the
 conservative ceiling; the ceiling calculation saturates in constant time. Range selection maintains
 a frontier of alternatives that remain useful by rate, capacity, lifetime and direct/private cost.
 
@@ -331,6 +338,15 @@ still owned by the integration.
 
 One txmanager completion object owns result delivery for accepted work, including worker completion
 and hard shutdown. Pending nonce state does not carry a second result channel or once guard.
+Admission claims one slot, checks nonce-lane availability and hands the job to the worker. A returned
+job transfers slot and demand ownership; an interrupted admission releases both. The slot remains
+necessary for `TrySend` to observe another caller's claim before the worker receives that caller's job.
+The manager has one constructor with an optional metrics dependency. The lifecycle goroutine owns
+one monotonic cancellation flag in its pending transaction; waiting and fee replacement use that
+same state. Shutdown only signals the existing cancellation channel. Entering cancellation records
+its reason once, including when a fee read crosses the deadline, and disables cancellation wakeups
+after the attempt so later replacements keep their scheduled cadence. Cancellation fee ceilings,
+exact-byte retries, canonical receipt checks and nonce-conflict admission remain unchanged.
 UniswapX uses one guarded publication record for snapshot, epoch and planning count. LI.FI quote
 session availability follows its disconnect channel rather than a second active flag.
 

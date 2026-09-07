@@ -147,7 +147,7 @@ func RefreshFillQuotes(candidates []liquidlane.FillQuote, resolved map[common.Ha
 		if signed == nil || !exists {
 			continue
 		}
-		quote, err := rebindFillQuote(candidate, signed, base, now)
+		quote, err := BindFillQuote(candidate.Inventory, signed, base, now)
 		if err != nil {
 			issues = append(issues, OfferIssue{DiscountID: candidate.DiscountID.Hex(), Err: err})
 			continue
@@ -159,7 +159,12 @@ func RefreshFillQuotes(candidates []liquidlane.FillQuote, resolved map[common.Ha
 	return refreshed, issues
 }
 
-func rebindFillQuote(candidate liquidlane.FillQuote, signed *Signed, base liquidlane.FillQuote, now time.Time) (*liquidlane.FillQuote, error) {
+// BindFillQuote applies validated signed terms to the current physical route and owns the resulting quote.
+// Both initial resolution and later refreshes retain the advertised rate and bounded capacity.
+func BindFillQuote(candidate liquidlane.Inventory, signed *Signed, base liquidlane.FillQuote, now time.Time) (*liquidlane.FillQuote, error) {
+	if candidate.DiscountID == nil {
+		return nil, errors.New("discount candidate has no signed identity")
+	}
 	if candidate.MaxRate == nil || base.MaxRate == nil || candidate.MaxRate.Cmp(base.MaxRate) > 0 {
 		return nil, errors.New("resolved discount rate exceeds refreshed adapter max rate")
 	}
@@ -175,6 +180,7 @@ func rebindFillQuote(candidate liquidlane.FillQuote, signed *Signed, base liquid
 	// All physical observations come from this refresh. Only the offered capacity,
 	// selected rate and signed identity survive from the earlier candidate.
 	base.MaxAssets, base.MaxRate = capacity, bigmath.Clone(candidate.MaxRate)
+	base.AdapterMinDiscount = bigmath.Clone(base.AdapterMinDiscount)
 	base.DiscountID = liquidlane.CloneHash(candidate.DiscountID)
 	base.ValidUntil, base.MaxAmountOut = ValidUntil(signed), amount
 	base.AmountIn, base.GrossAmountOut, base.MinDiscount = bigmath.Clone(base.AmountIn), bigmath.Clone(base.GrossAmountOut), bigmath.Clone(base.MinDiscount)

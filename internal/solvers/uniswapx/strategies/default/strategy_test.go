@@ -8,6 +8,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning/strategytest"
+
 	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -197,67 +200,6 @@ func TestDecideQuoteChoosesFreshPrivateAlternative(t *testing.T) {
 	}
 }
 
-func TestDecideFillBuildsCurrentMultiRoutePlan(t *testing.T) {
-	strategy, err := New(Config{})
-	testcheck.NoError(t, err)
-	tokenIn, tokenOut := testPair()
-	quotes := []liquidlane.FillQuote{
-		directFillQuote(testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut), 1_000, 500, 1_000),
-		directFillQuote(testRoute("route-2", "capacity-2", 2, tokenIn, tokenOut), 1_000, 500, 1_000),
-	}
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900),
-		ChainTime: time.Unix(1_800_000_000, 0), MaxFeePerGas: new(big.Int), Quotes: quotes,
-	})
-	if err != nil || plan == nil || len(plan.Routes) != 2 {
-		t.Fatalf("plan = %+v, err %v", plan, err)
-	}
-	totalIn := new(big.Int)
-	totalMinOut := new(big.Int)
-	for _, route := range plan.Routes {
-		totalIn.Add(totalIn, route.AmountIn)
-		totalMinOut.Add(totalMinOut, route.MinAmountOut)
-	}
-	if totalIn.String() != "1000" || totalMinOut.String() != "900" {
-		t.Fatalf("totals = %s/%s", totalIn, totalMinOut)
-	}
-}
-
-func TestDecideFillDoesNotDoubleSpendSharedCapacity(t *testing.T) {
-	strategy, err := New(Config{})
-	testcheck.NoError(t, err)
-	tokenIn, tokenOut := testPair()
-	quotes := []liquidlane.FillQuote{
-		directFillQuote(testRoute("route-1", "shared", 1, tokenIn, tokenOut), 1_000, 600, 1_000),
-		directFillQuote(testRoute("route-2", "shared", 2, tokenIn, tokenOut), 1_000, 600, 1_000),
-	}
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900),
-		MaxFeePerGas: new(big.Int), Quotes: quotes,
-	})
-	if err != nil || plan != nil {
-		t.Fatalf("plan = %+v, err %v", plan, err)
-	}
-}
-
-func TestDecideFillSelectsBestCurrentRoute(t *testing.T) {
-	strategy, err := New(Config{})
-	testcheck.NoError(t, err)
-	tokenIn, tokenOut := testPair()
-	first := testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut)
-	best := testRoute("route-2", "capacity-2", 2, tokenIn, tokenOut)
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900),
-		MaxFeePerGas: new(big.Int), Quotes: []liquidlane.FillQuote{
-			directFillQuote(first, 1_000, 2_000, 1_000),
-			directFillQuote(best, 1_000, 2_000, 1_100),
-		},
-	})
-	if err != nil || plan == nil || len(plan.Routes) != 1 || plan.Routes[0].Adapter != best.Adapter {
-		t.Fatalf("plan = %+v, err %v", plan, err)
-	}
-}
-
 func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 	strategy, err := New(Config{ExecutionDeadlineBuffer: "30s"})
 	testcheck.NoError(t, err)
@@ -265,9 +207,12 @@ func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	quote := directFillQuote(testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut), 100, 100, 100)
 	base := types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), OutputAmount: big.NewInt(90),
-		ChainTime: now, MaxFeePerGas: new(big.Int), Quotes: []liquidlane.FillQuote{quote},
-		Reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(60)},
+		FillInput: planning.FillInput{
+			TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), OutputAmount: big.NewInt(90),
+			ChainTime: now, MaxFeePerGas: new(big.Int),
+			Quotes:       []liquidlane.FillQuote{quote},
+			Reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(60)},
+		},
 	}
 	plan, err := strategy.DecideFill(context.Background(), base)
 	if err != nil || plan != nil {
@@ -278,25 +223,6 @@ func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 	plan, err = strategy.DecideFill(context.Background(), base)
 	if err != nil || plan != nil {
 		t.Fatalf("near-deadline plan = %+v, err %v", plan, err)
-	}
-}
-
-func TestDecideFillCommitsSelectedPrivateDiscount(t *testing.T) {
-	strategy, err := New(Config{})
-	testcheck.NoError(t, err)
-	tokenIn, tokenOut := testPair()
-	route := testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut)
-	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	direct := directFillQuote(route, 1_000, 1_000, 900)
-	private := directFillQuote(route, 1_000, 1_000, 950)
-	private.DiscountID = &discountID
-	private.MinDiscount = big.NewInt(100_000)
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(850),
-		MaxFeePerGas: new(big.Int), Quotes: []liquidlane.FillQuote{direct, private},
-	})
-	if err != nil || plan == nil || plan.Routes[0].DiscountID == nil || *plan.Routes[0].DiscountID != discountID {
-		t.Fatalf("plan = %+v, err %v", plan, err)
 	}
 }
 
@@ -350,4 +276,19 @@ func acquireGasSnapshot(route liquidlane.Route, amount int64) *liquidlanegas.Sna
 
 func testGasPrices(token common.Address, amount int64) *liquidlanegas.PriceSnapshot {
 	return liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{token: big.NewInt(amount)})
+}
+
+func TestSharedFillContracts(t *testing.T) {
+	strategy, err := New(Config{})
+	testcheck.NoError(t, err)
+	strategytest.CheckFill(t, func(input planning.FillInput) ([]planning.FillRoute, error) {
+		plan, err := strategy.DecideFill(t.Context(), types.FillInput{FillInput: input})
+		if plan == nil {
+			return nil, err
+		}
+		if len(plan.Routes) == 0 {
+			t.Fatal("non-nil fill plan has no routes")
+		}
+		return plan.Routes, err
+	})
 }

@@ -47,7 +47,7 @@ func newStreakManager(t *testing.T, b Backend, logger logr.Logger) *Manager {
 			ReplacementInterval: time.Second,
 			PendingTimeout:      time.Second,
 		},
-		logger,
+		nil, logger,
 	)
 }
 
@@ -69,7 +69,7 @@ func sendAndWait(t *testing.T, m *Manager, label string) {
 // info line with the count and duration when reads recover.
 func TestReceiptReadFailuresLogOncePerStreak(t *testing.T) {
 	logs, logger := newLogCapture(1)
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 3}
+	b := failReceiptReads(newMockBackend(), 3)
 	m := newStreakManager(t, b, logger)
 	startManagerForTest(t, m)
 	sendAndWait(t, m, "receipt streak")
@@ -95,7 +95,7 @@ func TestReceiptReadFailuresRemindWhileUnrecovered(t *testing.T) {
 	t.Cleanup(func() { readFailureReminderInterval = previous })
 
 	logs, logger := newLogCapture(0)
-	b := &receiptErrorBackend{mockBackend: newMockBackend(), receiptFailures: 4}
+	b := failReceiptReads(newMockBackend(), 4)
 	m := newStreakManager(t, b, logger)
 	startManagerForTest(t, m)
 	sendAndWait(t, m, "receipt reminder")
@@ -195,7 +195,7 @@ func (b *scriptedReceiptBackend) TransactionReceipt(ctx context.Context, h commo
 // not be reported as a reorg.
 func TestConfirmationMissCountResetsOnReadError(t *testing.T) {
 	b := &scriptedReceiptBackend{mockBackend: newMockBackend()}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard())
+	m := newTestManager(t, b, Config{Confirmations: 2, PollInterval: time.Millisecond})
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
 		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),

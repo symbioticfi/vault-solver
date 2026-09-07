@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestMetrics(t *testing.T) {
 	t.Run("included unconfirmed", func(t *testing.T) {
 		backend := &cancelOnConfirmationHeadBackend{mockBackend: newMockBackend()}
 		metrics := newTestMetrics(t)
-		manager := NewWithMetrics(
+		manager := New(
 			backend, mustSigner(t), big.NewInt(11155111),
 			Config{Confirmations: 2, PollInterval: time.Millisecond}, metrics, logr.Discard(),
 		)
@@ -131,7 +132,7 @@ func TestMetrics(t *testing.T) {
 		sgnr := mustSigner(t)
 		backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
 		metrics := newTestMetrics(t)
-		manager := NewWithMetrics(
+		manager := New(
 			backend, sgnr, big.NewInt(11155111),
 			Config{
 				MaxFeeGwei:          100,
@@ -142,7 +143,7 @@ func TestMetrics(t *testing.T) {
 			metrics,
 			logr.Discard(),
 		)
-		go manager.Start(t.Context())
+		startManagerForTest(t, manager)
 
 		result, accepted := manager.SendAsync(t.Context(), Request{
 			To: common.HexToAddress("0xabc"), Data: []byte{1}, GasLimit: 21_000,
@@ -168,7 +169,7 @@ func TestMetrics(t *testing.T) {
 		backend := &pendingMetricsBackend{mockBackend: newMockBackend()}
 		metrics := newTestMetrics(t)
 		ctx, cancel := context.WithCancel(context.Background())
-		manager := NewWithMetrics(
+		manager := New(
 			backend, mustSigner(t), big.NewInt(11155111),
 			Config{
 				PollInterval:        time.Millisecond,
@@ -239,9 +240,10 @@ func TestReceiptFeePaidWei(t *testing.T) {
 }
 
 func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
-	backend := &transientHeadErrorBackend{mockBackend: newMockBackend()}
+	var headFailures atomic.Int64
+	backend := failHeadReads(newMockBackend(), &headFailures)
 	metrics := newTestMetrics(t)
-	manager := NewWithMetrics(
+	manager := New(
 		backend,
 		mustSigner(t),
 		big.NewInt(11155111),
@@ -257,9 +259,7 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 	pending.lifecycle.transitionPhase(lifecyclePhasePending)
 	pending.nonceConflictHash = pending.attempts[0].hash
 	manager.markNonceConflict(pending.nonce, pending.nonceConflictHash)
-	backend.errorMu.Lock()
-	backend.blockFailures = 1
-	backend.errorMu.Unlock()
+	headFailures.Store(1)
 
 	if result, done := manager.receiptResult(t.Context(), pending); done {
 		t.Fatalf("untrusted reconciliation receipt completed lifecycle: %+v", result)
@@ -279,9 +279,9 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 
 func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 	backend := newMockBackend()
-	reorgBackend := &disappearingReceiptBackend{mockBackend: backend}
+	reorgBackend := disappearingReceipts(backend)
 	metrics := newTestMetrics(t)
-	manager := NewWithMetrics(
+	manager := New(
 		reorgBackend,
 		mustSigner(t),
 		big.NewInt(11155111),
@@ -362,7 +362,7 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 
 	t.Run("terminal failures before worker lifecycle", func(t *testing.T) {
 		metrics := newTestMetrics(t)
-		manager := NewWithMetrics(
+		manager := New(
 			newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, metrics, logr.Discard(),
 		)
 		result, accepted := manager.SendAsync(t.Context(), Request{
@@ -430,8 +430,8 @@ func (b *pendingMetricsBackend) SendTransaction(ctx context.Context, tx *types.T
 func startTestManager(t *testing.T, backend Backend, cfg Config, metrics *Metrics) *Manager {
 	t.Helper()
 	cfg.PollInterval = time.Millisecond
-	manager := NewWithMetrics(backend, mustSigner(t), big.NewInt(11155111), cfg, metrics, logr.Discard())
-	go manager.Start(t.Context())
+	manager := New(backend, mustSigner(t), big.NewInt(11155111), cfg, metrics, logr.Discard())
+	startManagerForTest(t, manager)
 	return manager
 }
 

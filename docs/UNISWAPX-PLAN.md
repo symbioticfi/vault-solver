@@ -944,3 +944,7 @@ The publication record alone owns the epoch; immutable inventory snapshots do no
 The poll worker cleans execution and exclusive-obligation history once per batch after reading chain
 time. Claimed executions and unresolved obligations survive cleanup; terminal execution history keeps
 the existing one-hour grace and resolved obligations keep the recovery lookback.
+
+The default fill strategy embeds `planning.FillInput` shared with LI.FI. Common amount checks, route
+limits, gas pricing and inventory reserves are applied once by LiquidLane; the UniswapX deadline
+and exact required output remain local. The strategy webhook keeps its existing flat JSON fields.

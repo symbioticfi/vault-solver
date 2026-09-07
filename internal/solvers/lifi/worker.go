@@ -11,16 +11,15 @@ import (
 // orderWorker alone owns pending fills and deferred orders. Result waiters only
 // deliver immutable completions; they cannot release capacity or renew quotes.
 type orderWorker struct {
-	solver          *Solver
-	routes          []route
-	pending         map[string]bool
-	completions     chan fillCompletion
-	capacityRetries *reservationRetryQueue
-	depositRetries  *orderDepositRetryQueue
-	generation      uint64
-	barrier         chan struct{}
-	onRetryable     func(*submittedOrder, int)
-	now             func() time.Time
+	solver      *Solver
+	routes      []route
+	pending     map[string]bool
+	completions chan fillCompletion
+	retries     *orderRetries
+	generation  uint64
+	barrier     chan struct{}
+	onRetryable func(*submittedOrder, int)
+	now         func() time.Time
 }
 
 func (s *Solver) runOrderWorker(ctx context.Context, routes []route, orders <-chan *submittedOrder,
@@ -28,23 +27,22 @@ func (s *Solver) runOrderWorker(ctx context.Context, routes []route, orders <-ch
 ) error {
 	w := &orderWorker{
 		solver: s, routes: routes, pending: make(map[string]bool),
-		completions:     make(chan fillCompletion, fillCompletionCapacity),
-		capacityRetries: newReservationRetryQueue(orderRetryCapacity),
-		depositRetries:  newOrderDepositRetryQueue(orderDepositRetryCapacity),
-		onRetryable:     onRetryable, now: s.wallNow,
+		completions: make(chan fillCompletion, fillCompletionCapacity),
+		retries:     newOrderRetries(orderRetryCapacity, orderDepositRetryCapacity),
+		onRetryable: onRetryable, now: s.wallNow,
 	}
 	if w.now == nil {
 		w.now = time.Now
 	}
-	stopCapacityMetrics := s.metrics.trackOrderQueue(orderQueueCapacityRetry, w.capacityRetries.orderQueueSnapshot)
+	stopCapacityMetrics := s.metrics.trackOrderQueue(orderQueueCapacityRetry, func() orderQueueSnapshot { return w.retries.snapshot().capacity })
 	defer stopCapacityMetrics()
-	stopDepositMetrics := s.metrics.trackOrderQueue(orderQueueDepositRetry, w.depositRetries.orderQueueSnapshot)
+	stopDepositMetrics := s.metrics.trackOrderQueue(orderQueueDepositRetry, func() orderQueueSnapshot { return w.retries.snapshot().deposit })
 	defer stopDepositMetrics()
 	return w.run(ctx, orders, inputDrained)
 }
 
 func (w *orderWorker) releaseBarrier() {
-	if w.barrier != nil && w.capacityRetries.len() == 0 {
+	if w.barrier != nil && len(w.retries.capacity) == 0 {
 		close(w.barrier)
 		w.barrier = nil
 	}
@@ -59,11 +57,11 @@ func (w *orderWorker) run(ctx context.Context, orders <-chan *submittedOrder, dr
 	for {
 		if runErr == nil && ctx.Err() != nil {
 			runErr, done, orders = ctx.Err(), nil, nil
-			w.capacityRetries.clear()
-			w.depositRetries.clear()
+			w.retries.clearCapacity()
+			w.retries.clearDeposits()
 			w.releaseBarrier()
 		}
-		if orders == nil && len(w.pending) == 0 && w.capacityRetries.len() == 0 && w.depositRetries.len() == 0 {
+		if orders == nil && len(w.pending) == 0 && len(w.retries.capacity) == 0 && len(w.retries.deposits) == 0 {
 			return runErr
 		}
 		input := orders
@@ -74,7 +72,7 @@ func (w *orderWorker) run(ctx context.Context, orders <-chan *submittedOrder, dr
 		}
 		var retry <-chan time.Time
 		timer.Stop()
-		if at, ok := w.depositRetries.nextReadyAt(); ok {
+		if at, ok := w.retries.nextDepositAt(); ok {
 			timer.Reset(max(at.Sub(w.now()), 0))
 			retry = timer.C
 		}
@@ -84,7 +82,7 @@ func (w *orderWorker) run(ctx context.Context, orders <-chan *submittedOrder, dr
 		case completion := <-w.completions:
 			w.complete(ctx, completion)
 		case <-retry:
-			order, err := w.depositRetries.popReady(w.now())
+			order, err := w.retries.popDeposit(w.now())
 			if err != nil {
 				w.depositExpired(order, err)
 			} else if order != nil {
@@ -93,7 +91,7 @@ func (w *orderWorker) run(ctx context.Context, orders <-chan *submittedOrder, dr
 		case order, ok := <-input:
 			if !ok {
 				orders = nil
-				w.depositRetries.clear()
+				w.retries.clearDeposits()
 				w.releaseBarrier()
 				if drained != nil {
 					close(drained)
@@ -104,7 +102,7 @@ func (w *orderWorker) run(ctx context.Context, orders <-chan *submittedOrder, dr
 				case order.processed != nil:
 					w.barrier = order.processed
 					w.releaseBarrier()
-				case w.depositRetries.contains(order):
+				case w.retries.deposits[orderInboxKey(order)] != nil:
 					w.solver.log.V(1).Info("order feed replay coalesced while awaiting on-chain deposit", "orderId", order.OrderID)
 				default:
 					w.process(ctx, order, nil)
@@ -123,7 +121,7 @@ func (w *orderWorker) process(ctx context.Context, order *submittedOrder, reserv
 
 func (w *orderWorker) retain(order *submittedOrder, result orderProcessingResult) orderProcessingOutcome {
 	if result.depositNotVisible {
-		if err := w.depositRetries.schedule(order, w.now()); err != nil {
+		if err := w.retries.scheduleDeposit(order, w.now()); err != nil {
 			w.solver.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
 			if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
 				w.solver.log.Error(err, "order deposit retry: dropped order", "orderId", order.OrderID)
@@ -134,7 +132,7 @@ func (w *orderWorker) retain(order *submittedOrder, result orderProcessingResult
 		}
 		return result.outcome
 	}
-	w.depositRetries.finish(order)
+	w.retries.finishDeposit(order)
 	if result.fill != nil {
 		w.pending[result.fill.reservationKey] = true
 		go awaitFill(result.fill, w.completions)
@@ -151,7 +149,7 @@ func (w *orderWorker) retain(order *submittedOrder, result orderProcessingResult
 	if len(w.pending) == 0 {
 		return orderProcessingOther
 	}
-	if err := w.capacityRetries.enqueue(order, w.generation); err != nil {
+	if err := w.retries.enqueueCapacity(order, w.generation); err != nil {
 		w.solver.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
 		w.solver.log.Error(err, "order retry queue: dropped newest order", "orderId", order.OrderID)
 		if errors.Is(err, errOrderRetryFull) {
@@ -171,7 +169,7 @@ func (w *orderWorker) complete(ctx context.Context, completion fillCompletion) {
 	w.solver.completeFill(w.pending, completion)
 	w.generation++
 	for ctx.Err() == nil {
-		order := w.capacityRetries.popReady(w.generation)
+		order := w.retries.popCapacity(w.generation)
 		if order == nil {
 			break
 		}
@@ -181,7 +179,7 @@ func (w *orderWorker) complete(ctx context.Context, completion fillCompletion) {
 		w.process(ctx, order, &reservations)
 	}
 	if ctx.Err() != nil {
-		w.capacityRetries.clear()
+		w.retries.clearCapacity()
 	}
 	if w.solver.capacity.Delete(completion.fill.reservationKey) {
 		w.solver.requestQuoteRefresh()

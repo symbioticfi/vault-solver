@@ -135,6 +135,7 @@ type pendingTransaction struct {
 	receiptReads      readStreak
 	obsolescenceReads readStreak
 	log               logr.Logger // m.log stamped with the request's solver
+	cancelling        bool        // owned by the lifecycle goroutine; once set, never returns to normal replacement
 	cancelDeadline    time.Time
 	cancelRequested   chan struct{}
 	cancelOnce        sync.Once
@@ -212,8 +213,8 @@ var (
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
 )
 
-// New constructs a Manager. Call Start to launch its worker.
-func New(backend Backend, account signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
+// New constructs a Manager with optional metrics. Call Start to launch its worker.
+func New(backend Backend, account signer.Signer, chainID *big.Int, cfg Config, metrics *Metrics, log logr.Logger) *Manager {
 	for _, duration := range []struct {
 		value    *time.Duration
 		fallback time.Duration
@@ -226,25 +227,9 @@ func New(backend Backend, account signer.Signer, chainID *big.Int, cfg Config, l
 			*duration.value = duration.fallback
 		}
 	}
-	manager := &Manager{backend: backend, signer: account, cfg: cfg, log: log.WithName("txmanager"),
+	return &Manager{backend: backend, signer: account, chainID: bigmath.Clone(chainID), cfg: cfg, metrics: metrics, log: log.WithName("txmanager"),
 		queue: make(chan job), lifecycleSlot: make(chan struct{}, 1), stopping: make(chan struct{}),
 		laneStateSubscribers: make(map[chan struct{}]struct{})}
-	manager.chainID = bigmath.Clone(chainID)
-	return manager
-}
-
-// NewWithMetrics constructs a Manager with transaction lifecycle metrics.
-func NewWithMetrics(
-	backend Backend,
-	s signer.Signer,
-	chainID *big.Int,
-	cfg Config,
-	metrics *Metrics,
-	log logr.Logger,
-) *Manager {
-	manager := New(backend, s, chainID, cfg, log)
-	manager.metrics = metrics
-	return manager
 }
 
 // Confirmations returns the configured finality depth used by requests without an override.
@@ -516,82 +501,67 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
 	started := time.Now()
 	m.addAdmissionDemand()
-	acquired, transferred := false, false
-	defer func() {
-		if transferred {
-			return
-		}
-		if acquired {
-			<-m.lifecycleSlot
-		}
-		m.releaseAdmissionDemand()
-	}()
 	admissionCtx := ctx
 	if !req.CancelAt.IsZero() {
 		var cancel context.CancelFunc
 		admissionCtx, cancel = context.WithDeadline(ctx, req.CancelAt)
 		defer cancel()
 	}
-	var err error
-	acquired, err = m.acquireLifecycle(admissionCtx, try)
+	next, err := m.enqueue(admissionCtx, req, started, try)
+	if next != nil {
+		return next.result, true
+	}
+	m.releaseAdmissionDemand()
 	if err != nil {
 		return m.admissionFailure(ctx, req, started, err)
 	}
-	if !acquired {
-		return nil, false
-	}
-	result := make(chan Result, 1)
-	next := job{completion: &completion{result: result}, req: cloneRequest(req), admissionStarted: started}
-	select {
-	case m.queue <- next:
-		// From this point the worker owns both demand and slot, including during shutdown.
-		transferred = true
-		return result, true
-	case <-admissionCtx.Done():
-		return m.admissionFailure(ctx, req, started, admissionCtx.Err())
-	case <-m.stopping:
-		return m.admissionFailure(ctx, req, started, errManagerStopped)
-	}
+	return nil, false
 }
 
-func (m *Manager) acquireLifecycle(ctx context.Context, try bool) (acquired bool, err error) {
+// enqueue owns the admission slot until the worker accepts the job. The slot is needed
+// for TrySend to observe a claim even before the worker is scheduled to receive it.
+// A returned job transfers both slot and demand to runJob; all other exits release the slot.
+func (m *Manager) enqueue(ctx context.Context, req Request, started time.Time, try bool) (accepted *job, err error) {
 	if err := m.admissionContextError(ctx); err != nil {
-		return false, err
+		return nil, err
 	}
 	if try {
-		if !m.Available() {
-			return false, nil
-		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		default:
-			return false, nil
+			return nil, nil
 		}
 	} else {
-		if err := m.waitForNonceLane(ctx); err != nil {
-			return false, err
-		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return nil, ctx.Err()
 		case <-m.stopping:
-			return false, errManagerStopped
+			return nil, errManagerStopped
 		}
 	}
-	// Admission may have paused while the previous owner released its slot.
+	defer func() {
+		if accepted == nil {
+			<-m.lifecycleSlot
+		}
+	}()
+	// A single lane check after the claim covers conflicts raised while the previous owner ran.
 	if try {
-		if m.nonceConflictError() == nil {
-			return true, nil
+		if !m.Available() {
+			return nil, nil
 		}
-	} else {
-		err = m.waitForNonceLane(ctx)
-		if err == nil {
-			return true, nil
-		}
+	} else if err := m.waitForNonceLane(ctx); err != nil {
+		return nil, err
 	}
-	<-m.lifecycleSlot
-	return false, err
+	next := job{completion: &completion{result: make(chan Result, 1)}, req: cloneRequest(req), admissionStarted: started}
+	select {
+	case m.queue <- next:
+		return &next, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-m.stopping:
+		return nil, errManagerStopped
+	}
 }
 
 func (m *Manager) admissionContextError(ctx context.Context) error {
@@ -805,44 +775,36 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	deadline := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
 	defer deadline.Stop()
 	cancelC, deadlineC := pending.cancelRequested, deadline.C
-	cancelling := false
 	for {
 		if result, done := m.receiptResult(ctx, pending); done {
 			return result
 		}
 		reason := ""
-		switch {
-		case ctx.Err() != nil:
+		if ctx.Err() != nil {
 			return Result{Hash: pending.originalHash, Outcome: OutcomeTrackingStopped, Err: context.Cause(ctx)}
-		default:
-			select {
-			case <-ctx.Done():
-				return Result{Hash: pending.originalHash, Outcome: OutcomeTrackingStopped, Err: context.Cause(ctx)}
-			case <-cancelC:
-				reason = "shutdown"
-			case <-deadlineC:
+		}
+		select {
+		case <-ctx.Done():
+			return Result{Hash: pending.originalHash, Outcome: OutcomeTrackingStopped, Err: context.Cause(ctx)}
+		case <-cancelC:
+			reason = pending.cancellationReason()
+		case <-deadlineC:
+			reason = pending.cancellationReason()
+		case <-poll.C:
+			if pending.cancelling || !m.pendingObsolete(ctx, pending) {
+				continue
+			}
+			reason = "obsolete"
+		case <-replace.C:
+			if !pending.cancelling && pending.cancellationDue(time.Now()) {
 				reason = pending.cancellationReason()
-			case <-poll.C:
-				if cancelling || !m.pendingObsolete(ctx, pending) {
-					continue
-				}
-				reason = "obsolete"
-			case <-replace.C:
-				if !cancelling && pending.cancellationDue(time.Now()) {
-					reason = pending.cancellationReason()
-				}
 			}
 		}
-		if reason != "" && !cancelling {
-			cancelling = true
-			pending.logCancellation(reason, m.cfg.PendingTimeout)
+		if reason != "" {
+			pending.beginCancellation(reason, m.cfg.PendingTimeout)
 		}
-		if m.tryReplace(ctx, pending, cancelling) && !cancelling {
-			// Fee lookup may cross CancelAt; the sender promotes that attempt to cancellation.
-			cancelling = true
-			pending.logCancellation(pending.cancellationReason(), m.cfg.PendingTimeout)
-		}
-		if cancelling {
+		m.tryReplace(ctx, pending)
+		if pending.cancelling {
 			cancelC, deadlineC = nil, nil
 		}
 	}
@@ -860,7 +822,11 @@ func (pending *pendingTransaction) cancellationReason() string {
 	return "pending_timeout"
 }
 
-func (pending *pendingTransaction) logCancellation(reason string, timeout time.Duration) {
+func (pending *pendingTransaction) beginCancellation(reason string, timeout time.Duration) {
+	if pending.cancelling {
+		return
+	}
+	pending.cancelling = true
 	pending.log.Info("pending transaction cancellation requested", "label", pending.req.Label,
 		"hash", pending.originalHash.Hex(), "nonce", pending.nonce, "reason", reason,
 		"deadline", pending.cancelDeadline.UTC().Format(time.RFC3339Nano), "pendingTimeout", timeout.String())
@@ -1001,48 +967,50 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 	return result, true
 }
 
-// tryReplace reports whether cancellation mode was entered, even if submission fails.
-func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, cancellation bool) bool {
+// tryReplace may permanently enter cancellation even if pricing, signing or submission fails.
+func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction) {
 	if m.hasNonceConflict(pending.nonce) {
-		return cancellation
+		return
 	}
-	cancellation = cancellation || pending.cancellationDue(time.Now())
-	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
-		return false
+	if !pending.cancelling && pending.cancellationDue(time.Now()) {
+		pending.beginCancellation(pending.cancellationReason(), m.cfg.PendingTimeout)
+	}
+	if !pending.cancelling && m.rebroadcastUncertainAttempt(ctx, pending) {
+		return
 	}
 	var fees feeQuote
 	for {
 		limit := m.normalFeeLimit(pending.req)
-		if cancellation {
+		if pending.cancelling {
 			limit = m.globalFeeLimit()
 		}
 		var err error
 		fees, err = m.nextReplacementFees(ctx, pending.fees, limit)
 		// Pricing can cross the fill deadline. Reprice the cancellation once under
 		// its own ceiling; never recursively re-enter the replacement lifecycle.
-		if !cancellation && pending.cancellationDue(time.Now()) {
-			cancellation = true
+		if !pending.cancelling && pending.cancellationDue(time.Now()) {
+			pending.beginCancellation(pending.cancellationReason(), m.cfg.PendingTimeout)
 			continue
 		}
 		if err != nil {
-			if !errors.Is(err, errReplacementLimitReached) || !m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
-				pending.log.Error(err, "cannot replace pending transaction", "label", pending.req.Label, "nonce", pending.nonce, "cancellation", cancellation)
+			if !errors.Is(err, errReplacementLimitReached) || !m.rebroadcastLatestAttempt(ctx, pending) {
+				pending.log.Error(err, "cannot replace pending transaction", "label", pending.req.Label, "nonce", pending.nonce, "cancellation", pending.cancelling)
 			}
-			return cancellation
+			return
 		}
 		break
 	}
 	to, data, value, gas := pending.req.To, pending.req.Data, pending.value, pending.gas
-	if cancellation {
+	if pending.cancelling {
 		to, data, value, gas = m.signer.Address(), nil, new(big.Int), cancellationGasLimit
 	}
-	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
+	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, pending.cancelling)
 	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true)
 	cancelSend()
-	log := pending.log.WithValues("label", pending.req.Label, "nonce", pending.nonce, "cancellation", cancellation)
+	log := pending.log.WithValues("label", pending.req.Label, "nonce", pending.nonce, "cancellation", pending.cancelling)
 	if signed == nil {
 		log.Error(sendErr, "pending transaction replacement rejected")
-		return cancellation
+		return
 	}
 	hash := signed.Hash()
 	log = log.WithValues("hash", hash.Hex())
@@ -1050,7 +1018,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	uncertain := sendErr != nil && !known
 	pending.fees = cloneFeeQuote(fees)
 	pending.attempts = append(pending.attempts, txAttempt{
-		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: uncertain,
+		hash: hash, tx: signed, cancellation: pending.cancelling, exactRebroadcastPending: uncertain,
 	})
 	if isNonceConsumedError(sendErr) {
 		pending.nonceConflictHash = hash
@@ -1063,13 +1031,12 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		log.Info("replacement already known by write RPC", "rpcResult", sendErr.Error())
 	default:
 		kind := replacementKindReplacement
-		if cancellation {
+		if pending.cancelling {
 			kind = replacementKindCancellation
 		}
 		m.metrics.replacement(pending.req.Label, kind)
 		log.Info("pending transaction replaced", "maxFeePerGas", fees.maxFee.String(), "maxPriorityFeePerGas", fees.tip.String())
 	}
-	return cancellation
 }
 
 // rebroadcastUncertainAttempt gives a transport-ambiguous normal submission one exact-byte retry
@@ -1092,10 +1059,10 @@ func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time
 	return pending.cancelDeadline.IsZero() || now.Add(m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval).Before(pending.cancelDeadline)
 }
 
-func (m *Manager) rebroadcastLatestAttempt(ctx context.Context, pending *pendingTransaction, cancellation bool) bool {
+func (m *Manager) rebroadcastLatestAttempt(ctx context.Context, pending *pendingTransaction) bool {
 	for index := len(pending.attempts); index > 0; index-- {
 		attempt := pending.attempts[index-1]
-		if attempt.tx != nil && attempt.cancellation == cancellation {
+		if attempt.tx != nil && attempt.cancellation == pending.cancelling {
 			m.rebroadcast(ctx, pending, attempt, false)
 			return true
 		}

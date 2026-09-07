@@ -90,7 +90,7 @@ The shared reader exposes facts:
 ResolveRoutes(ctx, adapters) ([]Route, error)
 ReadInventory(ctx, routes) ([]Inventory, error)
 ReadFillQuotes(ctx, routes, tokenIn, amountIn) ([]FillQuote, error)
-ReadGasSnapshot(ctx, routes) (*gas.Snapshot, error)
+ReadAdapterState(ctx, adapters, filler, gasRoutes) ([]Auth, *gas.Snapshot, error)
 ReadAdapterSnapshot(ctx, adapter, filler) (AdapterSnapshot, error)
 ReadAuth(ctx, adapters, filler) ([]Auth, error)
 FilterAuthorized(ctx, inventory, filler) ([]Inventory, error)
@@ -100,6 +100,10 @@ FilterAuthorizedRoutes(ctx, routes, filler) ([]Route, error)
 Implementation rules:
 
 - Use generated `PackXxx`/`UnpackXxx` helpers and Multicall batches.
+- Read owner and market-maker once per adapter for authorization and gas state in the same refresh.
+  Authorization covers only the requested adapters; gas state may cover all configured routes.
+  A nil `gasRoutes` disables gas reads, including for the `ReadAuth` wrapper. Failed role reads
+  leave that adapter unavailable; they do not trigger a second role read within the refresh.
 - Bound `tokensToRedeem`; reject invalid addresses, decimals, rates, caps, and discounts.
 - Fail startup when a configured adapter's stable `vault`, output asset, output decimals,
   `tokensToRedeem` list, or input-token decimals cannot be resolved. Silently running with a partial

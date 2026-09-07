@@ -723,10 +723,7 @@ func TestBlockedPlanCapacityIDsUsesOnlySelectedRoutes(t *testing.T) {
 func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy := &terminalNilFillStrategy{}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, &fakeLifiTxSender{}, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(&fakeLifiTxSender{}, strategy, lifiOrderStatusDeposited)
 	s.capacity.Set("pending-order", liquidlane.CapacityReservations{
 		"capacity-1": big.NewInt(1),
 	})
@@ -773,10 +770,7 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := immediateTestSetup(t)
-			s := newProcessTestSolver(
-				fixture.cfg, fixture.caller, &fakeLifiTxSender{}, errorFillStrategy{err: tt.err},
-				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-			)
+			s := fixture.solver(&fakeLifiTxSender{}, errorFillStrategy{err: tt.err}, lifiOrderStatusDeposited)
 
 			result := s.processOrderUsingReservations(
 				t.Context(),
@@ -806,7 +800,7 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	var logs []string
 	s.log = funcr.NewJSON(
 		func(entry string) { logs = append(logs, entry) },
@@ -847,16 +841,7 @@ func TestProcessOrderAttachesOnChainObsolescenceCheck(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	orderID := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	status := lifiOrderStatusDeposited
 	var statusErr error
@@ -916,16 +901,7 @@ func TestProcessOrderWithoutGasAccountingSkipsFeeReaderAndRequestCap(t *testing.
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	reader := s.reader.(fakeLifiReader)
 	reader.omitGasFacts = true
 	s.reader = reader
@@ -957,16 +933,7 @@ func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	order.Order.Expires = 0
 	order.Order.FillDeadline = 0
@@ -990,16 +957,7 @@ func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	wallNow := time.Unix(1_700_000_000, 0)
 	s.wallNow = func() time.Time { return wallNow }
 	s.now = func(context.Context) (time.Time, error) {
@@ -1035,10 +993,7 @@ func TestProcessOrderSkipsInputTokenOutsideScopeBeforeChainReads(t *testing.T) {
 	otherToken := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	fixture.cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, otherToken)
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, fixedFillStrategy{},
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, fixedFillStrategy{}, lifiOrderStatusDeposited)
 	orderIDReads := 0
 	s.reader = fakeLifiReader{orderIDFn: func(inputsettler.StandardOrder) common.Hash {
 		orderIDReads++
@@ -1060,10 +1015,7 @@ func TestProcessOrderSkipsInputTokenOutsideScopeBeforeChainReads(t *testing.T) {
 func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, fixedFillStrategy{},
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, fixedFillStrategy{}, lifiOrderStatusDeposited)
 	orderIDReads := 0
 	s.reader = fakeLifiReader{
 		governanceFeeErr: errors.New("input settler governance fee is 1, expected zero"),
@@ -1115,10 +1067,7 @@ func TestProcessOrderFillsThroughPrivateDiscountWithoutDirectAuthorization(t *te
 		resolved: testResolvedDiscount(base.Inventory, 100_000, now.Add(time.Minute)),
 	}
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	s.discounts = discounts
 	fillReads := 0
 	s.reader = fakeLifiReader{
@@ -1151,10 +1100,7 @@ func TestProcessOrderRejectsMultiRoutePlanForPermissionedToken(t *testing.T) {
 		{RouteID: "route-1", Adapter: fixture.adapter, AmountIn: big.NewInt(500_000)},
 		{RouteID: "route-2", Adapter: fixture.adapter, AmountIn: big.NewInt(500_000)},
 	}}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, fixedFillStrategy{plan: plan},
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, fixedFillStrategy{plan: plan}, lifiOrderStatusDeposited)
 
 	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
@@ -1189,16 +1135,7 @@ func TestProcessOrderChecksOnChainStatusBeforeSend(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		strategy,
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusClaimed,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusClaimed)
 	fillReads := 0
 	s.reader = fakeLifiReader{
 		orderID: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -1272,16 +1209,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			txm := &fakeLifiTxSender{}
-			solver := newProcessTestSolver(
-				fixture.cfg,
-				fixture.caller,
-				txm,
-				strategy,
-				fixture.tokenIn,
-				fixture.tokenOut,
-				fixture.adapter,
-				lifiOrderStatusDeposited,
-			)
+			solver := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 			statusReads := 0
 			reader := solver.reader.(fakeLifiReader)
 			reader.statusFn = func() (uint8, error) {
@@ -1323,7 +1251,7 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 		Outcome: txmanager.OutcomeSubmissionError,
 		Err:     errors.New("send failed"),
 	}}
-	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 
 	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 	if len(txm.reqs) != 1 {
@@ -1336,10 +1264,7 @@ func TestProcessOrderDropsWhenTransactionSubmissionIsRejected(t *testing.T) {
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{reject: true}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 
 	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
@@ -1365,10 +1290,7 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 			maxFeePerGas = big.NewInt(2)
 		}
 	}}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	fillReads := 0
 	feeReads := 0
 	s.reader = fakeLifiReader{
@@ -1419,10 +1341,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	fillReads := 0
 	feeReads := 0
 	s.reader = fakeLifiReader{
@@ -1498,18 +1417,9 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
-		fixture.cfg,
-		fixture.caller,
-		txm,
-		reservationAwareFillStrategy{
-			plan: plan, blockAtReserved: big.NewInt(2_000_000), inputs: inputs,
-		},
-		fixture.tokenIn,
-		fixture.tokenOut,
-		fixture.adapter,
-		lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, reservationAwareFillStrategy{
+		plan: plan, blockAtReserved: big.NewInt(2_000_000), inputs: inputs,
+	}, lifiOrderStatusDeposited)
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
 	testcheck.NoError(t, err)
@@ -1622,10 +1532,7 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	s.reader = fakeLifiReader{
 		status: lifiOrderStatusDeposited,
 		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
@@ -1733,10 +1640,7 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	s.reader = fakeLifiReader{
 		status: lifiOrderStatusDeposited,
 		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
@@ -1791,10 +1695,7 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 			submitted <- result
 		},
 	}
-	s := newProcessTestSolver(
-		fixture.cfg, fixture.caller, txm, strategy,
-		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
-	)
+	s := fixture.solver(txm, strategy, lifiOrderStatusDeposited)
 	ctx, cancel := context.WithCancel(t.Context())
 	orders := make(chan *submittedOrder, 1)
 	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
@@ -1878,21 +1779,14 @@ func immediateTestSetup(t *testing.T) processTestFixture {
 	return processTestFixture{cfg: cfg, caller: caller, tokenIn: tokenIn, tokenOut: tokenOut, adapter: adapter}
 }
 
-func newProcessTestSolver(
-	cfg *Config,
-	caller common.Address,
-	txm *fakeLifiTxSender,
-	strategy types.Strategy,
-	tokenIn, tokenOut, adapter common.Address,
-	status uint8,
-) *Solver {
+func (f processTestFixture) solver(txm *fakeLifiTxSender, strategy types.Strategy, status uint8) *Solver {
 	return &Solver{
-		cfg: cfg, chainID: 11155111,
+		cfg: f.cfg, chainID: 11155111,
 		reader: fakeLifiReader{
 			orderID: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-			status:  status, fill: profitableFillSnapshots(tokenIn, tokenOut, adapter, 1_000_000),
+			status:  status, fill: profitableFillSnapshots(f.tokenIn, f.tokenOut, f.adapter, 1_000_000),
 		},
-		strategy: strategy, caller: caller, txm: txm, log: logr.Discard(),
+		strategy: strategy, caller: f.caller, txm: txm, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
 		wallNow:      func() time.Time { return time.Unix(1_700_000_000, 0) },
