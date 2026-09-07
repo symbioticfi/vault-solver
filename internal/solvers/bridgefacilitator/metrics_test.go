@@ -13,43 +13,21 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func newThreeFTestMetrics(t *testing.T) (*threeFMetrics, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	metrics, err := newThreeFMetrics(reg, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	return metrics, reg
-}
-
-func requireThreeFObservation(
-	t *testing.T,
-	reg *prometheus.Registry,
-	view string,
-	count, timestamp float64,
-) {
-	t.Helper()
-	metricstest.RequireWorkflowState(t, reg, Name, view, count, timestamp)
 }
 
 func seedThreeFObservation(metrics *threeFMetrics, view string) {
 	metrics.workflow.ObserveStateAt(view, 7, time.Unix(123, 0))
-}
-
-func requireThreeFEvent(
-	t *testing.T,
-	reg *prometheus.Registry,
-	event, outcome string,
-	count, timestamp float64,
-) {
-	t.Helper()
-	metricstest.RequireWorkflowEvent(t, reg, Name, event, outcome, count, timestamp)
 }
 
 func threeFObservationTimestamp(t *testing.T, reg *prometheus.Registry, view string) float64 {
@@ -67,7 +45,7 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 	if !s.reconcileOffers(t.Context(), nil) {
 		t.Fatal("empty incremental reconciliation must be complete")
 	}
-	requireThreeFObservation(t, reg, threeFStateOffers, 0, 0)
+	metricstest.RequireWorkflowState(t, reg, Name, threeFStateOffers, 0, 0)
 
 	for view, count := range map[string]int{
 		threeFStateOffers: 0, threeFStateActiveRequests: 2,
@@ -83,10 +61,10 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 		threeFStateOffers: 0, threeFStateActiveRequests: 2,
 		threeFStateRedeemable: 1, threeFStateTargets: 3,
 	} {
-		requireThreeFObservation(t, reg, view, want, 123)
+		metricstest.RequireWorkflowState(t, reg, Name, view, want, 123)
 	}
-	requireThreeFEvent(t, reg, threeFEventOffer, "success", 1, 123)
-	requireThreeFEvent(t, reg, threeFEventRedeem, "success", 2, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, threeFEventOffer, "success", 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, threeFEventRedeem, "success", 2, 123)
 	for kind, want := range map[string]float64{threeFOfferPrincipal: 1_000, threeFOfferExpectedYield: 25} {
 		metricstest.RequireWorkflowAmount(
 			t, reg, Name, threeFEventOffer, strings.ToLower(token.Hex()), kind, want,
@@ -97,16 +75,12 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 func TestThreeFBacklogNonemptySinceTimestampTracksAuthoritativeTransitions(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m, err := newThreeFMetrics(reg, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(`# HELP threef_backlog_nonempty_since_timestamp Unix timestamp when this process first observed a continuous non-empty 3F backlog in complete authoritative snapshots by view; 0 before the first authoritative non-empty observation or after an authoritative empty snapshot. Pair with solver_bot_workflow_last_observation_timestamp; resets on process restart; not an item age.
+	testcheck.NoError(t, err)
+	testcheck.NoError(t, testutil.GatherAndCompare(reg, strings.NewReader(`# HELP threef_backlog_nonempty_since_timestamp Unix timestamp when this process first observed a continuous non-empty 3F backlog in complete authoritative snapshots by view; 0 before the first authoritative non-empty observation or after an authoritative empty snapshot. Pair with solver_bot_workflow_last_observation_timestamp; resets on process restart; not an item age.
 # TYPE threef_backlog_nonempty_since_timestamp gauge
 threef_backlog_nonempty_since_timestamp{view="active_requests"} 0
 threef_backlog_nonempty_since_timestamp{view="redeemable"} 0
-`), "threef_backlog_nonempty_since_timestamp"); err != nil {
-		t.Fatalf("initial backlog metric: %v", err)
-	}
+`), "threef_backlog_nonempty_since_timestamp"), "initial backlog metric: %v")
 
 	now := time.Unix(100, 0)
 	m.now = func() time.Time { return now }
@@ -218,7 +192,7 @@ func TestRefreshTargetsPublishesOnlyAuthoritativeTargetSnapshots(t *testing.T) {
 		if _, err := s.refreshTargets(t.Context()); err == nil {
 			t.Fatal("failed refresh returned nil error")
 		}
-		requireThreeFObservation(t, reg, threeFStateTargets, 7, 123)
+		metricstest.RequireWorkflowState(t, reg, Name, threeFStateTargets, 7, 123)
 		if s.targetsAuthoritative {
 			t.Fatal("failed target refresh retained authoritative provenance")
 		}
@@ -255,7 +229,7 @@ func TestRefreshTargetsPublishesOnlyAuthoritativeTargetSnapshots(t *testing.T) {
 		if len(s.targets) != 1 || s.targets[0].Adapter != adapter0 {
 			t.Fatalf("runtime targets = %+v, want safe adapter %s", s.targets, adapter0.Hex())
 		}
-		requireThreeFObservation(t, reg, threeFStateTargets, 7, 123)
+		metricstest.RequireWorkflowState(t, reg, Name, threeFStateTargets, 7, 123)
 		if s.targetsAuthoritative {
 			t.Fatal("partial target refresh marked authoritative")
 		}
@@ -281,7 +255,7 @@ func TestTargetDerivedMetricsRequireAuthoritativeTargetSnapshot(t *testing.T) {
 	s.reconcile(t.Context())
 	s.redeemAll(t.Context())
 	for _, view := range views {
-		requireThreeFObservation(t, reg, view, 7, 123)
+		metricstest.RequireWorkflowState(t, reg, Name, view, 7, 123)
 	}
 
 	s.targetsAuthoritative = true
@@ -357,7 +331,7 @@ func TestDiscoverAndOfferMalformedOfferRetainsLastCompleteMetric(t *testing.T) {
 			seedThreeFObservation(metrics, threeFStateOffers)
 			adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000a0")
 			s := &Solver{
-				api:                  newAPIClient(srv.URL, fakeSigner{}, big.NewInt(1), time.Second, logr.Discard()),
+				api:                  newAPIClient(srv.URL, fakeSigner{}, big.NewInt(1), time.Second),
 				reader:               newReader(c, common.Address{}),
 				log:                  logr.Discard(),
 				offers:               newOfferTracker(),
@@ -369,8 +343,8 @@ func TestDiscoverAndOfferMalformedOfferRetainsLastCompleteMetric(t *testing.T) {
 
 			s.discoverAndOffer(t.Context())
 
-			requireThreeFObservation(t, reg, threeFStateOffers, 7, 123)
-			if tc.name == "empty status" && len(s.offers.liveEntries(time.Now())) != 1 {
+			metricstest.RequireWorkflowState(t, reg, Name, threeFStateOffers, 7, 123)
+			if tc.name == "empty status" && len(s.offers.snapshot(time.Now()).entries) != 1 {
 				t.Fatal("empty-status offer was dropped from conservative live coverage")
 			}
 		})

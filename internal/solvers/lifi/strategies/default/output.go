@@ -26,58 +26,52 @@ type outputPricing struct {
 	exclusiveFor [32]byte
 }
 
-func parseOutputContext(outputAmount *big.Int, outputContext []byte) (*outputPricing, error) {
-	out := &outputPricing{amount: new(big.Int).Set(outputAmount)}
-	if len(outputContext) == 0 {
-		return out, nil
+func parseOutputContext(outputAmount *big.Int, encoded []byte) (*outputPricing, error) {
+	if outputAmount == nil || outputAmount.Sign() <= 0 {
+		return nil, errors.New("outputContext: output amount must be positive")
 	}
-	switch outputContext[0] {
+	pricing := &outputPricing{amount: new(big.Int).Set(outputAmount)}
+	if len(encoded) == 0 {
+		return pricing, nil
+	}
+	var size int
+	switch encoded[0] {
 	case limitOrderContextType:
-		if len(outputContext) != 1 {
-			return nil, errors.Errorf("outputContext: limit order length must be 1, got %d", len(outputContext))
-		}
-		return out, nil
-	case dutchAuctionContextType:
-		return nil, errors.New("outputContext: Dutch auctions are not supported")
+		size = 1
 	case exclusiveLimitOrderContextType:
-		if len(outputContext) != 37 {
-			return nil, errors.Errorf("outputContext: exclusive limit length must be 37, got %d", len(outputContext))
-		}
-		out.exclusive = true
-		copy(out.exclusiveFor[:], outputContext[1:33])
-		out.startTime = binary.BigEndian.Uint32(outputContext[33:37])
-		return out, nil
-	case exclusiveDutchAuctionContextType:
+		size = 37
+	case dutchAuctionContextType, exclusiveDutchAuctionContextType:
 		return nil, errors.New("outputContext: Dutch auctions are not supported")
 	default:
-		return nil, errors.Errorf("outputContext: unsupported type 0x%02x", outputContext[0])
+		return nil, errors.Errorf("outputContext: unsupported type 0x%02x", encoded[0])
 	}
+	if len(encoded) != size {
+		label := "limit order"
+		if size == 37 {
+			label = "exclusive limit"
+		}
+		return nil, errors.Errorf("outputContext: %s length must be %d, got %d", label, size, len(encoded))
+	}
+	if size == 37 {
+		pricing.exclusive = true
+		pricing.exclusiveFor = [32]byte(encoded[1:33])
+		pricing.startTime = binary.BigEndian.Uint32(encoded[33:])
+	}
+	return pricing, nil
 }
 
 func (o *outputPricing) fill(solver common.Address, now time.Time, acceptableAmount *big.Int) (*big.Int, bool) {
-	currentTime := uint32Time(now)
-	if o.exclusive && currentTime < o.startTime {
-		solverID := solverIdentifier(solver)
-		if o.exclusiveFor != solverID {
-			return nil, false
-		}
+	if acceptableAmount == nil || o.amount.Cmp(acceptableAmount) > 0 {
+		return nil, false
 	}
-	if o.amount.Cmp(acceptableAmount) > 0 {
+	allowed := !o.exclusive || uint32Time(now) >= o.startTime || o.exclusiveFor == solverIdentifier(solver)
+	if !allowed {
 		return nil, false
 	}
 	return new(big.Int).Set(o.amount), true
 }
 
-func uint32Time(t time.Time) uint32 {
-	unix := t.Unix()
-	if unix <= 0 {
-		return 0
-	}
-	if unix > math.MaxUint32 {
-		return math.MaxUint32
-	}
-	return uint32(unix)
-}
+func uint32Time(t time.Time) uint32 { return uint32(min(max(t.Unix(), 0), int64(math.MaxUint32))) }
 
 func solverIdentifier(addr common.Address) [32]byte {
 	var out [32]byte

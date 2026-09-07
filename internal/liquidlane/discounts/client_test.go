@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestClientResolveSingle(t *testing.T) {
@@ -30,9 +32,7 @@ func TestClientResolveSingle(t *testing.T) {
 
 	id := "0x" + hash64
 	res, err := NewClient(srv.URL).Resolve(context.Background(), id)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+	testcheck.NoError(t, err, "Resolve: %v")
 	if gotPath != "/api-internal/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
 	}
@@ -60,9 +60,7 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	defer srv.Close()
 
 	res, err := NewClient(srv.URL).Resolve(context.Background(), "0x"+hash64)
-	if err != nil {
-		t.Fatalf("Resolve batch: %v", err)
-	}
+	testcheck.NoError(t, err, "Resolve batch: %v")
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
 	}
@@ -103,9 +101,7 @@ func TestClientListDiscounts(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := NewClient(srv.URL).ListDiscounts(context.Background())
-	if err != nil {
-		t.Fatalf("ListDiscounts: %v", err)
-	}
+	testcheck.NoError(t, err, "ListDiscounts: %v")
 	if gotPath != "/api-internal/v1/discounts" {
 		t.Fatalf("path = %q", gotPath)
 	}

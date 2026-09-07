@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -59,7 +58,8 @@ func newThreeFMetrics(reg prometheus.Registerer, strategyName string) (*threeFMe
 			threeFStateOffers, threeFStateActiveRequests, threeFStateRedeemable, threeFStateTargets,
 		},
 	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	group := observability.NewMetricGroup("")
+	workflow, err := observability.NewWorkflowMetrics(group, Name, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -71,18 +71,15 @@ func newThreeFMetrics(reg prometheus.Registerer, strategyName string) (*threeFMe
 			activeRequestRefresh: workflow.Operation(activeRequestRefreshOperation),
 			redeemableRefresh:    workflow.Operation(redeemableRefreshOperation),
 		},
-		backlogNonemptySince: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "threef_backlog_nonempty_since_timestamp",
-			Help: "Unix timestamp when this process first observed a continuous non-empty 3F backlog in complete authoritative snapshots by view; 0 before the first authoritative non-empty observation or after an authoritative empty snapshot. Pair with solver_bot_workflow_last_observation_timestamp; resets on process restart; not an item age.",
-		}, []string{"view"}),
-		backlogNonempty: make(map[string]bool, 2),
-		now:             time.Now,
-	}
-	if err := reg.Register(m.backlogNonemptySince); err != nil {
-		return nil, errors.Errorf("bridgefacilitator: register metric: %w", err)
+		backlogNonemptySince: group.Gauge("threef_backlog_nonempty_since_timestamp", "Unix timestamp when this process first observed a continuous non-empty 3F backlog in complete authoritative snapshots by view; 0 before the first authoritative non-empty observation or after an authoritative empty snapshot. Pair with solver_bot_workflow_last_observation_timestamp; resets on process restart; not an item age.", "view"),
+		backlogNonempty:      make(map[string]bool, 2),
+		now:                  time.Now,
 	}
 	for _, view := range []string{threeFStateActiveRequests, threeFStateRedeemable} {
 		m.backlogNonemptySince.WithLabelValues(view)
+	}
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

@@ -1,7 +1,6 @@
 // Package bridgefacilitator implements the 3F (Grunt) Bridge Facilitator solver: it discovers
 // bridge-loan auctions via the 3F API, snapshots adapter state for a trusted strategy, signs the
-// returned offers, and realizes repaid loans back into the vault. It self-registers with the solver
-// framework via init().
+// returned offers, and realizes repaid loans back into the vault. Construction is explicit in internal/app.
 package bridgefacilitator
 
 import (
@@ -18,6 +17,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
@@ -34,29 +34,24 @@ var offerStatusIgnored = map[string]bool{
 	"CANCELED":     true,
 }
 
-// Name is the registry key that selects this solver from config.
+// Name is the configuration key that selects this solver from config.
 const Name = "3f-bridge-facilitator"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
-	cfg        *Config
-	deps       solver.Deps
-	api        *apiClient
-	reader     *reader
-	txManager  transactionSender
-	strategy   types.Strategy
-	log        logr.Logger
-	laneReady  func() bool    // shared txmanager lane state; safe for the single Run goroutine
-	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
-	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
-	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
-	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	cfg         *Config
+	offerSigner signer.Signer
+	api         *apiClient
+	reader      *reader
+	txManager   transactionSender
+	strategy    types.Strategy
+	log         logr.Logger
+	laneReady   func() bool    // shared txmanager lane state; safe for the single Run goroutine
+	signerAddr  common.Address // the solver's own signer address (diagnostics only), set in factory
+	probe       signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
+	nonceSeq    atomic.Uint64
+	offers      *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets     []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 	// targetsAuthoritative records whether targets covers the complete configured/discovered source.
 	// A partial refresh still installs its safe subset, but derived metric freshness must stay retained.
 	targetsAuthoritative bool
@@ -77,13 +72,13 @@ func deduplicateAdapters(adapters []common.Address) []common.Address {
 	return unique
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func New(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout, deps.Log.WithName(Name))
+	api := newAPIClient(cfg.APIBaseURL, deps.Signer, deps.Chain.ChainID(), cfg.HTTPTimeout)
 	offerStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
@@ -106,19 +101,19 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	s := &Solver{
-		cfg:        cfg,
-		deps:       deps,
-		api:        api,
-		reader:     newReader(deps.Chain, cfg.LiquidityLens),
-		txManager:  deps.TxManager,
-		strategy:   offerStrategy,
-		log:        deps.Log.WithName(Name),
-		laneReady:  deps.TxManager.LaneReady,
-		signerAddr: deps.Signer.Address(),
-		probe:      probe,
-		offers:     newOfferTracker(),
-		metrics:    metrics,
-		operations: operations,
+		cfg:         cfg,
+		offerSigner: deps.Signer,
+		api:         api,
+		reader:      newReader(deps.Chain, cfg.LiquidityLens),
+		txManager:   deps.TxManager,
+		strategy:    offerStrategy,
+		log:         deps.Log.WithName(Name),
+		laneReady:   deps.TxManager.LaneReady,
+		signerAddr:  deps.Signer.Address(),
+		probe:       probe,
+		offers:      newOfferTracker(),
+		metrics:     metrics,
+		operations:  operations,
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
@@ -128,110 +123,120 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
-// Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
-// ctx is cancelled.
+// Run owns targets, offers and all three scheduled activities. One timer
+// coalesces missed cadences while slow API calls run; activities never overlap.
 func (s *Solver) Run(ctx context.Context) error {
-	// Build the initial explicit-or-factory snapshot. A successfully empty factory is valid: the
-	// daemon stays alive and picks up future entities on a discovery tick.
 	if err := s.refreshTargetsAndHydrate(ctx); err != nil {
 		return err
 	}
-	// Preserve the explicit-list fail-closed startup contract. Factory-discovered deployments may
-	// start empty because later registry entries are expected.
 	if s.cfg.Targets != nil && len(s.targets) == 0 {
 		return errors.Errorf("no configured adapter passed startup validation (must resolve and accept this solver %s as an authorized offer signer via ERC-1271); see per-adapter warnings above", s.signerAddr.Hex())
 	}
-
-	s.log.Info("starting",
-		"adapters", len(s.targets),
-		"apiBaseUrl", s.cfg.APIBaseURL,
-		"discover", s.cfg.Intervals.Discover.String(),
-	)
-
-	discoverT := time.NewTicker(s.cfg.Intervals.Discover)
-	redeemT := time.NewTicker(s.cfg.Intervals.RedeemPoll)
-	reconcileT := time.NewTicker(s.cfg.Intervals.Reconcile)
-	defer discoverT.Stop()
-	defer redeemT.Stop()
-	defer reconcileT.Stop()
-
-	// Run one pass immediately rather than waiting a full interval.
+	s.log.Info("starting", "adapters", len(s.targets), "apiBaseUrl", s.cfg.APIBaseURL, "discover", s.cfg.Intervals.Discover)
 	s.discoverAndOffer(ctx)
 	s.redeemAll(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-discoverT.C:
+	now := time.Now()
+	activities := []struct {
+		every time.Duration
+		next  time.Time
+		run   func(context.Context)
+	}{
+		{s.cfg.Intervals.Discover, now.Add(s.cfg.Intervals.Discover), func(ctx context.Context) {
 			if err := s.refreshTargetsAndHydrate(ctx); err != nil {
 				s.log.Error(err, "refresh adapters; keeping last-known-good targets")
 			}
 			s.discoverAndOffer(ctx)
-		case <-redeemT.C:
-			s.redeemAll(ctx)
-		case <-reconcileT.C:
-			s.reconcile(ctx)
+		}},
+		{s.cfg.Intervals.RedeemPoll, now.Add(s.cfg.Intervals.RedeemPoll), s.redeemAll},
+		{s.cfg.Intervals.Reconcile, now.Add(s.cfg.Intervals.Reconcile), s.reconcile},
+	}
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
+	for ctx.Err() == nil {
+		soonest := activities[0].next
+		for _, activity := range activities[1:] {
+			if activity.next.Before(soonest) {
+				soonest = activity.next
+			}
+		}
+		timer.Reset(max(time.Until(soonest), 0))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+		for i := range activities {
+			activity := &activities[i]
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			elapsed := time.Since(activity.next)
+			if elapsed < 0 {
+				continue
+			}
+			activity.next = activity.next.Add(elapsed - elapsed%activity.every + activity.every)
+			activity.run(ctx)
 		}
 	}
+	return ctx.Err()
 }
 
-// reconcileOffers re-lists each target adapter's live offers from the 3F API and replaces that adapter's
-// offer cache with them, so coverage reflects our own offers and any made out of band. The poll is
-// authoritative. Best-effort: one adapter's list failure can't block the pass (its cache is left as-is).
+// A successful list replaces that adapter's cache even if individual records
+// are malformed. A failed list retains its last observation and freshness.
 func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
-	now := time.Now()
-	complete := true
-	for _, t := range targets {
-		offers, err := s.api.listOffers(ctx, t.Adapter)
+	complete, now := true, time.Now()
+	for _, target := range targets {
+		records, err := s.api.listOffers(ctx, target.Adapter)
 		if err != nil {
 			complete = false
-			s.log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
+			s.log.Error(err, "reconcile offers: list offers", "adapter", target.Adapter.Hex())
 			continue
 		}
 		live := make(map[int64]offerState)
-		for _, o := range offers {
-			status := strings.ToUpper(strings.TrimSpace(o.Status))
-			if offerStatusIgnored[status] {
-				continue // failed/not-accepted/cancelled offers aren't live coverage
-			}
-			if status == "" {
-				complete = false
-				s.log.Info("reconcile offers: empty status; retaining valid subset",
-					"adapter", t.Adapter.Hex(), "offerId", o.Id)
-			}
-			exp, perr := parseUnixTime(o.Expiration)
-			if perr != nil {
-				complete = false
-				s.log.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
-					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+		for _, record := range records {
+			state, keep, valid := s.readLiveOffer(target.Adapter, record, now)
+			complete = complete && valid
+			if !keep {
 				continue
 			}
-			if !exp.After(now) {
-				continue // valid, already-expired offer
-			}
-			principal, ok := new(big.Int).SetString(o.Amount, 10)
-			if !ok || principal.Sign() < 0 {
-				complete = false
-				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
-					"adapter", t.Adapter.Hex(), "offerId", o.Id)
-				principal = new(big.Int)
-			}
-			if o.AuctionId <= 0 {
-				complete = false
-				s.log.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset",
-					"adapter", t.Adapter.Hex(), "offerId", o.Id)
-				continue
-			}
-			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
-			auctionID := int64(o.AuctionId)
-			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
-				live[auctionID] = offerState{expiry: exp, principal: principal}
+			id := int64(record.AuctionId)
+			if previous, exists := live[id]; !exists || state.expiry.After(previous.expiry) {
+				live[id] = state
 			}
 		}
-		s.offers.reconcileAdapter(t.Adapter, live)
+		s.offers.reconcileAdapter(target.Adapter, live)
 	}
 	return complete
+}
+
+func (s *Solver) readLiveOffer(adapter common.Address, record threef.OfferDto, now time.Time) (state offerState, keep bool, valid bool) {
+	status := strings.ToUpper(strings.TrimSpace(record.Status))
+	if offerStatusIgnored[status] {
+		return offerState{}, false, true
+	}
+	valid = status != ""
+	log := s.log.WithValues("adapter", adapter.Hex(), "offerId", record.Id)
+	if !valid {
+		log.Info("reconcile offers: empty status; retaining valid subset")
+	}
+	expiry, err := parseUnixTime(record.Expiration)
+	if err != nil {
+		log.Error(err, "reconcile offers: malformed expiration; retaining valid subset")
+		return offerState{}, false, false
+	}
+	if !expiry.After(now) {
+		return offerState{}, false, valid
+	}
+	principal, ok := new(big.Int).SetString(record.Amount, 10)
+	if !ok || principal.Sign() < 0 {
+		principal, valid = new(big.Int), false
+		log.Info("reconcile offers: malformed amount; retaining valid subset")
+	}
+	if record.AuctionId <= 0 {
+		log.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset")
+		return offerState{}, false, false
+	}
+	return offerState{expiry: expiry, principal: principal}, true, valid
 }
 
 // adapterOffering tracks one adapter's liquidity/exposure snapshot for one offer pass.
@@ -244,130 +249,106 @@ type adapterOffering struct {
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
 	timer := observability.StartOperation(s.operations.offerRefresh)
-	observeRefresh := func(outcome observability.ExternalOperationOutcome) {
-		timer.Finish(ctx, outcome)
-	}
 	if !s.canCreateOffer() {
-		observeRefresh(observability.ExternalOperationSkipped)
-		s.log.V(1).Info("skipping offer discovery: transaction lane not ready")
+		timer.Finish(ctx, observability.ExternalOperationSkipped)
 		return
 	}
 	if len(s.targets) == 0 {
-		outcome := observability.ExternalOperationSuccess
-		if !s.targetsAuthoritative {
-			outcome = observability.ExternalOperationDegraded
-		}
-		observeRefresh(outcome)
+		timer.Finish(ctx, s.snapshotOutcome(0, 0, true))
 		s.observeTargetDerivedState(threeFStateOffers, 0, true)
 		return
 	}
-	auctions, err := s.api.listAuctions(ctx)
+	rows, err := s.api.listAuctions(ctx)
 	if err != nil {
-		observeRefresh(observability.ExternalOperationError)
+		timer.Finish(ctx, observability.ExternalOperationError)
 		s.log.Error(err, "discover: list auctions")
 		return
 	}
-	auctions = s.validAuctions(auctions)
-	s.log.V(1).Info("discovered auctions", "count", len(auctions))
-
-	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
+	auctions := s.validAuctions(rows)
 	offersComplete := s.reconcileOffers(ctx, s.targets)
-
-	offerings := make([]*adapterOffering, 0, len(s.targets))
-	liquidityReadsFailed := 0
-	for _, t := range s.targets {
-		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
-		if lerr != nil {
-			liquidityReadsFailed++
-			s.log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
+	complete := offersComplete
+	offerings := make([]adapterOffering, 0, len(s.targets))
+	for _, target := range s.targets {
+		state, err := s.reader.liquidityAndExposure(ctx, target.Adapter)
+		if err != nil {
+			complete = false
+			s.log.Error(err, "offer: liquidity/exposure", "adapter", target.Adapter.Hex())
 			continue
 		}
-		s.log.V(1).Info("adapter liquidity",
-			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
-			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
-			"minYieldPpm", st.minYieldPpm.String())
-		offerings = append(offerings, &adapterOffering{target: t, st: st})
+		offerings = append(offerings, adapterOffering{target: target, st: state})
 	}
 	now := time.Now()
 	s.offers.pruneExpired(now)
-	s.observeTargetDerivedState(threeFStateOffers, len(s.offers.liveEntries(now)), offersComplete)
-	refreshOutcome := observability.ExternalOperationSuccess
-	switch {
-	case len(offerings) == 0 && len(s.targets) != 0:
-		refreshOutcome = observability.ExternalOperationError
-	case !s.targetsAuthoritative || !offersComplete || liquidityReadsFailed != 0:
-		refreshOutcome = observability.ExternalOperationDegraded
-	}
-	observeRefresh(refreshOutcome)
+	liveOffers := s.offers.snapshot(now)
+	s.observeTargetDerivedState(threeFStateOffers, len(liveOffers.entries), offersComplete)
+	timer.Finish(ctx, s.snapshotOutcome(len(s.targets), len(offerings), complete))
 	if len(offerings) == 0 {
-		return // every adapter's liquidity read failed this pass
+		return
 	}
-	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	input := buildStrategyInput(auctions, offerings, liveOffers, now)
 	if len(input.Auctions) == 0 {
-		return // no open, offerable auctions this pass
+		return
 	}
-	out, err := s.strategy.DecideOffers(ctx, input)
+	plan, err := s.strategy.DecideOffers(ctx, input)
 	if err != nil {
 		s.log.Error(err, "offer: strategy")
 		return
 	}
-	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
-	// not just the default strategy's pricing, against the adapter's exact on-chain minYieldPerRequest.
-	minYieldByAdapter := make(map[common.Address]*big.Int, len(offerings))
-	for _, o := range offerings {
-		minYieldByAdapter[o.target.Adapter] = o.st.minYieldPpm
+	byAuction := auctionsByID(auctions)
+	floors := make(map[common.Address]*big.Int, len(offerings))
+	for _, offering := range offerings {
+		floors[offering.target.Adapter] = offering.st.minYieldPpm
 	}
-
-	auctionByID := auctionViewsByID(auctions)
-	for _, offer := range out.Offers {
-		av, ok := auctionByID[offer.AuctionID]
-		if !ok {
-			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
-			continue
-		}
-		floor, known := minYieldByAdapter[offer.Maker]
-		if !known {
-			s.log.Error(errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex()),
-				"offer: unknown maker; skipping", "auctionId", offer.AuctionID)
-			continue
-		}
-		maxRate, rateOk := av.maxRateBps()
-		if !rateOk {
-			s.log.Error(errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID),
-				"offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
-			continue
-		}
-		// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
-		// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
-		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
-			s.log.Error(err, "offer: yield out of bounds; skipping",
-				"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
-			continue
-		}
-		dto, buildErr := s.buildSignedOffer(av, offer)
-		if buildErr != nil {
-			s.log.Error(buildErr, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
-			continue
-		}
-		submitted, subErr := s.submitOfferIfLaneReady(ctx, dto)
-		if !submitted {
-			s.log.V(1).Info("stopping offer submission: transaction lane no longer ready")
+	for _, offer := range plan.Offers {
+		if ctx.Err() != nil {
 			return
 		}
-		if subErr != nil {
-			s.observeOfferSubmission("error")
-			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		a, known := byAuction[offer.AuctionID]
+		floor, makerKnown := floors[offer.Maker]
+		switch {
+		case !known || a.maxRate == nil:
+			s.log.Error(errors.Errorf("unknown or unpriced auction %d", offer.AuctionID), "offer: build")
+			continue
+		case !makerKnown:
+			s.log.Error(errors.Errorf("unknown adapter %s", offer.Maker.Hex()), "offer: build")
 			continue
 		}
-		s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
-		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
+		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, *a.maxRate); err != nil {
+			s.log.Error(err, "offer: yield out of bounds; skipping", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+			continue
+		}
+		dto, err := s.buildSignedOffer(a, offer)
+		if err != nil {
+			s.log.Error(err, "offer: build", "auctionId", offer.AuctionID)
+			continue
+		}
+		submitted, err := s.submitOfferIfLaneReady(ctx, dto)
+		if !submitted {
+			return
+		}
+		if err != nil {
+			s.observeOfferSubmission("error")
+			s.log.Error(err, "offer: submit", "auctionId", offer.AuctionID)
+			continue
+		}
+		s.observeSubmittedOffer(a.asset, offer.Principal, offer.ExpectedReturn)
 		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
-			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
+			"principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
 }
 
-// canCreateOffer fails closed when construction omitted the shared lane dependency. The registered
-// factory always wires txmanager.LaneReady; keeping the nil case closed avoids accidental commitments
+func (s *Solver) snapshotOutcome(expected, received int, complete bool) observability.ExternalOperationOutcome {
+	if expected > 0 && received == 0 {
+		return observability.ExternalOperationError
+	}
+	if !s.targetsAuthoritative || !complete {
+		return observability.ExternalOperationDegraded
+	}
+	return observability.ExternalOperationSuccess
+}
+
+// canCreateOffer fails closed when construction omitted the shared lane dependency. The application
+// constructor always wires txmanager.LaneReady; keeping the nil case closed avoids accidental commitments
 // from alternate construction paths.
 func (s *Solver) canCreateOffer() bool {
 	return s.laneReady != nil && s.laneReady()
@@ -385,31 +366,22 @@ func (s *Solver) submitOfferIfLaneReady(ctx context.Context, dto threef.CreateOf
 
 // reconcile reports each adapter's live open-position set — a stateless health/observability tick.
 func (s *Solver) reconcile(ctx context.Context) {
-	timer := observability.StartOperation(s.operations.activeRequestRefresh)
-	totalOpen := 0
-	complete := true
-	successfulReads := 0
-	for _, t := range s.targets {
-		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
+	operation := observability.StartOperation(s.operations.activeRequestRefresh)
+	open, observed := 0, 0
+	for _, target := range s.targets {
+		state, err := s.reader.liquidityAndExposure(ctx, target.Adapter)
+		log := s.log.WithValues("adapter", target.Adapter.Hex())
 		if err != nil {
-			complete = false
-			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
+			log.Error(err, "reconcile")
 			continue
 		}
-		successfulReads++
-		totalOpen += st.openCount
-		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
-			"openRequests", st.openCount, "fundable", st.fundable.String())
+		open += state.openCount
+		observed++
+		log.Info("reconcile", "openRequests", state.openCount, "fundable", state.fundable.String())
 	}
-	s.observeTargetDerivedState(threeFStateActiveRequests, totalOpen, complete)
-	outcome := observability.ExternalOperationSuccess
-	switch {
-	case len(s.targets) != 0 && successfulReads == 0:
-		outcome = observability.ExternalOperationError
-	case !s.targetsAuthoritative || !complete:
-		outcome = observability.ExternalOperationDegraded
-	}
-	timer.Finish(ctx, outcome)
+	complete := observed == len(s.targets)
+	s.observeTargetDerivedState(threeFStateActiveRequests, open, complete)
+	operation.Finish(ctx, s.snapshotOutcome(len(s.targets), observed, complete))
 }
 
 // nextNonce returns a strictly-increasing offer nonce.
@@ -430,85 +402,68 @@ func (s *Solver) refreshTargetsAndHydrate(ctx context.Context) error {
 
 func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 	timer := observability.StartOperation(s.operations.targetRefresh)
-	refreshOutcome := observability.ExternalOperationError
-	defer func() { timer.Finish(ctx, refreshOutcome) }()
-	// Until this pass proves otherwise, derived observations cannot claim complete target coverage.
-	// Whole-batch failures retain the safe runtime snapshot but must also retain metric freshness.
+	outcome := observability.ExternalOperationError
+	defer func() { timer.Finish(ctx, outcome) }()
 	s.targetsAuthoritative = false
-
-	var adapters []common.Address
-	if s.cfg.Targets != nil {
-		adapters = make([]common.Address, len(s.cfg.Targets))
-		for i := range s.cfg.Targets {
-			adapters[i] = s.cfg.Targets[i].Adapter
-		}
-	} else {
-		var err error
-		adapters, err = s.reader.factoryAdapters(ctx, s.cfg.AdapterFactory)
-		if err != nil {
-			return nil, err
-		}
+	adapters, err := s.targetAdapters(ctx)
+	if err != nil {
+		return nil, err
 	}
-	adapters = deduplicateAdapters(adapters)
-	if len(adapters) == 0 {
-		s.installTargets(nil)
-		s.targetsAuthoritative = true
-		s.observeState(threeFStateTargets, 0)
-		refreshOutcome = observability.ExternalOperationSuccess
-		return nil, nil
-	}
-
 	resolved, err := s.reader.resolveAdapters(ctx, adapters, s.probe)
 	if err != nil {
 		return nil, err
 	}
-	previous := make(map[common.Address]struct{}, len(s.targets))
+	if len(resolved) != len(adapters) {
+		return nil, errors.New("adapter resolution returned incomplete batch")
+	}
+	previous := make(map[common.Address]bool, len(s.targets))
 	for _, target := range s.targets {
-		previous[target.Adapter] = struct{}{}
+		previous[target.Adapter] = true
 	}
-
-	kept := make([]Target, 0, len(adapters))
-	added := make([]Target, 0, len(adapters))
-	resolutionComplete := true
-	for i, adapterAddr := range adapters {
-		r := resolved[i]
-		if r.err != nil {
-			resolutionComplete = false
-			if errors.Is(r.err, errAdapterUnconfigured) {
-				s.log.V(1).Info("skipping adapter: not configured on-chain",
-					"adapter", adapterAddr.Hex(), "reason", r.err.Error())
+	var kept, added []Target
+	complete := true
+	for i, result := range resolved {
+		address := adapters[i]
+		log := s.log.WithValues("adapter", address.Hex())
+		switch {
+		case result.err != nil:
+			complete = false
+			if errors.Is(result.err, errAdapterUnconfigured) {
+				log.V(1).Info("skipping adapter: not configured on-chain", "reason", result.err.Error())
 			} else {
-				s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+				log.Error(result.err, "skipping adapter: resolution failed")
 			}
-			continue
+		case !result.authorized:
+			log.Info("skipping adapter: solver is not an authorized offer signer", "signer", s.signerAddr.Hex(), "offerSigner", result.signer.Hex())
+		default:
+			target := Target{Adapter: address, Vault: result.vault, Collateral: result.collateral}
+			kept = append(kept, target)
+			if !previous[address] {
+				added = append(added, target)
+			}
+			log.Info("resolved target", "vault", result.vault.Hex(), "collateral", result.collateral.Hex())
 		}
-		if !r.authorized {
-			s.log.Info("skipping adapter: solver is not an authorized offer signer",
-				"adapter", adapterAddr.Hex(),
-				"signer", s.signerAddr.Hex(),
-				"offerSigner", r.signer.Hex())
-			continue
-		}
-		target := Target{Adapter: adapterAddr, Vault: r.vault, Collateral: r.collateral}
-		kept = append(kept, target)
-		if _, ok := previous[adapterAddr]; !ok {
-			added = append(added, target)
-		}
-		s.log.Info("resolved target",
-			"adapter", adapterAddr.Hex(), "vault", r.vault.Hex(), "collateral", r.collateral.Hex())
 	}
-
 	s.installTargets(kept)
-	s.targetsAuthoritative = resolutionComplete
-	if resolutionComplete {
-		refreshOutcome = observability.ExternalOperationSuccess
-	} else {
-		refreshOutcome = observability.ExternalOperationDegraded
-	}
-	if s.targetsAuthoritative {
+	s.targetsAuthoritative = complete
+	outcome = observability.ExternalOperationDegraded
+	if complete {
+		outcome = observability.ExternalOperationSuccess
 		s.observeState(threeFStateTargets, len(kept))
 	}
 	return added, nil
+}
+
+func (s *Solver) targetAdapters(ctx context.Context) ([]common.Address, error) {
+	if s.cfg.Targets == nil {
+		addresses, err := s.reader.factoryAdapters(ctx, s.cfg.AdapterFactory)
+		return deduplicateAdapters(addresses), err
+	}
+	addresses := make([]common.Address, 0, len(s.cfg.Targets))
+	for _, target := range s.cfg.Targets {
+		addresses = append(addresses, target.Adapter)
+	}
+	return deduplicateAdapters(addresses), nil
 }
 
 // installTargets applies the currently safe target subset to the offer tracker and runtime snapshot.
@@ -521,27 +476,4 @@ func (s *Solver) installTargets(targets []Target) {
 	}
 	s.offers.retainAdapters(active)
 	s.targets = targets
-}
-
-// validAuctions drops auctions missing a field the solver acts on. The generated client tolerates a
-// dropped field by zero-valuing it, so this is where such a schema change becomes visible.
-func (s *Solver) validAuctions(auctions []threef.AuctionDto) []threef.AuctionDto {
-	kept := make([]threef.AuctionDto, 0, len(auctions))
-	for _, a := range auctions {
-		var missing string
-		switch {
-		case a.Id <= 0:
-			missing = "id"
-		case strings.TrimSpace(a.Status) == "":
-			missing = "status"
-		case !common.IsHexAddress(a.RequestId):
-			missing = "requestId"
-		default:
-			kept = append(kept, a)
-			continue
-		}
-		s.log.Error(errRequiredFieldMissing, "discover: skipping auction",
-			"field", missing, "auctionId", a.Id, "requestId", a.RequestId, "status", a.Status)
-	}
-	return kept
 }

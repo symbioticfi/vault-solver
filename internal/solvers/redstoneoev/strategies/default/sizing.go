@@ -29,9 +29,8 @@ type sizedLeg struct {
 
 // expectedLoanOutFor estimates the loan-token output for selling `collIn` of seized collateral through
 // quote q at the adapter's discounted rate minus the extra safety haircut:
-// collIn × maxRate × 10^loanDec / (1e18 × 10^collDec), then × (1 − haircut). The RFQ solver replicates this
-// same adapter formula in rfq/strategy.go amountOutForRate — keep both in sync (not unified: a shared helper
-// would take several same-type big.Int args, a swap-footgun for fund pricing).
+// collIn × maxRate × 10^loanDec / (1e18 × 10^collDec), then × (1 − haircut).
+// These scales are precomputed from the verified adapter snapshot.
 func expectedLoanOutFor(collIn *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 	adapterOut := morpho.MulDivDown(new(big.Int).Mul(collIn, q.MaxRate), q.LoanScale, new(big.Int).Mul(morpho.Wad, q.CollScale))
 	out := morpho.MulDivDown(adapterOut, big.NewInt(int64(10_000-haircutBps)), big.NewInt(10_000))
@@ -64,70 +63,53 @@ func collForBudget(budget *big.Int, q AdapterQuote, haircutBps int) *big.Int {
 	return morpho.MulDivDown(budget, num, den)
 }
 
-// sizeLeg sizes ONE liquidation leg for candidate c, selling its WHOLE seizure through the single
-// configured adapter (quote q) in one swap. It targets either all collateral or the fixed partial seize,
-// CLAMPED by the borrower's full debt (so a small-debt / large-collateral position can't over-seize and
-// revert the Morpho borrowShares underflow) AND by the adapter's getMaxAssets redemption liquidity (so the
-// swap can't ask for more than the vault can allocate and revert InsufficientAllocate).
-//
-// Returns the callback leg, expected loan output, and gross loan profit (expectedLoanOut - repaid). ok=false
-// when the position cannot liquidate profitably here. Bundle and gas economics are applied later by bundle
-// selection and operationData.
-func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (sizedLeg, bool) {
-	m, p := c.Market.State, c.Position
-	if price == nil || price.Sign() <= 0 {
-		return sizedLeg{}, false
-	}
-	if q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
-		return sizedLeg{}, false // can't price the exit
-	}
-	if !morpho.IsLiquidatableAt(p, price, m.Lltv, accrued, m.TotalBorrowShares) {
-		return sizedLeg{}, false
-	}
-	target := targetSeize(p.Collateral, sp.AllowFullLiquidation)
-	if target.Sign() <= 0 {
-		return sizedLeg{}, false
-	}
-	// LiquidationIncentiveFactor depends only on the market's lltv, so compute it ONCE here and feed it to
-	// both the full-debt clamp and the repayment quote (each recomputed it per leg before) — provably the
-	// same value.
-	lif := morpho.LiquidationIncentiveFactor(m.Lltv)
-	// Clamp the seize so the implied repayment never exceeds the borrower's debt. The leg sets MaxSeizeAssets
-	// with RepaidShares=0, so Morpho derives repaidShares from the seize and reverts (borrowShares underflow)
-	// once the implied repayment would exceed the outstanding debt — which happens whenever the target
-	// collateral is worth more debt than the borrower carries (small debt vs large collateral). maxSeize is
-	// the inverse forward-map at the full-debt point (rounded down), so a full liquidation clamps here and
-	// can't round up past the debt. maxSeize can floor to 0 for a dust position (debt worth < ~1 collateral
-	// unit); clamping target to 0 then returns ok=false below, so we skip it rather than submit a
-	// guaranteed-revert over-seize (do NOT guard on maxSeize > 0).
-	if maxSeize := morpho.MaxSeizeForFullDebt(p.BorrowShares, price, lif, accrued, m.TotalBorrowShares); target.Cmp(maxSeize) > 0 {
-		target = maxSeize
-	}
-	// Clamp the seize by cached adapter redemption liquidity. This is a bidding-time safety check; the
-	// callback reads the current getMaxAssets again before swapping. nil/0 ⇒ uncapped (unknown liquidity).
-	if q.MaxAssets != nil && q.MaxAssets.Sign() > 0 {
-		if fit := collForBudget(q.MaxAssets, q, sp.SwapHaircutBps); fit.Cmp(target) < 0 {
-			target = fit
+// sizeLeg caps a liquidation by collateral, full debt and known adapter capacity.
+// Candidate.Market.State is already accrued or replayed to the decision point.
+// The repayment and exit are then priced at that exact seizure; gas belongs to the bundle.
+func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, sp SizingParams) (sizedLeg, bool) {
+	market, position := c.Market.State, c.Position
+	accrued := market.TotalBorrowAssets
+	for _, amount := range []*big.Int{price, q.MaxRate, q.LoanScale, q.CollScale, position.Collateral, position.BorrowShares} {
+		if amount == nil || amount.Sign() <= 0 {
+			return sizedLeg{}, false
 		}
 	}
-	if target.Sign() <= 0 {
+	if accrued == nil || accrued.Sign() < 0 || market.TotalBorrowShares == nil || market.TotalBorrowShares.Sign() < 0 ||
+		market.Lltv == nil || market.Lltv.Sign() < 0 || market.Lltv.Cmp(morpho.Wad) > 0 ||
+		sp.SwapHaircutBps < 0 || sp.SwapHaircutBps >= 10_000 {
 		return sizedLeg{}, false
 	}
-	expectedLoanOut := expectedLoanOutFor(target, q, sp.SwapHaircutBps)
-	if expectedLoanOut.Sign() <= 0 {
+	if !morpho.IsLiquidatableAt(position, price, market.Lltv, accrued, market.TotalBorrowShares) {
 		return sizedLeg{}, false
 	}
-	repaid := morpho.RepaidAssetsForSeizeAt(target, price, lif, accrued, m.TotalBorrowShares)
-	if expectedLoanOut.Cmp(repaid) <= 0 {
-		return sizedLeg{}, false // proceeds can't cover repayment after discount + haircut
+	incentive := morpho.LiquidationIncentiveFactor(market.Lltv)
+	seize := targetSeize(position.Collateral, sp.AllowFullLiquidation)
+	debtCap := morpho.MaxSeizeForFullDebt(position.BorrowShares, price, incentive, accrued, market.TotalBorrowShares)
+	// The full-debt inverse rounds down. A zero dust cap is a rejection, never an absent limit.
+	if debtCap.Cmp(seize) < 0 {
+		seize = debtCap
 	}
-	profit := new(big.Int).Sub(expectedLoanOut, repaid) // > 0 here
-	leg := selectedLeg{
-		MarketId:       c.MarketID,
-		Borrower:       c.Borrower,
-		MaxSeizeAssets: target,
+	// nil/zero remains the explicitly unbounded quote form used by local sizing.
+	// The production candidate join admits only positive physical capacity.
+	if q.MaxAssets != nil && q.MaxAssets.Sign() > 0 {
+		capacityCap := collForBudget(q.MaxAssets, q, sp.SwapHaircutBps)
+		if capacityCap.Cmp(seize) < 0 {
+			seize = capacityCap
+		}
 	}
-	return sizedLeg{leg: leg, expectedLoanOut: expectedLoanOut, profit: profit}, true
+	if seize.Sign() <= 0 {
+		return sizedLeg{}, false
+	}
+	proceeds := expectedLoanOutFor(seize, q, sp.SwapHaircutBps)
+	repayment := morpho.RepaidAssetsForSeizeAt(seize, price, incentive, accrued, market.TotalBorrowShares)
+	profit := new(big.Int).Sub(proceeds, repayment)
+	if profit.Sign() <= 0 {
+		return sizedLeg{}, false
+	}
+	return sizedLeg{
+		leg:             selectedLeg{MarketId: c.MarketID, Borrower: c.Borrower, MaxSeizeAssets: seize},
+		expectedLoanOut: proceeds, profit: profit,
+	}, true
 }
 
 func targetSeize(collateral *big.Int, allowFull bool) *big.Int {

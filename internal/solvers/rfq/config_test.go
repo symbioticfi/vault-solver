@@ -5,15 +5,14 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
 func parseCfg(t *testing.T, body string) (*Config, error) {
 	t.Helper()
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(body), &doc), "unmarshal: %v")
 	return parseConfig(*doc.Content[0])
 }
 
@@ -28,9 +27,7 @@ const oneAdapter = "adapters:\n  - \"0x0000000000000000000000000000000000000042\
 
 func TestParseConfig_Defaults(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+oneAdapter)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if cfg.ListenAddr != defaultListenAddr {
 		t.Fatalf("listenAddr = %q, want %q", cfg.ListenAddr, defaultListenAddr)
 	}
@@ -61,18 +58,14 @@ strategy:
   config:
     url: https://strategy.example
 `+oneAdapter)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if cfg.Strategy.Name != "webhook" {
 		t.Fatalf("strategy.name = %q, want webhook", cfg.Strategy.Name)
 	}
 	var raw struct {
 		URL string `yaml:"url"`
 	}
-	if err := cfg.Strategy.Config.Decode(&raw); err != nil {
-		t.Fatalf("decode strategy config: %v", err)
-	}
+	testcheck.NoError(t, cfg.Strategy.Config.Decode(&raw), "decode strategy config: %v")
 	if raw.URL != "https://strategy.example" {
 		t.Fatalf("strategy url = %q", raw.URL)
 	}
@@ -85,13 +78,14 @@ func TestParseConfig_SolverMode(t *testing.T) {
 		wantMode      string
 		wantRestrict  bool
 		wantDiscounts bool
+		wantQuote     bool
 		wantErr       bool
 	}{
-		"external + adapters":         {yaml: "solverMode: external" + a, wantMode: solverModeExternal, wantRestrict: true},
+		"external + adapters":         {yaml: "solverMode: external" + a, wantMode: solverModeExternal, wantRestrict: true, wantQuote: true},
 		"external, no adapters":       {yaml: "solverMode: external", wantErr: true},
-		"internal + adapters":         {yaml: "solverMode: internal" + a, wantMode: solverModeInternal, wantDiscounts: true},
+		"internal + adapters":         {yaml: "solverMode: internal" + a, wantMode: solverModeInternal, wantDiscounts: true, wantQuote: true},
 		"internal, no adapters":       {yaml: "solverMode: internal", wantMode: solverModeInternal, wantDiscounts: true},
-		"default + adapters":          {yaml: a, wantMode: solverModeExternal, wantRestrict: true},
+		"default + adapters":          {yaml: a, wantMode: solverModeExternal, wantRestrict: true, wantQuote: true},
 		"default, no adapters":        {wantErr: true},
 		"invalid mode":                {yaml: "solverMode: hybrid", wantErr: true},
 		"old whitelist flag rejected": {yaml: "adapterWhitelistEnabled: true" + a, wantErr: true},
@@ -105,45 +99,18 @@ func TestParseConfig_SolverMode(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("parseConfig: %v", err)
-			}
+			testcheck.NoError(t, err, "parseConfig: %v")
 			if cfg.SolverMode != tc.wantMode {
 				t.Fatalf("solverMode = %q, want %q", cfg.SolverMode, tc.wantMode)
 			}
 			if cfg.restrictsToAdapters() != tc.wantRestrict {
 				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantRestrict)
 			}
-			if cfg.usesDiscounts() != tc.wantDiscounts {
-				t.Fatalf("usesDiscounts() = %v, want %v", cfg.usesDiscounts(), tc.wantDiscounts)
-			}
-		})
-	}
-}
-
-func TestParseConfig_QuoteScopesToAdapters(t *testing.T) {
-	a := "\n" + oneAdapter
-	cases := map[string]struct {
-		yaml         string
-		wantQuote    bool
-		wantRestrict bool
-	}{
-		"external + adapters":   {yaml: "solverMode: external" + a, wantQuote: true, wantRestrict: true},
-		"internal + adapters":   {yaml: "solverMode: internal" + a, wantQuote: true},
-		"internal, no adapters": {yaml: "solverMode: internal"},
-		"default + adapters":    {yaml: a, wantQuote: true, wantRestrict: true},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			cfg, err := parseCfg(t, minimalConfig+tc.yaml+"\n")
-			if err != nil {
-				t.Fatalf("parseConfig: %v", err)
-			}
 			if cfg.quoteScopesToAdapters() != tc.wantQuote {
 				t.Fatalf("quoteScopesToAdapters() = %v, want %v", cfg.quoteScopesToAdapters(), tc.wantQuote)
 			}
-			if cfg.restrictsToAdapters() != tc.wantRestrict {
-				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantRestrict)
+			if cfg.usesDiscounts() != tc.wantDiscounts {
+				t.Fatalf("usesDiscounts() = %v, want %v", cfg.usesDiscounts(), tc.wantDiscounts)
 			}
 		})
 	}
@@ -162,9 +129,7 @@ pollIntervalMs: 1500
 orderLimit: 5
 reactor: "0x0000000000000000000000000000000000000030"
 `+oneAdapter)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if cfg.ListenAddr != ":9000" ||
 		cfg.PollInterval != 1500*time.Millisecond || cfg.OrderLimit != 5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
@@ -176,9 +141,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 
 func TestParseConfig_Adapters(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+oneAdapter)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if len(cfg.Adapters) != 1 {
 		t.Fatalf("adapters = %d, want 1", len(cfg.Adapters))
 	}
@@ -233,6 +196,16 @@ executor: "not-an-address"
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseCfg(t, body); err == nil {
 				t.Fatalf("expected an error for %q", name)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsUnsafeBounds(t *testing.T) {
+	for _, field := range []string{"pollIntervalMs: -1", "pollIntervalMs: 9223372036854775807", "orderLimit: -1"} {
+		t.Run(field, func(t *testing.T) {
+			if _, err := parseCfg(t, minimalConfig+field+"\n"); err == nil {
+				t.Fatal("expected invalid bound rejection")
 			}
 		})
 	}

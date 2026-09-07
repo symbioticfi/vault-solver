@@ -3,11 +3,11 @@ package types
 import (
 	"bytes"
 	"encoding/json"
-	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 // RFQ webhook JSON wire contract: big integers are decimal strings, and strategy responses reject
@@ -55,63 +55,36 @@ func (in QuoteInput) MarshalJSON() ([]byte, error) {
 		candidates = append(candidates, quoteCandidateJSON{
 			ID: string(c.ID), Adapter: c.Route.Adapter, Asset: c.Route.TokenOut,
 			AssetDecimals: c.Route.TokenOutDecimals,
-			MaxAssets:     bigString(c.MaxAmountOut), MaxRate: bigString(c.Rate), DiscountID: c.DiscountID,
+			MaxAssets:     parse.DecimalText(c.MaxAmountOut, ""), MaxRate: parse.DecimalText(c.Rate, ""), DiscountID: c.DiscountID,
 		})
 	}
 	return json.Marshal(quoteInputJSON{
 		RequestID: in.RequestID, QuoteID: in.QuoteID, ChainID: in.ChainID,
-		Executor: in.Executor, TokenIn: in.TokenIn, TokenOut: in.TokenOut, AmountIn: bigString(in.AmountIn),
-		RequiredAmountOut: bigString(in.RequiredAmountOut), RequireSingleRoute: in.RequireSingleRoute,
+		Executor: in.Executor, TokenIn: in.TokenIn, TokenOut: in.TokenOut, AmountIn: parse.DecimalText(in.AmountIn, ""),
+		RequiredAmountOut: parse.DecimalText(in.RequiredAmountOut, ""), RequireSingleRoute: in.RequireSingleRoute,
 		Candidates: candidates, Now: in.Now,
 	})
 }
 
-func (out *QuoteOutput) UnmarshalJSON(b []byte) error {
-	var raw quoteOutputJSON
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&raw); err != nil {
+func (out *QuoteOutput) UnmarshalJSON(data []byte) error {
+	var wire quoteOutputJSON
+	if err := parse.JSON(bytes.NewReader(data), &wire); err != nil {
 		return err
 	}
-	quoted, err := parseBigString(raw.QuotedAmountOut, "quotedAmountOut")
+	next := QuoteOutput{Decision: wire.Decision, Reason: wire.Reason, Legs: make([]QuoteLeg, len(wire.Legs))}
+	var err error
+	next.QuotedAmountOut, err = parse.NonnegativeDecimal(wire.QuotedAmountOut, "quotedAmountOut", true)
 	if err != nil {
 		return err
 	}
-	legs := make([]QuoteLeg, 0, len(raw.Legs))
-	for i, l := range raw.Legs {
-		amountIn, err := parseBigString(l.AmountIn, "legs.amountIn")
-		if err != nil {
-			return errors.Errorf("leg %d: %w", i, err)
+	for index, leg := range wire.Legs {
+		input, inputErr := parse.NonnegativeDecimal(leg.AmountIn, "amountIn", true)
+		output, outputErr := parse.NonnegativeDecimal(leg.AmountOut, "amountOut", true)
+		if err := errors.Join(inputErr, outputErr); err != nil {
+			return errors.Errorf("legs[%d]: %w", index, err)
 		}
-		amountOut, err := parseBigString(l.AmountOut, "legs.amountOut")
-		if err != nil {
-			return errors.Errorf("leg %d: %w", i, err)
-		}
-		legs = append(legs, QuoteLeg{CandidateID: l.CandidateID, AmountIn: amountIn, AmountOut: amountOut})
+		next.Legs[index] = QuoteLeg{CandidateID: leg.CandidateID, AmountIn: input, AmountOut: output}
 	}
-	*out = QuoteOutput{
-		Decision:        raw.Decision,
-		Reason:          raw.Reason,
-		QuotedAmountOut: quoted,
-		Legs:            legs,
-	}
+	*out = next
 	return nil
-}
-
-func bigString(n *big.Int) string {
-	if n == nil {
-		return ""
-	}
-	return n.String()
-}
-
-func parseBigString(s, field string) (*big.Int, error) {
-	if s == "" {
-		return nil, nil
-	}
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid decimal string %q", field, s)
-	}
-	return n, nil
 }

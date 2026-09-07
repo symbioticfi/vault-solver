@@ -13,6 +13,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 const testSecret = "s3cr3t"
@@ -25,7 +28,7 @@ func testServer() *server {
 		executor:  execAddr,
 		laneReady: func() bool { return true },
 		reader:    &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
-		strategy:  newDefaultTestStrategy(),
+		strategy:  defaultstrategy.New(),
 		log:       logr.Discard(),
 		now:       clk,
 	}
@@ -51,9 +54,7 @@ func do(t *testing.T, h http.Handler, method, path, secret string, body any) *ht
 	var r io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
+		testcheck.NoError(t, err, "marshal: %v")
 		r = bytes.NewReader(b)
 	}
 	req := httptest.NewRequestWithContext(t.Context(), method, path, r)
@@ -88,9 +89,7 @@ func TestServer_QuoteOK(t *testing.T) {
 		t.Fatalf("quote = %d, want 200 (body %s)", rr.Code, rr.Body.String())
 	}
 	var resp quoteResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp), "decode: %v")
 	if resp.AmountOut != "1000000" { // 1.0 USDC oracle, no quote discount
 		t.Fatalf("amountOut = %s, want 1000000", resp.AmountOut)
 	}
@@ -205,9 +204,7 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 				return
 			}
 			var resp quoteResponse
-			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode quote response: %v", err)
-			}
+			testcheck.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp), "decode quote response: %v")
 			if resp.AmountOut == "" {
 				t.Fatalf("quote response missing amountOut: %+v", resp)
 			}

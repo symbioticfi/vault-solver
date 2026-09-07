@@ -3,7 +3,6 @@ package rfq
 import (
 	"context"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,6 +12,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
@@ -30,8 +30,7 @@ type orderBackend interface {
 	listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error)
 	getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error)
 	getOrder(ctx context.Context, orderID string) (*backendOrder, error)
-	resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error)
-	listDiscounts(ctx context.Context) (*discountsResponse, error)
+	discounts.Provider
 }
 
 // executable is the resolved, typed payload needed to build a fill (from the backend executable view).
@@ -44,9 +43,8 @@ type executable struct {
 	outputs      []backendOut
 }
 
-// executionService polls the backend for open orders and fills them via the Executor. It runs in its
-// own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
-// double-submit the same order.
+// executionService has one owner: the poll goroutine. It resolves, plans and waits for
+// each fill before advancing another order; HTTP quoting never mutates execution state.
 type executionService struct {
 	chainID           int64
 	executor          common.Address
@@ -64,9 +62,6 @@ type executionService struct {
 	orderPollObserver *observability.OperationObserver
 	log               logr.Logger
 	now               func() time.Time
-
-	inflightMu sync.Mutex
-	inflight   map[string]bool
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -103,45 +98,37 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		e.log.Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
+		if ctx.Err() != nil {
+			break
+		}
 		e.handleOrder(ctx, o)
 	}
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
 }
 
-func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
-	timer := observability.StartOperation(e.orderPollObserver)
-	defer func() {
-		outcome := observability.ExternalOperationSuccess
-		if err != nil {
-			outcome = observability.ExternalOperationError
-		}
-		timer.Finish(ctx, outcome)
-	}()
-	orders, err := e.backend.listOpenOrders(ctx, lowerAddr(e.executor), e.orderLimit)
+func (e *executionService) pollOpenOrders(ctx context.Context) error {
+	observation := observability.StartOperation(e.orderPollObserver)
+	outcome := observability.ExternalOperationError
+	defer func() { observation.Finish(ctx, outcome) }()
+	listing, err := e.backend.listOpenOrders(ctx, lowerAddr(e.executor), e.orderLimit)
 	if err != nil {
 		return err
 	}
-	for i := range orders {
-		o := &orders[i]
-		if e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID}) {
+	for _, order := range listing {
+		fresh := e.store.upsertQueued(order.OrderID)
+		if fresh {
 			e.metrics.observeWin()
 		}
 	}
-	if len(orders) > 0 {
-		e.log.V(1).Info("polled open orders", "count", len(orders))
-	}
-	if e.metrics != nil {
-		e.metrics.observeOrderPoll(e.now())
+	e.metrics.observeOrderPoll(e.now())
+	outcome = observability.ExternalOperationSuccess
+	if len(listing) != 0 {
+		e.log.V(1).Info("polled open orders", "count", len(listing))
 	}
 	return nil
 }
 
-func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
-	if !e.acquire(o.OrderID) {
-		return
-	}
-	defer e.release(o.OrderID)
-
+func (e *executionService) handleOrder(ctx context.Context, o orderRecord) {
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
@@ -152,125 +139,125 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	}
 }
 
+// preparedFill carries the exact signed terms used for both execution and metrics.
+// It is local to one attempt and is never reused after a backend refresh.
+type preparedFill struct {
+	request                     txmanager.Request
+	quoteID                     string
+	tokenIn, tokenOut           common.Address
+	amountIn, required, surplus *big.Int
+}
+
+type rejectedFillError struct{ error }
+
+func rejectFill(message string, err error) error {
+	if err == nil {
+		return &rejectedFillError{errors.New(message)}
+	}
+	return &rejectedFillError{errors.Errorf("%s: %w", message, err)}
+}
+
 func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	e.store.markStatus(orderID, statusSubmitting, common.Hash{}, "")
-	local := e.store.order(orderID)
-	if local == nil {
-		return
-	}
-
-	exec, err := e.resolveExecutable(ctx, local)
+	payload, err := e.resolveExecutable(ctx, orderID)
 	if err != nil {
 		e.log.Error(err, "resolve executable order", "orderId", orderID)
-		return // transient; retried next cycle
+		return
 	}
-	if exec == nil {
+	if payload == nil {
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
-	order, err := decodeOrder(exec.encodedOrder)
+	fill, err := e.prepareFill(ctx, payload)
 	if err != nil {
-		e.fail(orderID, "decode order: "+err.Error())
-		return
-	}
-	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
-	if err != nil {
-		e.fail(orderID, "validate order: "+err.Error())
-		return
-	}
-	chainObservedAt := e.now()
-	chainTime, err := e.reader.latestBlockTime(ctx)
-	if err != nil {
-		e.log.Error(err, "read chain time", "orderId", orderID)
-		return
-	}
-	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
-	if !orderDeadline.After(chainTime) {
-		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
-		e.fail(orderID, "order deadline has passed")
-		return
-	}
-
-	selected, err := e.buildFillPlan(ctx, exec, order, outputToken, required)
-	if err != nil || selected == nil {
-		e.fail(orderID, "strategy fill plan: "+errString(err))
-		return
-	}
-
-	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
-	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(ctx, selected, chainTime)
-	if err != nil {
-		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
-		// order instead of submitting. While the backend still lists the order open, the next poll
-		// re-arms it and re-resolves the discount, so a transient mis-resolution self-heals without
-		// ever sending a tx through the wrong adapter (mirrors the TS filler's lifecycle).
-		if errors.Is(err, errDiscountAdapterMismatch) || errors.Is(err, errDiscountsDisabled) {
+		var rejected *rejectedFillError
+		if errors.As(err, &rejected) {
 			e.fail(orderID, err.Error())
-			return
+		} else if ctx.Err() == nil {
+			e.log.Error(err, "prepare fill (will retry)", "orderId", orderID)
 		}
-		// A discount resolve is a live backend call; treat its failure as transient (leave the order
-		// in submitting and retry next cycle) rather than terminal. Once the order is no longer open
-		// the executable lookup returns nil and reconciliation marks it expired/filled.
-		e.log.Error(err, "resolve discounts (will retry)", "orderId", orderID)
 		return
 	}
-	calldata, err := encodeFill(order, exec.signature, swaps, discountSwaps, emptyExecutorData)
-	if err != nil {
-		e.fail(orderID, "encode fill: "+err.Error())
-		return
-	}
-	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
-	cancelAt, ok := liquidlane.CancellationDeadline(deadline, chainTime, chainObservedAt, e.now())
-	if !ok {
-		e.fail(orderID, "fill execution deadline elapsed before submission")
-		return
-	}
-
-	res := e.txm.Send(ctx, txmanager.Request{
-		Solver: Name,
-		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
-	})
+	// Send owns admitted work even after ctx cancellation. Bookkeeping below must
+	// always run; only subsequent reconciliation depends on the caller context.
+	result := e.txm.Send(ctx, fill.request)
 	attempt := e.store.recordAttempt(orderID)
-	outcome := res.Outcome
-	if !outcome.Included() {
+	if !result.Outcome.Included() {
+		outcome := liquidlane.FillOutcomeFailure
+		if result.NotAdmitted {
+			outcome = liquidlane.FillOutcomeNotAdmitted
+		}
 		if e.metrics != nil {
-			fillOutcome := liquidlane.FillOutcomeFailure
-			if res.NotAdmitted {
-				fillOutcome = liquidlane.FillOutcomeNotAdmitted
-			}
-			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
+			e.metrics.fillAmounts.ObserveOutcome(outcome)
 		}
-		err := res.Err
+		err := result.Err
 		if err == nil {
-			err = errors.Errorf("unknown transaction outcome %q", outcome)
+			err = errors.Errorf("unknown transaction outcome %q", result.Outcome)
 		}
-		e.log.Error(err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+		e.log.Error(err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", result.Hash.Hex())
 		e.fail(orderID, err.Error())
 		return
 	}
-	if outcome == txmanager.OutcomeConfirmed {
-		e.log.Info("filled order", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
-	} else {
-		e.log.Error(res.Err, "fill included but confirmation wait failed",
-			"orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
-	}
+	e.store.markStatus(orderID, statusSubmitted, result.Hash, "")
 	if e.metrics != nil {
-		e.metrics.fillAmounts.Observe(
-			res.Receipt,
-			order.Request.TokenIn,
-			order.Request.AmountIn,
-			outputToken,
-			required,
-			liquidlane.PlannedSurplus(selected.QuotedAmountOut, required),
-		)
+		e.metrics.fillAmounts.Observe(result.Receipt, fill.tokenIn, fill.amountIn, fill.tokenOut, fill.required, fill.surplus)
 	}
-	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
+	if result.Outcome == txmanager.OutcomeConfirmed {
+		e.log.Info("filled order", "orderId", orderID, "quoteId", fill.quoteID, "tx", result.Hash.Hex())
+	} else {
+		e.log.Error(result.Err, "fill included but confirmation wait failed", "orderId", orderID, "tx", result.Hash.Hex())
+	}
 	e.reconcileTerminalStatus(ctx, orderID)
 }
 
+func (e *executionService) prepareFill(ctx context.Context, payload *executable) (*preparedFill, error) {
+	order, err := decodeOrder(payload.encodedOrder)
+	if err != nil {
+		return nil, rejectFill("decode order", err)
+	}
+	output, required, err := executableOrderTerms(payload, order, e.executor)
+	if err != nil {
+		return nil, rejectFill("validate order", err)
+	}
+	// Anchor before the RPC, so transport latency consumes executable lifetime.
+	observedAt := e.now()
+	chainTime, err := e.reader.latestBlockTime(ctx)
+	if err != nil {
+		return nil, errors.Errorf("read chain time: %w", err)
+	}
+	deadline := time.Unix(order.Request.Deadline.Int64(), 0)
+	if !deadline.After(chainTime) {
+		return nil, rejectFill("order deadline has passed", nil)
+	}
+	plan, err := e.buildFillPlan(ctx, payload, order, output, required)
+	if err != nil || plan == nil {
+		return nil, rejectFill("strategy fill plan: "+errString(err), nil)
+	}
+	discountSwaps, discountDeadline, err := e.buildDiscountSwapInputs(ctx, plan, chainTime)
+	if err != nil {
+		if errors.Is(err, errDiscountAdapterMismatch) || errors.Is(err, errDiscountsDisabled) {
+			return nil, rejectFill("resolve discounts", err)
+		}
+		return nil, errors.Errorf("resolve discounts: %w", err)
+	}
+	data, err := encodeFill(order, payload.signature, directSwaps(plan, order.Request.TokenIn, e.executor), discountSwaps, emptyExecutorData)
+	if err != nil {
+		return nil, rejectFill("encode fill", err)
+	}
+	cancelAt, ok := liquidlane.CancellationDeadline(rfqFillDeadline(deadline, discountDeadline), chainTime, observedAt, e.now())
+	if !ok {
+		return nil, rejectFill("fill execution deadline elapsed before submission", nil)
+	}
+	return &preparedFill{
+		request: txmanager.Request{Solver: Name, To: e.executor, Data: data, CancelAt: cancelAt, Label: "rfq-fill"},
+		quoteID: payload.quoteID, tokenIn: order.Request.TokenIn, tokenOut: output,
+		amountIn: order.Request.AmountIn, required: required, surplus: liquidlane.PlannedSurplus(plan.QuotedAmountOut, required),
+	}, nil
+}
+
 // resolveExecutable returns the executable payload for a polled order from the backend.
-func (e *executionService) resolveExecutable(ctx context.Context, local *orderRecord) (*executable, error) {
-	bo, err := e.backend.getExecutableOrder(ctx, local.OrderID, lowerAddr(e.executor))
+func (e *executionService) resolveExecutable(ctx context.Context, orderID string) (*executable, error) {
+	bo, err := e.backend.getExecutableOrder(ctx, orderID, lowerAddr(e.executor))
 	if err != nil {
 		return nil, err
 	}
@@ -281,34 +268,36 @@ func (e *executionService) resolveExecutable(ctx context.Context, local *orderRe
 }
 
 func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID string) {
-	bo, err := e.backend.getOrder(ctx, orderID)
+	order, err := e.backend.getOrder(ctx, orderID)
 	if err != nil {
 		e.log.Error(err, "reconcile: get order", "orderId", orderID)
 		return
 	}
-	if bo == nil {
+	if order == nil || order.OrderStatus == backendOrderStatusOpen {
 		return
 	}
-	txHash := common.Hash{}
-	// HexToHash silently zero-pads/truncates malformed input, so only accept a well-formed 32-byte
-	// hash from the backend; otherwise leave it zero rather than record a garbage reference.
-	if bo.TxHash != nil && isHash32(*bo.TxHash) {
-		txHash = common.HexToHash(*bo.TxHash)
-	}
-	switch bo.OrderStatus {
+	var status orderStatus
+	reason := ""
+	switch order.OrderStatus {
 	case "filled":
-		e.store.markStatus(orderID, statusFilled, txHash, "")
+		status = statusFilled
 	case "expired":
-		e.store.markStatus(orderID, statusExpired, txHash, "")
-	case backendOrderStatusOpen:
-		// still open; leave as-is for the next cycle
+		status = statusExpired
 	case "error", "cancelled", "unverified", "insufficient-funds":
-		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
+		status, reason = statusFailed, "backend terminal status "+order.OrderStatus
 	default:
-		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
-		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
-		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, "status", bo.OrderStatus)
+		// Unknown or dropped status must retain the local admission: otherwise it could submit twice.
+		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, "status", order.OrderStatus)
+		return
 	}
+	hash := common.Hash{}
+	if order.TxHash != nil {
+		// Malformed backend hashes never become padded or truncated transaction references.
+		if parsed, parseErr := parse.Hash(*order.TxHash, "txHash"); parseErr == nil {
+			hash = parsed
+		}
+	}
+	e.store.markStatus(orderID, status, hash, reason)
 }
 
 var errUnknownOrderStatus = errors.New("unrecognized backend order status")
@@ -316,41 +305,23 @@ var errUnknownOrderStatus = errors.New("unrecognized backend order status")
 // buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
 // strategy owns route economics; the solver assembles the fresh snapshot and enforces solver-owned
 // structural constraints on the returned plan.
-func (e *executionService) buildFillPlan(
-	ctx context.Context,
-	exec *executable,
-	order executor.IReactorOrder,
-	outputToken common.Address,
-	required *big.Int,
-) (*fillPlan, error) {
-	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
-	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
-	inv := make([]solverInventory, 0, len(e.vaults)+1)
-	if len(e.vaults) > 0 {
-		direct, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
-		if derr != nil {
-			return nil, derr
-		}
-		inv = append(inv, direct...)
+func (e *executionService) buildFillPlan(ctx context.Context, payload *executable, order executor.IReactorOrder,
+	output common.Address, required *big.Int) (*fillPlan, error) {
+	inventories, err := e.fillInventories(ctx, order.Request.TokenIn)
+	if err != nil {
+		return nil, err
 	}
-	// Discount inventories use the internal-only discounts API; external solvers skip it (adapters alone).
-	if e.discountsEnabled {
-		inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
-	}
-	req := strategyRequest{
-		RequestID: exec.quoteID, QuoteID: exec.quoteID,
-		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
-	}
-	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	var candidates []liquidlane.QuoteCandidate
-	if len(inv) > 0 {
-		var err error
-		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	request := strategyRequest{RequestID: payload.quoteID, QuoteID: payload.quoteID,
+		TokenIn: order.Request.TokenIn, TokenOut: output, Amount: order.Request.AmountIn}
+	input := newQuoteInput(e.chainID, e.executor, request, nil, required,
+		e.tokenPolicy.RequiresSingleRoute(request.TokenIn), e.now())
+	if len(inventories) != 0 {
+		input.Candidates, err = e.reader.readQuoteCandidates(ctx, inventories, request.TokenIn, request.TokenOut, request.Amount)
 		if err != nil {
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
-	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
+	input.Now = e.now()
 	plan, err := e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
 		return plan, err
@@ -359,6 +330,22 @@ func (e *executionService) buildFillPlan(
 		return nil, errors.Errorf("fill: strategy: %w", err)
 	}
 	return plan, nil
+}
+
+func (e *executionService) fillInventories(ctx context.Context, token common.Address) ([]solverInventory, error) {
+	var inventories []solverInventory
+	if len(e.vaults) != 0 {
+		direct, err := e.reader.readPermissionedVaultInventories(ctx, e.executor, token, e.vaults)
+		if err != nil {
+			return nil, errors.Errorf("fill: permissioned inventories: %w", err)
+		}
+		inventories = direct
+	}
+	// External mode has no access to the internal discounts surface. Direct inventories take precedence.
+	if e.discountsEnabled {
+		inventories = append(inventories, e.discountInventories(ctx, token, inventories)...)
+	}
+	return inventories, nil
 }
 
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and
@@ -378,7 +365,7 @@ func (e *executionService) buildDiscountSwapInputs(
 		if !e.discountsEnabled {
 			return nil, time.Time{}, errors.Errorf("%w: leg %s", errDiscountsDisabled, leg.DiscountID.Hex())
 		}
-		resolved, err := e.backend.resolveDiscount(ctx, leg.DiscountID.Hex())
+		resolved, err := e.backend.Resolve(ctx, leg.DiscountID.Hex())
 		if err != nil {
 			return nil, time.Time{}, errors.Errorf("resolve discount %s: %w", leg.DiscountID.Hex(), err)
 		}
@@ -424,7 +411,7 @@ func rfqFillDeadline(orderDeadline, discountValidUntil time.Time) time.Time {
 func (e *executionService) discountInventories(
 	ctx context.Context, tokenIn common.Address, direct []solverInventory,
 ) []solverInventory {
-	resp, err := e.backend.listDiscounts(ctx)
+	resp, err := e.backend.ListDiscounts(ctx)
 	if err != nil {
 		e.log.Error(err, "fill: list discounts")
 		return nil
@@ -487,11 +474,7 @@ func toDiscountSwapInput(
 	return executor.IReactorDiscountSwapInput{
 		Adapter: parsed.Adapter,
 		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
-			Discount: executor.ILiquidLaneAdapterDiscount{
-				TokenToRedeem: parsed.Terms.TokenToRedeem,
-				Discount:      parsed.Terms.Discount, Signer: parsed.Terms.Signer, Protocol: parsed.Terms.Protocol,
-				Nonce: parsed.Terms.Nonce, Deadline: parsed.Terms.Deadline,
-			},
+			Discount:         executor.ILiquidLaneAdapterDiscount(parsed.Terms.Clone()),
 			SignerSignature:  parsed.SignerSignature,
 			ProtocolDeadline: parsed.ProtocolDeadline,
 		},
@@ -513,137 +496,79 @@ func errString(err error) string {
 	return err.Error()
 }
 
-func (e *executionService) acquire(orderID string) bool {
-	e.inflightMu.Lock()
-	defer e.inflightMu.Unlock()
-	if e.inflight[orderID] {
-		return false
-	}
-	e.inflight[orderID] = true
-	return true
-}
-
-func (e *executionService) release(orderID string) {
-	e.inflightMu.Lock()
-	defer e.inflightMu.Unlock()
-	delete(e.inflight, orderID)
-}
-
 /* ───────── executable helpers ───────── */
 
-func executableFromBackend(bo *backendOrder) (*executable, error) {
-	if bo.EncodedOrder == nil || bo.ProtocolSignature == nil || bo.Deadline == nil || bo.Filler == nil {
+func executableFromBackend(order *backendOrder) (*executable, error) {
+	if order == nil || order.EncodedOrder == nil || order.ProtocolSignature == nil || order.Deadline == nil || order.Filler == nil {
 		return nil, errors.New("executable order payload incomplete")
 	}
-	if !common.IsHexAddress(*bo.Filler) {
-		return nil, errors.Errorf("invalid filler %q", *bo.Filler)
-	}
-	encoded, err := hexutil.Decode(*bo.EncodedOrder)
+	filler, err := parse.Address(*order.Filler, "filler")
 	if err != nil {
-		return nil, errors.Errorf("decode encodedOrder: %w", err)
+		return nil, err
 	}
-	sig, err := hexutil.Decode(*bo.ProtocolSignature)
-	if err != nil {
-		return nil, errors.Errorf("decode protocolSignature: %w", err)
+	payload := &executable{quoteID: order.QuoteID, filler: filler, deadline: *order.Deadline,
+		outputs: append([]backendOut(nil), order.Outputs...)}
+	for _, field := range []struct {
+		name, encoded string
+		target        *[]byte
+	}{
+		{"encodedOrder", *order.EncodedOrder, &payload.encodedOrder},
+		{"protocolSignature", *order.ProtocolSignature, &payload.signature},
+	} {
+		decoded, err := hexutil.Decode(field.encoded)
+		if err != nil {
+			return nil, errors.Errorf("decode %s: %w", field.name, err)
+		}
+		*field.target = decoded
 	}
-	return &executable{
-		quoteID:      bo.QuoteID,
-		encodedOrder: encoded,
-		signature:    sig,
-		deadline:     *bo.Deadline,
-		filler:       common.HexToAddress(*bo.Filler),
-		outputs:      bo.Outputs,
-	}, nil
+	return payload, nil
 }
 
-// isHash32 reports whether s is a 0x-prefixed, well-formed 32-byte hash.
-func isHash32(s string) bool {
-	b, err := hexutil.Decode(s)
-	return err == nil && len(b) == 32
-}
-
-func executableOrderTerms(
-	exec *executable,
-	order executor.IReactorOrder,
-	expectedFiller common.Address,
-) (common.Address, *big.Int, error) {
-	if order.Filler != expectedFiller {
+func executableOrderTerms(payload *executable, order executor.IReactorOrder, filler common.Address) (common.Address, *big.Int, error) {
+	request := order.Request
+	switch {
+	case order.Filler != filler:
 		return common.Address{}, nil, errors.New("signed order assigns a different filler")
-	}
-	if exec.filler != order.Filler {
+	case payload.filler != order.Filler:
 		return common.Address{}, nil, errors.New("backend filler does not match signed order")
-	}
-	if order.Request.TokenIn == (common.Address{}) || order.Request.AmountIn == nil || order.Request.AmountIn.Sign() <= 0 {
+	case request.TokenIn == (common.Address{}) || request.AmountIn == nil || request.AmountIn.Sign() <= 0:
 		return common.Address{}, nil, errors.New("signed order has invalid input")
-	}
-	if order.Request.Deadline == nil || !order.Request.Deadline.IsInt64() ||
-		order.Request.Deadline.Sign() <= 0 {
+	case request.Deadline == nil || !request.Deadline.IsInt64() || request.Deadline.Sign() <= 0:
 		return common.Address{}, nil, errors.New("signed order has invalid deadline")
-	}
-	if exec.deadline != order.Request.Deadline.Int64() {
+	case payload.deadline != request.Deadline.Int64():
 		return common.Address{}, nil, errors.New("backend deadline does not match signed order")
 	}
-	token, ok := singleOrderOutputToken(order.Outputs)
-	if !ok {
+	if len(order.Outputs) == 0 {
 		return common.Address{}, nil, errors.New("only single output-token orders are supported")
 	}
-	required, err := sumOrderOutputs(order.Outputs)
-	if err != nil {
-		return common.Address{}, nil, err
+	if len(order.Outputs) != len(payload.outputs) {
+		return common.Address{}, nil, errors.New("backend outputs do not match signed order")
 	}
-	if err := matchBackendOutputs(exec.outputs, order.Outputs); err != nil {
-		return common.Address{}, nil, err
-	}
-	return token, required, nil
-}
-
-func singleOrderOutputToken(outputs []executor.IReactorOutput) (common.Address, bool) {
-	if len(outputs) == 0 {
-		return common.Address{}, false
-	}
-	token := outputs[0].Token
-	for _, o := range outputs {
-		if o.Token != token {
-			return common.Address{}, false
+	token, total := order.Outputs[0].Token, new(big.Int)
+	for index, output := range order.Outputs {
+		if token == (common.Address{}) || output.Token != token {
+			return common.Address{}, nil, errors.New("only single output-token orders are supported")
 		}
-	}
-	if token == (common.Address{}) {
-		return common.Address{}, false
-	}
-	return token, true
-}
-
-func sumOrderOutputs(outputs []executor.IReactorOutput) (*big.Int, error) {
-	total := new(big.Int)
-	for i, output := range outputs {
 		if output.Amount == nil || output.Amount.Sign() <= 0 {
-			return nil, errors.Errorf("signed order output %d has invalid amount", i)
+			return common.Address{}, nil, errors.Errorf("signed order output %d has invalid amount", index)
 		}
 		if output.Recipient == (common.Address{}) {
-			return nil, errors.Errorf("signed order output %d has invalid recipient", i)
+			return common.Address{}, nil, errors.Errorf("signed order output %d has invalid recipient", index)
+		}
+		backend := payload.outputs[index]
+		backendToken, tokenErr := parse.Address(backend.Token, "token")
+		recipient, recipientErr := parse.Address(backend.Recipient, "recipient")
+		amount, amountErr := parseUint256(backend.Amount, "amount")
+		if tokenErr != nil || recipientErr != nil {
+			return common.Address{}, nil, errors.Errorf("backend output %d has invalid address", index)
+		}
+		if amountErr != nil || amount.Sign() <= 0 {
+			return common.Address{}, nil, errors.Errorf("backend output %d has invalid amount", index)
+		}
+		if backendToken != token || recipient != output.Recipient || amount.Cmp(output.Amount) != 0 {
+			return common.Address{}, nil, errors.Errorf("backend output %d does not match signed order", index)
 		}
 		total.Add(total, output.Amount)
 	}
-	return total, nil
-}
-
-func matchBackendOutputs(backend []backendOut, signed []executor.IReactorOutput) error {
-	if len(backend) != len(signed) {
-		return errors.New("backend outputs do not match signed order")
-	}
-	for i, output := range backend {
-		if !common.IsHexAddress(output.Token) || !common.IsHexAddress(output.Recipient) {
-			return errors.Errorf("backend output %d has invalid address", i)
-		}
-		amount, ok := new(big.Int).SetString(output.Amount, 10)
-		if !ok || amount.Sign() <= 0 {
-			return errors.Errorf("backend output %d has invalid amount", i)
-		}
-		if common.HexToAddress(output.Token) != signed[i].Token ||
-			common.HexToAddress(output.Recipient) != signed[i].Recipient ||
-			amount.Cmp(signed[i].Amount) != 0 {
-			return errors.Errorf("backend output %d does not match signed order", i)
-		}
-	}
-	return nil
+	return token, total, nil
 }

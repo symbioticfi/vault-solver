@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -49,9 +50,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	}
 
 	body, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "Marshal: %v")
 	if strings.Contains(string(body), "Fundable") || !strings.Contains(string(body), `"fundable":"1000"`) {
 		t.Fatalf("JSON does not use lower-camel decimal-string amounts: %s", body)
 	}
@@ -59,9 +58,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 		t.Fatalf("wire must carry the exact minYieldPpm floor: %s", body)
 	}
 	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		t.Fatalf("Unmarshal raw: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(body, &raw), "Unmarshal raw: %v")
 	adapters := raw["adapters"].([]any)
 	adapter := adapters[0].(map[string]any)
 	if adapter["maxAssets"] != "500" || adapter["minAssets"] != "100" {
@@ -76,7 +73,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 
 func TestOfferOutputUnmarshalJSONWireShape(t *testing.T) {
 	var out OfferOutput
-	if err := json.Unmarshal([]byte(`{
+	testcheck.NoError(t, json.Unmarshal([]byte(`{
 		"offers": [{
 			"auctionId": 10,
 			"request": "0x0000000000000000000000000000000000000010",
@@ -85,9 +82,7 @@ func TestOfferOutputUnmarshalJSONWireShape(t *testing.T) {
 			"expectedReturn": "10",
 			"reason": "largest"
 		}]
-	}`), &out); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
+	}`), &out), "Unmarshal: %v")
 	if len(out.Offers) != 1 ||
 		out.Offers[0].AuctionID != 10 ||
 		out.Offers[0].Principal.String() != "500" ||

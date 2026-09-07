@@ -28,13 +28,9 @@ func goldenBorrower() PositionState {
 func TestAccrualMatchesOnChain(t *testing.T) {
 	m := goldenMarket()
 	// elapsed = 1781246580 - 1780059204 = 1187376s -> interest 1024624 (verified §6.7).
-	got := AccruedTotalBorrowAssets(m, 1781246580)
-	if want := big.NewInt(4731024692); got.Cmp(want) != 0 {
-		t.Fatalf("AccruedTotalBorrowAssets = %s, want %s", got, want)
-	}
 	// No accrual at lastUpdate.
-	if atLU := AccruedTotalBorrowAssets(m, m.LastUpdate); atLU.Cmp(m.TotalBorrowAssets) != 0 {
-		t.Fatalf("accrual at lastUpdate = %s, want %s", atLU, m.TotalBorrowAssets)
+	if atLU := AccruedMarketState(m, m.LastUpdate); atLU.TotalBorrowAssets.Cmp(m.TotalBorrowAssets) != 0 {
+		t.Fatalf("accrual at lastUpdate = %s, want %s", atLU.TotalBorrowAssets, m.TotalBorrowAssets)
 	}
 	full := AccruedMarketState(m, 1781246580)
 	if want := big.NewInt(4731024692); full.TotalBorrowAssets.Cmp(want) != 0 {
@@ -51,7 +47,8 @@ func TestAccrualMatchesOnChain(t *testing.T) {
 func TestBorrowedAssetsUnaccrued(t *testing.T) {
 	// toAssetsUp at lastUpdate equals RedStone's pushed borrow_assets (1685600048) within 1-wei
 	// rounding (§6.7): our ToAssetsUp rounds up -> 1685600049.
-	got := BorrowedAssets(goldenMarket(), goldenBorrower(), goldenMarket().LastUpdate)
+	m := goldenMarket()
+	got := BorrowedAssetsAt(goldenBorrower(), m.TotalBorrowAssets, m.TotalBorrowShares)
 	if want := big.NewInt(1685600049); got.Cmp(want) != 0 {
 		t.Fatalf("unaccrued borrowed = %s, want %s", got, want)
 	}
@@ -102,8 +99,7 @@ func TestMaxSeizeForFullDebt(t *testing.T) {
 }
 
 func TestIsLiquidatableAcrossPrices(t *testing.T) {
-	m := goldenMarket()
-	ts := uint64(1781246580)
+	m := AccruedMarketState(goldenMarket(), 1781246580)
 	cases := []struct {
 		name  string
 		pos   PositionState
@@ -119,18 +115,18 @@ func TestIsLiquidatableAcrossPrices(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := IsLiquidatable(m, c.pos, mustBig(c.price), ts); got != c.want {
+			if got := IsLiquidatableAt(c.pos, mustBig(c.price), m.Lltv, m.TotalBorrowAssets, m.TotalBorrowShares); got != c.want {
 				t.Fatalf("IsLiquidatable(%s) = %v, want %v", c.price, got, c.want)
 			}
 		})
 	}
 }
 
-// TestLiquidationProximity pins the proximity pair against BorrowedAssetsAt / MaxBorrow and checks that
-// the borrowed >= maxBorrow boundary tracks IsLiquidatableAt.
-func TestLiquidationProximity(t *testing.T) {
+// TestLiquidationDebtLimit checks that the debt and collateral limit agree with
+// the health predicate, including debt-free and worthless-collateral positions.
+func TestLiquidationDebtLimit(t *testing.T) {
 	m := goldenMarket()
-	accrued := AccruedTotalBorrowAssets(m, m.LastUpdate)
+	accrued := m.TotalBorrowAssets
 	cases := []struct {
 		name        string
 		pos         PositionState
@@ -145,18 +141,11 @@ func TestLiquidationProximity(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			price := mustBig(c.price)
-			borrowed, maxBorrow := LiquidationProximity(c.pos, price, m.Lltv, accrued, m.TotalBorrowShares)
-			// The pair must equal the underlying helpers exactly.
-			if want := BorrowedAssetsAt(c.pos, accrued, m.TotalBorrowShares); borrowed.Cmp(want) != 0 {
-				t.Fatalf("borrowed = %s, want %s", borrowed, want)
-			}
-			if want := MaxBorrow(c.pos.Collateral, price, m.Lltv); maxBorrow.Cmp(want) != 0 {
-				t.Fatalf("maxBorrow = %s, want %s", maxBorrow, want)
-			}
-			// borrowed >= maxBorrow (with borrowed > 0) is the IsLiquidatableAt boundary.
-			boundary := borrowed.Sign() > 0 && borrowed.Cmp(maxBorrow) >= 0
+			borrowed := BorrowedAssetsAt(c.pos, accrued, m.TotalBorrowShares)
+			maxBorrow := MaxBorrow(c.pos.Collateral, price, m.Lltv)
+			boundary := borrowed.Sign() > 0 && borrowed.Cmp(maxBorrow) > 0
 			if boundary != c.wantLiqable {
-				t.Fatalf("borrowed>=maxBorrow = %v (borrowed=%s maxBorrow=%s), want %v", boundary, borrowed, maxBorrow, c.wantLiqable)
+				t.Fatalf("borrowed>maxBorrow = %v (borrowed=%s maxBorrow=%s), want %v", boundary, borrowed, maxBorrow, c.wantLiqable)
 			}
 			if liq := IsLiquidatableAt(c.pos, price, m.Lltv, accrued, m.TotalBorrowShares); liq != c.wantLiqable {
 				t.Fatalf("IsLiquidatableAt = %v, want %v", liq, c.wantLiqable)
@@ -169,11 +158,30 @@ func TestRepaidAssetsForSeizeMatchesLiveLiquidation(t *testing.T) {
 	// The real successful liquidation (§6.6) seized 0.5 TCOL at $1550 and repaid ~742.45 TLOAN
 	// (swapAmountOut 760 - profit 17.55). Assert RepaidAssetsForSeize lands in that band.
 	m := goldenMarket()
-	got := RepaidAssetsForSeize(m, mustBig("500000000000000000"), mustBig("1550000000000000000000000000"),
-		m.Lltv, m.LastUpdate)
+	got := RepaidAssetsForSeizeAt(mustBig("500000000000000000"), mustBig("1550000000000000000000000000"),
+		LiquidationIncentiveFactor(m.Lltv), m.TotalBorrowAssets, m.TotalBorrowShares)
 	lo, hi := big.NewInt(742_000_000), big.NewInt(743_000_000)
 	if got.Cmp(lo) < 0 || got.Cmp(hi) > 0 {
 		t.Fatalf("RepaidAssetsForSeize = %s, want in [%s, %s]", got, lo, hi)
+	}
+}
+
+func TestLiquidationAtExactDebtLimit(t *testing.T) {
+	// Virtual shares/assets make 1,000,000 shares exactly one asset in an empty
+	// market. One extra share rounds debt up, crossing a collateral limit of one.
+	for _, tc := range []struct {
+		shares int64
+		want   bool
+	}{
+		{0, false},
+		{1, false},
+		{1_000_000, false},
+		{1_000_001, true},
+	} {
+		position := PositionState{BorrowShares: big.NewInt(tc.shares), Collateral: big.NewInt(1)}
+		if got := IsLiquidatableAt(position, oraclePriceScale, Wad, new(big.Int), new(big.Int)); got != tc.want {
+			t.Errorf("shares=%d: liquidatable=%v, want %v", tc.shares, got, tc.want)
+		}
 	}
 }
 
@@ -261,4 +269,17 @@ func mustBig(s string) *big.Int {
 		panic("bad big int: " + s)
 	}
 	return n
+}
+
+func TestReplayRejectsInvalidMarketAccounting(t *testing.T) {
+	for _, mutate := range []func(*MarketState){
+		func(m *MarketState) { m.Lltv = new(big.Int).Add(Wad, big.NewInt(1)) },
+		func(m *MarketState) { m.TotalBorrowAssets = big.NewInt(-1) },
+	} {
+		market := goldenMarket()
+		mutate(&market)
+		if _, ok := ApplySeizeLiquidation(market, goldenBorrower(), big.NewInt(1), big.NewInt(1)); ok {
+			t.Fatal("invalid accounting admitted for replay")
+		}
+	}
 }

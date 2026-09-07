@@ -40,45 +40,37 @@ type Offer struct {
 // Request address. This is the digest grunt's OfferReceiver._validateOffer verifies, and which our
 // adapter's EIP-1271 isValidSignature checks against offerSigner.
 func OfferDigest(offer Offer, domainName, domainVersion string, chainID *big.Int, request common.Address) common.Hash {
-	ds := domainSeparator(domainName, domainVersion, chainID, request)
-	sh := offerStructHash(offer)
-	// keccak256(0x1901 || domainSeparator || structHash)
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, ds.Bytes(), sh.Bytes())
+	return hashTypedMessage(domainSeparator(domainName, domainVersion, chainID, request), offerStructHash(offer))
 }
 
-func offerStructHash(o Offer) common.Hash {
-	buf := make([]byte, 0, 7*32)
-	buf = append(buf, offerTypeHash.Bytes()...)
-	buf = append(buf, word(o.Maker.Bytes())...)
-	buf = append(buf, word(o.Amount.Bytes())...)
-	buf = append(buf, word(o.ExpectedReturn.Bytes())...)
-	buf = append(buf, word(o.Nonce.Bytes())...)
-	buf = append(buf, word(o.Expiration.Bytes())...)
-	buf = append(buf, boolWord(o.UseCallback)...)
-	return crypto.Keccak256Hash(buf)
+func offerStructHash(offer Offer) common.Hash {
+	callback := byte(0)
+	if offer.UseCallback {
+		callback = 1
+	}
+	return hashWords(offerTypeHash[:], offer.Maker.Bytes(), offer.Amount.Bytes(), offer.ExpectedReturn.Bytes(),
+		offer.Nonce.Bytes(), offer.Expiration.Bytes(), []byte{callback})
 }
 
 func domainSeparator(name, version string, chainID *big.Int, verifyingContract common.Address) common.Hash {
-	buf := make([]byte, 0, 5*32)
-	buf = append(buf, domainTypeHash.Bytes()...)
-	buf = append(buf, crypto.Keccak256([]byte(name))...)
-	buf = append(buf, crypto.Keccak256([]byte(version))...)
-	buf = append(buf, word(chainID.Bytes())...)
-	buf = append(buf, word(verifyingContract.Bytes())...)
-	return crypto.Keccak256Hash(buf)
+	return hashWords(domainTypeHash[:], crypto.Keccak256([]byte(name)), crypto.Keccak256([]byte(version)),
+		chainID.Bytes(), verifyingContract.Bytes())
 }
 
-// word left-pads b to a 32-byte EIP-712 word.
-func word(b []byte) []byte {
-	return common.LeftPadBytes(b, 32)
-}
-
-func boolWord(v bool) []byte {
-	w := make([]byte, 32)
-	if v {
-		w[31] = 1
+// hashWords hashes static ABI words in field order; fixed-width values are padded once.
+func hashWords(values ...[]byte) common.Hash {
+	for index, value := range values {
+		values[index] = common.LeftPadBytes(value, common.HashLength)
 	}
-	return w
+	return crypto.Keccak256Hash(values...)
+}
+
+func hashTypedMessage(domain, message common.Hash) common.Hash {
+	var envelope [66]byte
+	envelope[0], envelope[1] = 0x19, 0x01
+	copy(envelope[2:34], domain[:])
+	copy(envelope[34:], message[:])
+	return crypto.Keccak256Hash(envelope[:])
 }
 
 // grunt-api EIP-712 domain (no verifyingContract). chainId is per-flow: the (test-only) API-key
@@ -99,12 +91,8 @@ var (
 // gruntAPIDomainSeparator builds the grunt-api domain separator (name/version, no verifyingContract)
 // for chainID; the 3F server rebuilds it from the request's chainId query param to verify the signature.
 func gruntAPIDomainSeparator(chainID *big.Int) common.Hash {
-	return crypto.Keccak256Hash(
-		apiKeyDomainTypeHash.Bytes(),
-		crypto.Keccak256([]byte(apiKeyDomainName)),
-		crypto.Keccak256([]byte(apiKeyDomainVersion)),
-		word(chainID.Bytes()),
-	)
+	return hashWords(apiKeyDomainTypeHash[:], crypto.Keccak256([]byte(apiKeyDomainName)),
+		crypto.Keccak256([]byte(apiKeyDomainVersion)), chainID.Bytes())
 }
 
 // getOffersTypeHash is the EIP-712 type the maker signs to list its offers via the Authorization
@@ -114,8 +102,7 @@ var getOffersTypeHash = crypto.Keccak256Hash([]byte("GetOffers(address maker,uin
 // GetOffersDigest computes the EIP-712 digest signed for an authenticated GET /v1/offer (maker=adapter)
 // over the grunt-api domain at chainID (the bot's operating chain).
 func GetOffersDigest(maker common.Address, deadline, chainID *big.Int) common.Hash {
-	sh := crypto.Keccak256Hash(getOffersTypeHash.Bytes(), word(maker.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
+	return hashTypedMessage(gruntAPIDomainSeparator(chainID), hashWords(getOffersTypeHash[:], maker.Bytes(), deadline.Bytes()))
 }
 
 // cancelOfferTypeHash is the EIP-712 type the maker signs to cancel an unaccepted offer via
@@ -125,12 +112,11 @@ var cancelOfferTypeHash = crypto.Keccak256Hash([]byte("CancelOffer(address maker
 // CancelOfferDigest computes the EIP-712 digest a maker signs to cancel offerID over the grunt-api
 // domain at chainID (the bot's operating chain, matching GetOffersDigest).
 func CancelOfferDigest(maker common.Address, offerID, deadline, chainID *big.Int) common.Hash {
-	sh := crypto.Keccak256Hash(cancelOfferTypeHash.Bytes(), word(maker.Bytes()), word(offerID.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(chainID).Bytes(), sh.Bytes())
+	return hashTypedMessage(gruntAPIDomainSeparator(chainID), hashWords(cancelOfferTypeHash[:], maker.Bytes(), offerID.Bytes(), deadline.Bytes()))
 }
 
 // APIKeyDigest computes the EIP-712 digest a facilitator signs to generate a 3F API key (chainId 1).
 func APIKeyDigest(facilitator common.Address, deadline *big.Int) common.Hash {
-	sh := crypto.Keccak256Hash(apiKeyTypeHash.Bytes(), word(facilitator.Bytes()), word(deadline.Bytes()))
-	return crypto.Keccak256Hash([]byte{0x19, 0x01}, gruntAPIDomainSeparator(big.NewInt(apiKeyDomainChainID)).Bytes(), sh.Bytes())
+	domain := gruntAPIDomainSeparator(big.NewInt(apiKeyDomainChainID))
+	return hashTypedMessage(domain, hashWords(apiKeyTypeHash[:], facilitator.Bytes(), deadline.Bytes()))
 }

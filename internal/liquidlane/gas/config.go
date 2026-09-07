@@ -24,45 +24,40 @@ type RawTokenFeed struct {
 
 // ParseConfig validates the shared gas YAML without changing its gas.* field paths.
 func ParseConfig(raw RawConfig) (OracleConfig, error) {
-	nativeFeed, err := parse.NonZeroAddress(raw.NativeUSDFeed, "gas.nativeUsdFeed")
+	native, err := parseFeed(raw.NativeUSDFeed, raw.NativeMaxAge, "gas.nativeUsdFeed", "gas.nativeMaxAge")
 	if err != nil {
 		return OracleConfig{}, err
 	}
-	nativeMaxAge, err := parse.Duration(raw.NativeMaxAge, 0, "gas.nativeMaxAge")
-	if err != nil {
-		return OracleConfig{}, err
-	}
-	if nativeMaxAge <= 0 {
-		return OracleConfig{}, errors.New("gas.nativeMaxAge is required")
-	}
-	feeds := make(map[common.Address]USDFeed, len(raw.TokenUSDFeeds))
+	cfg := OracleConfig{NativeUSDFeed: native, TokenUSDFeeds: make(map[common.Address]USDFeed, len(raw.TokenUSDFeeds))}
 	for index, item := range raw.TokenUSDFeeds {
-		field := "gas.tokenUsdFeeds[" + strconv.Itoa(index) + "]"
-		token, tokenErr := parse.NonZeroAddress(item.Token, field+".token")
-		if tokenErr != nil {
-			return OracleConfig{}, tokenErr
+		path := "gas.tokenUsdFeeds[" + strconv.Itoa(index) + "]"
+		token, err := parse.NonZeroAddress(item.Token, path+".token")
+		if err != nil {
+			return OracleConfig{}, err
 		}
-		feed, feedErr := parse.NonZeroAddress(item.Feed, field+".feed")
-		if feedErr != nil {
-			return OracleConfig{}, feedErr
+		feed, err := parseFeed(item.Feed, item.MaxAge, path+".feed", path+".maxAge")
+		if err != nil {
+			return OracleConfig{}, err
 		}
-		maxAge, ageErr := parse.Duration(item.MaxAge, 0, field+".maxAge")
-		if ageErr != nil {
-			return OracleConfig{}, ageErr
+		if _, exists := cfg.TokenUSDFeeds[token]; exists {
+			return OracleConfig{}, errors.Errorf("%s.token: duplicate token %s", path, token.Hex())
 		}
-		if maxAge <= 0 {
-			return OracleConfig{}, errors.Errorf("%s.maxAge is required", field)
-		}
-		if _, duplicate := feeds[token]; duplicate {
-			return OracleConfig{}, errors.Errorf("%s.token: duplicate token %s", field, token.Hex())
-		}
-		feeds[token] = USDFeed{Address: feed, MaxAge: maxAge}
+		cfg.TokenUSDFeeds[token] = feed
 	}
-	if len(feeds) == 0 {
+	if len(cfg.TokenUSDFeeds) == 0 {
 		return OracleConfig{}, errors.New("gas.tokenUsdFeeds must contain at least one token feed")
 	}
-	return OracleConfig{
-		NativeUSDFeed: USDFeed{Address: nativeFeed, MaxAge: nativeMaxAge},
-		TokenUSDFeeds: feeds,
-	}, nil
+	return cfg, nil
+}
+
+func parseFeed(address, age, addressField, ageField string) (USDFeed, error) {
+	parsed, addressErr := parse.NonZeroAddress(address, addressField)
+	maxAge, ageErr := parse.Duration(age, 0, ageField)
+	if err := errors.Join(addressErr, ageErr); err != nil {
+		return USDFeed{}, err
+	}
+	if maxAge <= 0 {
+		return USDFeed{}, errors.Errorf("%s is required", ageField)
+	}
+	return USDFeed{Address: parsed, MaxAge: maxAge}, nil
 }

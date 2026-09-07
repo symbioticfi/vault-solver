@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -108,4 +110,17 @@ type BidOutput struct {
 	Reason        string
 	BidAmount     *big.Int
 	OperationData []byte
+}
+
+// Clone owns all mutable amounts before a snapshot crosses the strategy boundary.
+func (snapshot AdapterSnapshot) Clone() AdapterSnapshot {
+	snapshot.FreeAssets = bigmath.Clone(snapshot.FreeAssets)
+	snapshot.Withdrawable = bigmath.Clone(snapshot.Withdrawable)
+	routes := make([]RedeemableSnapshot, len(snapshot.Redeemable))
+	for index, route := range snapshot.Redeemable {
+		route.MaxRate, route.MaxAssets, route.AcquireBalance = bigmath.Clone(route.MaxRate), bigmath.Clone(route.MaxAssets), bigmath.Clone(route.AcquireBalance)
+		routes[index] = route
+	}
+	snapshot.Redeemable = routes
+	return snapshot
 }

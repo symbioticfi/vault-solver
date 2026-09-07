@@ -29,9 +29,6 @@ const Name = "uniswapx-filler"
 
 const orderQueueCapacity = 256
 
-//nolint:gochecknoinits // solver registration follows the framework plugin convention.
-func init() { solver.Register(Name, factory) }
-
 type Solver struct {
 	cfg           *Config
 	chainID       int64
@@ -47,12 +44,10 @@ type Solver struct {
 	reportFatal   func(error)
 
 	// refreshMu serializes chain snapshots. quoteState is immutable after publication and is
-	// replaced atomically. Quote requests are stateless because Uniswap intentionally hides
+	// published and invalidated under quotes.mu. Quote requests are stateless because Uniswap intentionally hides
 	// whether each request is indicative or hard.
 	refreshMu             sync.Mutex
-	quoteState            atomic.Pointer[quoteState]
-	quoteEpoch            atomic.Uint64
-	planningFills         atomic.Int64
+	quotes                quotePublication
 	chainTime             atomic.Int64
 	blockUntil            atomic.Int64
 	localBlockUntil       atomic.Int64
@@ -62,21 +57,17 @@ type Solver struct {
 	lastExclusivePoll     atomic.Int64
 	refreshCh             chan struct{}
 	// stateMu guards order retry/dedup and breaker history.
-	stateMu           sync.Mutex
-	filled            map[common.Hash]time.Time
-	retryAt           map[common.Hash]time.Time
-	inFlight          map[common.Hash]bool
-	attempts          map[common.Hash]int
-	capacity          liquidlane.CapacityLedger
-	exclusiveUntil    map[common.Hash]trackedExclusive
-	exclusiveTerminal map[common.Hash]time.Time
-	failureTimes      []time.Time
-	metrics           *uniswapXMetrics
-	operations        uniswapXOperationObservers
+	stateMu      sync.Mutex
+	executions   map[common.Hash]executionState
+	capacity     liquidlane.CapacityLedger
+	obligations  map[common.Hash]trackedExclusive
+	failureTimes []time.Time
+	metrics      *uniswapXMetrics
+	operations   uniswapXOperationObservers
 }
 
 type chainReader interface {
-	resolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
+	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
 	validateExecutorCode(ctx context.Context, executor common.Address) error
 	validateExecutorCaller(ctx context.Context, executor, caller common.Address) error
 	unauthorizedAdapters(
@@ -84,9 +75,9 @@ type chainReader interface {
 		executor common.Address,
 		routes []liquidlane.Route,
 	) ([]common.Address, error)
-	validateGasTokens(routes []liquidlane.Route) error
-	quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error)
-	fillSnapshot(
+	ValidateGasTokens(routes []liquidlane.Route) error
+	Quote(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error)
+	Fill(
 		ctx context.Context,
 		routes []liquidlane.Route,
 		executor common.Address,
@@ -94,7 +85,7 @@ type chainReader interface {
 		amountIn *big.Int,
 		now time.Time,
 	) (fillSnapshot, error)
-	physicalFillQuotes(
+	ReadFillQuotes(
 		ctx context.Context,
 		routes []liquidlane.Route,
 		tokenIn common.Address,
@@ -134,7 +125,7 @@ type contractCaller interface {
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func New(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -157,25 +148,21 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		discountClient = liquiddiscounts.NewClient(cfg.Discounts.BaseURL)
 	}
 	s := &Solver{
-		cfg:               cfg,
-		chainID:           deps.Chain.ChainID().Int64(),
-		solverAddress:     deps.Signer.Address(),
-		chain:             deps.Chain,
-		reader:            reader,
-		strategy:          strategy,
-		txm:               deps.TxManager,
-		confirmations:     deps.TxManager.Confirmations(),
-		orders:            newOrderClient(cfg.OrderServer, orderKey),
-		discounts:         discountClient,
-		log:               log,
-		reportFatal:       deps.ReportFatal,
-		refreshCh:         make(chan struct{}, 1),
-		filled:            make(map[common.Hash]time.Time),
-		retryAt:           make(map[common.Hash]time.Time),
-		inFlight:          make(map[common.Hash]bool),
-		attempts:          make(map[common.Hash]int),
-		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
-		exclusiveTerminal: make(map[common.Hash]time.Time),
+		cfg:           cfg,
+		chainID:       deps.Chain.ChainID().Int64(),
+		solverAddress: deps.Signer.Address(),
+		chain:         deps.Chain,
+		reader:        reader,
+		strategy:      strategy,
+		txm:           deps.TxManager,
+		confirmations: deps.TxManager.Confirmations(),
+		orders:        newOrderClient(cfg.OrderServer, orderKey),
+		discounts:     discountClient,
+		log:           log,
+		reportFatal:   deps.ReportFatal,
+		refreshCh:     make(chan struct{}, 1),
+		executions:    make(map[common.Hash]executionState),
+		obligations:   make(map[common.Hash]trackedExclusive),
 	}
 	if deps.Metrics != nil {
 		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s, cfg.Strategy.Name)
@@ -189,63 +176,47 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 
 func (s *Solver) Name() string { return Name }
 
-func (s *Solver) Run(ctx context.Context) error {
-	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
+// startup validates the executor and delivery path before any quote can be advertised.
+func (s *Solver) startup(ctx context.Context) ([]liquidlane.Route, error) {
+	fail := func(message string, err error) ([]liquidlane.Route, error) {
+		s.log.Error(err, message, "executor", s.cfg.Executor.Hex(), "caller", s.solverAddress.Hex(), "adapters", s.cfg.Adapters, "solverMode", s.cfg.SolverMode)
+		return nil, err
+	}
+	routes, err := s.reader.ResolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
-		startupErr := errors.Errorf("resolve routes: %w", err)
-		s.log.Error(startupErr, "adapter resolution failed",
-			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-		return startupErr
+		return fail("adapter resolution failed", errors.Errorf("resolve routes: %w", err))
 	}
 	if len(routes) == 0 && s.cfg.restrictsToAdapters() {
-		startupErr := errors.New("no LiquidLane routes resolved")
-		s.log.Error(startupErr, "adapter resolution failed",
-			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-		return startupErr
+		return fail("adapter resolution failed", errors.New("no LiquidLane routes resolved"))
 	}
 	if err := s.reader.validateExecutorCode(ctx, s.cfg.Executor); err != nil {
-		startupErr := errors.Errorf("validate executor: %w", err)
-		s.log.Error(startupErr, "executor validation failed", "executor", s.cfg.Executor.Hex())
-		return startupErr
+		return fail("executor validation failed", errors.Errorf("validate executor: %w", err))
 	}
 	if err := s.reader.validateExecutorCaller(ctx, s.cfg.Executor, s.solverAddress); err != nil {
-		startupErr := errors.Errorf("validate executor caller: %w", err)
-		s.log.Error(
-			startupErr,
-			"executor caller validation failed",
-			"executor", s.cfg.Executor.Hex(),
-			"caller", s.solverAddress.Hex(),
-		)
-		return startupErr
+		return fail("executor caller validation failed", errors.Errorf("validate executor caller: %w", err))
 	}
 	if s.cfg.restrictsToAdapters() {
 		unauthorized, err := s.reader.unauthorizedAdapters(ctx, s.cfg.Executor, routes)
 		if err != nil {
-			startupErr := errors.Errorf("validate adapters: %w", err)
-			s.log.Error(startupErr, "adapter validation failed",
-				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-			return startupErr
+			return fail("adapter validation failed", errors.Errorf("validate adapters: %w", err))
 		}
 		if len(unauthorized) > 0 {
-			startupErr := errors.Errorf(
-				"validate adapters: executor %s is not authorized as direct filler for configured adapters: %v",
-				s.cfg.Executor.Hex(), unauthorized,
-			)
-			s.log.Error(startupErr, "adapter validation failed",
-				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-			return startupErr
+			return fail("adapter validation failed", errors.Errorf("validate adapters: executor %s is not authorized as direct filler for configured adapters: %v", s.cfg.Executor.Hex(), unauthorized))
 		}
 	}
-	if err := s.reader.validateGasTokens(routes); err != nil {
-		startupErr := errors.Errorf("validate adapter gas tokens: %w", err)
-		s.log.Error(startupErr, "adapter validation failed", "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-		return startupErr
+	if err := s.reader.ValidateGasTokens(routes); err != nil {
+		return fail("adapter validation failed", errors.Errorf("validate adapter gas tokens: %w", err))
 	}
 	if _, err := s.orders.openOrders(ctx, s.chainID, &s.cfg.Executor); err != nil {
-		startupErr := errors.Errorf("validate exclusive order delivery: %w", err)
-		s.log.Error(startupErr, "exclusive order delivery validation failed",
-			"executor", s.cfg.Executor.Hex(), "orderApi", s.cfg.OrderServer.BaseURL)
-		return startupErr
+		return fail("exclusive order delivery validation failed", errors.Errorf("validate exclusive order delivery: %w", err))
+	}
+	return routes, nil
+}
+
+func (s *Solver) Run(ctx context.Context) error {
+	routes, err := s.startup(ctx)
+	if err != nil {
+		return err
 	}
 	// Reconcile recent terminal history before serving quotes after every process start.
 	s.exclusiveStateUnknown.Store(true)

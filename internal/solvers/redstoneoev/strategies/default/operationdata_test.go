@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestEncodeOperationDataRoundTrip(t *testing.T) {
@@ -26,9 +27,7 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 	authSig := bytes.Repeat([]byte{0x42}, 65)
 
 	got, err := encodeOperationData(auth, legs, authSig)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	want := "0x" +
 		"0000000000000000000000000000000000000000000000000000000000000020" +
 		"1111111111111111111111111111111111111111111111111111111111111111" +
@@ -50,9 +49,7 @@ func TestEncodeOperationDataRoundTrip(t *testing.T) {
 		t.Fatalf("operationData ABI mismatch:\n got %s\nwant %s", hexutil.Encode(got), want)
 	}
 	back, err := decodeOperationData(got)
-	if err != nil {
-		t.Fatalf("decode operationData: %v", err)
-	}
+	testcheck.NoError(t, err, "decode operationData: %v")
 	if back.Auth.AuctionKey != auth.AuctionKey ||
 		back.Auth.BidAmount.Cmp(auth.BidAmount) != 0 ||
 		back.Auth.MinBundleProfit.Cmp(auth.MinBundleProfit) != 0 ||
@@ -133,9 +130,7 @@ func TestEncodeOperationDataRejectsInvalidLegs(t *testing.T) {
 
 func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	auth := operationAuth{
 		AuctionKey:      common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		BidAmount:       big.NewInt(100),
@@ -149,17 +144,11 @@ func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 		MinProfit:      big.NewInt(4),
 	}}
 	digest, err := callbackAuthDigest(big.NewInt(11155111), common.Address{19: 3}, common.Address{19: 4}, auth, legs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	sig, err := crypto.Sign(digest.Bytes(), key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	pub, err := crypto.SigToPub(digest.Bytes(), sig)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got, want := crypto.PubkeyToAddress(*pub), crypto.PubkeyToAddress(key.PublicKey); got != want {
 		t.Fatalf("recovered %s, want %s", got, want)
 	}
@@ -167,18 +156,14 @@ func TestCallbackAuthDigestBindsLegs(t *testing.T) {
 	changed := legs
 	changed[0].MinProfit.Add(changed[0].MinProfit, big.NewInt(1))
 	changedDigest, err := callbackAuthDigest(big.NewInt(11155111), common.Address{19: 3}, common.Address{19: 4}, auth, changed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if changedDigest == digest {
 		t.Fatal("digest must change when leg minProfit changes")
 	}
 	changedAuth := auth
 	changedAuth.Deadline = big.NewInt(301)
 	changedDigest, err = callbackAuthDigest(big.NewInt(11155111), common.Address{19: 3}, common.Address{19: 4}, changedAuth, legs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if changedDigest == digest {
 		t.Fatal("digest must change when auth deadline changes")
 	}

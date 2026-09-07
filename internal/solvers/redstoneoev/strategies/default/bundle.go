@@ -4,9 +4,15 @@ package defaultstrategy
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"math/big"
 	"slices"
+	"sort"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
@@ -22,10 +28,6 @@ type bundleEngine struct {
 	log logr.Logger
 }
 
-func newBundleEngine(cfg Config, log logr.Logger) bundleEngine {
-	return bundleEngine{cfg: cfg, log: log}
-}
-
 // bundleLeg is one selected liquidation plus estimates used for bundle pricing and gas prediction.
 type bundleLeg struct {
 	selectedLeg
@@ -38,10 +40,9 @@ type bundleLeg struct {
 type scoredLeg struct {
 	bundleLeg
 
-	profit    *big.Int // loan-token base units
-	maxAssets *big.Int // cached adapter getMaxAssets budget (loan units; nil ⇒ uncapped)
-	source    evalItem
-	replay    bool
+	profit    *big.Int  // loan-token base units
+	maxAssets *big.Int  // cached adapter getMaxAssets budget (loan units; nil ⇒ uncapped)
+	source    *evalItem // immutable replay source; nil for an already-sized static leg
 }
 
 // chosenBundle is the set of legs selected for one solve. Single-token by design: the on-chain callback
@@ -61,12 +62,12 @@ type pricedBundle struct {
 
 // Legs sharing collateral share the adapter's getMaxAssets pool, so gross selection caps cumulative
 // expected loan output per collateral against cached adapter liquidity and the settlement gas limit.
-func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, string) {
+func (e bundleEngine) selectBundleWithGas(ctx context.Context, scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, string) {
 	if len(scored) == 0 {
 		return chosenBundle{}, skipNoLegs
 	}
-	best, ok := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
-		return new(big.Int).Set(b.grossLoan)
+	best, ok := e.searchBundle(ctx, scored, laneState, gasLimit, feedCount, func(b chosenBundle, _ uint64) *big.Int {
+		return b.grossLoan
 	})
 	if !ok {
 		return chosenBundle{}, skipNoLegs
@@ -76,22 +77,22 @@ func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidL
 
 // selectNetBundle maximizes bounded after-cost net while preserving deterministic tie-breaks and the shared
 // collateral budget. A lower-gross subset can beat a gross-best subset once gas and the bid are priced in.
-func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount int) (chosenBundle, string) {
+func (e bundleEngine) selectNetBundle(ctx context.Context, scored []scoredLeg, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount int) (chosenBundle, string) {
 	if len(scored) == 0 {
 		return chosenBundle{}, skipNoLegs
 	}
 	if rate == nil || rate.Sign() <= 0 {
 		return chosenBundle{}, skipGasUnprofitable
 	}
-	best, ok := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
-		return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
+	best, ok := e.searchBundle(ctx, scored, laneState, gasLimit, feedCount, func(b chosenBundle, gasUnits uint64) *big.Int {
+		return e.bundleNetNative(b, rate, gasPrice, gasUnits)
 	})
 	if !ok {
 		return chosenBundle{}, skipGasUnprofitable
 	}
 	bidNative := e.bundleBidNative(best.bundle, rate)
 	minNative := e.minBundleProfitNative(bidNative)
-	bestNet := e.bundleNetNativeForFeeds(best.bundle, rate, laneState, gasPrice, feedCount)
+	bestNet := best.score
 	if bestNet.Cmp(minNative) < 0 {
 		return best.bundle, skipGasUnprofitable
 	}
@@ -102,7 +103,7 @@ type bundleSearchState struct {
 	bundle   chosenBundle
 	consumed map[common.Address]*big.Int
 	markets  map[common.Hash]bundleMarketState
-	used     map[int]bool
+	used     []int
 	score    *big.Int
 }
 
@@ -117,52 +118,55 @@ type replayedScoredLeg struct {
 	market   bundleMarketState
 }
 
-func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int, scoreFn func(chosenBundle) *big.Int) (bundleSearchState, bool) {
-	maxDepth := bundleSearchDepth(gasLimit, feedCount)
-	if maxDepth == 0 {
-		return bundleSearchState{}, false
-	}
+// Search states are immutable. Expanding a branch replaces only the affected market,
+// borrower and collateral totals; untouched snapshots are shared between branches.
+// The frontier stays bounded during expansion, including when thousands of positions qualify.
+func (e bundleEngine) searchBundle(ctx context.Context, scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int, scoreFn func(chosenBundle, uint64) *big.Int) (bundleSearchState, bool) {
 	group := sortedScoredLegs(scored)
 	start := bundleSearchState{
 		bundle:   chosenBundle{grossLoan: new(big.Int)},
-		consumed: make(map[common.Address]*big.Int),
-		markets:  make(map[common.Hash]bundleMarketState),
-		used:     make(map[int]bool),
-		score:    new(big.Int),
+		consumed: make(map[common.Address]*big.Int), markets: make(map[common.Hash]bundleMarketState),
+		score: new(big.Int),
 	}
-	beam := []bundleSearchState{start}
+	frontier := []bundleSearchState{start}
 	best := start
-	for depth := 0; depth < maxDepth && depth < len(group); depth++ {
-		nextBeam := make([]bundleSearchState, 0, min(len(group), netBundleBeamWidth))
-		for _, state := range beam {
-			for i, sl := range group {
-				if state.used[i] {
+	for range min(bundleSearchDepth(gasLimit, feedCount), len(group)) {
+		next := make([]bundleSearchState, 0, netBundleBeamWidth+1)
+		for _, parent := range frontier {
+			for index, leg := range group {
+				if ctx.Err() != nil {
+					return bundleSearchState{}, false
+				}
+				if slices.Contains(parent.used, index) {
 					continue
 				}
-				trial, ok := e.extendBundleState(state, sl, i)
+				trial, ok := e.extendBundleState(parent, leg, index)
 				if !ok {
 					continue
 				}
-				if !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
+				gas := predictGasForFeeds(gasDemands(trial.bundle.legs), laneState, feedCount)
+				if gas.Units > usableGasLimit(gasLimit) {
 					continue
 				}
-				trial.score = scoreFn(trial.bundle)
-				nextBeam = append(nextBeam, trial)
+				trial.score = scoreFn(trial.bundle, gas.Units)
+				// Insert after ties to retain deterministic generation order.
+				at := sort.Search(len(next), func(i int) bool { return next[i].score.Cmp(trial.score) < 0 })
+				if at == netBundleBeamWidth {
+					continue
+				}
+				next = slices.Insert(next, at, trial)
+				if len(next) > netBundleBeamWidth {
+					next = next[:netBundleBeamWidth]
+				}
 			}
 		}
-		if len(nextBeam) == 0 {
+		if len(next) == 0 {
 			break
 		}
-		slices.SortStableFunc(nextBeam, func(a, b bundleSearchState) int {
-			return b.score.Cmp(a.score)
-		})
-		if len(nextBeam) > netBundleBeamWidth {
-			nextBeam = nextBeam[:netBundleBeamWidth]
+		if len(best.bundle.legs) == 0 || next[0].score.Cmp(best.score) > 0 {
+			best = next[0]
 		}
-		if len(best.bundle.legs) == 0 || nextBeam[0].score.Cmp(best.score) > 0 {
-			best = nextBeam[0]
-		}
-		beam = nextBeam
+		frontier = next
 	}
 	return best, len(best.bundle.legs) > 0
 }
@@ -178,43 +182,52 @@ func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 
 func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int) (bundleSearchState, bool) {
 	next, ok := e.replayScoredLeg(sl, state.markets)
-	if !ok || !fitsCollateralBudget(state.consumed, next.scored) {
+	if !ok {
+		return bundleSearchState{}, false
+	}
+	consumed, fits := nextCollateralUsage(state.consumed, next.scored)
+	if !fits {
 		return bundleSearchState{}, false
 	}
 	trial := bundleSearchState{
 		bundle:   cloneBundleWithLeg(state.bundle, next.scored),
-		consumed: cloneCollateralBudget(state.consumed),
-		markets:  cloneBundleMarkets(state.markets),
-		used:     cloneUsed(state.used),
+		consumed: state.consumed,
+		markets:  state.markets,
+		used:     append(slices.Clone(state.used), idx),
 	}
-	trial.used[idx] = true
 	if next.marketID != (common.Hash{}) {
+		trial.markets = maps.Clone(state.markets)
 		trial.markets[next.marketID] = next.market
 	}
-	commitCollateralBudget(trial.consumed, next.scored)
+	if consumed != nil {
+		trial.consumed = maps.Clone(state.consumed)
+		trial.consumed[next.scored.collateral] = consumed
+	}
 	return trial, true
 }
 
 func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState) (replayedScoredLeg, bool) {
-	if !sl.replay {
+	if sl.source == nil {
 		return replayedScoredLeg{scored: sl}, true
 	}
 	id := sl.source.cand.MarketID
 	if id == (common.Hash{}) {
 		return replayedScoredLeg{}, false
 	}
+	// Inputs remain immutable; ApplySeizeLiquidation owns the changed market
+	// and borrower state, so seeding a branch needs no preparatory deep copy.
 	ms, ok := markets[id]
 	if !ok {
-		ms = bundleMarketState{info: cloneMarketInfo(sl.source.cand.Market), positions: make(map[common.Address]morpho.PositionState)}
+		ms = bundleMarketState{info: sl.source.cand.Market, positions: make(map[common.Address]morpho.PositionState)}
 	}
 	pos, ok := ms.positions[sl.source.cand.Borrower]
 	if !ok {
-		pos = morpho.ClonePositionState(sl.source.cand.Position)
+		pos = sl.source.cand.Position
 	}
 	cand := sl.source.cand
 	cand.Market = ms.info
 	cand.Position = pos
-	sized, ok := sizeLeg(cand, sl.source.price, sl.source.quote, ms.info.State.TotalBorrowAssets, e.cfg.Sizing)
+	sized, ok := sizeLeg(cand, sl.source.price, sl.source.quote, e.cfg.Sizing)
 	if !ok {
 		return replayedScoredLeg{}, false
 	}
@@ -222,7 +235,7 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	if !ok {
 		return replayedScoredLeg{}, false
 	}
-	nextMarket := cloneBundleMarketState(ms)
+	nextMarket := bundleMarketState{info: ms.info, positions: maps.Clone(ms.positions)}
 	nextMarket.info.State = replay.Market
 	nextMarket.positions[cand.Borrower] = replay.Position
 	nextLeg := sl
@@ -246,118 +259,59 @@ func sortedScoredLegs(scored []scoredLeg) []scoredLeg {
 	return group
 }
 
-func fitsCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) bool {
+// A nil total means this leg has no capacity ceiling and consumes no tracked
+// capped budget. Otherwise the returned amount is owned by the new branch.
+func nextCollateralUsage(consumed map[common.Address]*big.Int, sl scoredLeg) (*big.Int, bool) {
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
-		return true
+		return nil, true
 	}
-	next := new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
-	return next.Cmp(sl.maxAssets) <= 0
-}
-
-func commitCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) {
-	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
-		return
+	next := bigmath.OrZero(consumed[sl.collateral])
+	if sl.expectedLoanOut != nil {
+		next.Add(next, sl.expectedLoanOut)
 	}
-	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
-}
-
-func cloneCollateralBudget(in map[common.Address]*big.Int) map[common.Address]*big.Int {
-	out := make(map[common.Address]*big.Int, len(in))
-	for collateral, amount := range in {
-		out[collateral] = orZero(amount)
-	}
-	return out
-}
-
-func cloneBundleMarkets(in map[common.Hash]bundleMarketState) map[common.Hash]bundleMarketState {
-	out := make(map[common.Hash]bundleMarketState, len(in))
-	for id, state := range in {
-		out[id] = cloneBundleMarketState(state)
-	}
-	return out
-}
-
-func cloneBundleMarketState(in bundleMarketState) bundleMarketState {
-	out := bundleMarketState{info: cloneMarketInfo(in.info), positions: make(map[common.Address]morpho.PositionState, len(in.positions))}
-	for borrower, position := range in.positions {
-		out.positions[borrower] = morpho.ClonePositionState(position)
-	}
-	return out
-}
-
-func cloneUsed(in map[int]bool) map[int]bool {
-	out := make(map[int]bool, len(in))
-	maps.Copy(out, in)
-	return out
-}
-
-func cloneMarketInfo(in MarketInfo) MarketInfo {
-	in.State = morpho.CloneMarketState(in.State)
-	return in
-}
-
-func appendScoredLeg(b *chosenBundle, sl scoredLeg) {
-	b.legs = append(b.legs, cloneBundleLeg(sl.bundleLeg))
-	b.grossLoan.Add(b.grossLoan, sl.profit)
+	return next, next.Cmp(sl.maxAssets) <= 0
 }
 
 func cloneBundleWithLeg(b chosenBundle, sl scoredLeg) chosenBundle {
+	leg := sl.bundleLeg
+	leg.MaxSeizeAssets, leg.MinProfit = bigmath.Clone(leg.MaxSeizeAssets), bigmath.Clone(leg.MinProfit)
+	leg.expectedLoanOut = bigmath.Clone(leg.expectedLoanOut)
 	out := chosenBundle{
-		legs:      cloneBundleLegs(b.legs),
-		grossLoan: new(big.Int).Set(b.grossLoan),
+		legs: make([]bundleLeg, len(b.legs)+1), grossLoan: new(big.Int).Add(b.grossLoan, sl.profit),
 	}
-	appendScoredLeg(&out, sl)
+	copy(out.legs, b.legs)
+	out.legs[len(b.legs)] = leg
 	return out
 }
 
-func cloneBundleLeg(in bundleLeg) bundleLeg {
-	in.MaxSeizeAssets = cloneBig(in.MaxSeizeAssets)
-	in.MinProfit = cloneBig(in.MinProfit)
-	in.expectedLoanOut = cloneBig(in.expectedLoanOut)
-	return in
-}
-
-func cloneBundleLegs(in []bundleLeg) []bundleLeg {
-	out := make([]bundleLeg, len(in))
-	for i, leg := range in {
-		out[i] = cloneBundleLeg(leg)
-	}
-	return out
-}
-
-func (b chosenBundle) selectedLegs() []selectedLeg {
+func (b chosenBundle) selectedLegs(profit func(int) *big.Int) []selectedLeg {
 	out := make([]selectedLeg, len(b.legs))
 	for i, leg := range b.legs {
 		out[i] = selectedLeg{
 			MarketId:       leg.MarketId,
 			Borrower:       leg.Borrower,
-			MaxSeizeAssets: cloneBig(leg.MaxSeizeAssets),
-			MinProfit:      cloneBig(leg.MinProfit),
+			MaxSeizeAssets: bigmath.Clone(leg.MaxSeizeAssets),
+			MinProfit:      profit(i),
 		}
 	}
 	return out
 }
 
-func (e bundleEngine) bundleNetNative(b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int) *big.Int {
-	return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, defaultPriceUpdateFeeds)
-}
-
-func (e bundleEngine) bundleNetNativeForFeeds(b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, feedCount int) *big.Int {
+func (e bundleEngine) bundleNetNative(b chosenBundle, rate, gasPrice *big.Int, gasUnits uint64) *big.Int {
 	grossNative := loanToNative(b.grossLoan, rate)
-	gasUnits := predictGasForFeeds(legHints(b.legs), laneState, feedCount).Units
 	gasNative := gasCostNative(gasUnits, gasPrice)
 	grossNative.Sub(grossNative, gasNative)
 	return grossNative.Sub(grossNative, e.bundleBidNative(b, rate))
 }
 
 func (e bundleEngine) bundleBidNative(b chosenBundle, rate *big.Int) *big.Int {
-	minimal := orZero(e.cfg.BidWei)
+	minimal := bigmath.OrZero(e.cfg.BidWei)
 	if e.cfg.TotalBundleProfitBps <= 0 {
-		return new(big.Int).Set(minimal)
+		return minimal
 	}
-	share := ceilMulDiv(loanToNative(b.grossLoan, rate), big.NewInt(int64(e.cfg.TotalBundleProfitBps)), big.NewInt(10_000))
+	share := liquidlane.MulDivUp(loanToNative(b.grossLoan, rate), big.NewInt(int64(e.cfg.TotalBundleProfitBps)), big.NewInt(10_000))
 	if share.Cmp(minimal) < 0 {
-		return new(big.Int).Set(minimal)
+		return minimal
 	}
 	return share
 }
@@ -366,25 +320,18 @@ func (e bundleEngine) minBundleProfitNative(bidNative *big.Int) *big.Int {
 	if e.cfg.MinBundleProfitBidBps <= 0 {
 		return new(big.Int)
 	}
-	return ceilMulDiv(orZero(bidNative), big.NewInt(int64(e.cfg.MinBundleProfitBidBps)), big.NewInt(10_000))
-}
-
-func (e bundleEngine) minBundleProfitLoan(b chosenBundle, rate *big.Int, gas gasPrediction, gasPrice *big.Int) *big.Int {
-	bidNative := e.bundleBidNative(b, rate)
-	requiredNative := gasCostNative(gas.Units, gasPrice)
-	requiredNative.Add(requiredNative, bidNative)
-	requiredNative.Add(requiredNative, e.minBundleProfitNative(bidNative))
-	return nativeToLoan(requiredNative, rate)
+	return liquidlane.MulDivUp(bigmath.OrZero(bidNative), big.NewInt(int64(e.cfg.MinBundleProfitBidBps)), big.NewInt(10_000))
 }
 
 func (e bundleEngine) priceBundle(b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, feedCount int) pricedBundle {
-	gas := predictGasForFeeds(legHints(b.legs), laneState, feedCount)
+	gas := predictGasForFeeds(gasDemands(b.legs), laneState, feedCount)
+	gasNative, bidNative := gasCostNative(gas.Units, gasPrice), e.bundleBidNative(b, rate)
+	requiredNative := new(big.Int).Add(gasNative, bidNative)
+	requiredNative.Add(requiredNative, e.minBundleProfitNative(bidNative))
 	return pricedBundle{
-		gas:                 gas,
-		gasNative:           gasCostNative(gas.Units, gasPrice),
-		bidNative:           e.bundleBidNative(b, rate),
-		minBundleProfitLoan: e.minBundleProfitLoan(b, rate, gas, gasPrice),
-		selectedLegs:        legsWithProfitFloors(b.selectedLegs(), gas, gasPrice, rate),
+		gas: gas, gasNative: gasNative, bidNative: bidNative,
+		minBundleProfitLoan: nativeToLoan(requiredNative, rate),
+		selectedLegs:        b.legsWithProfitFloors(gas, gasPrice, rate),
 	}
 }
 
@@ -397,21 +344,21 @@ func (e bundleEngine) priceBundleWithoutGasAccounting(
 	gasPrice *big.Int,
 	feedCount int,
 ) pricedBundle {
-	gas := predictGasForFeeds(legHints(b.legs), laneState, feedCount)
+	gas := predictGasForFeeds(gasDemands(b.legs), laneState, feedCount)
 	return pricedBundle{
 		gas:                 gas,
 		gasNative:           gasCostNative(gas.Units, gasPrice),
-		bidNative:           cloneBig(e.cfg.BidWei),
+		bidNative:           bigmath.Clone(e.cfg.BidWei),
 		minBundleProfitLoan: big.NewInt(1),
-		selectedLegs:        legsWithMinimumProfit(b.selectedLegs(), big.NewInt(1)),
+		selectedLegs:        b.selectedLegs(func(int) *big.Int { return big.NewInt(1) }),
 	}
 }
 
 func (e bundleEngine) logBundleEconomics(auctionID, msg string, b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount, scoredLegs int) {
-	gas := predictGasForFeeds(legHints(b.legs), laneState, feedCount)
+	gas := predictGasForFeeds(gasDemands(b.legs), laneState, feedCount)
 	grossNative := loanToNative(b.grossLoan, rate)
 	gasNative := gasCostNative(gas.Units, gasPrice)
-	netNative := e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
+	netNative := e.bundleNetNative(b, rate, gasPrice, gas.Units)
 	bidNative := e.bundleBidNative(b, rate)
 	e.log.Info(msg,
 		"auction", auctionID,

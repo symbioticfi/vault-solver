@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 var (
@@ -48,9 +48,7 @@ func baseInput(candidates ...liquidlane.QuoteCandidate) types.QuoteInput {
 func TestStrategyQuotesNormalizedLiquidLaneCandidates(t *testing.T) {
 	candidate := quoteCandidate(vlt, 2, 100, 200, nil)
 	got, err := New().DecideQuote(t.Context(), baseInput(candidate))
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuote: %v")
 	if got.Decision != types.DecisionQuote || got.QuotedAmountOut.Cmp(big.NewInt(200)) != 0 ||
 		len(got.Legs) != 1 || got.Legs[0].CandidateID != string(candidate.ID) {
 		t.Fatalf("output = %+v, want one 200-output leg", got)
@@ -142,5 +140,30 @@ func TestBuildFillPlanRejectsNonCanonicalCandidateID(t *testing.T) {
 	plan, err := New().BuildFillPlan(t.Context(), baseInput(candidate))
 	if err == nil || plan != nil {
 		t.Fatalf("plan = %+v, err %v; want invalid identity rejection", plan, err)
+	}
+}
+
+func TestStrategyResultsDoNotMutateBorrowedCandidates(t *testing.T) {
+	discountID := common.Hash{1}
+	input := baseInput(quoteCandidate(vlt, 2, 100, 200, &discountID))
+	quote, err := New().DecideQuote(t.Context(), input)
+	if err != nil || len(quote.Legs) != 1 {
+		t.Fatalf("quote = %+v, err %v", quote, err)
+	}
+	plan, err := New().BuildFillPlan(t.Context(), input)
+	if err != nil || plan == nil || len(plan.Legs) != 1 {
+		t.Fatalf("plan = %+v, err %v", plan, err)
+	}
+	for _, amount := range []*big.Int{
+		quote.QuotedAmountOut, quote.Legs[0].AmountIn, quote.Legs[0].AmountOut,
+		plan.AmountIn, plan.QuotedAmountOut, plan.Legs[0].AmountIn, plan.Legs[0].AmountOut, plan.Legs[0].MaxRate,
+	} {
+		amount.SetInt64(1)
+	}
+	*plan.Legs[0].DiscountID = common.Hash{}
+	candidate := input.Candidates[0]
+	if input.AmountIn.Int64() != 100 || candidate.MaxAmountIn.Int64() != 100 || candidate.MaxAmountOut.Int64() != 200 ||
+		candidate.Rate.Int64() != 2_000_000_000_000_000_000 || *candidate.DiscountID != discountID {
+		t.Fatalf("returned result changed its source: amountIn=%s candidate=%+v", input.AmountIn, candidate)
 	}
 }

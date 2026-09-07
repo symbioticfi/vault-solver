@@ -10,6 +10,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
@@ -120,7 +123,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
 	// asset-group at 1.000000 USDC.
 	quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}
-	quotes.strategy = newDefaultTestStrategy()
+	quotes.strategy = defaultstrategy.New()
 
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
@@ -133,9 +136,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	onlyRogue.QuoteID = "33333333-3333-4333-8333-333333333333"
 	onlyRogue.Adapters = []quoteAdapter{rogueAdapter}
 	decision, err := quotes.quote(t.Context(), &onlyRogue)
-	if err != nil {
-		t.Fatalf("quote (only non-configured adapter): unexpected error %v", err)
-	}
+	testcheck.NoError(t, err, "quote (only non-configured adapter): unexpected error %v")
 	if decision.response != nil {
 		t.Fatalf("quote (only non-configured adapter): got %+v, want nil (declined: out of adapter scope)", decision.response)
 	}
@@ -144,9 +145,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	mixed := validQuoteBody() // validQuoteBody's single adapter is vlt (the configured one)
 	mixed.Adapters = append(mixed.Adapters, rogueAdapter)
 	decision, err = quotes.quote(t.Context(), &mixed)
-	if err != nil {
-		t.Fatalf("quote (configured + rogue): unexpected error %v", err)
-	}
+	testcheck.NoError(t, err, "quote (configured + rogue): unexpected error %v")
 	if decision.response == nil {
 		t.Fatal("quote (configured + rogue): got nil, want a quote through the configured adapter")
 	}

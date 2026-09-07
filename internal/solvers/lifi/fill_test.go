@@ -11,11 +11,12 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
@@ -40,7 +41,7 @@ type fakeLifiReader struct {
 	governanceFeeErr error
 }
 
-func (f fakeLifiReader) resolveRoutes(context.Context, []common.Address) ([]route, error) {
+func (f fakeLifiReader) ResolveRoutes(context.Context, []common.Address) ([]route, error) {
 	return f.routes, nil
 }
 
@@ -58,13 +59,13 @@ func (f fakeLifiReader) validateDirectAuthorization(context.Context, common.Addr
 	return f.directAuthErr
 }
 
-func (f fakeLifiReader) validateGasTokens([]route) error { return nil }
+func (f fakeLifiReader) ValidateGasTokens([]route) error { return nil }
 
-func (f fakeLifiReader) quoteSnapshots(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
+func (f fakeLifiReader) Quote(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
 	return quoteSnapshotSet{}, nil
 }
 
-func (f fakeLifiReader) fillSnapshots(
+func (f fakeLifiReader) Fill(
 	context.Context, []route, common.Address, common.Address, *big.Int, time.Time,
 ) (fillSnapshotSet, error) {
 	if f.fillSetFn != nil {
@@ -138,14 +139,10 @@ func unpackFinaliseCalldata(t *testing.T, calldata []byte) (
 		t.Fatalf("finalise selector = %s, want 0xd24f1d03", got)
 	}
 	executorABI, err := executor.LiquidLaneLifiExecutorMetaData.ParseABI()
-	if err != nil {
-		t.Fatalf("parse executor ABI: %v", err)
-	}
+	testcheck.NoError(t, err, "parse executor ABI: %v")
 	method := executorABI.Methods["finaliseWithCurrentTimestamp"]
 	args, err := method.Inputs.Unpack(calldata[4:])
-	if err != nil {
-		t.Fatalf("unpack finaliseWithCurrentTimestamp: %v", err)
-	}
+	testcheck.NoError(t, err, "unpack finaliseWithCurrentTimestamp: %v")
 	if len(args) != 3 {
 		t.Fatalf("finalise arguments = %d, want order, routes, and discountRoutes", len(args))
 	}
@@ -177,9 +174,7 @@ func TestBuildFillCalldata(t *testing.T) {
 	}
 
 	calldata, err := buildFillCalldata(*submitted, orderID, plan, nil)
-	if err != nil {
-		t.Fatalf("buildFillCalldata: %v", err)
-	}
+	testcheck.NoError(t, err, "buildFillCalldata: %v")
 	if calldata.OrderID != orderID {
 		t.Fatalf("order id = %s", calldata.OrderID)
 	}
@@ -202,7 +197,7 @@ func TestBuildFillCalldata(t *testing.T) {
 	}
 }
 
-func TestBuildExecutorRoutesRejectsInputMismatch(t *testing.T) {
+func TestBuildFillCalldataRejectsInputMismatch(t *testing.T) {
 	order := submittedOrder{AmountIn: big.NewInt(100)}
 	plan := &types.FillPlan{Routes: []types.FillRoute{{
 		Adapter:           common.HexToAddress("0x9999999999999999999999999999999999999999"),
@@ -211,9 +206,9 @@ func TestBuildExecutorRoutesRejectsInputMismatch(t *testing.T) {
 		MinAmountOut:      big.NewInt(80),
 	}}}
 
-	_, _, err := buildExecutorRoutes(order, plan, nil)
+	_, err := buildFillCalldata(order, common.Hash{}, plan, nil)
 	if err == nil || !strings.Contains(err.Error(), "input sum 99 does not match order input 100") {
-		t.Fatalf("buildExecutorRoutes() error = %v", err)
+		t.Fatalf("buildFillCalldata() error = %v", err)
 	}
 }
 
@@ -255,9 +250,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 		plan,
 		map[common.Hash]*discounts.Signed{discountID: resolved},
 	)
-	if err != nil {
-		t.Fatalf("buildFillCalldata: %v", err)
-	}
+	testcheck.NoError(t, err, "buildFillCalldata: %v")
 	if got := calldata.Deadline.Unix(); got != 1_799_999_999 {
 		t.Fatalf("transaction deadline = %d, want selected discount deadline", got)
 	}

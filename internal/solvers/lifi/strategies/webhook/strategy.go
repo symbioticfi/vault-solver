@@ -4,13 +4,12 @@ import (
 	"context"
 	"math/big"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -25,17 +24,8 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
-}
-
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
-	cfg, err := webhook.ParseConfig(raw)
-	if err != nil {
-		return nil, err
-	}
-	client, err := webhook.NewClient(cfg)
+	client, err := webhook.NewFromConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -47,28 +37,22 @@ func New(client *webhook.Client) *Strategy {
 }
 
 func (s *Strategy) DecideQuotes(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
-	var out types.QuoteOutput
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideQuotesRoute, input, &out); err != nil {
+	output, err := webhook.Post[types.QuoteOutput](ctx, s.client, decideQuotesRoute, input)
+	if err == nil {
+		err = validateQuotes(input, &output)
+	}
+	if err != nil {
 		return types.QuoteOutput{}, err
 	}
-	if err := validateQuotes(input, &out); err != nil {
-		return types.QuoteOutput{}, err
-	}
-	return out, nil
+	return output, nil
 }
 
 func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
-	var out *types.FillPlan
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideFillRoute, input, &out); err != nil {
-		if webhook.IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
-			return nil, types.MarkPermanentFillDecisionError(err)
-		}
-		return nil, err
+	plan, err := webhook.Post[*types.FillPlan](ctx, s.client, decideFillRoute, input)
+	if webhook.IsHTTPStatus(err, http.StatusBadRequest, http.StatusUnprocessableEntity) {
+		return nil, types.MarkPermanentFillDecisionError(err)
 	}
-	if out == nil {
-		return nil, nil
-	}
-	return out, nil
+	return plan, err
 }
 
 type quotePair struct {
@@ -78,47 +62,46 @@ type quotePair struct {
 
 func validateQuotes(input types.QuoteInput, out *types.QuoteOutput) error {
 	pairs := make(map[quotePair]bool)
-	seen := make(map[quotePair]bool)
-	for _, candidate := range input.Inventory {
-		pairs[quotePair{
-			from: candidate.TokenIn, to: candidate.TokenOut,
-			fromDec: candidate.TokenInDecimals, toDec: candidate.TokenOutDecimals,
-		}] = true
+	for _, item := range input.Inventory {
+		pairs[quotePair{item.TokenIn, item.TokenOut, item.TokenInDecimals, item.TokenOutDecimals}] = false
 	}
-	for i := range out.Quotes {
-		quote := &out.Quotes[i]
-		pair := quotePair{quote.FromAsset, quote.ToAsset, quote.FromDecimals, quote.ToDecimals}
-		if !pairs[pair] {
-			return errors.Errorf("webhook quote %d uses unknown token pair", i)
+	canonical := make([]types.Quote, len(out.Quotes))
+	for index, proposed := range out.Quotes {
+		key := quotePair{proposed.FromAsset, proposed.ToAsset, proposed.FromDecimals, proposed.ToDecimals}
+		used, known := pairs[key]
+		if !known {
+			return errors.Errorf("webhook quote %d uses unknown token pair", index)
 		}
-		if seen[pair] {
-			return errors.Errorf("webhook quote %d repeats token pair", i)
+		if used {
+			return errors.Errorf("webhook quote %d repeats token pair", index)
 		}
-		seen[pair] = true
-		if quote.Expiry <= input.ServerTime.Unix() || quote.Expiry > input.QuoteExpiresAt.Unix() {
-			return errors.Errorf("webhook quote %d expiry is outside the solver window", i)
+		pairs[key] = true
+		if proposed.Expiry <= input.ServerTime.Unix() || proposed.Expiry > input.QuoteExpiresAt.Unix() {
+			return errors.Errorf("webhook quote %d expiry is outside the solver window", index)
 		}
-		if len(quote.Ranges) == 0 || len(quote.Ranges) > types.MaxQuoteRanges {
-			return errors.Errorf("webhook quote %d has %d ranges, allowed [1,%d]", i, len(quote.Ranges), types.MaxQuoteRanges)
+		if len(proposed.Ranges) < 1 || len(proposed.Ranges) > types.MaxQuoteRanges {
+			return errors.Errorf("webhook quote %d has %d ranges, allowed [1,%d]", index, len(proposed.Ranges), types.MaxQuoteRanges)
 		}
-		for j, priceRange := range quote.Ranges {
-			rate, rateOK := new(big.Rat).SetString(priceRange.Quote)
-			if priceRange.MinAmount == nil || priceRange.MaxAmount == nil || priceRange.MinAmount.Sign() <= 0 ||
-				priceRange.MinAmount.Cmp(priceRange.MaxAmount) > 0 || priceRange.Quote == "" {
-				return errors.Errorf("webhook quote %d range %d is invalid", i, j)
+		ranges := slices.Clone(proposed.Ranges)
+		for r, price := range ranges {
+			if price.MinAmount == nil || price.MaxAmount == nil || price.MinAmount.Sign() <= 0 || price.MinAmount.Cmp(price.MaxAmount) > 0 || price.Quote == "" {
+				return errors.Errorf("webhook quote %d range %d is invalid", index, r)
 			}
-			if !rateOK || rate.Sign() <= 0 {
-				return errors.Errorf("webhook quote %d range %d rate is invalid", i, j)
-			}
-		}
-		sort.Slice(quote.Ranges, func(i, j int) bool { return quote.Ranges[i].MinAmount.Cmp(quote.Ranges[j].MinAmount) < 0 })
-		for j, priceRange := range quote.Ranges {
-			if j > 0 && quote.Ranges[j-1].MaxAmount.Cmp(priceRange.MinAmount) >= 0 {
-				return errors.Errorf("webhook quote %d ranges overlap", i)
+			rate, valid := new(big.Rat).SetString(price.Quote)
+			if !valid || rate.Sign() <= 0 {
+				return errors.Errorf("webhook quote %d range %d rate is invalid", index, r)
 			}
 		}
-		quote.ExclusiveFor = input.Solver
+		slices.SortFunc(ranges, func(a, b types.QuoteRange) int { return a.MinAmount.Cmp(b.MinAmount) })
+		for r := 1; r < len(ranges); r++ {
+			if ranges[r-1].MaxAmount.Cmp(ranges[r].MinAmount) >= 0 {
+				return errors.Errorf("webhook quote %d ranges overlap", index)
+			}
+		}
+		proposed.Ranges, proposed.ExclusiveFor = ranges, input.Solver
+		canonical[index] = proposed
 	}
+	out.Quotes = canonical
 	return nil
 }
 

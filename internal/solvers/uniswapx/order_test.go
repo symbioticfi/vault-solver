@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -37,9 +38,7 @@ func TestV2OrderHashMatchesApitypesAndGolden(t *testing.T) {
 	}
 
 	got, err := v2OrderHash(order)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got.Hex() != goldenV2OrderHash {
 		t.Fatalf("V2 order hash = %s, want golden %s", got.Hex(), goldenV2OrderHash)
 	}
@@ -84,9 +83,7 @@ func TestV2OrderHashMatchesApitypesAndGolden(t *testing.T) {
 		},
 	}
 	want, err := typed.HashStruct(typed.PrimaryType, typed.Message)
-	if err != nil {
-		t.Fatalf("hash V2 order with apitypes: %v", err)
-	}
+	testcheck.NoError(t, err, "hash V2 order with apitypes: %v")
 	if got != common.BytesToHash(want) {
 		t.Fatalf("V2 hash mismatch:\n manual   %s\n apitypes %s", got.Hex(), common.BytesToHash(want).Hex())
 	}
@@ -96,17 +93,13 @@ func TestParseAndResolveOrder(t *testing.T) {
 	reactor := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	cosignerKey, err := crypto.HexToECDSA("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	cosigner := crypto.PubkeyToAddress(cosignerKey.PublicKey)
 	tokenIn := common.HexToAddress("0x4444444444444444444444444444444444444444")
 	tokenOut := common.HexToAddress("0x5555555555555555555555555555555555555555")
 	recipient := common.HexToAddress("0x6666666666666666666666666666666666666666")
 	policy, err := tokenpolicy.New(tokenpolicy.All, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	cfg := &Config{Reactor: reactor, Executor: executor, TokenPolicy: policy}
 	order := v2Order{
 		Info: v2OrderInfo{
@@ -123,22 +116,14 @@ func TestParseAndResolveOrder(t *testing.T) {
 		Cosignature: make([]byte, 65),
 	}
 	hash, err := v2OrderHash(order)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	cosignerData, err := v2CosignerDataArguments.Pack(order.CosignerData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	order.Cosignature, err = crypto.Sign(crypto.Keccak256(hash.Bytes(), cosignerData), cosignerKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	order.Cosignature[64] += 27
 	encoded, err := v2OrderArguments.Pack(order)
-	if err != nil {
-		t.Fatalf("pack order: %v", err)
-	}
+	testcheck.NoError(t, err, "pack order: %v")
 	entry := orderEntry{
 		Type: "Dutch_V2", EncodedOrder: hexutil.Encode(encoded), Signature: "0x01", OrderHash: hash.Hex(),
 		OrderStatus: "open", ChainID: 1, QuoteID: "quote-1",
@@ -146,9 +131,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		Outputs: []orderOutput{{Token: tokenOut.Hex(), StartAmount: "220", EndAmount: "200", Recipient: recipient.Hex()}},
 	}
 	resolved, err := parseAndResolveOrder(entry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0))
-	if err != nil {
-		t.Fatalf("parseAndResolveOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseAndResolveOrder: %v")
 	if resolved.AmountIn.Cmp(big.NewInt(100)) != 0 || resolved.AmountOut.Cmp(big.NewInt(210)) != 0 {
 		t.Fatalf("resolved amounts = %s/%s, want 100/210", resolved.AmountIn, resolved.AmountOut)
 	}
@@ -157,31 +140,21 @@ func TestParseAndResolveOrder(t *testing.T) {
 		rotatedKey, keyErr := crypto.HexToECDSA(
 			"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
 		)
-		if keyErr != nil {
-			t.Fatal(keyErr)
-		}
+		testcheck.NoError(t, keyErr)
 		rotated := order
 		rotated.Cosigner = crypto.PubkeyToAddress(rotatedKey.PublicKey)
 		rotatedHash, hashErr := v2OrderHash(rotated)
-		if hashErr != nil {
-			t.Fatal(hashErr)
-		}
+		testcheck.NoError(t, hashErr)
 		encodedCosignerData, packErr := v2CosignerDataArguments.Pack(rotated.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		rotated.Cosignature, packErr = crypto.Sign(
 			crypto.Keccak256(rotatedHash.Bytes(), encodedCosignerData),
 			rotatedKey,
 		)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		rotated.Cosignature[64] += 27
 		body, packErr := v2OrderArguments.Pack(rotated)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		rotatedEntry := entry
 		rotatedEntry.EncodedOrder = hexutil.Encode(body)
 		rotatedEntry.OrderHash = rotatedHash.Hex()
@@ -197,24 +170,16 @@ func TestParseAndResolveOrder(t *testing.T) {
 		publicOrder.CosignerData.ExclusiveFiller = recipient
 		publicOrder.CosignerData.ExclusivityOverrideBps = big.NewInt(100)
 		publicCosignerData, packErr := v2CosignerDataArguments.Pack(publicOrder.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		publicOrder.Cosignature, packErr = crypto.Sign(crypto.Keccak256(hash.Bytes(), publicCosignerData), cosignerKey)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		publicOrder.Cosignature[64] += 27
 		body, packErr := v2OrderArguments.Pack(publicOrder)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		publicEntry := entry
 		publicEntry.EncodedOrder = hexutil.Encode(body)
 		public, parseErr := parseAndResolveOrder(publicEntry, orderSourcePublicV2, cfg, 1, time.Unix(1_000, 0))
-		if parseErr != nil {
-			t.Fatal(parseErr)
-		}
+		testcheck.NoError(t, parseErr)
 		if public.AmountOut.Cmp(big.NewInt(223)) != 0 {
 			t.Fatalf("override amount = %s, want 223", public.AmountOut)
 		}
@@ -247,25 +212,17 @@ func TestParseAndResolveOrder(t *testing.T) {
 		}}
 		inputDecay.CosignerData.InputOverride = big.NewInt(80)
 		inputHash, hashErr := v2OrderHash(inputDecay)
-		if hashErr != nil {
-			t.Fatal(hashErr)
-		}
+		testcheck.NoError(t, hashErr)
 		encodedCosignerData, packErr := v2CosignerDataArguments.Pack(inputDecay.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		inputDecay.Cosignature, packErr = crypto.Sign(
 			crypto.Keccak256(inputHash.Bytes(), encodedCosignerData),
 			cosignerKey,
 		)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		inputDecay.Cosignature[64] += 27
 		body, packErr := v2OrderArguments.Pack(inputDecay)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		decayingEntry := entry
 		decayingEntry.Outputs = append([]orderOutput(nil), entry.Outputs...)
 		decayingEntry.EncodedOrder = hexutil.Encode(body)
@@ -279,9 +236,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 			1,
 			time.Unix(1_050, 0),
 		)
-		if parseErr != nil {
-			t.Fatalf("exact-output order rejected: %v", parseErr)
-		}
+		testcheck.NoError(t, parseErr, "exact-output order rejected: %v")
 		if resolvedExactOutput.AmountIn.Cmp(big.NewInt(110)) != 0 ||
 			resolvedExactOutput.AmountOut.Cmp(big.NewInt(200)) != 0 {
 			t.Fatalf("resolved exact-output amounts = %s/%s, want 110/200",
@@ -315,20 +270,14 @@ func TestParseAndResolveOrder(t *testing.T) {
 				candidate := order
 				test.mutate(&candidate)
 				encodedCosignerData, packErr := v2CosignerDataArguments.Pack(candidate.CosignerData)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
+				testcheck.NoError(t, packErr)
 				candidate.Cosignature, packErr = crypto.Sign(
 					crypto.Keccak256(hash.Bytes(), encodedCosignerData), cosignerKey,
 				)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
+				testcheck.NoError(t, packErr)
 				candidate.Cosignature[64] += 27
 				body, packErr := v2OrderArguments.Pack(candidate)
-				if packErr != nil {
-					t.Fatal(packErr)
-				}
+				testcheck.NoError(t, packErr)
 				candidateEntry := entry
 				candidateEntry.EncodedOrder = hexutil.Encode(body)
 				if _, parseErr := parseAndResolveOrder(
@@ -349,22 +298,14 @@ func TestParseAndResolveOrder(t *testing.T) {
 			append([]*big.Int(nil), order.CosignerData.OutputOverrides...), big.NewInt(0),
 		)
 		multiHash, hashErr := v2OrderHash(multi)
-		if hashErr != nil {
-			t.Fatal(hashErr)
-		}
+		testcheck.NoError(t, hashErr)
 		encodedCosignerData, packErr := v2CosignerDataArguments.Pack(multi.CosignerData)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		multi.Cosignature, packErr = crypto.Sign(crypto.Keccak256(multiHash.Bytes(), encodedCosignerData), cosignerKey)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		multi.Cosignature[64] += 27
 		body, packErr := v2OrderArguments.Pack(multi)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		multiEntry := entry
 		multiEntry.EncodedOrder = hexutil.Encode(body)
 		multiEntry.OrderHash = multiHash.Hex()
@@ -374,9 +315,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		resolvedMulti, parseErr := parseAndResolveOrder(
 			multiEntry, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0),
 		)
-		if parseErr != nil {
-			t.Fatalf("multi-output order rejected: %v", parseErr)
-		}
+		testcheck.NoError(t, parseErr, "multi-output order rejected: %v")
 		if resolvedMulti.AmountOut.Cmp(big.NewInt(225)) != 0 {
 			t.Fatalf("multi-output amount = %s, want 225", resolvedMulti.AmountOut)
 		}
@@ -386,9 +325,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		tamperedOrder := order
 		tamperedOrder.CosignerData.ExclusiveFiller = recipient
 		body, packErr := v2OrderArguments.Pack(tamperedOrder)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
 		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
@@ -400,9 +337,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		tamperedOrder := order
 		tamperedOrder.Cosigner = common.Address{}
 		body, packErr := v2OrderArguments.Pack(tamperedOrder)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
 		if _, err := parseAndResolveOrder(
@@ -425,9 +360,7 @@ func TestParseAndResolveOrder(t *testing.T) {
 		tamperedOrder.Cosignature = append([]byte(nil), order.Cosignature...)
 		tamperedOrder.Cosignature[10] ^= 0xff
 		body, packErr := v2OrderArguments.Pack(tamperedOrder)
-		if packErr != nil {
-			t.Fatal(packErr)
-		}
+		testcheck.NoError(t, packErr)
 		tampered := entry
 		tampered.EncodedOrder = hexutil.Encode(body)
 		if _, err := parseAndResolveOrder(tampered, orderSourceExclusiveV2, cfg, 1, time.Unix(1_050, 0)); err == nil {
@@ -464,13 +397,9 @@ func testExclusiveOrderEntry(t *testing.T, exclusiveFiller common.Address) (orde
 		},
 	}
 	hash, err := v2OrderHash(order)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	encoded, err := v2OrderArguments.Pack(order)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	return orderEntry{
 		Type: orderTypeDutchV2, EncodedOrder: hexutil.Encode(encoded), Signature: "0x",
 		OrderHash: hash.Hex(), OrderStatus: orderStatusOpen, ChainID: 1, QuoteID: "quote-1",

@@ -10,20 +10,17 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
 func TestDecideQuotesRequiresSolverExpiry(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err = strategy.DecideQuotes(context.Background(), types.QuoteInput{
+	strategy := testStrategy(t, Config{})
+	if _, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
 		ChainTime: time.Unix(1_800_000_000, 0),
 	}); err == nil {
 		t.Fatal("expected missing quote expiry error")
@@ -31,12 +28,9 @@ func TestDecideQuotesRequiresSolverExpiry(t *testing.T) {
 }
 
 func TestDefaultExecutionBufferIsOneBlock(t *testing.T) {
-	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if strategy.executionBuffer != 12*time.Second {
-		t.Fatalf("execution buffer = %s", strategy.executionBuffer)
+	strategy := testStrategy(t, Config{})
+	if strategy.policy.ExecutionBuffer != 12*time.Second {
+		t.Fatalf("execution buffer = %s", strategy.policy.ExecutionBuffer)
 	}
 	if strategy.rangeCount != 8 {
 		t.Fatalf("range count = %d", strategy.rangeCount)
@@ -51,58 +45,83 @@ func TestRangeCountValidation(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesAppliesBuffersAndCapacity(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100, MinAmount: "1000"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Solver:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		ChainTime:      time.Unix(1_800_000_000, 0),
-		QuoteExpiresAt: time.Unix(1_800_000_300, 0),
-		MaxFeePerGas:   big.NewInt(0),
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID:               "route-1",
-				Adapter:          common.HexToAddress("0x2222222222222222222222222222222222222222"),
-				TokenIn:          common.HexToAddress("0x3333333333333333333333333333333333333333"),
-				TokenOut:         common.HexToAddress("0x4444444444444444444444444444444444444444"),
-				TokenInDecimals:  6,
-				TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(990_000_000),
-			MaxRate:   big.NewInt(1_000_000_000_000_000_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes len = %d", len(out.Quotes))
-	}
-	q := out.Quotes[0]
-	if q.Expiry != 1_800_000_300 {
-		t.Fatalf("expiry = %d", q.Expiry)
-	}
-	if got, ok := new(big.Rat).SetString(q.Ranges[0].Quote); !ok ||
-		got.Sign() <= 0 || got.Cmp(big.NewRat(98, 100)) > 0 {
-		t.Fatalf("quote = %q, want positive rate no greater than buffered 0.98", q.Ranges[0].Quote)
-	}
-	if got := q.Ranges[0].MinAmount.String(); got != "1000" {
-		t.Fatalf("minAmount = %s", got)
-	}
-	if got := q.Ranges[len(q.Ranges)-1].MaxAmount.String(); got != "990000000" {
-		t.Fatalf("maxAmount = %s", got)
+// One physical route isolates amount floors, configured ranges and reservation ordering.
+func TestDecideQuotesInventoryLimits(t *testing.T) {
+	for _, test := range []struct {
+		name                                   string
+		config                                 Config
+		assets, reserved, minAmount, maxAmount int64
+		ranges                                 int
+		lifetime                               time.Duration
+		wantRate, rateCeiling                  string
+	}{
+		{name: "price buffer", config: Config{PriceBufferBps: 100, MinAmount: "1000"}, assets: 990_000_000,
+			minAmount: 1000, maxAmount: 990_000_000, lifetime: 5 * time.Minute, rateCeiling: "0.98"},
+		{name: "break even minimum", config: Config{MinAmount: "1"}, assets: 100,
+			minAmount: 1, maxAmount: 100, lifetime: time.Minute, wantRate: "1"},
+		{name: "configured range count", config: Config{MinAmount: "100", RangeCount: 4}, assets: 1000,
+			minAmount: 100, maxAmount: 1000, ranges: 4, lifetime: time.Minute},
+		{name: "below minimum", config: Config{MinAmount: "1000001"}, assets: 1_000_000, lifetime: 90 * time.Second},
+		{name: "inventory reserve", config: Config{InventoryReserveBps: 1000, MinAmount: "2"}, assets: 1000,
+			minAmount: 2, maxAmount: 900, lifetime: 90 * time.Second},
+		{name: "reserve before pending", config: Config{InventoryReserveBps: 1000, MinAmount: "2"}, assets: 1000, reserved: 800,
+			minAmount: 2, maxAmount: 100, lifetime: 90 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Unix(1_800_000_000, 0)
+			input := types.QuoteInput{
+				Solver: common.Address{1}, ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(test.lifetime),
+				MaxFeePerGas: new(big.Int),
+				Inventory: []liquidlane.Inventory{{
+					Route: liquidlane.Route{ID: "route-1", CapacityID: "capacity-1", Adapter: common.Address{2},
+						TokenIn: common.Address{3}, TokenOut: common.Address{4}, TokenInDecimals: 6, TokenOutDecimals: 6},
+					MaxAssets: big.NewInt(test.assets), MaxRate: big.NewInt(1_000_000_000_000_000_000),
+				}},
+			}
+			if test.reserved > 0 {
+				input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(test.reserved)}
+			}
+			out, err := testStrategy(t, test.config).DecideQuotes(t.Context(), input)
+			testcheck.NoError(t, err)
+			if test.maxAmount == 0 {
+				if len(out.Quotes) != 0 {
+					t.Fatalf("below-minimum inventory quoted: %+v", out.Quotes)
+				}
+				return
+			}
+			if len(out.Quotes) != 1 || len(out.Quotes[0].Ranges) == 0 {
+				t.Fatalf("quotes = %+v", out.Quotes)
+			}
+			quote := out.Quotes[0]
+			ranges := quote.Ranges
+			if quote.Expiry != input.QuoteExpiresAt.Unix() || ranges[0].MinAmount.Cmp(big.NewInt(test.minAmount)) != 0 || ranges[len(ranges)-1].MaxAmount.Cmp(big.NewInt(test.maxAmount)) != 0 {
+				t.Fatalf("quote = %+v, want [%d,%d] until %s", quote, test.minAmount, test.maxAmount, input.QuoteExpiresAt)
+			}
+			if test.ranges != 0 && len(ranges) != test.ranges {
+				t.Fatalf("ranges = %d, want %d", len(ranges), test.ranges)
+			}
+			for i := 1; i < len(ranges); i++ {
+				if want := new(big.Int).Add(ranges[i-1].MaxAmount, big.NewInt(1)); ranges[i].MinAmount.Cmp(want) != 0 {
+					t.Fatalf("range[%d].min = %s, want %s", i, ranges[i].MinAmount, want)
+				}
+			}
+			if test.wantRate != "" && ranges[0].Quote != test.wantRate {
+				t.Fatalf("rate = %s, want %s", ranges[0].Quote, test.wantRate)
+			}
+			if test.rateCeiling != "" {
+				rate, ok := new(big.Rat).SetString(ranges[0].Quote)
+				ceiling, _ := new(big.Rat).SetString(test.rateCeiling)
+				if !ok || rate.Sign() <= 0 || rate.Cmp(ceiling) > 0 {
+					t.Fatalf("rate = %s, want positive and <= %s", ranges[0].Quote, test.rateCeiling)
+				}
+			}
+		})
 	}
 }
 
 func TestDecideQuotesChargesGasAfterBuildingRange(t *testing.T) {
-	cfg := testStrategyConfig(Config{MinAmount: "1000"})
-	strategy, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	cfg := Config{MinAmount: "1000"}
+	strategy := testStrategy(t, cfg)
 
 	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
 		Solver:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
@@ -123,9 +142,7 @@ func TestDecideQuotesChargesGasAfterBuildingRange(t *testing.T) {
 			MaxRate:   big.NewInt(1_000_000_000_000_000_000),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes len = %d", len(out.Quotes))
 	}
@@ -144,31 +161,6 @@ func TestDecideQuotesChargesGasAfterBuildingRange(t *testing.T) {
 		if !ok || rate.Sign() <= 0 || rate.Cmp(big.NewRat(1, 1)) >= 0 {
 			t.Fatalf("quote should deduct complete-plan gas: %#v", ranges)
 		}
-	}
-}
-
-func TestDecideQuotesAllowsBreakEvenMinimum(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	now := time.Unix(1_800_000_000, 0)
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID:      "route-1",
-				TokenIn: common.HexToAddress("0x1111111111111111111111111111111111111111"), TokenOut: common.HexToAddress("0x2222222222222222222222222222222222222222"),
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(100), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		}},
-		MaxFeePerGas: big.NewInt(0), ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 || out.Quotes[0].Ranges[0].Quote != "1" {
-		t.Fatalf("quotes = %+v, want break-even range", out.Quotes)
 	}
 }
 
@@ -194,7 +186,7 @@ func TestMaximumNonOverquotingRate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			amountIn := big.NewInt(tt.amountIn)
 			amountOut := big.NewInt(tt.amountOut)
-			got := maximumNonOverquotingRate(
+			got := liquidlane.MaxRateForAmountOut(
 				amountOut, amountIn, tt.inDecimals, tt.outDecimals,
 			)
 			if got.Cmp(big.NewInt(tt.want)) != 0 {
@@ -216,7 +208,7 @@ func TestMaximumNonOverquotingRate(t *testing.T) {
 }
 
 func TestPriceQuoteRangeKeepsPositiveMinimumOutput(t *testing.T) {
-	strategy := &Strategy{minAmount: big.NewInt(3)}
+	strategy := &Strategy{policy: planning.ExecutionPolicy{MinAmount: big.NewInt(3)}}
 	candidates := []liquidlane.QuoteCandidate{{
 		ID:           "route-1",
 		Route:        liquidlane.Route{ID: "route-1"},
@@ -224,18 +216,13 @@ func TestPriceQuoteRangeKeepsPositiveMinimumOutput(t *testing.T) {
 		MaxAmountIn:  big.NewInt(4),
 		MaxAmountOut: big.NewInt(2),
 	}}
-	pricing, err := liquidstrategies.NewGasPricing(
-		big.NewInt(0), candidates[0].Route.TokenOut, nil, nil, 0, liquidstrategies.GasEnvelope{},
+	pricing, err := planning.NewGasPricing(
+		big.NewInt(0), candidates[0].Route.TokenOut, nil, nil, 0, planning.GasEnvelope{},
 	)
-	if err != nil {
-		t.Fatalf("NewGasPricing: %v", err)
-	}
-	quoteRange, err := strategy.priceQuoteRange(
-		candidates, 1, big.NewInt(3), big.NewInt(4), pricing.MaxCost(1, 0), 1, pricing,
-	)
-	if err != nil {
-		t.Fatalf("priceQuoteRange: %v", err)
-	}
+	testcheck.NoError(t, err, "NewGasPricing: %v")
+	quoter := newRangeQuoter(strategy, candidates, 1, pricing)
+	quoteRange, err := quoter.quote(big.NewInt(3), big.NewInt(4), quoter.floor(big.NewInt(4)))
+	testcheck.NoError(t, err, "priceQuoteRange: %v")
 	if quoteRange == nil ||
 		quoteRange.MinAmount.Cmp(big.NewInt(3)) != 0 ||
 		quoteRange.MaxAmount.Cmp(big.NewInt(4)) != 0 ||
@@ -244,11 +231,36 @@ func TestPriceQuoteRangeKeepsPositiveMinimumOutput(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1", RangeCount: 8}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
+func TestQuoteBreakpointsRespectIntegerIntervals(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		minimum, maximum int64
+		count            int
+		want             []int64
+	}{
+		{name: "backwards", minimum: 5, maximum: 4, count: 8},
+		{name: "no intervals", minimum: 1, maximum: 10, count: 0},
+		{name: "one point", minimum: 4, maximum: 4, count: 8, want: []int64{4}},
+		{name: "adjacent endpoints", minimum: 4, maximum: 5, count: 8, want: []int64{5}},
+		{name: "exhaust integer interior", minimum: 3, maximum: 7, count: 20, want: []int64{4, 5, 6, 7}},
+		{name: "equal relative spans", minimum: 1, maximum: 10_000, count: 4, want: []int64{10, 100, 1000, 10_000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := quoteBreakpoints(big.NewInt(tc.maximum), big.NewInt(tc.minimum), tc.count)
+			if len(got) != len(tc.want) {
+				t.Fatalf("breakpoints = %v, want %v", got, tc.want)
+			}
+			for i, want := range tc.want {
+				if got[i].Cmp(big.NewInt(want)) != 0 {
+					t.Fatalf("breakpoints = %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
+}
+
+func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
+	strategy := testStrategy(t, Config{MinAmount: "1", RangeCount: 8})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -279,14 +291,12 @@ func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			maxFeePerGas := big.NewInt(tt.maxFeePerGas)
-			pricing, pricingErr := liquidstrategies.NewGasPricing(
+			pricing, pricingErr := planning.NewGasPricing(
 				maxFeePerGas, tokenOut, gasPrices, nil, 0, types.LiquidLaneGasEnvelope(),
 			)
-			if pricingErr != nil {
-				t.Fatalf("NewGasPricing: %v", pricingErr)
-			}
+			testcheck.NoError(t, pricingErr, "NewGasPricing: %v")
 			gasCost := pricing.MaxCost(1, 0)
-			actualGasCost := pricing.Cost([]liquidstrategies.GasLeg{{Route: route, AmountOut: maximum}})
+			actualGasCost := pricing.Cost([]planning.GasLeg{{Route: route, AmountOut: maximum}})
 			if actualGasCost.Cmp(gasCost) != 0 {
 				t.Fatalf("actual gas cost = %s, max gas cost = %s", actualGasCost, gasCost)
 			}
@@ -294,7 +304,7 @@ func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
 			// At gasCost+1 the floor rate is positive but still rounds to zero output.
 			wantMin := new(big.Int).Add(gasCost, big.NewInt(2))
 			floorOutput := func(amount *big.Int) *big.Int {
-				floorRate := candidateFloorRate(candidates, amount, maximum, gasCost, 1, 0, 6, 6)
+				floorRate := newRangeQuoter(strategy, candidates, 1, pricing).floor(maximum).at(amount)
 				return liquidlane.AmountOutForRate(amount, floorRate, 6, 6)
 			}
 			if unsafeInput := new(big.Int).Sub(wantMin, big.NewInt(1)); floorOutput(unsafeInput).Sign() != 0 {
@@ -321,9 +331,7 @@ func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
 				GasPrices: gasPrices, MaxFeePerGas: maxFeePerGas,
 				ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 			})
-			if decideErr != nil {
-				t.Fatalf("DecideQuotes: %v", decideErr)
-			}
+			testcheck.NoError(t, decideErr, "DecideQuotes: %v")
 			if len(out.Quotes) != 1 || len(out.Quotes[0].Ranges) == 0 {
 				t.Fatalf("quotes = %+v, want ranges above gas break-even", out.Quotes)
 			}
@@ -339,11 +347,8 @@ func TestDecideQuotesTrimsAtGasBreakEven(t *testing.T) {
 }
 
 func TestDecideQuotesBoundsGasTransitionInsideRange(t *testing.T) {
-	cfg := testStrategyConfig(Config{MinAmount: "900"})
-	strategy, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	cfg := Config{MinAmount: "900"}
+	strategy := testStrategy(t, cfg)
 
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -369,26 +374,22 @@ func TestDecideQuotesBoundsGasTransitionInsideRange(t *testing.T) {
 		GasSnapshot: gasSnapshot, GasPrices: testGasPrices(tokenOut, 1_000_000), MaxFeePerGas: big.NewInt(1_000_000_000),
 		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 || len(out.Quotes[0].Ranges) == 0 {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
-	pricing, err := liquidstrategies.NewGasPricing(
+	pricing, err := planning.NewGasPricing(
 		big.NewInt(1_000_000_000), tokenOut, testGasPrices(tokenOut, 1_000_000), gasSnapshot, 0,
 		types.LiquidLaneGasEnvelope(),
 	)
-	if err != nil {
-		t.Fatalf("pricing: %v", err)
-	}
+	testcheck.NoError(t, err, "pricing: %v")
 	for _, quoteRange := range out.Quotes[0].Ranges {
 		rate, ok := new(big.Rat).SetString(quoteRange.Quote)
 		if !ok {
 			t.Fatalf("invalid quote rate %q", quoteRange.Quote)
 		}
 		for amount := quoteRange.MinAmount.Int64(); amount <= quoteRange.MaxAmount.Int64(); amount++ {
-			actual := new(big.Int).Sub(big.NewInt(amount), pricing.Cost([]liquidstrategies.GasLeg{{
+			actual := new(big.Int).Sub(big.NewInt(amount), pricing.Cost([]planning.GasLeg{{
 				Route: route, AmountOut: big.NewInt(amount),
 			}}))
 			quoted := new(big.Int).Mul(big.NewInt(amount), rate.Num())
@@ -400,52 +401,8 @@ func TestDecideQuotesBoundsGasTransitionInsideRange(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesUsesConfiguredRangeCount(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "100", RangeCount: 4}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	now := time.Unix(1_800_000_000, 0)
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID: "route-1", TokenIn: tokenIn, TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(1_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		}},
-		MaxFeePerGas: big.NewInt(0), ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes = %+v", out.Quotes)
-	}
-	ranges := out.Quotes[0].Ranges
-	if len(ranges) != 4 {
-		t.Fatalf("ranges = %+v, want four configured ranges", ranges)
-	}
-	for i := range ranges {
-		if i > 0 {
-			wantMin := new(big.Int).Add(ranges[i-1].MaxAmount, big.NewInt(1))
-			if ranges[i].MinAmount.Cmp(wantMin) != 0 {
-				t.Fatalf("range[%d].min = %s, want %s", i, ranges[i].MinAmount, wantMin)
-			}
-		}
-	}
-	if got := ranges[len(ranges)-1].MaxAmount.String(); got != "1000" {
-		t.Fatalf("last maxAmount = %s, want 1000", got)
-	}
-}
-
 func TestDecideQuotesUsesAtMostThreePhysicalRoutes(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "2"})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -465,9 +422,7 @@ func TestDecideQuotesUsesAtMostThreePhysicalRoutes(t *testing.T) {
 		Inventory: inventory, MaxFeePerGas: big.NewInt(0),
 		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
@@ -477,93 +432,54 @@ func TestDecideQuotesUsesAtMostThreePhysicalRoutes(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesAggregatesIndependentRoutesIntoOnePairCurve(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	now := time.Unix(1_800_000_000, 0)
+func TestDecideQuotesRespectsRouteLimit(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	inventory := []liquidlane.Inventory{
-		{
-			Route: liquidlane.Route{
-				ID: "route-1", CapacityID: "capacity-1", TokenIn: tokenIn, TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		},
-		{
-			Route: liquidlane.Route{
-				ID: "route-2", CapacityID: "capacity-2", TokenIn: tokenIn, TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		},
-	}
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory:    inventory,
-		MaxFeePerGas: big.NewInt(0),
-		ChainTime:    now, ServerTime: now, QuoteExpiresAt: now.Add(90 * time.Second),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes = %+v", out.Quotes)
-	}
-	ranges := out.Quotes[0].Ranges
-	if got := ranges[len(ranges)-1].MaxAmount.String(); got != "1000" {
-		t.Fatalf("aggregate maxAmount = %s, want 1000", got)
-	}
-}
-
-func TestDecideQuotesPermissionedTokenUsesOneRoute(t *testing.T) {
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	now := time.Unix(1_800_000_000, 0)
-	inventory := []liquidlane.Inventory{
-		{
-			Route: liquidlane.Route{
-				ID: "route-1", CapacityID: "capacity-1", TokenIn: tokenIn, TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		},
-		{
-			Route: liquidlane.Route{
-				ID: "route-2", CapacityID: "capacity-2", TokenIn: tokenIn, TokenOut: tokenOut,
-				TokenInDecimals: 6, TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-		},
-	}
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory: inventory, SingleRouteTokens: map[common.Address]bool{tokenIn: true},
-		MaxFeePerGas: big.NewInt(0),
-		ChainTime:    now, ServerTime: now, QuoteExpiresAt: now.Add(90 * time.Second),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes = %+v", out.Quotes)
-	}
-	ranges := out.Quotes[0].Ranges
-	if got := ranges[len(ranges)-1].MaxAmount.String(); got != "500" {
-		t.Fatalf("permissioned maxAmount = %s, want 500", got)
+	for _, tc := range []struct {
+		name, wantMax string
+		singleRoute   map[common.Address]bool
+	}{
+		{"independent routes aggregate", "1000", nil},
+		{"permissioned token uses one route", "500", map[common.Address]bool{tokenIn: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			strategy := testStrategy(t, Config{MinAmount: "2"})
+			now := time.Unix(1_800_000_000, 0)
+			tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+			inventory := []liquidlane.Inventory{
+				{
+					Route: liquidlane.Route{
+						ID: "route-1", CapacityID: "capacity-1", TokenIn: tokenIn, TokenOut: tokenOut,
+						TokenInDecimals: 6, TokenOutDecimals: 6,
+					},
+					MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
+				},
+				{
+					Route: liquidlane.Route{
+						ID: "route-2", CapacityID: "capacity-2", TokenIn: tokenIn, TokenOut: tokenOut,
+						TokenInDecimals: 6, TokenOutDecimals: 6,
+					},
+					MaxAssets: big.NewInt(500), MaxRate: big.NewInt(1_000_000_000_000_000_000),
+				},
+			}
+			out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
+				Inventory: inventory, SingleRouteTokens: tc.singleRoute,
+				MaxFeePerGas: big.NewInt(0),
+				ChainTime:    now, ServerTime: now, QuoteExpiresAt: now.Add(90 * time.Second),
+			})
+			testcheck.NoError(t, err, "DecideQuotes: %v")
+			if len(out.Quotes) != 1 {
+				t.Fatalf("quotes = %+v", out.Quotes)
+			}
+			ranges := out.Quotes[0].Ranges
+			if got := ranges[len(ranges)-1].MaxAmount.String(); got != tc.wantMax {
+				t.Fatalf("maxAmount = %s, want %s", got, tc.wantMax)
+			}
+		})
 	}
 }
 
 func TestDecideQuotesNeverOverquotesBlendedRouteRange(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "2"})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -587,9 +503,7 @@ func TestDecideQuotesNeverOverquotesBlendedRouteRange(t *testing.T) {
 		Inventory: inventory, MaxFeePerGas: big.NewInt(0),
 		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
@@ -611,10 +525,7 @@ func TestDecideQuotesNeverOverquotesBlendedRouteRange(t *testing.T) {
 }
 
 func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
-	strategy, err := New(Config{MinAmount: "1", RangeCount: 1})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "1", RangeCount: 1})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	rateUnit := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -645,18 +556,13 @@ func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
 		candidate("b-direct", "b", 1, 5, nil),
 		candidate("c-direct", "c", 2, 2, nil),
 	}
-	pricing, err := liquidstrategies.NewGasPricing(
-		big.NewInt(0), tokenOut, nil, nil, 0, liquidstrategies.GasEnvelope{},
+	pricing, err := planning.NewGasPricing(
+		big.NewInt(0), tokenOut, nil, nil, 0, planning.GasEnvelope{},
 	)
-	if err != nil {
-		t.Fatalf("NewGasPricing: %v", err)
-	}
-	quoteRange, err := strategy.priceQuoteRange(
-		candidates, 3, big.NewInt(6), big.NewInt(9), pricing.MaxCost(3, 2), 3, pricing,
-	)
-	if err != nil {
-		t.Fatalf("priceQuoteRange: %v", err)
-	}
+	testcheck.NoError(t, err, "NewGasPricing: %v")
+	quoter := newRangeQuoter(strategy, candidates, 3, pricing)
+	quoteRange, err := quoter.quote(big.NewInt(6), big.NewInt(9), quoter.floor(big.NewInt(9)))
+	testcheck.NoError(t, err, "priceQuoteRange: %v")
 	if quoteRange == nil {
 		t.Fatal("priceQuoteRange returned no range")
 	}
@@ -665,9 +571,9 @@ func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
 		t.Fatalf("invalid quote rate %q", quoteRange.Quote)
 	}
 	for amount := quoteRange.MinAmount.Int64(); amount <= quoteRange.MaxAmount.Int64(); amount++ {
-		actual, solveErr := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
-			ExactInput: big.NewInt(amount), Candidates: candidates, MaxRoutes: 3,
-			MinInput: strategy.minAmount, InputPolicy: liquidgreedy.RejectUncoveredInput,
+		actual, solveErr := planning.NewQuotePool(candidates).Solve(planning.QuoteTask{
+			ExactInput: big.NewInt(amount), MaxRoutes: 3,
+			MinInput: strategy.policy.MinAmount, InputPolicy: planning.RejectUncoveredInput,
 		})
 		if solveErr != nil || actual == nil {
 			t.Fatalf("SolveQuote(%d) = %+v, %v", amount, actual, solveErr)
@@ -684,10 +590,7 @@ func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
 }
 
 func TestBuildQuoteRangesScalesToManyRoutes(t *testing.T) {
-	strategy, err := New(Config{MinAmount: "100", RangeCount: 1})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "100", RangeCount: 1})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	candidates := make([]liquidlane.QuoteCandidate, 128)
@@ -704,26 +607,19 @@ func TestBuildQuoteRangesScalesToManyRoutes(t *testing.T) {
 			MaxAmountOut: big.NewInt(200),
 		}
 	}
-	pricing, err := liquidstrategies.NewGasPricing(
-		big.NewInt(0), tokenOut, nil, nil, 0, liquidstrategies.GasEnvelope{},
+	pricing, err := planning.NewGasPricing(
+		big.NewInt(0), tokenOut, nil, nil, 0, planning.GasEnvelope{},
 	)
-	if err != nil {
-		t.Fatalf("NewGasPricing: %v", err)
-	}
+	testcheck.NoError(t, err, "NewGasPricing: %v")
 	ranges, _, err := strategy.buildQuoteRanges(candidates, 64, pricing)
-	if err != nil {
-		t.Fatalf("buildQuoteRanges: %v", err)
-	}
+	testcheck.NoError(t, err, "buildQuoteRanges: %v")
 	if len(ranges) != 1 || ranges[0].MaxAmount.Cmp(big.NewInt(6_400)) != 0 {
 		t.Fatalf("ranges = %+v, want one range through 6400", ranges)
 	}
 }
 
 func TestDecideQuotesUsesPrivateAlternativeBeforeDirectFallback(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "100"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "100"})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -743,9 +639,7 @@ func TestDecideQuotesUsesPrivateAlternativeBeforeDirectFallback(t *testing.T) {
 		Inventory: inventory, MaxFeePerGas: big.NewInt(0),
 		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(90 * time.Second),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 || out.Quotes[0].Expiry != now.Add(48*time.Second).Unix() {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
@@ -763,10 +657,7 @@ func TestDecideQuotesUsesPrivateAlternativeBeforeDirectFallback(t *testing.T) {
 }
 
 func TestDecideQuotesFiltersPrivateAlternativeExpiredByServerClock(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "100"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "100"})
 	chainTime := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -786,9 +677,7 @@ func TestDecideQuotesFiltersPrivateAlternativeExpiredByServerClock(t *testing.T)
 		MaxFeePerGas: big.NewInt(0), ChainTime: chainTime, ServerTime: chainTime.Add(9 * time.Second),
 		QuoteExpiresAt: chainTime.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %+v, want direct quote", out.Quotes)
 	}
@@ -798,10 +687,7 @@ func TestDecideQuotesFiltersPrivateAlternativeExpiredByServerClock(t *testing.T)
 }
 
 func TestPriceBufferCoversQuoteToFillAndExecutionWindows(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100, MinAmount: "10000"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{PriceBufferBps: 100, MinAmount: "10000"})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -815,9 +701,7 @@ func TestPriceBufferCoversQuoteToFillAndExecutionWindows(t *testing.T) {
 		}},
 		MaxFeePerGas: big.NewInt(0), ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(quotes.Quotes) != 1 {
 		t.Fatalf("quote = %+v", quotes.Quotes)
 	}
@@ -834,19 +718,14 @@ func TestPriceBufferCoversQuoteToFillAndExecutionWindows(t *testing.T) {
 			AmountIn:  big.NewInt(10_000), MaxAmountOut: big.NewInt(9_900),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil {
 		t.Fatal("expected fill after one price-buffer adverse move")
 	}
 }
 
 func TestDecideFillBuildsMultiRoutePlan(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	quotes := make([]liquidlane.FillQuote, 0, 2)
@@ -867,9 +746,7 @@ func TestDecideFillBuildsMultiRoutePlan(t *testing.T) {
 		AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900), ChainTime: time.Unix(1_800_000_000, 0),
 		MaxFeePerGas: big.NewInt(0), Quotes: quotes,
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 2 {
 		t.Fatalf("plan = %+v", plan)
 	}
@@ -885,10 +762,7 @@ func TestDecideFillBuildsMultiRoutePlan(t *testing.T) {
 }
 
 func TestDecideFillDoesNotDoubleSpendSharedVaultCapacity(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	quotes := make([]liquidlane.FillQuote, 0, 2)
@@ -909,19 +783,14 @@ func TestDecideFillDoesNotDoubleSpendSharedVaultCapacity(t *testing.T) {
 		AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900), ChainTime: time.Unix(1_800_000_000, 0),
 		MaxFeePerGas: big.NewInt(0), Quotes: quotes,
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan != nil {
 		t.Fatalf("shared capacity was double counted: %+v", plan)
 	}
 }
 
 func TestDecideQuotesUsesPrivateDiscountWithoutDirectCandidateAndClipsExpiry(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1000"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "1000"})
 	now := time.Unix(1_800_000_000, 0)
 	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	route := liquidlane.Route{
@@ -938,9 +807,7 @@ func TestDecideQuotesUsesPrivateDiscountWithoutDirectCandidateAndClipsExpiry(t *
 		Inventory:    []liquidlane.Inventory{discount},
 		MaxFeePerGas: big.NewInt(0), ChainTime: now, QuoteExpiresAt: now.Add(90 * time.Second),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
@@ -954,10 +821,7 @@ func TestDecideQuotesUsesPrivateDiscountWithoutDirectCandidateAndClipsExpiry(t *
 }
 
 func TestDecideQuotesPublishesOnePairForDirectAndDiscount(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	now := time.Unix(1_800_000_000, 0)
 	route := liquidlane.Route{
 		ID: "route-1", TokenIn: common.HexToAddress("0x1111111111111111111111111111111111111111"),
@@ -976,90 +840,55 @@ func TestDecideQuotesPublishesOnePairForDirectAndDiscount(t *testing.T) {
 		Inventory: []liquidlane.Inventory{direct, discount}, MaxFeePerGas: big.NewInt(0),
 		ChainTime: now, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %+v", out.Quotes)
 	}
 }
 
-func TestDecideQuotesSkipsBelowMinAmount(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1000001"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Solver:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		ChainTime:      time.Unix(1_800_000_000, 0),
-		QuoteExpiresAt: time.Unix(1_800_000_090, 0),
-		MaxFeePerGas:   big.NewInt(0),
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID:               "route-1",
-				TokenIn:          common.HexToAddress("0x3333333333333333333333333333333333333333"),
-				TokenOut:         common.HexToAddress("0x4444444444444444444444444444444444444444"),
-				TokenInDecimals:  6,
-				TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(1_000_000),
-			MaxRate:   big.NewInt(1_000_000_000_000_000_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 0 {
-		t.Fatalf("quotes len = %d", len(out.Quotes))
-	}
-}
-
-func TestDecideFillSelectsProfitableRoute(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1000"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	adapter := common.HexToAddress("0x3333333333333333333333333333333333333333")
-
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn:      tokenIn,
-		TokenOut:     tokenOut,
-		AmountIn:     big.NewInt(1_000_000),
-		OutputAmount: big.NewInt(990_000),
-		ChainTime:    time.Unix(1_800_000_000, 0),
-		MaxFeePerGas: big.NewInt(0),
-		Quotes: []liquidlane.FillQuote{{
-			Inventory: liquidlane.Inventory{
-				Route:     liquidlane.Route{ID: "route-1", Adapter: adapter, TokenIn: tokenIn, TokenOut: tokenOut},
-				MaxAssets: big.NewInt(2_000_000),
-			},
-			AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(1_000_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan == nil {
-		t.Fatal("expected fill plan")
-	}
-	if len(plan.Routes) != 1 || plan.Routes[0].Adapter != adapter {
-		t.Fatalf("routes = %+v", plan.Routes)
-	}
-	if plan.Routes[0].ExpectedAmountOut.String() != "1000000" {
-		t.Fatalf("plan = %+v", plan)
+func TestDecideFillSingleRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		config            Config
+		now               time.Time
+		expires, deadline uint32
+		quotedOutput      int64
+		wantPlan          bool
+	}{
+		{"profitable", Config{MinAmount: "1000"}, time.Unix(1_800_000_000, 0), 0, 0, 1_000_000, true},
+		{"no required profit margin", Config{}, time.Time{}, 0, 0, 999_000, true},
+		{"expired", Config{}, time.Unix(1_700_000_000, 0), 1_700_000_000, 1_700_000_100, 1_000_000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			strategy := testStrategy(t, tc.config)
+			tokenIn, tokenOut, adapter := common.HexToAddress("0x1"), common.HexToAddress("0x2"), common.HexToAddress("0x3")
+			plan, err := strategy.DecideFill(t.Context(), types.FillInput{
+				TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000_000), OutputAmount: big.NewInt(990_000),
+				ChainTime: tc.now, Expires: tc.expires, FillDeadline: tc.deadline, MaxFeePerGas: big.NewInt(0),
+				Quotes: []liquidlane.FillQuote{{
+					Inventory: liquidlane.Inventory{
+						Route:     liquidlane.Route{ID: "route-1", Adapter: adapter, TokenIn: tokenIn, TokenOut: tokenOut},
+						MaxAssets: big.NewInt(2_000_000),
+					},
+					AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(tc.quotedOutput),
+				}},
+			})
+			testcheck.NoError(t, err, "DecideFill: %v")
+			if (plan != nil) != tc.wantPlan {
+				t.Fatalf("plan = %+v, want plan %t", plan, tc.wantPlan)
+			}
+			if plan != nil && (len(plan.Routes) != 1 || plan.Routes[0].Adapter != adapter ||
+				plan.Routes[0].ExpectedAmountOut.Cmp(big.NewInt(tc.quotedOutput)) != 0) {
+				t.Fatalf("routes = %+v, want adapter %s and output %d", plan.Routes, adapter, tc.quotedOutput)
+			}
+		})
 	}
 }
 
 func TestDecideFillPermissionedTokenNeverAggregatesRoutes(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	quotes := []liquidlane.FillQuote{
 		{
 			Inventory: liquidlane.Inventory{
@@ -1087,19 +916,14 @@ func TestDecideFillPermissionedTokenNeverAggregatesRoutes(t *testing.T) {
 		RequireSingleRoute: true,
 		ChainTime:          time.Unix(1_800_000_000, 0), MaxFeePerGas: big.NewInt(0), Quotes: quotes,
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan != nil {
 		t.Fatalf("permissioned token must not aggregate routes, got %+v", plan)
 	}
 }
 
 func TestDecideFillSelectsBestRouteInsteadOfConfigOrder(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	firstAdapter := common.HexToAddress("0x3333333333333333333333333333333333333333")
@@ -1127,19 +951,14 @@ func TestDecideFillSelectsBestRouteInsteadOfConfigOrder(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 1 || plan.Routes[0].Adapter != bestAdapter {
 		t.Fatalf("plan = %+v, want adapter %s", plan, bestAdapter)
 	}
 }
 
 func TestDecideFillCommitsSelectedPrivateDiscount(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	adapter := common.HexToAddress("0x3333333333333333333333333333333333333333")
@@ -1161,9 +980,7 @@ func TestDecideFillCommitsSelectedPrivateDiscount(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 1 || plan.Routes[0].DiscountID == nil ||
 		*plan.Routes[0].DiscountID != discountID {
 		t.Fatalf("plan = %+v", plan)
@@ -1171,11 +988,8 @@ func TestDecideFillCommitsSelectedPrivateDiscount(t *testing.T) {
 }
 
 func TestDecideFillChargesPrivateExecutionGasAfterGreedySelection(t *testing.T) {
-	cfg := testStrategyConfig(Config{})
-	strategy, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	cfg := Config{}
+	strategy := testStrategy(t, cfg)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	adapter := common.HexToAddress("0x3333333333333333333333333333333333333333")
@@ -1210,9 +1024,7 @@ func TestDecideFillChargesPrivateExecutionGasAfterGreedySelection(t *testing.T) 
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 1 || plan.Routes[0].DiscountID == nil {
 		t.Fatalf("plan = %+v, want higher-rate private route", plan)
 	}
@@ -1222,10 +1034,7 @@ func TestDecideFillChargesPrivateExecutionGasAfterGreedySelection(t *testing.T) 
 }
 
 func TestDecideFillPrivateCapacityIncludesUpwardPriceBuffer(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{PriceBufferBps: 100})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -1258,9 +1067,7 @@ func TestDecideFillPrivateCapacityIncludesUpwardPriceBuffer(t *testing.T) {
 					MinDiscount:  big.NewInt(100_000),
 				}},
 			})
-			if fillErr != nil {
-				t.Fatalf("DecideFill: %v", fillErr)
-			}
+			testcheck.NoError(t, fillErr, "DecideFill: %v")
 			if (plan != nil) != tt.wantFill {
 				t.Fatalf("plan = %+v, wantFill = %v", plan, tt.wantFill)
 			}
@@ -1272,10 +1079,7 @@ func TestDecideFillPrivateCapacityIncludesUpwardPriceBuffer(t *testing.T) {
 }
 
 func TestDecideFillSubtractsPendingCapacityReservations(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	route := liquidlane.Route{
@@ -1298,19 +1102,14 @@ func TestDecideFillSubtractsPendingCapacityReservations(t *testing.T) {
 			MaxAmountOut: big.NewInt(100),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan != nil {
 		t.Fatalf("plan = %+v, want pending reservation to leave insufficient capacity", plan)
 	}
 }
 
 func TestDecideFillRequiresExecutionDeadlineBuffer(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{ExecutionDeadlineBuffer: "30s"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{ExecutionDeadlineBuffer: "30s"})
 	now := time.Unix(1_800_000_000, 0)
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -1321,80 +1120,14 @@ func TestDecideFillRequiresExecutionDeadlineBuffer(t *testing.T) {
 		Expires: uint32(now.Add(30 * time.Second).Unix()), FillDeadline: uint32(now.Add(time.Minute).Unix()),
 		MaxFeePerGas: big.NewInt(0), Quotes: profitableFillQuotes(tokenIn, tokenOut),
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan != nil {
 		t.Fatalf("expected near-expiry order to be skipped, got %+v", plan)
 	}
 }
 
-func TestDecideQuotesKeepsInventoryReserve(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{InventoryReserveBps: 1_000, MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	routeItem := liquidlane.Inventory{
-		Route: liquidlane.Route{
-			ID: "route-1", TokenIn: common.HexToAddress("0x1111111111111111111111111111111111111111"),
-			TokenOut:        common.HexToAddress("0x2222222222222222222222222222222222222222"),
-			TokenInDecimals: 6, TokenOutDecimals: 6,
-		},
-		MaxAssets: big.NewInt(1_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-	}
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory: []liquidlane.Inventory{routeItem}, MaxFeePerGas: big.NewInt(0),
-		ChainTime: time.Unix(1_800_000_000, 0), QuoteExpiresAt: time.Unix(1_800_000_090, 0),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes = %d", len(out.Quotes))
-	}
-	ranges := out.Quotes[0].Ranges
-	if got := ranges[len(ranges)-1].MaxAmount.String(); got != "900" {
-		t.Fatalf("reserved maxAmount = %s, want 900", got)
-	}
-}
-
-func TestDecideQuotesAppliesReserveBeforeInFlightReservations(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{InventoryReserveBps: 1_000, MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	routeItem := liquidlane.Inventory{
-		Route: liquidlane.Route{
-			ID: "route-1", CapacityID: "capacity-1",
-			TokenIn:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
-			TokenOut:        common.HexToAddress("0x2222222222222222222222222222222222222222"),
-			TokenInDecimals: 6, TokenOutDecimals: 6,
-		},
-		MaxAssets: big.NewInt(1_000), MaxRate: big.NewInt(1_000_000_000_000_000_000),
-	}
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Inventory:      []liquidlane.Inventory{routeItem},
-		Reservations:   liquidlane.CapacityReservations{"capacity-1": big.NewInt(800)},
-		MaxFeePerGas:   big.NewInt(0),
-		ChainTime:      time.Unix(1_800_000_000, 0),
-		QuoteExpiresAt: time.Unix(1_800_000_090, 0),
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 1 {
-		t.Fatalf("quotes = %d", len(out.Quotes))
-	}
-	if got := out.Quotes[0].Ranges[len(out.Quotes[0].Ranges)-1].MaxAmount.String(); got != "100" {
-		t.Fatalf("maxAmount = %s, want reserve-first capacity 100", got)
-	}
-}
-
 func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "2"})
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	inventory := []liquidlane.Inventory{
 		{
@@ -1435,9 +1168,7 @@ func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
 				ChainTime:      time.Unix(1_800_000_000, 0),
 				QuoteExpiresAt: time.Unix(1_800_000_090, 0),
 			})
-			if err != nil {
-				t.Fatalf("DecideQuotes: %v", err)
-			}
+			testcheck.NoError(t, err, "DecideQuotes: %v")
 			if len(out.Quotes) != 2 {
 				t.Fatalf("quotes = %d", len(out.Quotes))
 			}
@@ -1452,10 +1183,7 @@ func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
 }
 
 func TestDecideQuotesDoesNotDoubleCountSharedCapacityWithinPair(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{MinAmount: "2"})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	inventory := make([]liquidlane.Inventory, 2)
@@ -1479,9 +1207,7 @@ func TestDecideQuotesDoesNotDoubleCountSharedCapacityWithinPair(t *testing.T) {
 		ChainTime:      time.Unix(1_800_000_000, 0),
 		QuoteExpiresAt: time.Unix(1_800_000_090, 0),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(out.Quotes) != 1 {
 		t.Fatalf("quotes = %d", len(out.Quotes))
 	}
@@ -1491,10 +1217,7 @@ func TestDecideQuotesDoesNotDoubleCountSharedCapacityWithinPair(t *testing.T) {
 }
 
 func TestDecideFillSeparatesBufferedTargetFromEconomicFloor(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{PriceBufferBps: 100})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
@@ -1515,9 +1238,7 @@ func TestDecideFillSeparatesBufferedTargetFromEconomicFloor(t *testing.T) {
 			AmountIn: big.NewInt(10_000), MaxAmountOut: big.NewInt(10_000),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 1 {
 		t.Fatalf("plan = %+v", plan)
 	}
@@ -1528,10 +1249,7 @@ func TestDecideFillSeparatesBufferedTargetFromEconomicFloor(t *testing.T) {
 }
 
 func TestDecideFillRejectsDutchAuctionContext(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	for _, outputContext := range [][]byte{{dutchAuctionContextType}, {exclusiveDutchAuctionContextType}} {
 		plan, decideErr := strategy.DecideFill(context.Background(), types.FillInput{
 			AmountIn:      big.NewInt(1_000_000),
@@ -1551,10 +1269,7 @@ func TestDecideFillRejectsDutchAuctionContext(t *testing.T) {
 }
 
 func TestDecideFillMarksMalformedOutputContextPermanent(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	for _, outputContext := range [][]byte{
 		{limitOrderContextType, 0x01},
 		{exclusiveLimitOrderContextType},
@@ -1575,10 +1290,7 @@ func TestDecideFillMarksMalformedOutputContextPermanent(t *testing.T) {
 }
 
 func TestDecideFillRespectsExclusiveWindow(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	strategy := testStrategy(t, Config{})
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	solver := common.HexToAddress("0x5555555555555555555555555555555555555555")
@@ -1595,9 +1307,7 @@ func TestDecideFillRespectsExclusiveWindow(t *testing.T) {
 		MaxFeePerGas:  big.NewInt(0),
 		Quotes:        profitableFillQuotes(tokenIn, tokenOut),
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan != nil {
 		t.Fatalf("expected skip during another solver's exclusive window, got %+v", plan)
 	}
@@ -1613,9 +1323,7 @@ func TestDecideFillRespectsExclusiveWindow(t *testing.T) {
 		MaxFeePerGas:  big.NewInt(0),
 		Quotes:        profitableFillQuotes(tokenIn, tokenOut),
 	})
-	if err != nil {
-		t.Fatalf("DecideFill after window: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill after window: %v")
 	if plan == nil {
 		t.Fatal("expected fill after exclusive window")
 	}
@@ -1674,9 +1382,7 @@ func TestOutputPricingSupportsOutputSettlerSimpleContexts(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("parseOutputContext: %v", err)
-			}
+			testcheck.NoError(t, err, "parseOutputContext: %v")
 			got, ok := pricing.fill(solver, now, big.NewInt(1_000_000))
 			if ok != tt.fill {
 				t.Fatalf("fill = %v", ok)
@@ -1688,69 +1394,6 @@ func TestOutputPricingSupportsOutputSettlerSimpleContexts(t *testing.T) {
 				t.Fatalf("amount = %s, want %s", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestDecideFillDoesNotRequireProfitMargin(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn:      tokenIn,
-		TokenOut:     tokenOut,
-		AmountIn:     big.NewInt(1_000_000),
-		OutputAmount: big.NewInt(990_000),
-		MaxFeePerGas: big.NewInt(0),
-		Quotes: []liquidlane.FillQuote{{
-			Inventory: liquidlane.Inventory{
-				Route:     liquidlane.Route{ID: "route-1", Adapter: common.HexToAddress("0x3333333333333333333333333333333333333333"), TokenIn: tokenIn, TokenOut: tokenOut},
-				MaxAssets: big.NewInt(2_000_000),
-			},
-			AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(999_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan == nil {
-		t.Fatal("expected fill without an explicit profit margin")
-	}
-}
-
-func TestDecideFillSkipsExpiredOrder(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-
-	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
-		TokenIn:      tokenIn,
-		TokenOut:     tokenOut,
-		AmountIn:     big.NewInt(1_000_000),
-		OutputAmount: big.NewInt(990_000),
-		Expires:      1_700_000_000,
-		FillDeadline: 1_700_000_100,
-		ChainTime:    time.Unix(1_700_000_000, 0),
-		MaxFeePerGas: big.NewInt(0),
-		Quotes: []liquidlane.FillQuote{{
-			Inventory: liquidlane.Inventory{
-				Route:     liquidlane.Route{ID: "route-1", Adapter: common.HexToAddress("0x3333333333333333333333333333333333333333"), TokenIn: tokenIn, TokenOut: tokenOut},
-				MaxAssets: big.NewInt(2_000_000),
-			},
-			AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(1_000_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("expected expired skip, got %#v", plan)
 	}
 }
 
@@ -1777,29 +1420,13 @@ func profitableFillQuotes(tokenIn, tokenOut common.Address) []liquidlane.FillQuo
 	}}
 }
 
-func testStrategyConfig(cfg Config) Config {
-	return cfg
+func testStrategy(t *testing.T, cfg Config) *Strategy {
+	t.Helper()
+	strategy, err := New(cfg)
+	testcheck.NoError(t, err, "New: %v")
+	return strategy
 }
 
 func testGasPrices(token common.Address, amount int64) *liquidlanegas.PriceSnapshot {
 	return liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{token: big.NewInt(amount)})
-}
-
-func TestFixedPointDecimal(t *testing.T) {
-	tests := map[string]string{
-		"0":                      "0",
-		"990000000000000000":     "0.99",
-		"1000000000000000000":    "1",
-		"1234500000000000000":    "1.2345",
-		"1000000000000000000000": "1000",
-	}
-	for raw, want := range tests {
-		n, ok := new(big.Int).SetString(raw, 10)
-		if !ok {
-			t.Fatalf("bad test int %s", raw)
-		}
-		if got := fixedPointDecimal(n, 18); got != want {
-			t.Fatalf("fixedPointDecimal(%s) = %q, want %q", raw, got, want)
-		}
-	}
 }

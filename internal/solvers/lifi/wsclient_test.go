@@ -8,11 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestPongFor(t *testing.T) {
@@ -51,7 +54,7 @@ func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http")}, "", logr.Discard())
 	connected, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if !connected {
 		t.Fatal("connection was not reported as established")
@@ -79,7 +82,7 @@ func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http")}, "", logr.Discard())
 	workStarted := make(chan struct{})
 	workCanceled := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -134,7 +137,7 @@ func TestWatchOnceRunsConnectionStartHookBeforeFirstEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http")}, "", logr.Discard())
 	hookStarted := make(chan struct{})
 	releaseHook := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -180,7 +183,7 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http")}, "", logr.Discard())
 	started := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -193,13 +196,8 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 	expectSignal(t, started)
 	expectSignal(t, started)
 	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("feed.run() error = %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("feed did not stop")
+	if err := testcheck.ReceiveWithin(t, done, 3*time.Second, "feed did not stop"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("feed.run() error = %v", err)
 	}
 }
 
@@ -219,17 +217,11 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http")}, "", logr.Discard())
 	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
-		t.Fatalf("initial connected = %v, want 0", got)
-	}
-	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
-		t.Fatalf("initial recovery ready = %v, want 0", got)
-	}
+	testcheck.NoError(t, err)
+	metricstest.RequireValue(t, metrics.orderFeedConnected, 0)
+	metricstest.RequireValue(t, metrics.orderRecoveryReady, 0)
 
 	result := make(chan error, 1)
 	recoveryStarted := make(chan struct{})
@@ -254,9 +246,7 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	<-upgraded
 	expectSignal(t, recoveryStarted)
 	assertGaugeEventually(t, metrics.orderFeedConnected, 1)
-	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
-		t.Fatalf("recovery ready before convergence = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, metrics.orderRecoveryReady, 0)
 
 	close(allowRecovery)
 	assertGaugeEventually(t, metrics.orderRecoveryReady, 1)
@@ -265,22 +255,14 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	if err := <-result; err == nil {
 		t.Fatal("expected read error after server closed the connection")
 	}
-	if got := testutil.ToFloat64(metrics.orderFeedConnected); got != 0 {
-		t.Fatalf("disconnected = %v, want 0", got)
-	}
-	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
-		t.Fatalf("recovery ready after disconnect = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, metrics.orderFeedConnected, 0)
+	metricstest.RequireValue(t, metrics.orderRecoveryReady, 0)
 }
 
 func TestOrderRecoveryReadyMetricNilFeed(t *testing.T) {
 	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := testutil.ToFloat64(metrics.orderRecoveryReady); got != 0 {
-		t.Fatalf("recovery ready with nil feed = %v, want 0", got)
-	}
+	testcheck.NoError(t, err)
+	metricstest.RequireValue(t, metrics.orderRecoveryReady, 0)
 }
 
 func assertGaugeEventually(t *testing.T, collector prometheus.Collector, want float64) {
@@ -299,9 +281,25 @@ func assertGaugeEventually(t *testing.T, collector prometheus.Collector, want fl
 
 func expectSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
-	select {
-	case <-signal:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for signal")
+	testcheck.ReceiveWithin(t, signal, 3*time.Second, "timed out waiting for signal")
+}
+
+func TestFeedRejectsOversizedMessage(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer connection.Close()
+		_ = connection.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", 128)))
+	}))
+	defer server.Close()
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http"), MaxMessageBytes: 64}, "", logr.Discard())
+	handled := false
+	connected, err := feed.watchOnce(t.Context(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) { handled = true })
+	if !connected || err == nil || !strings.Contains(err.Error(), "read limit") || handled {
+		t.Fatalf("connected=%v handled=%v error=%v", connected, handled, err)
 	}
 }

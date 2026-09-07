@@ -5,24 +5,21 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
 func parse(t *testing.T, body string) (*Config, error) {
 	t.Helper()
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(body), &doc), "unmarshal: %v")
 	return parseConfig(*doc.Content[0]) // Content[0] is the mapping node (as the two-stage decode yields)
 }
 
 func mustParse(t *testing.T, body string) *Config {
 	t.Helper()
 	cfg, err := parse(t, body)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	return cfg
 }
 
@@ -74,9 +71,7 @@ func TestParseConfig_OfferExpiryBufferOverride(t *testing.T) {
 
 func TestParseConfig_UnknownKeyRejected(t *testing.T) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(oneTarget+"redeemBatchSiez: 3\n"), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(oneTarget+"redeemBatchSiez: 3\n"), &doc), "unmarshal: %v")
 	if _, err := parseConfig(*doc.Content[0]); err == nil {
 		t.Fatal("expected a typo'd key to be rejected")
 	}
@@ -84,9 +79,7 @@ func TestParseConfig_UnknownKeyRejected(t *testing.T) {
 
 func TestParseConfig_InvalidDurationRejected(t *testing.T) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(oneTarget+"intervals:\n  discover: \"1 hour\"\n"), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(oneTarget+"intervals:\n  discover: \"1 hour\"\n"), &doc), "unmarshal: %v")
 	if _, err := parseConfig(*doc.Content[0]); err == nil {
 		t.Fatal("expected an invalid duration to be rejected")
 	}
@@ -99,9 +92,7 @@ adapters:
   - "0x0000000000000000000000000000000000000000"
 `
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(body), &doc), "unmarshal: %v")
 	if _, err := parseConfig(*doc.Content[0]); err == nil {
 		t.Fatal("expected zero adapter address to be rejected")
 	}
@@ -109,9 +100,7 @@ adapters:
 
 func TestParseConfig_AdaptersList(t *testing.T) {
 	cfg, err := parse(t, minimalConfig+"adapters:\n  - \"0x0000000000000000000000000000000000000042\"\n  - \"0x0000000000000000000000000000000000000043\"\n")
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if len(cfg.Targets) != 2 ||
 		cfg.Targets[0].Adapter != common.HexToAddress("0x0000000000000000000000000000000000000042") ||
 		cfg.Targets[1].Adapter != common.HexToAddress("0x0000000000000000000000000000000000000043") {
@@ -155,18 +144,14 @@ strategy:
   config:
     url: https://strategy.example
 `)
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	if cfg.Strategy.Name != "webhook" {
 		t.Fatalf("strategy.name = %q, want webhook", cfg.Strategy.Name)
 	}
 	var raw struct {
 		URL string `yaml:"url"`
 	}
-	if err := cfg.Strategy.Config.Decode(&raw); err != nil {
-		t.Fatalf("decode strategy config: %v", err)
-	}
+	testcheck.NoError(t, cfg.Strategy.Config.Decode(&raw), "decode strategy config: %v")
 	if raw.URL != "https://strategy.example" {
 		t.Fatalf("strategy url = %q", raw.URL)
 	}

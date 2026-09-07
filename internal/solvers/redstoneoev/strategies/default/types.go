@@ -24,8 +24,6 @@ type MarketParams struct {
 	Lltv            *big.Int
 }
 
-type abiMarketParams = MarketParams
-
 // MarketInfo is a Morpho market's params plus its state snapshot.
 type MarketInfo struct {
 	Params MarketParams
@@ -51,13 +49,6 @@ type selectedLeg struct {
 	Borrower       common.Address
 	MaxSeizeAssets *big.Int
 	MinProfit      *big.Int
-}
-
-type legHint struct {
-	selectedLeg
-
-	Collateral      common.Address
-	ExpectedLoanOut *big.Int
 }
 
 type Config struct {

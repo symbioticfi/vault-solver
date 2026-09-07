@@ -4,15 +4,18 @@ import (
 	"os"
 	"strings"
 
+	"github.com/symbioticfi/vault-solver/internal/parse"
+
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func New(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -22,7 +25,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.Errorf("%s: ws api key env %q is empty", Name, cfg.APIKeyEnv)
 	}
 	// Dry-run is solver-owned because it suppresses outbound solve frames for every strategy.
-	dryRun, err := dryRunEnv()
+	dryRun, err := parse.Bool(os.Getenv(envDryRun), envDryRun)
 	if err != nil {
 		return nil, errors.Errorf("%s: %w", Name, err)
 	}
@@ -61,7 +64,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 		s.stateRefreshObserver = s.metrics.workflow.Operation(stateRefreshOperation)
 	}
-	strategy, err := newStrategy(cfg, strategies.Deps{
+	strategy, err := newStrategy(cfg, types.Dependencies{
 		Chain:               deps.Chain,
 		Signer:              deps.Signer,
 		Log:                 log,
@@ -76,7 +79,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	s.strategy = strategy
 	s.ws = newWSClient(
-		wsConfig{URL: cfg.WSURL, APIKey: apiKey, Topics: wsTopics(cfg.Callback)},
+		wsConfig{URL: cfg.WSURL, APIKey: apiKey, Topics: wsTopics(cfg.Callback), MaxMessageBytes: cfg.MaxMessageBytes},
 		log,
 		s.handleMessage,
 		s.metrics.setFeedConnected,
@@ -87,3 +90,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func wsTopics(callback common.Address) []string {
 	return []string{"oev/liquidations", "oev/feeds", "oev/notify/" + strings.ToLower(callback.Hex())}
 }
+
+// envDryRun is an explicit local harness flag; production leaves it unset.
+const envDryRun = "OEV_DRY_RUN"

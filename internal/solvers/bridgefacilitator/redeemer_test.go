@@ -113,6 +113,6 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 	if sent != 1 {
 		t.Fatalf("sent transactions = %d, want one valid-subset batch", sent)
 	}
-	requireThreeFObservation(t, reg, threeFStateRedeemable, 7, 123)
+	metricstest.RequireWorkflowState(t, reg, Name, threeFStateRedeemable, 7, 123)
 	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 1)
 }

@@ -3,14 +3,13 @@ package rfq
 import (
 	"context"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -138,7 +137,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
-	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
+	if _, err := types.FillPlanFromQuote(input, out); err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if !qs.canQuote() {
@@ -179,4 +178,4 @@ func (qs *quoteService) canQuote() bool {
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
-func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
+func lowerAddr(a common.Address) string { return hexutil.Encode(a[:]) }

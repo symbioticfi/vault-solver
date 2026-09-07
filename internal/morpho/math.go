@@ -3,10 +3,10 @@ package morpho
 import (
 	"math/big"
 
-	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 )
 
-// Morpho Blue math, ported verbatim from morpho-org/morpho-blue (see docs/OEV-PLAN.md §6.4). This is
+// Morpho Blue accounting, matching morpho-org/morpho-blue (see docs/OEV-PLAN.md §6.4). This is
 // the SINGLE source of truth for health/sizing over a worker-derived candidate set. All arithmetic is
 // big.Int with the exact rounding directions Morpho uses on-chain; an off-by-one here means reverted or
 // unprofitable fills. Lives in internal/morpho so any solver can reuse it.
@@ -17,7 +17,7 @@ var (
 	Wad               = big.NewInt(1e18)
 	twoWad            = big.NewInt(2e18)    // 2·WAD — Taylor-series denominators, hoisted out of the hot path
 	threeWad          = big.NewInt(3e18)    // 3·WAD
-	oraclePriceScale  = chain.Exp10(36)     // ORACLE_PRICE_SCALE = 1e36
+	oraclePriceScale  = bigmath.Exp10(36)   // ORACLE_PRICE_SCALE = 1e36
 	virtualShares     = big.NewInt(1e6)     // SharesMathLib.VIRTUAL_SHARES
 	virtualAssets     = big.NewInt(1)       // SharesMathLib.VIRTUAL_ASSETS
 	liquidationCursor = big.NewInt(0.3e18)  // ConstantsLib.LIQUIDATION_CURSOR (β)
@@ -53,44 +53,28 @@ type LiquidationReplay struct {
 	BadDebtShares *big.Int
 }
 
-// AccruedTotalBorrowAssets returns totalBorrowAssets grown to `nowTs` using the Taylor-compounded
-// borrow rate — the off-chain replica of Morpho `_accrueInterest` (borrow shares are unchanged by
-// accrual; only the assets side grows). Returns the original value when elapsed is 0 or the rate is 0.
-func AccruedTotalBorrowAssets(m MarketState, nowTs uint64) *big.Int {
-	tba := new(big.Int).Set(m.TotalBorrowAssets)
-	if m.BorrowRatePerSec == nil || m.BorrowRatePerSec.Sign() == 0 || nowTs <= m.LastUpdate {
-		return tba
-	}
-	elapsed := new(big.Int).SetUint64(nowTs - m.LastUpdate)
-	growth := WTaylorCompounded(m.BorrowRatePerSec, elapsed)
-	interest := WMulDown(tba, growth)
-	return tba.Add(tba, interest)
-}
-
-// AccruedMarketState returns Morpho's market accounting after `_accrueInterest`, including the supply side
-// needed for bad-debt replay. Borrow shares never change on accrual.
+// AccruedMarketState applies the same interest to both sides of the market and
+// mints fee shares at the supply balance excluding that fee, as Morpho does.
 func AccruedMarketState(m MarketState, nowTs uint64) MarketState {
 	out := CloneMarketState(m)
-	if out.BorrowRatePerSec == nil || out.BorrowRatePerSec.Sign() == 0 || nowTs <= out.LastUpdate {
+	if nowTs <= m.LastUpdate || m.BorrowRatePerSec == nil || m.BorrowRatePerSec.Sign() == 0 {
 		return out
 	}
-	elapsed := new(big.Int).SetUint64(nowTs - out.LastUpdate)
-	growth := WTaylorCompounded(out.BorrowRatePerSec, elapsed)
-	interest := WMulDown(out.TotalBorrowAssets, growth)
+	elapsed := new(big.Int).SetUint64(nowTs - m.LastUpdate)
+	interest := WMulDown(m.TotalBorrowAssets, WTaylorCompounded(m.BorrowRatePerSec, elapsed))
 	out.TotalBorrowAssets.Add(out.TotalBorrowAssets, interest)
 	out.TotalSupplyAssets.Add(out.TotalSupplyAssets, interest)
-	if out.Fee != nil && out.Fee.Sign() != 0 {
-		feeAmount := WMulDown(interest, out.Fee)
-		supplyExFee := new(big.Int).Sub(out.TotalSupplyAssets, feeAmount)
-		feeShares := ToSharesDown(feeAmount, supplyExFee, out.TotalSupplyShares)
-		out.TotalSupplyShares.Add(out.TotalSupplyShares, feeShares)
+	if m.Fee != nil && m.Fee.Sign() != 0 {
+		feeAssets := WMulDown(interest, m.Fee)
+		base := new(big.Int).Sub(out.TotalSupplyAssets, feeAssets)
+		out.TotalSupplyShares.Add(out.TotalSupplyShares, ToSharesDown(feeAssets, base, m.TotalSupplyShares))
 	}
 	out.LastUpdate = nowTs
 	return out
 }
 
-// BorrowedAssetsAt is BorrowedAssets given a pre-accrued total — so the hot path can accrue once per
-// candidate and reuse it across the health check and sizing instead of recomputing the Taylor series.
+// BorrowedAssetsAt values borrower shares against already accrued market totals.
+// Accrue once per market, then reuse those totals for health checks and sizing.
 func BorrowedAssetsAt(p PositionState, accruedTotal, totalShares *big.Int) *big.Int {
 	if p.BorrowShares == nil || p.BorrowShares.Sign() == 0 {
 		return big.NewInt(0)
@@ -104,21 +88,14 @@ func MaxBorrow(collateral, collateralPrice, lltv *big.Int) *big.Int {
 	return WMulDown(MulDivDown(collateral, collateralPrice, oraclePriceScale), lltv)
 }
 
-// IsLiquidatableAt is IsLiquidatable given a pre-accrued total (hot-path variant).
+// IsLiquidatableAt checks whether debt strictly exceeds the collateral borrowing
+// limit using accrued market totals. Equality is healthy.
 func IsLiquidatableAt(p PositionState, collateralPrice, lltv, accruedTotal, totalShares *big.Int) bool {
 	borrowed := BorrowedAssetsAt(p, accruedTotal, totalShares)
 	if borrowed.Sign() == 0 {
 		return false
 	}
 	return MaxBorrow(p.Collateral, collateralPrice, lltv).Cmp(borrowed) < 0
-}
-
-// LiquidationProximity returns the two quantities whose ratio is the position's distance to liquidation:
-// borrowed = BorrowedAssetsAt(p, …) and maxBorrow = MaxBorrow(p.Collateral, …). Higher borrowed/maxBorrow
-// ⇒ closer to (or past) liquidation; borrowed >= maxBorrow is exactly the IsLiquidatableAt boundary. A
-// caller ranks without dividing by cross-multiplying the two pairs (no float, no division).
-func LiquidationProximity(p PositionState, collateralPrice, lltv, accruedTotal, totalShares *big.Int) (borrowed, maxBorrow *big.Int) {
-	return BorrowedAssetsAt(p, accruedTotal, totalShares), MaxBorrow(p.Collateral, collateralPrice, lltv)
 }
 
 // LiquidationIncentiveFactor = min(M, 1 / (1 - cursor*(1 - lltv))) in wad, matching liquidate().
@@ -138,50 +115,58 @@ func LiquidationIncentiveFactor(lltv *big.Int) *big.Int {
 // LiquidationIncentiveFactor — the hot-path variant (sizeLeg computes the LIF once and passes it here and
 // to MaxSeizeForFullDebt).
 func RepaidAssetsForSeizeAt(seizedAssets, collateralPrice, lif, accruedTotal, totalShares *big.Int) *big.Int {
-	seizedQuoted := MulDivUp(seizedAssets, collateralPrice, oraclePriceScale)
-	repaidShares := ToSharesUp(WDivUp(seizedQuoted, lif), accruedTotal, totalShares)
-	return ToAssetsUp(repaidShares, accruedTotal, totalShares)
+	shares := repaidSharesForSeize(seizedAssets, collateralPrice, lif, accruedTotal, totalShares)
+	return ToAssetsUp(shares, accruedTotal, totalShares)
+}
+
+func repaidSharesForSeize(seize, price, incentive, assets, shares *big.Int) *big.Int {
+	quoted := MulDivUp(seize, price, oraclePriceScale)
+	return ToSharesUp(WDivUp(quoted, incentive), assets, shares)
 }
 
 // ApplySeizeLiquidation replays Morpho Blue liquidate(market, borrower, seizedAssets, 0, data) on local
 // state. It assumes m is already accrued to the settlement timestamp and returns ok=false for any state
 // transition that would underflow or cannot be priced.
 func ApplySeizeLiquidation(m MarketState, p PositionState, seizedAssets, collateralPrice *big.Int) (LiquidationReplay, bool) {
-	if seizedAssets == nil || seizedAssets.Sign() <= 0 || collateralPrice == nil || collateralPrice.Sign() <= 0 ||
-		m.TotalBorrowAssets == nil || m.TotalBorrowShares == nil || m.TotalSupplyAssets == nil ||
-		p.BorrowShares == nil || p.Collateral == nil || m.Lltv == nil {
+	if seizedAssets == nil || seizedAssets.Sign() <= 0 || collateralPrice == nil || collateralPrice.Sign() <= 0 {
 		return LiquidationReplay{}, false
 	}
-	lif := LiquidationIncentiveFactor(m.Lltv)
-	seizedQuoted := MulDivUp(seizedAssets, collateralPrice, oraclePriceScale)
-	repaidShares := ToSharesUp(WDivUp(seizedQuoted, lif), m.TotalBorrowAssets, m.TotalBorrowShares)
-	repaidAssets := ToAssetsUp(repaidShares, m.TotalBorrowAssets, m.TotalBorrowShares)
-	if p.BorrowShares.Cmp(repaidShares) < 0 || m.TotalBorrowShares.Cmp(repaidShares) < 0 || p.Collateral.Cmp(seizedAssets) < 0 {
+	for _, value := range []*big.Int{m.TotalBorrowAssets, m.TotalBorrowShares, m.TotalSupplyAssets, m.Lltv, p.BorrowShares, p.Collateral} {
+		if value == nil || value.Sign() < 0 {
+			return LiquidationReplay{}, false
+		}
+	}
+	if m.Lltv.Cmp(Wad) > 0 {
+		return LiquidationReplay{}, false
+	}
+	shares := repaidSharesForSeize(seizedAssets, collateralPrice, LiquidationIncentiveFactor(m.Lltv), m.TotalBorrowAssets, m.TotalBorrowShares)
+	if shares.Cmp(p.BorrowShares) > 0 || shares.Cmp(m.TotalBorrowShares) > 0 || seizedAssets.Cmp(p.Collateral) > 0 {
 		return LiquidationReplay{}, false
 	}
 	out := LiquidationReplay{
-		Market:        CloneMarketState(m),
-		Position:      ClonePositionState(p),
-		RepaidAssets:  repaidAssets,
-		RepaidShares:  repaidShares,
-		BadDebtAssets: new(big.Int),
-		BadDebtShares: new(big.Int),
+		Market: CloneMarketState(m), Position: ClonePositionState(p), RepaidShares: shares,
+		RepaidAssets:  ToAssetsUp(shares, m.TotalBorrowAssets, m.TotalBorrowShares),
+		BadDebtAssets: new(big.Int), BadDebtShares: new(big.Int),
 	}
-	out.Position.BorrowShares.Sub(out.Position.BorrowShares, repaidShares)
-	out.Market.TotalBorrowShares.Sub(out.Market.TotalBorrowShares, repaidShares)
-	out.Market.TotalBorrowAssets = zeroFloorSub(out.Market.TotalBorrowAssets, repaidAssets)
 	out.Position.Collateral.Sub(out.Position.Collateral, seizedAssets)
-	if out.Position.Collateral.Sign() == 0 {
-		out.BadDebtShares = new(big.Int).Set(out.Position.BorrowShares)
-		out.BadDebtAssets = minBig(out.Market.TotalBorrowAssets, ToAssetsUp(out.BadDebtShares, out.Market.TotalBorrowAssets, out.Market.TotalBorrowShares))
-		if out.Market.TotalSupplyAssets.Cmp(out.BadDebtAssets) < 0 || out.Market.TotalBorrowShares.Cmp(out.BadDebtShares) < 0 {
-			return LiquidationReplay{}, false
-		}
-		out.Market.TotalBorrowAssets.Sub(out.Market.TotalBorrowAssets, out.BadDebtAssets)
-		out.Market.TotalSupplyAssets.Sub(out.Market.TotalSupplyAssets, out.BadDebtAssets)
-		out.Market.TotalBorrowShares.Sub(out.Market.TotalBorrowShares, out.BadDebtShares)
-		out.Position.BorrowShares = new(big.Int)
+	out.Position.BorrowShares.Sub(out.Position.BorrowShares, shares)
+	out.Market.TotalBorrowShares.Sub(out.Market.TotalBorrowShares, shares)
+	out.Market.TotalBorrowAssets = zeroFloorSub(m.TotalBorrowAssets, out.RepaidAssets)
+	if out.Position.Collateral.Sign() != 0 {
+		return out, true
 	}
+	// Once collateral is exhausted the remaining borrower shares become bad debt.
+	// Round using the post-repayment market, then socialize the loss to suppliers.
+	out.BadDebtShares.Set(out.Position.BorrowShares)
+	out.BadDebtAssets = bigmath.Min(out.Market.TotalBorrowAssets,
+		ToAssetsUp(out.BadDebtShares, out.Market.TotalBorrowAssets, out.Market.TotalBorrowShares))
+	if out.BadDebtAssets.Cmp(out.Market.TotalSupplyAssets) > 0 || out.BadDebtShares.Cmp(out.Market.TotalBorrowShares) > 0 {
+		return LiquidationReplay{}, false
+	}
+	out.Market.TotalBorrowAssets.Sub(out.Market.TotalBorrowAssets, out.BadDebtAssets)
+	out.Market.TotalSupplyAssets.Sub(out.Market.TotalSupplyAssets, out.BadDebtAssets)
+	out.Market.TotalBorrowShares.Sub(out.Market.TotalBorrowShares, out.BadDebtShares)
+	out.Position.BorrowShares.SetInt64(0)
 	return out, true
 }
 
@@ -199,24 +184,6 @@ func MaxSeizeForFullDebt(borrowShares, collateralPrice, lif, accruedTotal, total
 	}
 	debtAssets := ToAssetsDown(borrowShares, accruedTotal, totalShares)
 	return MulDivDown(WMulDown(debtAssets, lif), oraclePriceScale, collateralPrice)
-}
-
-/* ───────── whole-market convenience forms (accrue once, then forward) ───────── */
-
-// BorrowedAssets accrues the market to nowTs, then forwards to BorrowedAssetsAt. The hot path accrues once
-// and calls the *At forms directly; these whole-market forms are for callers (and tests) holding a raw state.
-func BorrowedAssets(m MarketState, p PositionState, nowTs uint64) *big.Int {
-	return BorrowedAssetsAt(p, AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
-}
-
-// IsLiquidatable accrues the market to nowTs, then forwards to IsLiquidatableAt.
-func IsLiquidatable(m MarketState, p PositionState, collateralPrice *big.Int, nowTs uint64) bool {
-	return IsLiquidatableAt(p, collateralPrice, m.Lltv, AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
-}
-
-// RepaidAssetsForSeize accrues the market to nowTs, then forwards to RepaidAssetsForSeizeAt.
-func RepaidAssetsForSeize(m MarketState, seizedAssets, collateralPrice, lltv *big.Int, nowTs uint64) *big.Int {
-	return RepaidAssetsForSeizeAt(seizedAssets, collateralPrice, LiquidationIncentiveFactor(lltv), AccruedTotalBorrowAssets(m, nowTs), m.TotalBorrowShares)
 }
 
 /* ───────── SharesMathLib (virtual shares/assets) ───────── */
@@ -266,34 +233,20 @@ func MulDivUp(x, y, d *big.Int) *big.Int {
 // CloneMarketState returns a deep copy of a Morpho market state snapshot.
 func CloneMarketState(m MarketState) MarketState {
 	return MarketState{
-		TotalSupplyAssets: cloneBig(m.TotalSupplyAssets),
-		TotalSupplyShares: cloneBig(m.TotalSupplyShares),
-		TotalBorrowAssets: cloneBig(m.TotalBorrowAssets),
-		TotalBorrowShares: cloneBig(m.TotalBorrowShares),
+		TotalSupplyAssets: bigmath.Clone(m.TotalSupplyAssets),
+		TotalSupplyShares: bigmath.Clone(m.TotalSupplyShares),
+		TotalBorrowAssets: bigmath.Clone(m.TotalBorrowAssets),
+		TotalBorrowShares: bigmath.Clone(m.TotalBorrowShares),
 		LastUpdate:        m.LastUpdate,
-		Fee:               cloneBig(m.Fee),
-		Lltv:              cloneBig(m.Lltv),
-		BorrowRatePerSec:  cloneBig(m.BorrowRatePerSec),
+		Fee:               bigmath.Clone(m.Fee),
+		Lltv:              bigmath.Clone(m.Lltv),
+		BorrowRatePerSec:  bigmath.Clone(m.BorrowRatePerSec),
 	}
 }
 
 // ClonePositionState returns a deep copy of a Morpho position snapshot.
 func ClonePositionState(p PositionState) PositionState {
-	return PositionState{BorrowShares: cloneBig(p.BorrowShares), Collateral: cloneBig(p.Collateral)}
-}
-
-func cloneBig(v *big.Int) *big.Int {
-	if v == nil {
-		return nil
-	}
-	return new(big.Int).Set(v)
-}
-
-func minBig(a, b *big.Int) *big.Int {
-	if a.Cmp(b) <= 0 {
-		return new(big.Int).Set(a)
-	}
-	return new(big.Int).Set(b)
+	return PositionState{BorrowShares: bigmath.Clone(p.BorrowShares), Collateral: bigmath.Clone(p.Collateral)}
 }
 
 func zeroFloorSub(x, y *big.Int) *big.Int {

@@ -3,29 +3,36 @@ package redstoneoev
 import (
 	"math/big"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
+	local "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
+	remote "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
-func newStrategy(cfg *Config, deps strategies.Deps) (types.Strategy, error) {
-	name := cfg.Strategy.Name
-	if name == "" {
-		name = defaultStrategyName
+func newStrategy(cfg *Config, deps types.Dependencies) (types.Strategy, error) {
+	spec := cfg.Strategy
+
+	switch spec.Name {
+	case "", local.Name:
+		return local.NewFromConfig(spec.Config, deps)
+	case remote.Name:
+		return remote.NewFromConfig(spec.Config, deps)
+	default:
+		return nil, errors.Errorf("unknown OEV strategy %q (available: default, webhook)", spec.Name)
 	}
-	return strategies.New(name, cfg.Strategy.Config, deps)
 }
 
 func (s *Solver) bidInput(
 	a AuctionMessage,
 	now time.Time,
 	st cachedState,
-	inFlight inFlightState,
+	inFlight []types.PendingAuction,
 	gasPrice *big.Int,
 ) types.BidInput {
 	return types.BidInput{
@@ -37,19 +44,19 @@ func (s *Solver) bidInput(
 			RawPriceCount: len(a.Payload.Prices),
 			Prices:        auctionPricesForStrategy(a),
 		},
-		Adapter: cloneAdapterSnapshot(st.Adapter),
+		Adapter: st.Adapter.Clone(),
 		Context: types.BidContext{
-			ChainID:            cloneBig(s.chainID),
+			ChainID:            bigmath.Clone(s.chainID),
 			Executor:           s.cfg.Executor,
 			Callback:           s.cfg.Callback,
 			Signer:             s.deps.Signer.Address(),
-			ExecutorDeposit:    cloneBig(st.Exec.Deposit),
-			ExecutorMinDeposit: cloneBig(minDeposit),
-			MaxTxGasPrice:      cloneBig(gasPrice),
+			ExecutorDeposit:    bigmath.Clone(st.Exec.Deposit),
+			ExecutorMinDeposit: bigmath.Clone(minDeposit),
+			MaxTxGasPrice:      bigmath.Clone(gasPrice),
 			GasPrices:          st.GasPrices,
 			GasLimit:           st.GasLimit,
 		},
-		PendingAuctions: pendingAuctionsForStrategy(inFlight.pending, now),
+		PendingAuctions: pendingAuctionsForStrategy(inFlight, now),
 	}
 }
 
@@ -71,34 +78,17 @@ func auctionPricesForStrategy(a AuctionMessage) []types.AuctionPrice {
 	return out
 }
 
-func pendingAuctionsForStrategy(in []pendingAuction, now time.Time) []types.PendingAuction {
-	out := make([]types.PendingAuction, 0, len(in))
-	for _, a := range in {
-		if a.ID == "" {
-			continue
+func pendingAuctionsForStrategy(pending []types.PendingAuction, now time.Time) []types.PendingAuction {
+	active := pending[:0]
+	for _, auction := range pending {
+		snapshot := auction
+		snapshot.ExpiresAt = auction.SentAt.Add(reservationTTL)
+		if snapshot.ID != "" && now.Before(snapshot.ExpiresAt) {
+			active = append(active, snapshot)
 		}
-		expiresAt := a.SentAt.Add(reservationTTL)
-		if !expiresAt.After(now) {
-			continue
-		}
-		out = append(out, types.PendingAuction{
-			ID:        a.ID,
-			SentAt:    a.SentAt,
-			Won:       a.Won,
-			ExpiresAt: expiresAt,
-		})
 	}
-	slices.SortFunc(out, func(a, b types.PendingAuction) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		default:
-			return 0
-		}
-	})
-	return out
+	slices.SortFunc(active, func(a, b types.PendingAuction) int { return strings.Compare(a.ID, b.ID) })
+	return active
 }
 
 func checkExecutionEnvelope(out types.BidOutput) error {

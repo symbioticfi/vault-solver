@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
@@ -42,9 +43,7 @@ func TestReadGasPricesValidatesConfiguredMode(t *testing.T) {
 				otherToken: {Address: feed, MaxAge: time.Hour},
 			},
 		})
-		if err != nil {
-			t.Fatalf("new gas reader: %v", err)
-		}
+		testcheck.NoError(t, err, "new gas reader: %v")
 		_, err = (&reader{gas: oracle}).ReadGasPrices(t.Context(), adapter, time.Unix(1, 0))
 		if err == nil || !strings.Contains(err.Error(), "missing USD feed for token "+loan.Hex()) {
 			t.Fatalf("error = %v, want missing adapter-loan feed", err)

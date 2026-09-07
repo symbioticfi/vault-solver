@@ -1,121 +1,64 @@
 package rfq
 
 import (
-	"math/big"
-
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 )
 
-// executorBinding (abigen --v2) packs fill() via TryPackFill; executorABI is parsed only for tuple
-// reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
-// overloaded 3×; PackFill is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
-// golden selector test pins it.
-var (
-	executorBinding = executor.NewExecutor()
-	executorABI     = mustExecutorABI()
-)
+var executorBinding = executor.NewExecutor()
 
-func mustExecutorABI() abi.ABI {
-	parsed, err := executor.ExecutorMetaData.ParseABI()
+// Use the actual mixed fill overload's order shape for backend tuple decoding.
+// The generated PackFill selector is pinned by the existing golden tests.
+var orderTupleArgs = func() abi.Arguments {
+	contract, err := executor.ExecutorMetaData.ParseABI()
 	if err != nil {
-		panic("rfq: parse executor ABI: " + err.Error())
+		panic("rfq executor ABI: " + err.Error())
 	}
-	return *parsed
-}
-
-// orderTupleArgs decodes the backend's `encodedOrder` — an ABI-encoded single Order tuple, identical
-// to fill()'s first argument type.
-var orderTupleArgs = abi.Arguments{{Type: fillOrderType()}}
-
-// emptyExecutorData is abi.encode(ExecutorCall[]) for an empty call list — the executorData a direct
-// fill passes (the Executor decodes it to a (target,value,data)[] and runs no extra calls).
-var emptyExecutorData = encodeEmptyExecutorData()
-
-func fillOrderType() abi.Type {
-	m, ok := executorABI.Methods["fill"]
-	if !ok || len(m.Inputs) == 0 {
-		panic("rfq: executor ABI missing fill(order, ...)")
+	method, exists := contract.Methods["fill"]
+	if !exists || len(method.Inputs) == 0 {
+		panic("rfq executor ABI missing fill(order, ...)")
 	}
-	return m.Inputs[0].Type
-}
+	return abi.Arguments{{Name: "order", Type: method.Inputs[0].Type}}
+}()
 
-// executorCall mirrors the Executor's (address target, uint256 value, bytes data) callback tuple.
-type executorCall struct {
-	Target common.Address
-	Value  *big.Int
-	Data   []byte
-}
+// abi.encode(ExecutorCall[]): one offset word (32), then an empty array length.
+// No callback elements exist, so their tuple layout contributes no encoded words.
+var emptyExecutorData = []byte{31: 32, 63: 0}
 
-func encodeEmptyExecutorData() []byte {
-	t, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
-		{Name: "target", Type: "address"},
-		{Name: "value", Type: "uint256"},
-		{Name: "data", Type: "bytes"},
-	})
-	if err != nil {
-		panic("rfq: build executorData type: " + err.Error())
-	}
-	data, err := abi.Arguments{{Type: t}}.Pack([]executorCall{})
-	if err != nil {
-		panic("rfq: pack empty executorData: " + err.Error())
-	}
-	return data
-}
-
-// decodeOrder decodes a backend-provided ABI-encoded Reactor order into the typed struct fill expects.
 func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
-	vals, err := orderTupleArgs.Unpack(encoded)
+	var decoded struct{ Order executor.IReactorOrder }
+	values, err := orderTupleArgs.Unpack(encoded)
+	if err == nil {
+		err = orderTupleArgs.Copy(&decoded, values)
+	}
 	if err != nil {
 		return executor.IReactorOrder{}, errors.Errorf("decode order: %w", err)
 	}
-	if len(vals) != 1 {
-		return executor.IReactorOrder{}, errors.Errorf("decode order: got %d values, want 1", len(vals))
-	}
-	out, ok := abi.ConvertType(vals[0], new(executor.IReactorOrder)).(*executor.IReactorOrder)
-	if !ok {
-		return executor.IReactorOrder{}, errors.New("decode order: type conversion failed")
-	}
-	return *out, nil
+	return decoded.Order, nil
 }
 
-// encodeFill builds Executor.fill(order, protocolSig, swapInputs, discountSwapInputs, executorData)
-// calldata for the mixed overload.
-func encodeFill(
-	order executor.IReactorOrder,
-	protocolSig []byte,
-	swaps []executor.IReactorSwapInput,
-	discountSwaps []executor.IReactorDiscountSwapInput,
-	executorData []byte,
-) ([]byte, error) {
-	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
+func encodeFill(order executor.IReactorOrder, protocolSig []byte, swaps []executor.IReactorSwapInput,
+	discounts []executor.IReactorDiscountSwapInput, executorData []byte) ([]byte, error) {
+	encoded, err := executorBinding.TryPackFill(order, protocolSig, swaps, discounts, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)
 	}
-	return data, nil
+	return encoded, nil
 }
 
-// directSwaps maps a strategy's direct (non-discount) legs to the Executor's SwapInputs: each carries
-// its adapter and the per-adapter Swap tuple. The executor itself is the swap recipient (it forwards
-// outputs to the Reactor). Mirrors the swapInputs build in execution.ts (#submitOrder).
-func directSwaps(selected *fillPlan, tokenIn, executorAddr common.Address) []executor.IReactorSwapInput {
-	swaps := make([]executor.IReactorSwapInput, 0, len(selected.Legs))
-	for _, leg := range selected.Legs {
-		if leg.DiscountID != nil {
-			continue // discount legs are built separately
+// Executor forwards these outputs to the Reactor. Own the selected amounts so a
+// strategy result cannot mutate a prepared transaction through shared pointers.
+func directSwaps(plan *fillPlan, tokenIn, recipient common.Address) []executor.IReactorSwapInput {
+	out := make([]executor.IReactorSwapInput, 0, len(plan.Legs))
+	for _, leg := range plan.Legs {
+		if leg.DiscountID == nil {
+			out = append(out, executor.IReactorSwapInput{Adapter: leg.Adapter, Swap: executor.ILiquidLaneAdapterSwap{
+				Recipient: recipient, TokenIn: tokenIn, AmountIn: bigmath.Clone(leg.AmountIn), AmountOut: bigmath.Clone(leg.AmountOut),
+			}})
 		}
-		swaps = append(swaps, executor.IReactorSwapInput{
-			Adapter: leg.Adapter,
-			Swap: executor.ILiquidLaneAdapterSwap{
-				Recipient: executorAddr,
-				TokenIn:   tokenIn,
-				AmountIn:  new(big.Int).Set(leg.AmountIn),
-				AmountOut: new(big.Int).Set(leg.AmountOut),
-			},
-		})
 	}
-	return swaps
+	return out
 }

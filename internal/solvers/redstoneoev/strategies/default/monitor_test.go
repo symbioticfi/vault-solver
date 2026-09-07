@@ -7,9 +7,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestCandidatePriceSource(t *testing.T) {
@@ -20,7 +20,7 @@ func TestCandidatePriceSource(t *testing.T) {
 
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
+			id: {Params: MarketParams{Oracle: oracle}, State: goldenMarket()},
 		},
 		prices: map[common.Hash]*big.Int{id: onchain},
 		quotes: map[common.Hash]AdapterQuote{
@@ -34,7 +34,7 @@ func TestCandidatePriceSource(t *testing.T) {
 		Prices: []types.AuctionPrice{{Oracle: oracle, Price: framePx}},
 	}
 
-	apiCands := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
+	apiCands := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
 	if len(apiCands) != 1 || apiCands[0].price.Cmp(framePx) != 0 {
 		t.Fatalf("auction path price = %+v, want %v", apiCands, framePx)
 	}
@@ -42,7 +42,7 @@ func TestCandidatePriceSource(t *testing.T) {
 	var testMon testMonitor
 	testMon.log = logr.Discard()
 	testMon.snap.Store(snap)
-	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
+	testCands := candidatesFromAuctionWithAdapter(testMon.log, testMon.snapshot(), auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
 	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
 		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
 	}
@@ -69,7 +69,7 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 	otherOracle := common.HexToAddress("0x00000000000000000000000000000000000000bb")
 	snap := &snapshot{
 		markets: map[common.Hash]MarketInfo{
-			id: {Params: abiMarketParams{Oracle: oracle}, State: goldenMarket()},
+			id: {Params: MarketParams{Oracle: oracle}, State: goldenMarket()},
 		},
 		quotes: map[common.Hash]AdapterQuote{
 			id: newQuote("1780000000000000000000", mustBig("100000000000")),
@@ -83,7 +83,7 @@ func TestCandidateRequiresAuctionPriceForMarketOracle(t *testing.T) {
 		{Oracle: oracle, Price: big.NewInt(0)},
 	}}
 
-	got := candidatesFromAuction(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate)
+	got := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
 	if len(got) != 0 {
 		t.Fatalf("market without positive auction price for its oracle must not produce candidates: %+v", got)
 	}
@@ -129,10 +129,8 @@ func TestMarketInfoFromAPI(t *testing.T) {
 	oracle := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	irm := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	lltv := mustBig("860000000000000000")
-	id, err := deriveMarketID(abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
-	if err != nil {
-		t.Fatalf("deriveMarketID: %v", err)
-	}
+	id, err := deriveMarketID(MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Irm: irm, Lltv: lltv})
+	testcheck.NoError(t, err, "deriveMarketID: %v")
 
 	view, ok := marketInfoFromAPI(morphoMarket{
 		MarketID: id,
@@ -178,11 +176,9 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 	coll := common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78")
 	lltv := mustBig("860000000000000000")
 	mk := func(oracle common.Address, block, ts string) morphoMarket {
-		params := abiMarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
+		params := MarketParams{LoanToken: loan, CollateralToken: coll, Oracle: oracle, Lltv: lltv}
 		id, err := deriveMarketID(params)
-		if err != nil {
-			t.Fatalf("deriveMarketID: %v", err)
-		}
+		testcheck.NoError(t, err, "deriveMarketID: %v")
 		return morphoMarket{
 			MarketID:        id,
 			Oracle:          oracle,
@@ -198,7 +194,7 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 	old := mk(common.HexToAddress("0x1111111111111111111111111111111111111111"), "10", "120")
 	latest := mk(common.HexToAddress("0x2222222222222222222222222222222222222222"), "11", "132")
 
-	snap := (&apiMonitor{log: logr.Discard()}).apiMarketSnapshot([]morphoMarket{old, latest}, loan, []common.Address{coll})
+	snap := (&apiMonitor{marketMonitor: marketMonitor{log: logr.Discard()}}).apiMarketSnapshot([]morphoMarket{old, latest}, loan, []common.Address{coll})
 	if snap.block != 11 || snap.blockTime != 132 {
 		t.Fatalf("snapshot epoch = (%d,%d), want (11,132)", snap.block, snap.blockTime)
 	}
@@ -233,5 +229,22 @@ func TestAPIMarketAndPositionFailClosed(t *testing.T) {
 	})
 	if !ok || pos.BorrowShares.Cmp(big.NewInt(11)) != 0 || pos.Collateral.Cmp(big.NewInt(22)) != 0 {
 		t.Fatalf("bad parsed position: %+v ok=%v", pos, ok)
+	}
+}
+
+func TestCandidatesBindCurrentLoanToken(t *testing.T) {
+	id, borrower := common.Hash{1}, common.Address{2}
+	oracle, loan, collateral := common.Address{3}, common.Address{4}, common.Address{5}
+	snap := &snapshot{markets: map[common.Hash]MarketInfo{id: {Params: MarketParams{LoanToken: loan, CollateralToken: collateral, Oracle: oracle}, State: goldenMarket()}},
+		positions: map[common.Hash]map[common.Address]morpho.PositionState{id: {borrower: goldenBorrower()}}}
+	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: big.NewInt(1)}}}
+	adapter := types.AdapterSnapshot{Address: common.Address{6}, Loan: loan, LoanDecimals: 6,
+		Redeemable: []types.RedeemableSnapshot{{Asset: collateral, Decimals: 18, MaxRate: big.NewInt(1), MaxAssets: big.NewInt(1)}}}
+	if got := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, adapter); len(got) != 1 {
+		t.Fatal("matching loan rejected")
+	}
+	adapter.Loan = common.Address{7}
+	if got := candidatesFromAuctionWithAdapter(logr.Discard(), snap, auction, snap.markets[id].State.LastUpdate, adapter); len(got) != 0 {
+		t.Fatal("cached market with different loan accepted")
 	}
 }

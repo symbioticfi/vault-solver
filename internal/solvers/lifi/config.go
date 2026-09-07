@@ -1,7 +1,6 @@
 package lifi
 
 import (
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -10,7 +9,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
+
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -29,19 +28,15 @@ type rawConfig struct {
 	SolverMode         string                   `yaml:"solverMode"`
 	DiscountsURL       string                   `yaml:"privateDiscountsUrl"`
 	Gas                *liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy           rawStrategyConfig        `yaml:"strategy"`
+	Strategy           StrategyConfig           `yaml:"strategy"`
 }
 
 type rawOrderServerConfig struct {
-	BaseURL     string `yaml:"baseUrl"`
-	WSURL       string `yaml:"wsUrl"`
-	APIKeyEnv   string `yaml:"apiKeyEnv"`
-	HTTPTimeout string `yaml:"httpTimeout"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	MaxMessageBytes int64  `yaml:"maxMessageBytes"`
+	BaseURL         string `yaml:"baseUrl"`
+	WSURL           string `yaml:"wsUrl"`
+	APIKeyEnv       string `yaml:"apiKeyEnv"`
+	HTTPTimeout     string `yaml:"httpTimeout"`
 }
 
 type Config struct {
@@ -65,19 +60,18 @@ type Config struct {
 }
 
 type OrderServerConfig struct {
-	BaseURL     string
-	WSURL       string
-	APIKeyEnv   string
-	HTTPTimeout time.Duration
+	MaxMessageBytes int64
+	BaseURL         string
+	WSURL           string
+	APIKeyEnv       string
+	HTTPTimeout     time.Duration
 }
 
-type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
-}
+type StrategyConfig = parse.NamedConfig
 
 const (
 	defaultHTTPTimeout       = 10 * time.Second
+	defaultMaxMessageBytes   = 1 << 20
 	defaultQuoteInterval     = 30 * time.Second
 	defaultQuoteTTL          = 36 * time.Second
 	defaultBlockPollInterval = time.Second
@@ -95,7 +89,7 @@ const (
 
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 
@@ -111,11 +105,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	liquidityLens, err := parse.OptionalAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
 	adapters, err := parseAdapters(raw.Adapters)
 	if err != nil {
@@ -173,12 +165,19 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		gas = &parsed
 	}
+	if raw.OrderServer.MaxMessageBytes < 0 {
+		return nil, errors.New("orderServer.maxMessageBytes must be positive")
+	}
+	if raw.OrderServer.MaxMessageBytes == 0 {
+		raw.OrderServer.MaxMessageBytes = defaultMaxMessageBytes
+	}
 	return &Config{
 		OrderServer: OrderServerConfig{
-			BaseURL:     raw.OrderServer.BaseURL,
-			WSURL:       raw.OrderServer.WSURL,
-			APIKeyEnv:   apiKeyEnv,
-			HTTPTimeout: httpTimeout,
+			MaxMessageBytes: raw.OrderServer.MaxMessageBytes,
+			BaseURL:         raw.OrderServer.BaseURL,
+			WSURL:           raw.OrderServer.WSURL,
+			APIKeyEnv:       apiKeyEnv,
+			HTTPTimeout:     httpTimeout,
 		},
 		InputSettler:     inputSettler,
 		OutputSettler:    outputSettler,
@@ -208,28 +207,12 @@ func parseQuoteInterval(ms int, mode string) (time.Duration, error) {
 		}
 		return defaultQuoteInterval, nil
 	}
-	if ms < 0 {
-		return 0, errors.Errorf("quoteIntervalMs: must be positive, got %d", ms)
-	}
-	return time.Duration(ms) * time.Millisecond, nil
+	return parse.MsDuration(&ms, 0, "quoteIntervalMs")
 }
 
 func parseAdapters(raw []string) ([]common.Address, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("at least one adapters entry is required")
 	}
-	out := make([]common.Address, 0, len(raw))
-	seen := make(map[common.Address]bool, len(raw))
-	for i, a := range raw {
-		addr, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return nil, err
-		}
-		if seen[addr] {
-			return nil, errors.Errorf("adapters[%d]: duplicate adapter %s", i, addr.Hex())
-		}
-		seen[addr] = true
-		out = append(out, addr)
-	}
-	return out, nil
+	return parse.Addresses(raw, "adapters")
 }

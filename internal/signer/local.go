@@ -26,22 +26,21 @@ type local struct {
 
 // FromConfig builds a Signer from the configured key source, reading secrets from the environment.
 func FromConfig(cfg config.SignerConfig) (Signer, error) {
-	switch {
-	case cfg.KeyEnv != "":
-		hexKey := os.Getenv(cfg.KeyEnv)
-		if hexKey == "" {
-			return nil, errors.Errorf("signer: env %q is empty", cfg.KeyEnv)
-		}
-		return NewFromHexKey(hexKey)
-	case cfg.KeystorePath != "":
-		passphrase := os.Getenv(cfg.PassphraseEnv)
-		if passphrase == "" {
-			return nil, errors.Errorf("signer: passphrase env %q is empty", cfg.PassphraseEnv)
-		}
-		return NewFromKeystore(cfg.KeystorePath, passphrase)
-	default:
-		return nil, errors.New("signer: no key source configured")
+	if (cfg.KeyEnv == "") == (cfg.KeystorePath == "") {
+		return nil, errors.New("signer: exactly one key source is required")
 	}
+	env := cfg.KeyEnv
+	if cfg.KeystorePath != "" {
+		env = cfg.PassphraseEnv
+	}
+	secret := os.Getenv(env)
+	if secret == "" {
+		return nil, errors.Errorf("signer: env %q is empty", env)
+	}
+	if cfg.KeystorePath != "" {
+		return NewFromKeystore(cfg.KeystorePath, secret)
+	}
+	return NewFromHexKey(secret)
 }
 
 // NewFromHexKey builds a Signer from a hex-encoded private key (with or without the 0x prefix).
@@ -90,6 +89,9 @@ func (l *local) SignTx(
 ) (*types.Transaction, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if tx == nil || chainID == nil || chainID.Sign() <= 0 {
+		return nil, errors.New("signer: transaction and positive chain id are required")
 	}
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), l.key)
 	if err != nil {

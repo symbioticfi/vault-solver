@@ -12,8 +12,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestMetrics(t *testing.T) {
@@ -65,8 +65,8 @@ func TestMetrics(t *testing.T) {
 			if result.Outcome != test.outcome {
 				t.Fatalf("outcome = %q, want %q", result.Outcome, test.outcome)
 			}
-			assertMetric(t, metrics.requests.WithLabelValues(test.label, string(test.outcome)), 1)
-			assertMetric(t, metrics.inflight.WithLabelValues(test.label), 0)
+			metricstest.RequireValue(t, metrics.requests.WithLabelValues(test.label, string(test.outcome)), 1)
+			metricstest.RequireValue(t, metrics.inflight.WithLabelValues(test.label), 0)
 			assertHistogramObservedOnce(t, metrics.lifecycleDuration.WithLabelValues(
 				test.label,
 				string(test.outcome),
@@ -89,8 +89,8 @@ func TestMetrics(t *testing.T) {
 			if test.outcome == OutcomeSubmissionError {
 				wantGas = 0
 			}
-			assertMetric(t, metrics.gasUsed.WithLabelValues(test.label, string(test.outcome)), wantGas)
-			assertMetric(
+			metricstest.RequireValue(t, metrics.gasUsed.WithLabelValues(test.label, string(test.outcome)), wantGas)
+			metricstest.RequireValue(
 				t,
 				metrics.feePaidWei.WithLabelValues(test.label, string(test.outcome)),
 				test.wantFeeWei,
@@ -109,11 +109,7 @@ func TestMetrics(t *testing.T) {
 			To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "lifi-fill",
 		}
 		pending, err := manager.broadcast(t.Context(), request)
-		if err != nil {
-			t.Fatalf("broadcast: %v", err)
-		}
-		result := make(chan Result, 1)
-		pending.result = result
+		testcheck.NoError(t, err, "broadcast: %v")
 		manager.trackUnminedTransaction(pending)
 		pending.lifecycle = metrics.beginLifecycle(request.Label)
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
@@ -121,12 +117,11 @@ func TestMetrics(t *testing.T) {
 		lifecycleCtx, cancel := context.WithCancelCause(t.Context())
 		backend.cancel = func() { cancel(context.Canceled) }
 		backend.armed = true
-		manager.complete(lifecycleCtx, pending)
-		completed := <-result
+		completed := manager.complete(lifecycleCtx, pending)
 		if completed.Outcome != OutcomeIncludedUnconfirmed {
 			t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeIncludedUnconfirmed)
 		}
-		assertMetric(t, metrics.requests.WithLabelValues(
+		metricstest.RequireValue(t, metrics.requests.WithLabelValues(
 			"lifi-fill",
 			string(OutcomeIncludedUnconfirmed),
 		), 1)
@@ -159,11 +154,11 @@ func TestMetrics(t *testing.T) {
 		if completed := <-result; completed.Outcome != OutcomeCancelled {
 			t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeCancelled)
 		}
-		assertMetric(t, metrics.replacements.WithLabelValues(
+		metricstest.RequireValue(t, metrics.replacements.WithLabelValues(
 			"lifi-fill",
 			replacementKindReplacement,
 		), 1)
-		assertMetric(t, metrics.replacements.WithLabelValues(
+		metricstest.RequireValue(t, metrics.replacements.WithLabelValues(
 			"lifi-fill",
 			replacementKindCancellation,
 		), 1)
@@ -194,7 +189,7 @@ func TestMetrics(t *testing.T) {
 			t.Fatal("transaction was not accepted")
 		}
 		waitForSentTransactions(t, backend.mockBackend, 1)
-		assertMetric(t, metrics.inflight.WithLabelValues("rfq-fill"), 1)
+		metricstest.RequireValue(t, metrics.inflight.WithLabelValues("rfq-fill"), 1)
 
 		cancel()
 		completed := <-result
@@ -203,8 +198,8 @@ func TestMetrics(t *testing.T) {
 		}
 		<-managerDone
 		manager.lifecycleWG.Wait()
-		assertMetric(t, metrics.requests.WithLabelValues("rfq-fill", string(OutcomeTrackingStopped)), 1)
-		assertMetric(t, metrics.inflight.WithLabelValues("rfq-fill"), 0)
+		metricstest.RequireValue(t, metrics.requests.WithLabelValues("rfq-fill", string(OutcomeTrackingStopped)), 1)
+		metricstest.RequireValue(t, metrics.inflight.WithLabelValues("rfq-fill"), 0)
 		if got := testutil.CollectAndCount(metrics.phaseDuration); got != 2 {
 			t.Fatalf("phase duration series = %d, want 2", got)
 		}
@@ -257,9 +252,7 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 	pending, err := manager.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "canonical-reconciliation",
 	})
-	if err != nil {
-		t.Fatalf("broadcast: %v", err)
-	}
+	testcheck.NoError(t, err, "broadcast: %v")
 	pending.lifecycle = metrics.beginLifecycle(pending.req.Label)
 	pending.lifecycle.transitionPhase(lifecyclePhasePending)
 	pending.nonceConflictHash = pending.attempts[0].hash
@@ -274,7 +267,7 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 	if pending.lifecycle.phase != lifecyclePhasePending {
 		t.Fatalf("phase = %q, want pending", pending.lifecycle.phase.label())
 	}
-	if pending.lifecycle.phaseObserved[lifecyclePhaseConfirming] {
+	if pending.lifecycle.phases[lifecyclePhaseConfirming].seen {
 		t.Fatal("untrusted reconciliation receipt recorded confirming phase")
 	}
 
@@ -315,7 +308,7 @@ func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 	if pending.lifecycle.phase != lifecyclePhasePending {
 		t.Fatalf("phase after reorg = %q, want pending", pending.lifecycle.phase.label())
 	}
-	firstConfirmingDuration := pending.lifecycle.phaseDurations[lifecyclePhaseConfirming]
+	firstConfirmingDuration := pending.lifecycle.phases[lifecyclePhaseConfirming].elapsed
 
 	// The next receipt remains canonical, so the same lifecycle enters confirming a second time.
 	manager.backend = backend
@@ -329,7 +322,7 @@ func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	pending.lifecycle.finish(result.Outcome, result.Receipt)
 
-	if got := pending.lifecycle.phaseDurations[lifecyclePhaseConfirming]; got <= firstConfirmingDuration {
+	if got := pending.lifecycle.phases[lifecyclePhaseConfirming].elapsed; got <= firstConfirmingDuration {
 		t.Fatalf(
 			"cumulative confirming duration = %s, want more than first episode %s",
 			got,
@@ -337,11 +330,11 @@ func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 		)
 	}
 	for phase := range lifecyclePhaseCount {
-		assertHistogramDuration(t, metrics.phaseDuration.WithLabelValues(
+		metricstest.RequireHistogram(t, metrics.phaseDuration.WithLabelValues(
 			pending.req.Label,
 			phase.label(),
 			string(result.Outcome),
-		), pending.lifecycle.phaseDurations[phase])
+		), 1, pending.lifecycle.phases[phase].elapsed.Seconds())
 	}
 }
 
@@ -361,7 +354,7 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				metrics := newTestMetrics(t)
 				metrics.finishAdmission("test", time.Now(), test.err)
-				assertMetric(t, metrics.admissionRejections.WithLabelValues("test", string(test.want)), 1)
+				metricstest.RequireValue(t, metrics.admissionRejections.WithLabelValues("test", string(test.want)), 1)
 				assertHistogramObservedOnce(t, metrics.admissionWait.WithLabelValues("test", string(test.want)))
 			})
 		}
@@ -383,7 +376,7 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 		if completed := <-result; !completed.NotAdmitted {
 			t.Fatalf("result = %+v, want NotAdmitted", completed)
 		}
-		assertMetric(t, metrics.admissionRejections.WithLabelValues(
+		metricstest.RequireValue(t, metrics.admissionRejections.WithLabelValues(
 			"expired",
 			string(admissionRejectionDeadline),
 		), 1)
@@ -445,17 +438,8 @@ func startTestManager(t *testing.T, backend Backend, cfg Config, metrics *Metric
 func newTestMetrics(t *testing.T) *Metrics {
 	t.Helper()
 	metrics, err := NewMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatalf("NewMetrics: %v", err)
-	}
+	testcheck.NoError(t, err, "NewMetrics: %v")
 	return metrics
-}
-
-func assertMetric(t *testing.T, collector prometheus.Collector, want float64) {
-	t.Helper()
-	if got := testutil.ToFloat64(collector); got != want {
-		t.Fatalf("metric = %v, want %v", got, want)
-	}
 }
 
 func assertHistogramObservedOnce(t *testing.T, observer prometheus.Observer) {
@@ -463,9 +447,4 @@ func assertHistogramObservedOnce(t *testing.T, observer prometheus.Observer) {
 	if got := metricstest.HistogramCount(t, observer); got != 1 {
 		t.Fatalf("histogram sample count = %d, want 1", got)
 	}
-}
-
-func assertHistogramDuration(t *testing.T, observer prometheus.Observer, want time.Duration) {
-	t.Helper()
-	metricstest.RequireHistogram(t, observer, 1, want.Seconds())
 }

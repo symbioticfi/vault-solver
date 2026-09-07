@@ -14,17 +14,19 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -275,7 +277,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		caller:   common.HexToAddress("0x5555555555555555555555555555555555555555"),
 		orders:   newOrderClient(orderServer.URL, "test-key", cfg.OrderServer.HTTPTimeout, 11155111),
 		feed: newOrderFeed(
-			"ws"+strings.TrimPrefix(webSocketServer.URL, "http"),
+			OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(webSocketServer.URL, "http")},
 			"test-key",
 			logr.Discard(),
 		),
@@ -301,20 +303,11 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 	expectSignal(t, renewalStarted)
 	stopWebSocketOnce.Do(func() { close(stopWebSocket) })
 	expectSignal(t, renewalCanceled)
-	select {
-	case <-quoteExpired:
-	case <-time.After(5 * time.Second):
-		t.Fatal("active quote was not expired after order feed disconnected")
-	}
+	testcheck.ReceiveWithin(t, quoteExpired, 5*time.Second, "active quote was not expired after order feed disconnected")
 
 	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Run() error = %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Run did not stop")
+	if err := testcheck.ReceiveWithin(t, done, 3*time.Second, "Run did not stop"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 
@@ -381,13 +374,8 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 	if connectionCtx.Err() != nil {
 		t.Fatalf("feed connection was canceled before quote expiry: %v", connectionCtx.Err())
 	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("quoteLoop did not stop after expiring quotes")
+	if err := testcheck.ReceiveWithin(t, done, 3*time.Second, "quoteLoop did not stop after expiring quotes"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("quoteLoop error = %v, want context cancellation", err)
 	}
 }
 
@@ -494,13 +482,8 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 	expectSignal(t, quoteSubmitted)
 	cancel()
 	expectSignal(t, quoteExpired)
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("quoteLoop error = %v, want context cancellation", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("quoteLoop did not stop after resumed quote expiry")
+	if err := testcheck.ReceiveWithin(t, done, 3*time.Second, "quoteLoop did not stop after resumed quote expiry"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("quoteLoop error = %v, want context cancellation", err)
 	}
 	if !unsubscribed.Load() {
 		t.Fatal("quoteLoop did not unsubscribe from transaction lane state")
@@ -515,7 +498,7 @@ func TestShutdownPreparationTimeoutIncludesQuoteAndInboxDrain(t *testing.T) {
 }
 
 func (s *Solver) processOrder(ctx context.Context, routes []route, order *submittedOrder) {
-	s.processOrderWithPending(ctx, routes, order, nil)
+	s.processOrderUsingReservations(ctx, routes, order, nil, nil)
 }
 
 type fakeLifiTxSender struct {
@@ -748,11 +731,11 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 		"capacity-1": big.NewInt(1),
 	})
 
-	result := s.processOrderWithPending(
+	result := s.processOrderUsingReservations(
 		t.Context(),
 		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
-		nil,
+		nil, nil,
 	)
 	if result.fill != nil || len(result.blockedOn) != 0 {
 		t.Fatalf("external nil decision was retained: %+v", result)
@@ -795,11 +778,11 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 			)
 
-			result := s.processOrderWithPending(
+			result := s.processOrderUsingReservations(
 				t.Context(),
 				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
-				nil,
+				nil, nil,
 			)
 			if result.retryable != tt.wantRetryable {
 				t.Fatalf("retryable = %v, want %v", result.retryable, tt.wantRetryable)
@@ -821,9 +804,7 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 	var logs []string
@@ -864,9 +845,7 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 func TestProcessOrderAttachesOnChainObsolescenceCheck(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(
 		fixture.cfg,
@@ -935,9 +914,7 @@ func TestProcessOrderWithoutGasAccountingSkipsFeeReaderAndRequestCap(t *testing.
 	fixture := immediateTestSetup(t)
 	fixture.cfg.Gas = nil
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(
 		fixture.cfg,
@@ -978,9 +955,7 @@ func TestProcessOrderWithoutGasAccountingSkipsFeeReaderAndRequestCap(t *testing.
 func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(
 		fixture.cfg,
@@ -1013,9 +988,7 @@ func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
 func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(
 		fixture.cfg,
@@ -1072,9 +1045,9 @@ func TestProcessOrderSkipsInputTokenOutsideScopeBeforeChainReads(t *testing.T) {
 		return common.Hash{}
 	}}
 
-	result := s.processOrderWithPending(
+	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil, nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
 		t.Fatalf("out-of-scope order: orderID reads=%d txs=%d", orderIDReads, len(txm.reqs))
@@ -1102,9 +1075,9 @@ func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 	var logs []string
 	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
 
-	result := s.processOrderWithPending(
+	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil, nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
 		t.Fatalf("fee-bearing order: orderID reads=%d txs=%d", orderIDReads, len(txm.reqs))
@@ -1120,11 +1093,10 @@ func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 
 func TestProcessOrderFillsThroughPrivateDiscountWithoutDirectAuthorization(t *testing.T) {
 	fixture := immediateTestSetup(t)
+	fixture.cfg.OrderServer.HTTPTimeout = time.Second
 	now := time.Unix(1_700_000_000, 0)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	routeItem := testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter)[0]
 	baseInventory := liquidlane.DirectInventory(
 		routeItem,
@@ -1184,9 +1156,9 @@ func TestProcessOrderRejectsMultiRoutePlanForPermissionedToken(t *testing.T) {
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 	)
 
-	result := s.processOrderWithPending(
+	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil, nil,
 	)
 	if len(txm.reqs) != 0 {
 		t.Fatalf("permissioned multi-route plan submitted %d transactions", len(txm.reqs))
@@ -1215,9 +1187,7 @@ func TestRoutesForPairUsesBothTokens(t *testing.T) {
 func TestProcessOrderChecksOnChainStatusBeforeSend(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{}
 	s := newProcessTestSolver(
 		fixture.cfg,
@@ -1284,9 +1254,7 @@ func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
 func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	tests := []struct {
 		name                  string
 		status                uint8
@@ -1325,11 +1293,11 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 			}
 			solver.reader = reader
 
-			result := solver.processOrderWithPending(
+			result := solver.processOrderUsingReservations(
 				t.Context(),
 				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
-				nil,
+				nil, nil,
 			)
 			if result.depositNotVisible != test.wantDepositNotVisible {
 				t.Fatalf("depositNotVisible = %t, want %t", result.depositNotVisible, test.wantDepositNotVisible)
@@ -1350,9 +1318,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{result: txmanager.Result{
 		Outcome: txmanager.OutcomeSubmissionError,
 		Err:     errors.New("send failed"),
@@ -1368,18 +1334,16 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 func TestProcessOrderDropsWhenTransactionSubmissionIsRejected(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{reject: true}
 	s := newProcessTestSolver(
 		fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
 	)
 
-	result := s.processOrderWithPending(
+	result := s.processOrderUsingReservations(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
-		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil, nil,
 	)
 	if len(txm.reqs) != 0 {
 		t.Fatalf("busy sender accepted %d requests", len(txm.reqs))
@@ -1392,9 +1356,7 @@ func TestProcessOrderDropsWhenTransactionSubmissionIsRejected(t *testing.T) {
 func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	availableOutput := int64(1_000_000)
 	maxFeePerGas := big.NewInt(1)
 	txm := &fakeLifiTxSender{onSend: func(attempt int, _ chan<- txmanager.Result) {
@@ -1435,11 +1397,9 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 	orders <- &secondValue
 	close(orders)
 
-	if err := s.runOrderWorker(
+	testcheck.NoError(t, s.runOrderWorker(
 		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil,
-	); err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	), "runOrderWorker: %v")
 	if fillReads != 2 || feeReads != 2 {
 		t.Fatalf("fresh state reads: fills=%d fees=%d, want 2/2", fillReads, feeReads)
 	}
@@ -1451,9 +1411,7 @@ func TestOrderWorkerReplansQueuedOrderBeforeSend(t *testing.T) {
 func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	submitted := make(chan chan<- txmanager.Result, 5)
 	txm := &fakeLifiTxSender{
 		hold: true,
@@ -1507,13 +1465,9 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	for _, result := range results {
 		result <- txm.fillResult()
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runOrderWorker: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not finish after receipts")
+	{
+		err := testcheck.ReceiveWithin(t, done, 5*time.Second, "worker did not finish after receipts")
+		testcheck.NoError(t, err, "runOrderWorker: %v")
 	}
 	if fillReads != 5 || feeReads != 5 || len(txm.reqs) != 5 {
 		t.Fatalf("fills=%d fees=%d submissions=%d, want 5/5/5", fillReads, feeReads, len(txm.reqs))
@@ -1558,9 +1512,7 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 	)
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	s.metrics = metrics
 	s.quoteRefresh = make(chan struct{}, 8)
 	s.reader = fakeLifiReader{
@@ -1636,13 +1588,9 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 	}
 	secondResult <- txm.fillResult()
 	thirdResult <- txm.fillResult()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runOrderWorker: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not finish after receipt")
+	{
+		err := testcheck.ReceiveWithin(t, done, 5*time.Second, "worker did not finish after receipt")
+		testcheck.NoError(t, err, "runOrderWorker: %v")
 	}
 	wantByOutcome := map[string]float64{
 		string(orderProcessingSubmitted): 3, string(orderProcessingCapacityDeferred): 1,
@@ -1694,9 +1642,7 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 	blockedValue.OrderID = "blocked"
 	blockedValue.Order.Nonce = new(big.Int).Add(pending.Order.Nonce, big.NewInt(1))
 	blockedKey, err := localOrderKey(blockedValue.Order)
-	if err != nil {
-		t.Fatalf("blocked order key: %v", err)
-	}
+	testcheck.NoError(t, err, "blocked order key: %v")
 	blockedValue.dedupeKey = blockedKey
 	blocked := &blockedValue
 	barrier := &submittedOrder{processed: make(chan struct{})}
@@ -1736,22 +1682,14 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 
 	pendingResult <- txm.fillResult()
 	expectRetryEvent(t, events, "transient")
-	select {
-	case <-barrier.processed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("recovery barrier did not pass after the capacity retry returned to recovery")
-	}
+	testcheck.ReceiveWithin(t, barrier.processed, 3*time.Second, "recovery barrier did not pass after the capacity retry returned to recovery")
 	retries := inbox.takeRecoveryRetries()
 	if len(retries) != 1 || retries[0] != blocked {
 		t.Fatalf("recovery retries = %+v, want blocked order", retries)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runOrderWorker: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("worker did not stop after retaining the capacity retry")
+	{
+		err := testcheck.ReceiveWithin(t, done, 3*time.Second, "worker did not stop after retaining the capacity retry")
+		testcheck.NoError(t, err, "runOrderWorker: %v")
 	}
 }
 
@@ -1836,22 +1774,16 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 
 	results[2] <- txm.fillResult()
 	results[3] <- txm.fillResult()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runOrderWorker: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not finish after rerouted retry")
+	{
+		err := testcheck.ReceiveWithin(t, done, 5*time.Second, "worker did not finish after rerouted retry")
+		testcheck.NoError(t, err, "runOrderWorker: %v")
 	}
 }
 
 func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	submitted := make(chan chan<- txmanager.Result, 1)
 	txm := &fakeLifiTxSender{
 		hold: true,
@@ -1886,13 +1818,8 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	result <- txm.fillResult()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("runOrderWorker error = %v, want context cancellation after drain", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("worker did not finish after draining accepted fill")
+	if err := testcheck.ReceiveWithin(t, done, 5*time.Second, "worker did not finish after draining accepted fill"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runOrderWorker error = %v, want context cancellation after drain", err)
 	}
 	if s.capacity.Len() != 0 {
 		t.Fatalf("capacity reservations after drain = %d, want 0", s.capacity.Len())
@@ -1995,8 +1922,6 @@ func testResolvedRoutes(tokenIn, tokenOut, adapter common.Address) []route {
 func testSubmittedOrder(t *testing.T, cfg *Config, tokenIn, tokenOut common.Address) *submittedOrder {
 	t.Helper()
 	order, err := parseSubmittedOrder(testOrderJSON(t, cfg, tokenIn, tokenOut), cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parseSubmittedOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseSubmittedOrder: %v")
 	return order
 }

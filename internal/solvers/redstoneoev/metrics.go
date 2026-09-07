@@ -21,7 +21,7 @@ const (
 
 var (
 	auctionDecisionOutcomes = [...]string{
-		"breaker", "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
+		"bid_busy", "breaker", "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
 		"sign_error", "signer_locked", "state_unknown", "strategy_error", "strategy_invalid", "too_late",
 		"would_bid", "bid_cap", "deposit_low", "empty_auction_id", "executor_state_stale",
 		"no_legs", "gas_unprofitable", "stale_epoch", "stale_state", "in_flight", "callback_balance", "strategy_skip",
@@ -56,7 +56,8 @@ func newMetrics(
 	if wonMetrics == nil {
 		wonMetrics = func() (int, time.Duration) { return 0, 0 }
 	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, observability.WorkflowSpec{
+	group := observability.NewMetricGroup("")
+	workflow, err := observability.NewWorkflowMetrics(group, Name, observability.WorkflowSpec{
 		Strategy:   strategyName,
 		Operations: []string{stateRefreshOperation},
 		Events: []observability.WorkflowEventSpec{
@@ -72,7 +73,8 @@ func newMetrics(
 	if err != nil {
 		return nil, err
 	}
-	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
+	parent := reg
+	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, group)
 	m := &metrics{
 		workflow: workflow,
 		wonInflight: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -112,6 +114,9 @@ func newMetrics(
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
 		}
+	}
+	if err := group.Publish(parent); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

@@ -8,9 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/signer"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // TestLiveListOffers exercises the signed per-adapter GET /v1/offer flow against the live API. It is
@@ -25,9 +24,7 @@ func TestLiveListOffers(t *testing.T) {
 		t.Fatal("SOLVER_PRIVATE_KEY not set")
 	}
 	sgnr, err := signer.NewFromHexKey(strings.TrimPrefix(pk, "0x"))
-	if err != nil {
-		t.Fatalf("signer: %v", err)
-	}
+	testcheck.NoError(t, err, "signer: %v")
 
 	baseURL := os.Getenv("SOLVER_3F_BASE_URL")
 	if baseURL == "" {
@@ -38,7 +35,7 @@ func TestLiveListOffers(t *testing.T) {
 	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
 		chainID, _ = new(big.Int).SetString(v, 10)
 	}
-	ac := newAPIClient(baseURL, sgnr, chainID, 30*time.Second, logr.Discard())
+	ac := newAPIClient(baseURL, sgnr, chainID, 30*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

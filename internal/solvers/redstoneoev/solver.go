@@ -1,11 +1,12 @@
 // Package redstoneoev implements the RedStone Atom OEV solver: it subscribes to OEV auctions over
 // WebSocket, delegates bid/skip decisions to a configured strategy, signs EXECUTOR_V6 bids, and replies
 // with solve payloads that settle through strategy-selected callback operationData. The built-in default
-// strategy is the Morpho/LiquidLane liquidation path. The solver registers itself via init(). See
+// strategy is the Morpho/LiquidLane liquidation path. The application constructs this solver explicitly. See
 // docs/OEV-PLAN.md.
 package redstoneoev
 
 import (
+	"container/list"
 	"math/big"
 	"sync"
 
@@ -16,15 +17,10 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// Name is the registry key that selects this solver from config.
+// Name is the configuration key that selects this solver from config.
 const Name = "redstone-oev"
 
 const stateRefreshOperation = "state_refresh"
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver is the RedStone OEV solver runtime.
 type Solver struct {
@@ -50,14 +46,14 @@ type Solver struct {
 	// resMu guards enqueued-but-unresolved bids. pruneReservations frees a bid once it RESOLVES: its nonce fell
 	// below the on-chain nonce (enqueued -> settled or reverted; the fresh read reflects it) or it aged past
 	// reservationTTL as a last-resort cleanup for missed result frames.
-	resMu             sync.Mutex
-	res               []reservedBid
-	bidLifecycle      map[string]*bidLifecycleRecord
-	bidLifecycleOrder []string
+	resMu      sync.Mutex
+	bids       map[string]*bidRecord
+	bidHistory list.List
 
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.
 	bidMu sync.Mutex
+	bidWG sync.WaitGroup
 }
 
 // Name identifies the solver.

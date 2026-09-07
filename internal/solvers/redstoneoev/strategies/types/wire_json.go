@@ -3,12 +3,12 @@ package types
 import (
 	"bytes"
 	"encoding/json"
-	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 // RedStone OEV webhook JSON wire contract: big integers are decimal strings,
@@ -106,7 +106,7 @@ func (out BidOutput) MarshalJSON() ([]byte, error) {
 func (in BidInput) MarshalJSON() ([]byte, error) {
 	prices := make([]auctionPriceJSON, 0, len(in.Auction.Prices))
 	for _, p := range in.Auction.Prices {
-		prices = append(prices, auctionPriceJSON{Oracle: p.Oracle, Price: bigStringZero(p.Price)})
+		prices = append(prices, auctionPriceJSON{Oracle: p.Oracle, Price: parse.DecimalText(p.Price, "0")})
 	}
 	pending := make([]pendingAuctionSnapshotJSON, 0, len(in.PendingAuctions))
 	for _, a := range in.PendingAuctions {
@@ -117,9 +117,9 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 		redeemable = append(redeemable, redeemableSnapshotJSON{
 			Asset:          r.Asset,
 			Decimals:       r.Decimals,
-			MaxRate:        bigStringZero(r.MaxRate),
-			MaxAssets:      bigStringZero(r.MaxAssets),
-			AcquireBalance: bigStringZero(r.AcquireBalance),
+			MaxRate:        parse.DecimalText(r.MaxRate, "0"),
+			MaxAssets:      parse.DecimalText(r.MaxAssets, "0"),
+			AcquireBalance: parse.DecimalText(r.AcquireBalance, "0"),
 		})
 	}
 	return json.Marshal(bidInputJSON{
@@ -137,19 +137,19 @@ func (in BidInput) MarshalJSON() ([]byte, error) {
 			Loan:         in.Adapter.Loan,
 			LoanDecimals: in.Adapter.LoanDecimals,
 			Paused:       in.Adapter.Paused,
-			FreeAssets:   bigStringZero(in.Adapter.FreeAssets),
-			Withdrawable: bigStringZero(in.Adapter.Withdrawable),
+			FreeAssets:   parse.DecimalText(in.Adapter.FreeAssets, "0"),
+			Withdrawable: parse.DecimalText(in.Adapter.Withdrawable, "0"),
 			Redeemable:   redeemable,
 			Filler:       in.Adapter.Filler,
 		},
 		Context: bidContextJSON{
-			ChainID:            bigStringZero(in.Context.ChainID),
+			ChainID:            parse.DecimalText(in.Context.ChainID, "0"),
 			Executor:           in.Context.Executor,
 			Callback:           in.Context.Callback,
 			Signer:             in.Context.Signer,
-			ExecutorDeposit:    bigStringZero(in.Context.ExecutorDeposit),
-			ExecutorMinDeposit: bigStringZero(in.Context.ExecutorMinDeposit),
-			MaxTxGasPrice:      bigStringZero(in.Context.MaxTxGasPrice),
+			ExecutorDeposit:    parse.DecimalText(in.Context.ExecutorDeposit, "0"),
+			ExecutorMinDeposit: parse.DecimalText(in.Context.ExecutorMinDeposit, "0"),
+			MaxTxGasPrice:      parse.DecimalText(in.Context.MaxTxGasPrice, "0"),
 			GasPrices:          gasPricesJSON(in),
 			GasLimit:           in.Context.GasLimit,
 		},
@@ -170,49 +170,24 @@ func gasPricesJSON(in BidInput) *gasPriceSnapshotJSON {
 
 func (out *BidOutput) UnmarshalJSON(data []byte) error {
 	var wire bidOutputJSON
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&wire); err != nil {
+	if err := parse.JSON(bytes.NewReader(data), &wire); err != nil {
 		return err
 	}
-	bidAmount, err := parseOptionalDecimal(wire.BidAmount, "bidAmount")
-	if err != nil {
-		return err
+	next := BidOutput{Decision: wire.Decision, Reason: wire.Reason}
+	if wire.BidAmount != nil {
+		amount, err := parse.NonnegativeDecimal(*wire.BidAmount, "bidAmount", false)
+		if err != nil {
+			return err
+		}
+		next.BidAmount = amount
 	}
-	var operationData []byte
 	if wire.OperationData != "" {
-		operationData, err = hexutil.Decode(wire.OperationData)
+		operation, err := hexutil.Decode(wire.OperationData)
 		if err != nil {
 			return errors.Errorf("operationData: invalid hex: %w", err)
 		}
+		next.OperationData = operation
 	}
-	*out = BidOutput{
-		Decision:      wire.Decision,
-		Reason:        wire.Reason,
-		BidAmount:     bidAmount,
-		OperationData: operationData,
-	}
+	*out = next
 	return nil
-}
-
-func parseOptionalDecimal(s *string, field string) (*big.Int, error) {
-	if s == nil {
-		return nil, nil
-	}
-	return parseRequiredBigString(*s, field)
-}
-
-func bigStringZero(n *big.Int) string {
-	if n == nil {
-		return "0"
-	}
-	return n.String()
-}
-
-func parseRequiredBigString(s, field string) (*big.Int, error) {
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid decimal string %q", field, s)
-	}
-	return n, nil
 }

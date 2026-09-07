@@ -100,12 +100,11 @@ type StrategySpec struct {
     Config yaml.Node
 }
 
-type StrategyFactory func(raw yaml.Node) (types.Strategy, error)
 ```
 
-Each solver keeps a local registry/factory. A strategy self-registers from its own package `init()`
-under a solver-local unique name; the solver-level factory only routes by `name`, and the selected
-strategy owns parsing and validating its own `config` node.
+Each solver selects its built-ins explicitly in `strategy.go`. Constructors parse their
+own deferred config. There are no mutable registries, side-effect imports, or initialization-order
+requirements; strategy names remain local to each solver.
 
 ## Built-in strategies
 
@@ -134,7 +133,7 @@ the solver runs it subject to the same solver-owned structural and safety constr
 strategy. This is the fastest path and keeps your decision logic in your own
 codebase and language.
 
-**In-tree — register a new strategy on the solver.** To ship a strategy alongside a solver, implement
+**In-tree — add a strategy to the solver selector.** To ship a strategy alongside a solver, implement
 that solver's interface (each is unique — you implement the one the target solver defines):
 
 1. Create a package under the solver's `strategies/<name>/` and implement the solver's strategy
@@ -142,27 +141,29 @@ that solver's interface (each is unique — you implement the one the target sol
    output type.
 2. Add a `NewFromConfig(raw yaml.Node) (types.Strategy, error)` constructor that parses your own
    `strategy.config` node — the framework hands it to you opaque, so you own its schema and validation.
-3. Self-register from your package `init()` via the solver's local
-   `strategies.Register("<name>", NewFromConfig)`, under a name unique within that solver.
-4. Ensure the package is imported so its `init()` runs (blank-import it where the solver wires its
-   strategies).
+3. Add the constructor to the solver's `strategy.go` switch.
+4. Declare any strategy policy there (for example, whether OEV requires an explicit bid cap).
 5. Select it in config: `strategy: { name: <name>, config: { … } }`.
 
 Either way the solver skeleton is untouched: it provides the same input and executes whatever plan your
 strategy returns — so the correctness of the decision is entirely yours to own.
 
-LiquidLane quote/fill strategies intentionally receive no chain client or logger through their registry:
+LiquidLane quote/fill strategies intentionally receive no chain client or logger through their constructors:
 all current reads are represented in the typed input. A different workflow may define explicit
 strategy-owned dependencies only when the strategy itself genuinely owns that I/O.
 
-## Shared LiquidLane strategy: `internal/liquidlane/strategies/greedy`
+## Shared LiquidLane strategy: `internal/liquidlane/planning`
 
-The current shared LiquidLane algorithm is explicitly named `greedy`. Adding another algorithm means a
-sibling package under `internal/liquidlane/strategies`; it does not require a second runtime registry or
-solver config knob until a real deployment needs selectable behavior. Sharing this pure decision engine
-does not create a cross-solver `Strategy` facade. `QuoteTask` accepts
-normalized, already-priced candidates, an exact input or output, route limit, buffer, an optional gas
-pricing model, and an explicit input-coverage rule. `SolveQuote` owns deterministic ranking, direct/private
+`internal/liquidlane/planning` owns quote and fill allocation, capacity partitioning, plan validation,
+rounding and optional gas pricing. Quote and fill decisions share one package and no longer cross a
+parent/child strategy hierarchy. Sharing this pure decision engine
+does not create a cross-solver `Strategy` facade. `QuotePool` groups normalized, already-priced
+candidates by physical route once and retains their deterministic ranking. LI.FI and UniswapX
+use `NormalizeFixedInventory` to turn capacity-partitioned inventory into these candidates, including
+the private-route buffer and conservative integer input capacity. RFQ uses `NormalizeOracleInventory`
+with its amount-specific physical observation. Each `QuoteTask` supplies
+an exact input or output, route limit, buffer, optional gas pricing and an explicit input-coverage rule.
+`QuotePool.Solve` owns direct/private
 alternative selection, route splitting, gas deduction, and fixed-point sizing. Exact input uses the RFQ-style
 forward allocator. Exact output uses the same one-pass greedy route selection in output units, adds buffer
 and gas, and converts each selected output leg directly to input with upward rounding. It neither binary
@@ -222,7 +223,7 @@ validated `discounts.Signed` into its own generated executor binding.
 `internal/webhook` is a generic HTTP JSON client:
 
 - HTTP JSON `POST`, configurable timeout, request/response body byte caps (default 1 MiB each)
-- literal or env-backed headers (parsed config retains only the env-var name; `NewClient` resolves it)
+- literal or env-backed headers (parsed config retains only the env-var name; the client resolves it for each request)
 - strict response decode; non-2xx and empty-body responses are errors
 - typed non-2xx status errors, so each solver strategy can distinguish permanent input rejection from a
   retryable endpoint failure without putting protocol policy in the shared client
@@ -243,3 +244,123 @@ strategy:
       authorization:
         env: STRATEGY_AUTH_HEADER
 ```
+
+Webhook header configuration retains environment variable names. The client verifies referenced
+variables during construction and resolves their current values for every request; it does not
+retain the resolved secret in its configuration. HTTP redirects remain disabled.
+
+## Shared reads and integrity boundaries
+
+Gas pricing reads each distinct feed once and applies the strictest configured freshness bound when
+assets share a feed. Route simulation copies only demanded adapters and vaults; adapters sharing a
+vault consume one vault budget. Advertised discount quotes and fill quotes use the same route/rate/
+minimum-discount/capacity checks, and a rejected duplicate does not suppress a later usable offer.
+
+OEV's strategy owns its independent balance and position refresh loops. A bid validates and sizes
+against one immutable Morpho snapshot; replacing the cache during a decision cannot replace its
+position set. Interest accrual is shared by health calculation and market replay, and replay applies
+repayment before calculating and socializing bad debt.
+
+HTTP quote and webhook JSON boundaries accept one document and reject trailing documents. Contract
+integer parsing rejects out-of-range unsigned values before calldata packing. Metrics registration
+builds a private group before attaching it to the process registry, so a registration conflict leaves
+no partially installed workflow collectors. Sentry is owned by the application logger, with an
+independent event per write and one bounded flush at shutdown.
+
+## Runtime ownership after the rewrite
+
+`cmd/vault-solver` parses the command and calls `internal/app`. The application owns resource
+construction, probe listener binding, the explicit solver construction and shutdown order. Constructors
+receive concrete shared services; neither solvers nor strategies mutate a global registry. The
+transaction manager outlives solver admission and drains accepted transactions before process exit.
+
+Each integration owns one workflow:
+
+| Integration | Mutable state owner | Decision and execution boundary |
+| --- | --- | --- |
+| 3F | one loop, adapter-indexed offers and current validated targets | auction projection → budgeted offers → protocol signatures; bounded redemption batches |
+| RFQ | one order record contains lifecycle and attempts; poll worker executes | authenticated quote evaluation; immutable prepared fill before transaction admission |
+| LI.FI | feed inbox and order worker; immutable queue observations for metrics | recovery generations → fresh plan → calldata → accepted-fill reservations and terminal result |
+| UniswapX | order execution records, exclusive obligations, versioned quote snapshots | snapshot loading → guarded publication; prepared fill → admission → capacity reservation |
+| RedStone OEV | one active bid decision; bid records plus bounded completed history | one checked position snapshot → bundle selection/pricing → signed bid; strategy owns callback/position reservations |
+
+`internal/liquidlane/planning` owns allocation and fill validation. Physical alternatives are selected
+before capacity is assigned; each vault has one budget. The capacity ledger updates aggregate amounts
+when an entry is replaced or released, so quote reads need not scan pending orders. LI.FI and UniswapX
+read through the same snapshot interface directly. Protocol-specific reads remain inside their solver.
+
+UniswapX snapshot TTL begins before RPC work. Publication rejects an expired snapshot as well as one
+invalidated by a concurrent fill. Millisecond configuration rejects overflow; configured adapter lists
+reject canonical duplicates. OEV nonce exhaustion returns an error instead of wrapping to zero.
+
+Wire DTOs, ABI layouts, signing domains, rounding constants and metric names remain explicit contracts.
+Their existing golden, parity, rounding and metric assertions apply to the new workflows. Generated
+clients and bindings remain generated artifacts under `api/`, outside the rewritten runtime scope.
+
+HTTP adapters retain generated request builders and local protocol validation. Shared
+`internal/httpclient.Execute` calls the generated request, closes its response on success and failure,
+and unwraps upstream diagnostics while preserving the original cause. RFQ uses one response recorder for access
+logs, HTTP metrics and panic recovery, including implicit successful writes and already-sent responses.
+LI.FI resolves private discount candidates with at most four joined workers and preserves ranked order
+when assembling successful results.
+
+Fresh signed discounts bind both their selected identity and the physical quote's adapter, token pair
+and exact input amount where supplied. Resolution and quote refresh use this same validation boundary.
+
+LI.FI and UniswapX default strategies store one validated `planning.ExecutionPolicy`; raw YAML
+strings do not survive construction. The common policy owns price/inventory buffers, minimum input
+and the execution safety window. Gas pricing uses the same owned snapshot for exact cost and the
+conservative ceiling; the ceiling calculation saturates in constant time. Range selection maintains
+a frontier of alternatives that remain useful by rate, capacity, lifetime and direct/private cost.
+
+Strategy webhook decimal fields use the shared non-negative decimal parser and strict single-document
+JSON boundary. Missing-field encodings remain protocol-specific. RFQ open-order lists require an
+identity and an `open` status before entering the order store. UniswapX rechecks snapshot identity and precise expiry after the strategy returns, so a slow decision cannot advertise expired data.
+
+The input-token policy owns a sorted membership slice and returns independent sets to strategies.
+Typed-data layouts remain protocol contracts: UniswapX derives its cosigner-data layout from the
+order tuple, so decoding and signature verification cannot drift through duplicate definitions.
+Gas estimation rejects zero or overflowing estimates before applying its 5% execution headroom.
+
+### Reduced construction and state ownership
+
+The application selects the five built-in constructors directly. Each integration selects its own
+`default` or `webhook` strategy directly; there is no generic catalog or intermediate selection
+package. `parse.NamedConfig` is the common opaque name/config shape, with decoding and validation
+still owned by the integration.
+
+One txmanager completion object owns result delivery for accepted work, including worker completion
+and hard shutdown. Pending nonce state does not carry a second result channel or once guard.
+UniswapX uses one guarded publication record for snapshot, epoch and planning count. LI.FI quote
+session availability follows its disconnect channel rather than a second active flag.
+
+`internal/bigmath` owns nil-preserving integer copies, zero defaults, decimal scales and copied minima.
+Protocol math and rounding stay in their existing domain packages. Signed discount terms copy their
+mutable numbers before explicit conversion to the generated contract tuple.
+
+Range pricing shares immutable route preparation across intervals. LiquidLane owns the exact maximum
+non-overquoting rate calculation; protocol adapters retain their range and response contracts.
+`bigmath.Decimal` formats integer amounts by decimal-point placement, without constructing a scale or
+dividing the integer. LI.FI rates and OEV bids reach it only after their existing non-negative checks.
+OEV test configuration copies the supplied values once and fills missing defaults, including preserving
+an explicit sizing override as a whole. Morpho parameter reads convert generated results directly at the
+reader boundary and still validate the canonical market hash before using a market.
+
+HTTP webhook headers are resolved directly into the outgoing request, with env-backed secrets still
+read on every request. UniswapX response bodies own their byte budget and underlying close operation
+in a single wrapper. RPC dialing selects transport options before constructing the shared RPC client;
+HTTP fallback, redirect restrictions and non-HTTP transport support retain their existing behavior.
+
+A prepared quote pool borrows immutable candidates; each amount query owns its computed amounts.
+LI.FI reuses the pool across range endpoints and conservative-floor searches. Fill allocation groups
+physical alternatives once using candidate indices, without copying full quotes into each group,
+and compares validated quotes for the same exact input; shared vault
+budgets and output-rounding bounds remain enforced. Gas prediction returns both selected routes and
+saturated units in one pass, consuming only owned copies of the demanded adapter/vault balances.
+
+OEV bundle branches share immutable source and replay state until a leg changes it. Replay owns the
+changed market state, collateral budgets are calculated once per branch extension, and final output
+legs receive owned amounts. Candidate sizing reads the accrued market state already in the candidate.
+3F builds live offer identities and per-auction coverage together in one snapshot per discovery pass.
+UniswapX cleans terminal order and resolved obligation history once per poll batch, retaining active
+work and the existing expiry boundaries.

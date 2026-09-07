@@ -82,6 +82,17 @@ func TestPredictionConsumesSharedBudgets(t *testing.T) {
 	}
 }
 
+func TestPredictionPreservesDemandAliasedToSourceBalances(t *testing.T) {
+	token := common.Address{1}
+	amount := big.NewInt(100)
+	state := &State{FreeAssets: amount, Withdrawable: amount, Acquire: map[common.Address]*big.Int{token: amount}}
+	demands := []Demand{{Collateral: token, AmountOut: amount}, {Collateral: token, AmountOut: amount}}
+	prediction := Predict(demands, state)
+	if amount.Int64() != 100 || RoutesString(prediction.Routes) != "acquire,allocate" {
+		t.Fatalf("borrowed demand changed: amount=%s routes=%v", amount, prediction.Routes)
+	}
+}
+
 func TestPredictAdaptersSharesVaultStateAndKeepsFirstSwapTierPerAdapter(t *testing.T) {
 	adapterA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000b1")
@@ -148,4 +159,14 @@ func demandsFor(coll common.Address, outs ...int64) []Demand {
 		demands[i] = Demand{Collateral: coll, AmountOut: big.NewInt(out)}
 	}
 	return demands
+}
+
+func TestUnrecognizedRouteUsesConservativeFallback(t *testing.T) {
+	for value := 4; value <= 255; value++ {
+		route := Route(value)
+		if route.String() != "unknown" || UnitsForRouteAt(route, true) != UnitsForRouteAt(RouteUnknown, true) ||
+			UnitsForRouteAt(route, false) != UnitsForRouteAt(RouteUnknown, false) {
+			t.Errorf("route %d did not use the conservative fallback", value)
+		}
+	}
 }

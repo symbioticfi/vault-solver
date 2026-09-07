@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"math/big"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -10,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
+
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -22,19 +21,14 @@ type rawConfig struct {
 	Executor               string            `yaml:"executor"`
 	Reactor                string            `yaml:"reactor"`
 	LiquidityLens          string            `yaml:"liquidityLens"`
-	PollIntervalMs         int               `yaml:"pollIntervalMs"`
+	PollIntervalMs         *int              `yaml:"pollIntervalMs"`
 	OrderLimit             int               `yaml:"orderLimit"`
 	SolverMode             string            `yaml:"solverMode"`
 	TokensToQuote          string            `yaml:"tokensToQuote"`
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
 	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
-	Strategy               rawStrategyConfig `yaml:"strategy"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	Strategy               StrategyConfig    `yaml:"strategy"`
 }
 
 // Config is the validated, typed RFQ solver configuration.
@@ -81,10 +75,7 @@ type Config struct {
 	Strategy StrategyConfig
 }
 
-type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
-}
+type StrategyConfig = parse.NamedConfig
 
 // Solver-mode profiles (see Config.SolverMode).
 const (
@@ -104,7 +95,7 @@ const (
 // parseConfig decodes and validates the opaque rfq solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.BackendURL == "" {
@@ -113,7 +104,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.BackendSharedSecretEnv == "" {
 		return nil, errors.New("backendSharedSecretEnv is required")
 	}
-	executor, err := parse.Address(raw.Executor, "executor")
+	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
 	}
@@ -140,21 +131,18 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			Config: raw.Strategy.Config,
 		},
 	}
-	if raw.PollIntervalMs > 0 {
-		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
+	if cfg.PollInterval, err = parse.MsDuration(raw.PollIntervalMs, defaultPollInterval, "pollIntervalMs"); err != nil {
+		return nil, err
 	}
-	if raw.OrderLimit > 0 {
-		cfg.OrderLimit = raw.OrderLimit
+	cfg.OrderLimit = parse.OrDefault(raw.OrderLimit, defaultOrderLimit)
+	if cfg.OrderLimit < 1 {
+		return nil, errors.New("orderLimit must be positive")
 	}
-	if raw.Reactor != "" {
-		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {
-			return nil, err
-		}
+	if cfg.Reactor, err = parse.OptionalAddress(raw.Reactor, "reactor"); err != nil {
+		return nil, err
 	}
-	if raw.LiquidityLens != "" {
-		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	if cfg.LiquidityLens, err = parse.OptionalAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+		return nil, err
 	}
 	for token, amount := range raw.MinAmountsIn {
 		field := `minAmountsIn["` + token + `"]`
@@ -162,7 +150,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		if aerr != nil {
 			return nil, aerr
 		}
-		minIn, berr := parse.Big(amount, field)
+		minIn, berr := parse.Uint(amount, field, 256)
 		if berr != nil {
 			return nil, berr
 		}
@@ -179,11 +167,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		cfg.MinAmountsIn[addr] = minIn
 	}
-	for i, a := range raw.Adapters {
-		adapter, err := parse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return nil, err
-		}
+	adapters, err := parse.Addresses(raw.Adapters, "adapters")
+	if err != nil {
+		return nil, err
+	}
+	for _, adapter := range adapters {
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
 	if mode == solverModeExternal && len(cfg.Adapters) == 0 {

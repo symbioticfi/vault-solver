@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -47,16 +47,12 @@ func TestQuoteInputMarshalJSONWireShape(t *testing.T) {
 	}
 
 	body, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "Marshal: %v")
 	if strings.Contains(string(body), "AmountIn") || !strings.Contains(string(body), `"amountIn":"1000000000000000000"`) {
 		t.Fatalf("JSON does not use lower-camel decimal-string amountIn: %s", body)
 	}
 	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		t.Fatalf("Unmarshal raw: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(body, &raw), "Unmarshal raw: %v")
 	if _, ok := raw["requiredAmountOut"]; ok {
 		t.Fatalf("requiredAmountOut should be omitted when nil: %s", body)
 	}
@@ -85,14 +81,12 @@ func TestQuoteInputMarshalJSONWireShape(t *testing.T) {
 
 func TestQuoteOutputUnmarshalJSONWireShape(t *testing.T) {
 	var out QuoteOutput
-	if err := json.Unmarshal([]byte(`{
+	testcheck.NoError(t, json.Unmarshal([]byte(`{
 		"decision": "quote",
 		"reason": "selected",
 		"quotedAmountOut": "1000000",
 		"legs": [{"candidateId": "candidate-1", "amountIn": "1000000000000000000", "amountOut": "1000000"}]
-	}`), &out); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
+	}`), &out), "Unmarshal: %v")
 	if out.Decision != DecisionQuote || out.Reason != "selected" {
 		t.Fatalf("unexpected metadata: %+v", out)
 	}

@@ -71,13 +71,7 @@ func (s *server) handler() http.Handler {
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
 
-	// Middleware chain (outer → inner): body cap, access log + request-id, metrics, panic recovery.
-	var h = recoverPanics(mux, s.log)
-	if s.metrics != nil {
-		h = s.metrics.instrument(h)
-	}
-	h = logRequests(h, s.log)
-	return http.MaxBytesHandler(h, maxRequestBytes)
+	return http.MaxBytesHandler(s.observeHTTP(mux), maxRequestBytes)
 }
 
 const version1 = "1.0.0"

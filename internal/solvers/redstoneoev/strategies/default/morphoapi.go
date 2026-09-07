@@ -4,9 +4,11 @@ package defaultstrategy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -16,7 +18,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/morphographql"
-	"github.com/symbioticfi/vault-solver/api/morphographql/scalars"
 )
 
 // maxDiscoverMarkets bounds the candidate markets one discovery poll proposes (the `first` arg + a defensive
@@ -106,165 +107,107 @@ func (a *morphoClient) DiscoverMarketData(ctx context.Context, chainID int64, lo
 	return out, nil
 }
 
-func (a *morphoClient) PositionsByMarket(ctx context.Context, marketIDs []common.Hash, first int, maxHF *float64) ([]morphoPosition, error) {
-	if len(marketIDs) == 0 || first <= 0 {
+func (a *morphoClient) PositionsByMarket(ctx context.Context, marketIDs []common.Hash, limit int, maxHF *float64) ([]morphoPosition, error) {
+	if limit <= 0 || len(marketIDs) == 0 {
 		return nil, nil
 	}
 	ids := make([]string, 0, len(marketIDs))
+	seen := make(map[common.Hash]bool, len(marketIDs))
 	for _, id := range marketIDs {
-		ids = append(ids, lowerHash(id))
+		if !seen[id] {
+			ids = append(ids, id.Hex())
+			seen[id] = true
+		}
 	}
-	out := make([]morphoPosition, 0, min(first, maxPositionsPage))
-	for start := 0; start < len(ids); start += maxPositionMarketIDs {
-		end := min(start+maxPositionMarketIDs, len(ids))
-		page, err := a.positionsChunk(ctx, ids[start:end], first, maxHF)
+	selected := make([]morphoPosition, 0, min(limit, maxPositionsPage))
+	for chunk := range slices.Chunk(ids, maxPositionMarketIDs) {
+		positions, err := a.positionsChunk(ctx, chunk, limit, maxHF)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, page...)
+		selected = append(selected, positions...)
+		sortPositionsByRisk(selected)
+		// Once a row is outside the global top limit, later chunks cannot make it relevant.
+		if len(selected) > limit {
+			clear(selected[limit:])
+			selected = selected[:limit]
+		}
 	}
-	sortPositionsByRisk(out)
-	if len(out) > first {
-		out = out[:first]
-	}
-	return out, nil
+	return selected, nil
 }
 
+// The cap counts upstream rows, including malformed entries. A bad endpoint cannot
+// keep a refresh alive by filling every page with unusable positions.
 func (a *morphoClient) positionsChunk(ctx context.Context, ids []string, limit int, maxHF *float64) ([]morphoPosition, error) {
 	out := make([]morphoPosition, 0, min(limit, maxPositionsPage))
-	for skip := 0; len(out) < limit; {
-		first := min(maxPositionsPage, limit-len(out))
-		data, err := morphographql.MorphoPositionsByMarket(ctx, a.gql, ids, first, skip, maxHF)
+	seen := make(map[positionKey]bool)
+	for offset := 0; offset < limit; {
+		pageSize := min(maxPositionsPage, limit-offset)
+		data, err := morphographql.MorphoPositionsByMarket(ctx, a.gql, ids, pageSize, offset, maxHF)
 		if err != nil {
 			return nil, err
 		}
 		items := data.MarketPositions.Items
-		if len(items) == 0 {
-			break
+		if len(items) > pageSize {
+			return nil, errors.Errorf("Morpho positions: page has %d rows, requested %d", len(items), pageSize)
 		}
-		for _, it := range items {
-			var state wirePositionState
-			if it.State != nil {
-				state = it.State
-			}
-			pos := morphoPositionFromWire(it.User.Address, it.Market.MarketId, it.HealthFactor, state)
-			if pos.MarketID == (common.Hash{}) || pos.Borrower == (common.Address{}) {
+		for _, item := range items {
+			position := morphoPositionFromAPI(item)
+			key := positionKey{market: position.MarketID, borrower: position.Borrower}
+			if key.market == (common.Hash{}) || key.borrower == (common.Address{}) || seen[key] {
 				continue
 			}
-			out = append(out, pos)
+			seen[key] = true
+			out = append(out, position)
 		}
-		if len(items) < first {
+		if len(items) < pageSize {
 			break
 		}
-		skip += len(items)
+		offset += len(items)
 	}
 	return out, nil
 }
 
-func sortPositionsByRisk(pos []morphoPosition) {
-	slices.SortStableFunc(pos, func(a, b morphoPosition) int {
-		if a.HealthFactor != nil && b.HealthFactor != nil && *a.HealthFactor != *b.HealthFactor {
-			if *a.HealthFactor < *b.HealthFactor {
-				return -1
-			}
-			return 1
+func sortPositionsByRisk(positions []morphoPosition) {
+	risk := func(position morphoPosition) float64 {
+		if position.HealthFactor == nil {
+			return math.Inf(1)
 		}
-		if a.HealthFactor == nil && b.HealthFactor != nil {
-			return 1
-		}
-		if a.HealthFactor != nil && b.HealthFactor == nil {
-			return -1
-		}
-		if c := a.MarketID.Cmp(b.MarketID); c != 0 {
-			return c
-		}
-		return a.Borrower.Cmp(b.Borrower)
+		return *position.HealthFactor
+	}
+	slices.SortStableFunc(positions, func(left, right morphoPosition) int {
+		return cmp.Or(cmp.Compare(risk(left), risk(right)), left.MarketID.Cmp(right.MarketID), left.Borrower.Cmp(right.Borrower))
 	})
 }
 
-type wireAsset interface {
-	GetAddress() string
+// Generated response types end here. Missing optional states remain missing so
+// monitor validation cannot mistake a partially indexed item for a fresh position.
+func morphoMarketFromDiscover(item morphographql.MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) morphoMarket {
+	market := morphoMarket{MarketID: common.HexToHash(item.MarketId), Oracle: common.HexToAddress(item.OracleAddress),
+		IRM: common.HexToAddress(item.IrmAddress), LLTV: item.Lltv.String(), LoanAsset: morphoAsset{Address: common.HexToAddress(item.LoanAsset.Address)}}
+	if collateral := item.CollateralAsset; collateral != nil {
+		market.CollateralAsset = &morphoAsset{Address: common.HexToAddress(collateral.Address)}
+	}
+	if state := item.State; state != nil {
+		market.State = &morphoMarketState{BlockNumber: state.BlockNumber.String(), BorrowAssets: state.BorrowAssets.String(),
+			BorrowShares: state.BorrowShares.String(), SupplyAssets: state.SupplyAssets.String(), SupplyShares: state.SupplyShares.String(), Timestamp: state.Timestamp.String()}
+		if state.Price != nil {
+			market.State.Price = state.Price.String()
+		}
+	}
+	return market
 }
 
-type wireMarketState interface {
-	GetBlockNumber() scalars.BigIntString
-	GetBorrowAssets() scalars.BigIntString
-	GetBorrowShares() scalars.BigIntString
-	GetSupplyAssets() scalars.BigIntString
-	GetSupplyShares() scalars.BigIntString
-	GetTimestamp() scalars.BigIntString
-	GetPrice() *scalars.BigIntString
-}
-
-func morphoMarketFromDiscover(it morphographql.MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) morphoMarket {
-	var coll wireAsset
-	if it.CollateralAsset != nil {
-		coll = it.CollateralAsset
+func morphoPositionFromAPI(item morphographql.MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPosition) morphoPosition {
+	position := morphoPosition{MarketID: common.HexToHash(item.Market.MarketId), Borrower: common.HexToAddress(item.User.Address)}
+	if item.HealthFactor != nil {
+		risk := *item.HealthFactor
+		position.HealthFactor = &risk
 	}
-	var state wireMarketState
-	if it.State != nil {
-		state = it.State
+	if state := item.State; state != nil {
+		position.BorrowShares, position.Collateral = state.BorrowShares.String(), state.Collateral.String()
 	}
-	return morphoMarketFromWire(it.MarketId, it.OracleAddress, it.IrmAddress, it.Lltv.String(), &it.LoanAsset, coll, state)
-}
-
-func morphoMarketFromWire(id, oracle, irm, lltv string, loan wireAsset, collateral wireAsset, state wireMarketState) morphoMarket {
-	m := morphoMarket{
-		MarketID:  common.HexToHash(id),
-		Oracle:    common.HexToAddress(oracle),
-		IRM:       common.HexToAddress(irm),
-		LLTV:      lltv,
-		LoanAsset: morphoAssetFromWire(loan),
-	}
-	if collateral != nil {
-		c := morphoAssetFromWire(collateral)
-		m.CollateralAsset = &c
-	}
-	if state != nil {
-		m.State = morphoMarketStateFromWire(state)
-	}
-	return m
-}
-
-func morphoAssetFromWire(a wireAsset) morphoAsset {
-	if a == nil {
-		return morphoAsset{}
-	}
-	return morphoAsset{Address: common.HexToAddress(a.GetAddress())}
-}
-
-func morphoMarketStateFromWire(s wireMarketState) *morphoMarketState {
-	st := &morphoMarketState{
-		BlockNumber:  s.GetBlockNumber().String(),
-		BorrowAssets: s.GetBorrowAssets().String(),
-		BorrowShares: s.GetBorrowShares().String(),
-		SupplyAssets: s.GetSupplyAssets().String(),
-		SupplyShares: s.GetSupplyShares().String(),
-		Timestamp:    s.GetTimestamp().String(),
-	}
-	if p := s.GetPrice(); p != nil {
-		st.Price = p.String()
-	}
-	return st
-}
-
-type wirePositionState interface {
-	GetBorrowShares() scalars.BigIntString
-	GetCollateral() scalars.BigIntString
-}
-
-func morphoPositionFromWire(user, market string, health *float64, state wirePositionState) morphoPosition {
-	pos := morphoPosition{
-		MarketID:     common.HexToHash(market),
-		Borrower:     common.HexToAddress(user),
-		HealthFactor: health,
-	}
-	if state == nil {
-		return pos
-	}
-	pos.BorrowShares = state.GetBorrowShares().String()
-	pos.Collateral = state.GetCollateral().String()
-	return pos
+	return position
 }
 
 type boundedGraphQLClient struct {
@@ -272,53 +215,49 @@ type boundedGraphQLClient struct {
 	hc  *http.Client
 }
 
-// MakeRequest is genqlient's transport hook. It keeps the old fail-safe HTTP behavior while the query and
-// response types come from generated code.
-func (c boundedGraphQLClient) MakeRequest(ctx context.Context, req *graphql.Request, resp *graphql.Response) error {
-	body, err := json.Marshal(req)
+// MakeRequest decodes the GraphQL envelope before touching generated data. The
+// bounded body and envelope errors apply equally to every generated operation.
+func (c boundedGraphQLClient) MakeRequest(ctx context.Context, request *graphql.Request, output *graphql.Response) error {
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return errors.Errorf("morpho graphql: marshal request: %w", err)
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, c.hc.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.hc.Timeout)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.url, bytes.NewReader(body))
+	call, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
 	if err != nil {
 		return errors.Errorf("morpho graphql: build request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-
-	httpResp, err := c.hc.Do(httpReq)
+	call.Header.Set("Content-Type", "application/json")
+	call.Header.Set("Accept", "application/json")
+	response, err := c.hc.Do(call)
 	if err != nil {
 		return errors.Errorf("morpho graphql: request: %w", err)
 	}
-	defer func() { _ = httpResp.Body.Close() }()
-	if httpResp.StatusCode != http.StatusOK {
-		return errors.Errorf("morpho graphql: status %d", httpResp.StatusCode)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return errors.Errorf("morpho graphql: status %d", response.StatusCode)
 	}
-
-	raw, err := io.ReadAll(io.LimitReader(httpResp.Body, maxMorphoRespBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxMorphoRespBytes+1))
 	if err != nil {
 		return errors.Errorf("morpho graphql: read response: %w", err)
 	}
 	if len(raw) > maxMorphoRespBytes {
 		return errors.New("morpho graphql: response too large")
 	}
-	if err := json.Unmarshal(raw, resp); err != nil {
+	var envelope graphql.BaseResponse[json.RawMessage]
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return errors.Errorf("morpho graphql: decode response: %w", err)
 	}
-	if len(resp.Errors) > 0 {
-		return errors.Errorf("morpho graphql: graphql error: %s", resp.Errors[0].Message)
+	output.Errors, output.Extensions = envelope.Errors, envelope.Extensions
+	if len(envelope.Errors) != 0 {
+		return errors.Errorf("morpho graphql: graphql error: %s", envelope.Errors[0].Message)
 	}
-
-	var envelope struct {
-		Data *json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return errors.Errorf("morpho graphql: decode response envelope: %w", err)
-	}
-	if envelope.Data == nil || bytes.Equal(bytes.TrimSpace(*envelope.Data), []byte("null")) {
+	if len(envelope.Data) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null")) {
 		return errors.New("morpho graphql: response missing data")
+	}
+	if err := json.Unmarshal(envelope.Data, &output.Data); err != nil {
+		return errors.Errorf("morpho graphql: decode response data: %w", err)
 	}
 	return nil
 }

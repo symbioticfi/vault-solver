@@ -3,11 +3,12 @@ package defaultstrategy
 import (
 	"context"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -26,29 +27,20 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 		return nil, errors.New("quote amount must be positive")
 	}
 
-	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
-	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter)
+	validAfter := input.QuoteExpiresAt.Add(s.policy.ExecutionBuffer)
+	liveInventory := planning.FilterLiveInventory(input.Inventory, validAfter)
 	pairInventory := make([]liquidlane.Inventory, 0, len(liveInventory))
 	for _, item := range liveInventory {
 		if item.TokenIn == input.TokenIn && item.TokenOut == input.TokenOut {
 			pairInventory = append(pairInventory, item)
 		}
 	}
-	inventory := liquidgreedy.AllocateInventoryCapacity(
+	inventory := planning.AllocateInventoryCapacity(
 		pairInventory,
 		input.Reservations,
-		s.cfg.InventoryReserveBps,
+		s.policy.InventoryReserveBps,
 	)
-	candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
-	for _, item := range inventory {
-		candidate := liquidgreedy.NewQuoteCandidate(
-			item,
-			liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
-		)
-		if candidate != nil {
-			candidates = append(candidates, *candidate)
-		}
-	}
+	candidates := planning.NormalizeFixedInventory(inventory, s.policy.PriceBufferBps)
 	if len(candidates) == 0 {
 		input.Trace.Decline(
 			"quote", "no-matching-routes",
@@ -63,12 +55,12 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 		return nil, nil
 	}
 
-	pricing, err := liquidstrategies.NewGasPricing(
+	pricing, err := planning.NewGasPricing(
 		input.MaxFeePerGas,
 		input.TokenOut,
 		input.GasPrices,
 		input.GasSnapshot,
-		s.cfg.InventoryReserveBps,
+		s.policy.InventoryReserveBps,
 		types.LiquidLaneGasEnvelope(),
 	)
 	if err != nil {
@@ -78,10 +70,10 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	solution, err := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+	solution, err := planning.NewQuotePool(candidates).Solve(planning.QuoteTask{
 		ExactInput: input.AmountIn, ExactOutput: input.AmountOut,
-		Candidates: candidates, MaxRoutes: maxRoutes, MinInput: s.minAmount,
-		OutputBufferBps: 2 * s.cfg.PriceBufferBps,
+		MaxRoutes: maxRoutes, MinInput: s.policy.MinAmount,
+		OutputBufferBps: 2 * s.policy.PriceBufferBps,
 		GasPricing:      &pricing,
 		Trace:           input.Trace,
 	})

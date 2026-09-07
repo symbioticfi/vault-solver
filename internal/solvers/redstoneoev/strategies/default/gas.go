@@ -3,6 +3,8 @@ package defaultstrategy
 import (
 	"math/big"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
@@ -17,48 +19,27 @@ const (
 	defaultPriceUpdateFeeds        = 1
 )
 
-type gasPrediction struct {
-	Units  uint64
-	Routes []liquidlanegas.Route
-}
+type gasPrediction = liquidlanegas.Prediction
 
-func predictGasForFeeds(legs []legHint, st *liquidLaneState, feedCount int) gasPrediction {
-	routeGas := liquidlanegas.Predict(gasDemands(legs), st)
-	return gasPrediction{
-		Units:  saturatingAddUint64(fixedSettlementGasUnits(feedCount), routeGas.Units),
-		Routes: routeGas.Routes,
-	}
-}
-
-func fitsGasLimit(legs []legHint, st *liquidLaneState, headerGasLimit uint64, feedCount int) bool {
-	return predictGasForFeeds(legs, st, feedCount).Units <= usableGasLimit(headerGasLimit)
+func predictGasForFeeds(demands []liquidlanegas.Demand, state *liquidLaneState, feedCount int) gasPrediction {
+	prediction := liquidlanegas.Predict(demands, state)
+	prediction.Units = bigmath.SaturatingAdd(prediction.Units, fixedSettlementGasUnits(feedCount))
+	return prediction
 }
 
 func gasCostNative(units uint64, gasPrice *big.Int) *big.Int {
-	return new(big.Int).Mul(new(big.Int).SetUint64(units), orZero(gasPrice))
+	return new(big.Int).Mul(new(big.Int).SetUint64(units), bigmath.OrZero(gasPrice))
 }
 
 func fixedSettlementGasUnits(feedCount int) uint64 {
-	feeds := uint64(defaultPriceUpdateFeeds)
-	if feedCount > 0 {
-		feeds = uint64(feedCount)
-	}
-	feedUnits := saturatingMulUint64(priceUpdateGasPerFeed, feeds)
-	return saturatingAddUint64(saturatingAddUint64(executorBaseGasUnits, callbackDebitGasUnits), feedUnits)
+	feeds := uint64(max(feedCount, defaultPriceUpdateFeeds))
+	return bigmath.SaturatingAdd(executorBaseGasUnits+callbackDebitGasUnits, bigmath.SaturatingMul(feeds, priceUpdateGasPerFeed))
 }
 
 func usableGasLimit(headerGasLimit uint64) uint64 {
-	if headerGasLimit == 0 {
-		headerGasLimit = maxSettlementGasUnits
+	limit := maxSettlementGasUnits
+	if headerGasLimit != 0 {
+		limit = min(limit, headerGasLimit)
 	}
-	limit := min(headerGasLimit, maxSettlementGasUnits)
-	return saturatingMulUint64(limit, gasLimitSafetyBps) / 10_000
-}
-
-func gasDemands(legs []legHint) []liquidlanegas.Demand {
-	demands := make([]liquidlanegas.Demand, len(legs))
-	for i, leg := range legs {
-		demands[i] = liquidlanegas.Demand{Collateral: leg.Collateral, AmountOut: leg.ExpectedLoanOut}
-	}
-	return demands
+	return limit * gasLimitSafetyBps / 10_000 // limit is bounded to 2M, so multiplication cannot overflow.
 }

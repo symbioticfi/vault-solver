@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
@@ -14,7 +16,7 @@ import (
 func newQuote(maxRate string, maxAssets *big.Int) AdapterQuote {
 	return AdapterQuote{
 		MaxRate: mustBig(maxRate), MaxAssets: maxAssets,
-		LoanScale: exp10(6), CollScale: exp10(18),
+		LoanScale: bigmath.Exp10(6), CollScale: bigmath.Exp10(18),
 	}
 }
 
@@ -31,8 +33,8 @@ func TestTargetSeizeModes(t *testing.T) {
 
 // evalLeg sizes a position against the single configured adapter's quote.
 func evalLeg(c Candidate, price *big.Int, q AdapterQuote, nowTs uint64, sp SizingParams) (selectedLeg, *big.Int, bool) {
-	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, nowTs)
-	sized, ok := sizeLeg(c, price, q, accrued, sp)
+	c.Market.State = morpho.AccruedMarketState(c.Market.State, nowTs)
+	sized, ok := sizeLeg(c, price, q, sp)
 	return sized.leg, sized.profit, ok
 }
 
@@ -79,23 +81,24 @@ func TestSizeLegAllowsFullBadDebtSeize(t *testing.T) {
 		Lltv: lltv, BorrowRatePerSec: big.NewInt(0), Fee: big.NewInt(0), LastUpdate: assignNowTs}
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 9},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: collateral},
 	}
-	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)
+	c.Market.State = morpho.AccruedMarketState(state, assignNowTs)
+	accrued := c.Market.State.TotalBorrowAssets
 	lif := morpho.LiquidationIncentiveFactor(lltv)
 	if maxSeize := morpho.MaxSeizeForFullDebt(debtShares, price, lif, accrued, totalBorrowShares); maxSeize.Cmp(collateral) <= 0 {
 		t.Fatalf("fixture must be bad-debt-like: maxSeizeForFullDebt=%s <= collateral=%s", maxSeize, collateral)
 	}
 	q := newQuote("1200000000000000000000", nil) // exit at 1200 loan per collateral, above the full-collateral repayment.
-	full, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0})
+	full, ok := sizeLeg(c, price, q, SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0})
 	if !ok {
 		t.Fatal("full bad-debt seize should be profitable")
 	}
 	if full.leg.MaxSeizeAssets.Cmp(collateral) != 0 {
 		t.Fatalf("full bad-debt seize = %s, want all collateral %s", full.leg.MaxSeizeAssets, collateral)
 	}
-	partial, ok := sizeLeg(c, price, q, accrued, SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0})
+	partial, ok := sizeLeg(c, price, q, SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0})
 	if !ok {
 		t.Fatal("partial fallback should also size")
 	}
@@ -152,7 +155,7 @@ var assignMarketID = common.HexToHash("0x6209dbd022c20923c071d7183d7a9729a755961
 // tokenA), so the sizing tests can size real legs at a given adapter quote.
 func sizeFixture() (SizingParams, func(b byte) Candidate, *big.Int) {
 	sp := SizingParams{AllowFullLiquidation: true, SwapHaircutBps: 0}
-	info := MarketInfo{Params: abiMarketParams{LoanToken: tokenA}, State: goldenMarket()}
+	info := MarketInfo{Params: MarketParams{LoanToken: tokenA}, State: goldenMarket()}
 	cand := func(b byte) Candidate {
 		var addr common.Address
 		addr[19] = b
@@ -168,10 +171,10 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	_, cand, price := sizeFixture()
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
 	c := cand(1)
-	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
+	c.Market.State = morpho.AccruedMarketState(c.Market.State, assignNowTs)
 
 	// Uncapped first, to learn the full expectedLoanOut.
-	full, ok := sizeLeg(c, price, newQuote("1780000000000000000000", nil), accrued, sp)
+	full, ok := sizeLeg(c, price, newQuote("1780000000000000000000", nil), sp)
 	if !ok {
 		t.Fatal("uncapped leg should size")
 	}
@@ -179,7 +182,7 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	// Cap the adapter below the full expectedLoanOut so the clamp binds.
 	uncapped := full.expectedLoanOut
 	budget := new(big.Int).Div(uncapped, big.NewInt(2))
-	capped, ok := sizeLeg(c, price, newQuote("1780000000000000000000", budget), accrued, sp)
+	capped, ok := sizeLeg(c, price, newQuote("1780000000000000000000", budget), sp)
 	if !ok {
 		t.Fatal("capped leg should still size (smaller)")
 	}
@@ -199,9 +202,9 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 func TestSizeLegReturnsExpectedLoanOut(t *testing.T) {
 	sp, cand, price := sizeFixture()
 	c := cand(1)
-	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
+	c.Market.State = morpho.AccruedMarketState(c.Market.State, assignNowTs)
 	q := newQuote("1780000000000000000000", mustBig("1000000000000"))
-	sized, ok := sizeLeg(c, price, q, accrued, sp)
+	sized, ok := sizeLeg(c, price, q, sp)
 	if !ok {
 		t.Fatal("position should liquidate")
 	}
@@ -234,10 +237,11 @@ func TestSizeLegClampsSeizeToDebt(t *testing.T) {
 	coll18 := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 1},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: coll},
 	}
-	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)
+	c.Market.State = morpho.AccruedMarketState(state, assignNowTs)
+	accrued := c.Market.State.TotalBorrowAssets
 	debt := morpho.BorrowedAssetsAt(c.Position, accrued, totalBorrowShares)
 
 	// Sanity: the UNCLAMPED 90% target really would over-repay (so the clamp is exercised, not vacuous).
@@ -249,7 +253,7 @@ func TestSizeLegClampsSeizeToDebt(t *testing.T) {
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
 	// MaxRate sized so the swap proceeds clear the repayment (profitable): expectedLoanOut = collIn·rate·1e6/(1e18·1e18).
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
-	sized, ok := sizeLeg(c, price, q, accrued, sp)
+	sized, ok := sizeLeg(c, price, q, sp)
 	if !ok {
 		t.Fatal("a liquidatable position should size a leg")
 	}
@@ -283,10 +287,11 @@ func TestSizeLegSkipsDustPosition(t *testing.T) {
 	coll18 := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	c := Candidate{
 		MarketID: assignMarketID, Borrower: common.Address{19: 3},
-		Market:   MarketInfo{Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
+		Market:   MarketInfo{Params: MarketParams{LoanToken: tokenA, CollateralToken: coll18}, State: state},
 		Position: morpho.PositionState{BorrowShares: debtShares, Collateral: coll},
 	}
-	accrued := morpho.AccruedTotalBorrowAssets(state, assignNowTs)
+	c.Market.State = morpho.AccruedMarketState(state, assignNowTs)
+	accrued := c.Market.State.TotalBorrowAssets
 	if !morpho.IsLiquidatableAt(c.Position, price, lltv, accrued, totalBorrowShares) {
 		t.Fatal("fixture must be liquidatable so the clamp path is reached")
 	}
@@ -295,7 +300,7 @@ func TestSizeLegSkipsDustPosition(t *testing.T) {
 	}
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
-	if _, ok := sizeLeg(c, price, q, accrued, sp); ok {
+	if _, ok := sizeLeg(c, price, q, sp); ok {
 		t.Fatal("a dust position whose full-debt seize floors to 0 must be skipped (ok=false), not over-seized")
 	}
 }

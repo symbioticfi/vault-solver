@@ -3,36 +3,50 @@ package defaultstrategy
 import (
 	"context"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
-func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
+func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	if len(input.Candidates) == 0 {
 		return decline(), nil
 	}
-	out, err := solveQuote(input, input.Candidates)
+	maxRoutes := len(input.Candidates)
+	if input.RequireSingleRoute {
+		maxRoutes = 1
+	}
+	solution, err := planning.NewQuotePool(input.Candidates).Solve(planning.QuoteTask{
+		ExactInput: input.AmountIn, MaxRoutes: maxRoutes, InputPolicy: planning.AbsorbUncoveredInput,
+	})
 	if err != nil {
 		return types.QuoteOutput{}, err
 	}
-	if out == nil {
+	if solution == nil || input.RequireSingleRoute && input.RequiredAmountOut != nil && solution.AmountOut.Cmp(input.RequiredAmountOut) < 0 {
 		return decline(), nil
 	}
-	return *out, nil
+	legs := make([]types.QuoteLeg, len(solution.Allocations))
+	for i, leg := range solution.Allocations {
+		legs[i] = types.QuoteLeg{CandidateID: string(leg.Candidate.ID), AmountIn: leg.AmountIn, AmountOut: leg.AmountOut}
+	}
+	return types.QuoteOutput{Decision: types.DecisionQuote, QuotedAmountOut: solution.AmountOut, Legs: legs}, nil
 }
 
-func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
+func (s *Strategy) BuildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if len(input.Candidates) == 0 {
 		return nil, nil
 	}
-	task, sources, err := rfqFillTask(input, input.Candidates)
+	task, sources, err := rfqFillTask(input)
 	if err != nil {
 		return nil, err
 	}
-	solution, err := liquidgreedy.SolveFill(task)
+	solution, err := planning.SolveFill(task)
 	if err != nil || solution == nil {
 		return nil, err
 	}
@@ -55,12 +69,12 @@ func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*typ
 		}
 		legs = append(legs, types.FillLeg{
 			Adapter: source.Route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
-			MaxRate: liquidlane.CloneBig(source.Rate), DiscountID: liquidlane.CloneHash(source.DiscountID),
+			MaxRate: bigmath.Clone(source.Rate), DiscountID: liquidlane.CloneHash(source.DiscountID),
 		})
 	}
 	return &types.FillPlan{
 		QuoteID: input.QuoteID, RequestID: input.RequestID,
-		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
+		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: bigmath.Clone(input.AmountIn),
 		QuotedAmountOut: quotedAmountOut, Legs: legs,
 	}, nil
 }
@@ -69,70 +83,35 @@ func decline() types.QuoteOutput {
 	return types.QuoteOutput{Decision: types.DecisionDecline, Reason: "no viable strategy"}
 }
 
-func solveQuote(
-	input types.QuoteInput,
-	candidates []liquidlane.QuoteCandidate,
-) (*types.QuoteOutput, error) {
-	maxRoutes := len(candidates)
-	inputPolicy := liquidgreedy.AbsorbUncoveredInput
-	if input.RequireSingleRoute {
-		maxRoutes = 1
-	}
-	solution, err := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
-		ExactInput: input.AmountIn, Candidates: candidates, MaxRoutes: maxRoutes,
-		InputPolicy: inputPolicy,
-	})
-	if err != nil || solution == nil {
-		return nil, err
-	}
-	if input.RequireSingleRoute && input.RequiredAmountOut != nil &&
-		solution.AmountOut.Cmp(input.RequiredAmountOut) < 0 {
-		return nil, nil
-	}
-	legs := make([]types.QuoteLeg, 0, len(solution.Allocations))
-	for _, leg := range solution.Allocations {
-		legs = append(legs, types.QuoteLeg{
-			CandidateID: string(leg.Candidate.ID),
-			AmountIn:    liquidlane.CloneBig(leg.AmountIn), AmountOut: liquidlane.CloneBig(leg.AmountOut),
-		})
-	}
-	return &types.QuoteOutput{
-		Decision: types.DecisionQuote, QuotedAmountOut: liquidlane.CloneBig(solution.AmountOut), Legs: legs,
-	}, nil
-}
-
-func rfqFillTask(
-	input types.FillInput,
-	candidates []liquidlane.QuoteCandidate,
-) (liquidgreedy.FillTask, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
-	quotes := make([]liquidlane.FillQuote, 0, len(candidates))
-	sources := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate, len(candidates))
-	for _, candidate := range candidates {
+// The pure planner borrows candidate fields; the resulting fill plan owns its amounts.
+func rfqFillTask(input types.FillInput) (planning.FillTask, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
+	quotes := make([]liquidlane.FillQuote, 0, len(input.Candidates))
+	sources := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate, len(input.Candidates))
+	for _, candidate := range input.Candidates {
 		route := candidate.Route
 		candidateID := liquidlane.NewCandidateID(route, candidate.DiscountID)
 		if candidate.ID != candidateID {
-			return liquidgreedy.FillTask{}, nil, errors.Errorf("candidate %q has invalid identity", candidate.ID)
+			return planning.FillTask{}, nil, errors.Errorf("candidate %q has invalid identity", candidate.ID)
 		}
 		sources[candidateID] = candidate
 		quotes = append(quotes, liquidlane.FillQuote{
 			Inventory: liquidlane.Inventory{
-				Route: route, MaxAssets: liquidlane.CloneBig(candidate.MaxAmountOut),
-				MaxRate: liquidlane.CloneBig(candidate.Rate), DiscountID: liquidlane.CloneHash(candidate.DiscountID),
+				Route: route, MaxAssets: candidate.MaxAmountOut,
+				MaxRate: candidate.Rate, DiscountID: candidate.DiscountID,
 				ValidUntil: candidate.ValidUntil,
 			},
-			AmountIn: liquidlane.CloneBig(input.AmountIn),
+			AmountIn: input.AmountIn,
 			MaxAmountOut: liquidlane.AmountOutForRate(
 				input.AmountIn, candidate.Rate, route.TokenInDecimals, route.TokenOutDecimals,
 			),
 		})
 	}
 	maxRoutes := len(quotes)
-	inputPolicy := liquidgreedy.AbsorbUncoveredInput
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	return liquidgreedy.FillTask{
-		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
-		Quotes: quotes, ValidAfter: input.Now, MaxRoutes: maxRoutes, InputPolicy: inputPolicy,
+	return planning.FillTask{
+		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
+		Quotes: quotes, ValidAfter: input.Now, MaxRoutes: maxRoutes, InputPolicy: planning.AbsorbUncoveredInput,
 	}, sources, nil
 }

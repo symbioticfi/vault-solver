@@ -6,15 +6,11 @@
 // auction/executor gas limits, price updates, bids, and economics stay outside.
 package gas
 
-const (
-	firstAcquireSwap         uint64 = 300_000
-	additionalAcquireSwap    uint64 = 140_000
-	firstAllocateSwap        uint64 = 530_000
-	additionalAllocateSwap   uint64 = 350_000
-	firstDeallocateSwap      uint64 = 650_000
-	additionalDeallocateSwap uint64 = 450_000
-	firstUnknownSwap         uint64 = 850_000
-	additionalUnknownSwap    uint64 = 650_000
+import (
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 )
 
 type Prediction struct {
@@ -22,53 +18,47 @@ type Prediction struct {
 	Routes []Route
 }
 
-// Predict returns LiquidLane adapter route gas for the demands in order.
-func Predict(demands []Demand, st *State) Prediction {
-	routes := PredictRoutes(demands, st)
-	return Prediction{Units: RouteUnits(routes), Routes: routes}
+// Predict consumes one owned copy of the adapter's balances. The same route
+// transition is used by PredictAdapters; a single adapter needs no address maps.
+func Predict(demands []Demand, state *State) Prediction {
+	if len(demands) == 0 {
+		return Prediction{}
+	}
+	var free, withdrawable *big.Int
+	acquire := make(map[common.Address]*big.Int)
+	if state != nil {
+		free, withdrawable = bigmath.Clone(state.FreeAssets), bigmath.Clone(state.Withdrawable)
+		for token, amount := range state.Acquire {
+			acquire[token] = bigmath.Clone(amount)
+		}
+	}
+	out := Prediction{Routes: make([]Route, len(demands))}
+	for i, demand := range demands {
+		route := predictRoute(demand.AmountOut, demand.Collateral, acquire, free, withdrawable)
+		out.Routes[i] = route
+		out.Units = bigmath.SaturatingAdd(out.Units, UnitsForRouteAt(route, i == 0))
+	}
+	return out
 }
 
-func RouteUnits(routes []Route) uint64 {
-	var total uint64
-	for i, route := range routes {
-		total = saturatingAddUint64(total, UnitsForRouteAt(route, i == 0))
-	}
-	return total
+// Each row is the measured first/subsequent swap cost. Unknown route values
+// retain the conservative ceiling used for an unavailable liquidity snapshot.
+var routeCosts = [...]struct {
+	name              string
+	first, additional uint64
+}{
+	RouteUnknown:    {"unknown", 850_000, 650_000},
+	RouteAcquire:    {"acquire", 300_000, 140_000},
+	RouteAllocate:   {"allocate", 530_000, 350_000},
+	RouteDeallocate: {"deallocate", 650_000, 450_000},
 }
 
 func UnitsForRouteAt(route Route, first bool) uint64 {
-	switch route {
-	case RouteAcquire:
-		if first {
-			return firstAcquireSwap
-		}
-		return additionalAcquireSwap
-	case RouteAllocate:
-		if first {
-			return firstAllocateSwap
-		}
-		return additionalAllocateSwap
-	case RouteDeallocate:
-		if first {
-			return firstDeallocateSwap
-		}
-		return additionalDeallocateSwap
-	case RouteUnknown:
-		if first {
-			return firstUnknownSwap
-		}
-		return additionalUnknownSwap
-	default:
-		if first {
-			return firstUnknownSwap
-		}
-		return additionalUnknownSwap
+	if int(route) >= len(routeCosts) {
+		route = RouteUnknown
 	}
-}
-
-func saturatingAddUint64(a, b uint64) uint64 {
-	if b > ^uint64(0)-a {
-		return ^uint64(0)
+	if first {
+		return routeCosts[route].first
 	}
-	return a + b
+	return routeCosts[route].additional
 }

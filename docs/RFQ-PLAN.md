@@ -481,3 +481,36 @@ generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=
   `ResolveDiscountResponse` `anyOf` union is consumed via its single shape (the batch shape is accepted
   only when it contains exactly one entry — fail closed). `apitypes.go` is unchanged: it is the filler's
   own inbound `/quote` server contract (Huma validation tags), not a backend-client type.
+
+### Runtime ownership
+
+The quote listener binds before execution starts. One polling owner advances orders; each stored
+order includes its execution attempts, so a second in-flight map is unnecessary. Fill preparation
+produces a validated immutable transaction request with its metric terms. Deterministic rejection
+and transient resolution failures take different retry paths. Accepted transactions drain through
+the shared manager before the application releases the nonce lane.
+
+Canonical backend order lookup requires zero rows or exactly the requested order ID. Ambiguous or
+unrelated responses are dependency errors, so they cannot resolve another pending order. Backend
+poll responses are bounded by the requested limit. Quote amounts, rates, and capacities are parsed as
+unsigned 256-bit decimal integers before reaching strategy or calldata construction.
+
+RFQ configuration uses the shared strict duration and address parsers: an explicit nonpositive or
+overflowing poll interval, a negative order limit, a zero executor/reactor, or duplicate adapters
+fails startup. Per-token minimums must fit uint256.
+
+The backend embeds the shared discount provider. Optional order fields are copied into owned records; executable output validation checks signed and backend terms and totals in one pass. Direct request parsing also validates discount IDs without relying on HTTP schema validation.
+
+The open-order boundary rejects missing identities and statuses inconsistent with the requested
+`open` listing. Backend `encodedOrder` decoding uses the mixed fill overload's argument shape from
+the vendored Executor ABI. Strategy fills bind each selected candidate once to a physical route and
+reconcile both aggregate amounts before returning an owned plan.
+
+Quote preparation filters backend inventory into a request-owned slice. Canonical adapter metadata is
+bound into that slice directly, avoiding a second inventory copy while preserving the backend snapshot.
+Missing metadata, asset mismatch or decimal mismatch rejects the whole preparation before allocation.
+
+The order worker passes its current record through execution and resolves canonical backend terms by
+order ID. Stored state contains lifecycle facts, with no duplicate queued-order/quote-ID projection
+and no second store lookup before submission. Default quote/fill planning borrows immutable candidate
+inputs while calculating, then returns owned amounts and private terms to the execution boundary.

@@ -6,18 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+	"gopkg.in/yaml.v3"
 )
 
 func testYAMLNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
-		t.Fatalf("unmarshal yaml: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(raw), &node), "unmarshal yaml: %v")
 	if len(node.Content) == 0 {
 		return yaml.Node{}
 	}
@@ -36,13 +33,9 @@ func TestWebhookStrategyRoutes(t *testing.T) {
 	defer srv.Close()
 
 	strategy, err := NewFromConfig(testYAMLNode(t, "url: "+srv.URL+"/oev\n"), nilDeps())
-	if err != nil {
-		t.Fatalf("NewFromConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "NewFromConfig: %v")
 	out, err := strategy.DecideBid(t.Context(), types.BidInput{})
-	if err != nil {
-		t.Fatalf("DecideBid: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideBid: %v")
 	if out.Decision != "skip" || out.Reason != "test" {
 		t.Fatalf("output = %+v, want skip/test", out)
 	}
@@ -59,6 +52,6 @@ callbacks:
 	}
 }
 
-func nilDeps() strategies.Deps {
-	return strategies.Deps{}
+func nilDeps() types.Dependencies {
+	return types.Dependencies{}
 }

@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"math/big"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -68,100 +67,64 @@ type parsedQuote struct {
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
 func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
-	// Schema-level validation (malformed → 400).
-	if q.Type != quoteTypeExactInput {
+	switch {
+	case q.Type != quoteTypeExactInput:
 		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
-	}
-	if q.Protocol != quoteProtocolV1 {
+	case q.Protocol != quoteProtocolV1:
 		return nil, errors.Errorf("protocol must be %q", quoteProtocolV1)
-	}
-	if q.NumOutputs <= 0 {
+	case q.NumOutputs < 1:
 		return nil, errors.New("numOutputs must be positive")
-	}
-	if q.QuoteID == "" || q.RequestID == "" {
+	case q.RequestID == "" || q.QuoteID == "":
 		return nil, errors.New("quoteId and requestId are required")
 	}
-	if !common.IsHexAddress(q.Swapper) {
-		return nil, errors.Errorf("swapper: invalid address %q", q.Swapper)
-	}
-	tokenIn, err := parse.Address(q.TokenIn, "tokenIn")
-	if err != nil {
+	_, swapperErr := parse.Address(q.Swapper, "swapper")
+	tokenIn, inputErr := parse.Address(q.TokenIn, "tokenIn")
+	tokenOut, outputErr := parse.Address(q.TokenOut, "tokenOut")
+	amount, amountErr := parseUint256(q.Amount, "amount")
+	if err := errors.Join(swapperErr, inputErr, outputErr, amountErr); err != nil {
 		return nil, err
 	}
-	tokenOut, err := parse.Address(q.TokenOut, "tokenOut")
-	if err != nil {
-		return nil, err
-	}
-	amount, err := parseUint256(q.Amount, "amount")
-	if err != nil {
-		return nil, err
-	}
-	inv := make([]solverInventory, 0, len(q.Adapters))
-	for i := range q.Adapters {
-		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn)
-		if perr != nil {
-			return nil, perr
+	parsed := &parsedQuote{req: strategyRequest{RequestID: q.RequestID, QuoteID: q.QuoteID,
+		TokenIn: tokenIn, TokenOut: tokenOut, Amount: amount}, inv: make([]solverInventory, len(q.Adapters))}
+	for index := range q.Adapters {
+		inventory, err := q.Adapters[index].parse(index, q.TokenInChainID, tokenIn)
+		if err != nil {
+			return nil, err
 		}
-		inv = append(inv, entry)
+		parsed.inv[index] = inventory
 	}
-
-	// Quote-logic checks (well-formed but not for us → 204).
-	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(q.Adapters) == 0 {
+	// Validate the entire payload before classifying a different chain as a decline.
+	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(parsed.inv) == 0 {
 		return nil, nil
 	}
-	return &parsedQuote{
-		req: strategyRequest{
-			RequestID: q.RequestID,
-			QuoteID:   q.QuoteID,
-			TokenIn:   tokenIn,
-			TokenOut:  tokenOut,
-			Amount:    amount,
-		},
-		inv: inv,
-	}, nil
+	return parsed, nil
 }
 
-func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (solverInventory, error) {
-	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
-	if err != nil {
-		return solverInventory{}, err
-	}
-	asset, err := parse.Address(v.Asset, idxField(index, "asset"))
-	if err != nil {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (inventory solverInventory, err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Errorf("adapters[%d]: %w", index, err)
+		}
+	}()
+	adapter, adapterErr := parse.Address(v.Adapter, "adapter")
+	asset, assetErr := parse.Address(v.Asset, "asset")
+	assets, assetsErr := parseUint256(v.MaxAssets, "maxAssets")
+	rate, rateErr := parseUint256(v.MaxRate, "maxRate")
+	if err := errors.Join(adapterErr, assetErr, assetsErr, rateErr); err != nil {
 		return solverInventory{}, err
 	}
 	if v.AssetDecimals < 0 || v.AssetDecimals > 255 {
-		return solverInventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
-	}
-	maxAssets, err := parseUint256(v.MaxAssets, idxField(index, "maxAssets"))
-	if err != nil {
-		return solverInventory{}, err
-	}
-	maxRate, err := parseUint256(v.MaxRate, idxField(index, "maxRate"))
-	if err != nil {
-		return solverInventory{}, err
-	}
-	var discountID *common.Hash
-	if v.DiscountID != nil && *v.DiscountID != "" {
-		h := common.HexToHash(*v.DiscountID)
-		discountID = &h
+		return solverInventory{}, errors.Errorf("assetDecimals out of range: %d", v.AssetDecimals)
 	}
 	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
-	if discountID != nil {
-		return liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{}), nil
+	if v.DiscountID == nil || *v.DiscountID == "" {
+		return liquidlane.DirectInventory(route, assets, rate), nil
 	}
-	return liquidlane.DirectInventory(route, maxAssets, maxRate), nil
+	id, err := parse.Hash(*v.DiscountID, "discountId")
+	if err != nil {
+		return solverInventory{}, err
+	}
+	return liquidlane.DiscountInventory(route, assets, rate, id, time.Time{}), nil
 }
 
-// parseUint256 parses a base-10 non-negative integer string into a big.Int.
-func parseUint256(s, field string) (*big.Int, error) {
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid non-negative integer %q", field, s)
-	}
-	return n, nil
-}
-
-func idxField(i int, field string) string {
-	return "adapters[" + strconv.Itoa(i) + "]." + field
-}
+func parseUint256(raw, field string) (*big.Int, error) { return parse.Uint(raw, field, 256) }

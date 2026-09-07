@@ -27,7 +27,7 @@ type orderMessage struct {
 }
 
 type orderFeed struct {
-	url           string
+	cfg           OrderServerConfig
 	apiKey        string
 	log           logr.Logger
 	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
@@ -39,37 +39,28 @@ type orderFeedConnectionHooks struct {
 	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
 }
 
-func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
-	return &orderFeed{url: url, apiKey: apiKey, log: log}
+func newOrderFeed(cfg OrderServerConfig, apiKey string, log logr.Logger) *orderFeed {
+	if cfg.MaxMessageBytes <= 0 {
+		cfg.MaxMessageBytes = defaultMaxMessageBytes
+	}
+	return &orderFeed{cfg: cfg, apiKey: apiKey, log: log}
 }
 
-func (f *orderFeed) run(
-	ctx context.Context,
-	hooks orderFeedConnectionHooks,
-	handle func(context.Context, orderMessage),
-) error {
-	backoff := initialWSBackoff
-	for {
+func (f *orderFeed) run(ctx context.Context, hooks orderFeedConnectionHooks, handle func(context.Context, orderMessage)) error {
+	for delay := initialWSBackoff; ctx.Err() == nil; delay = min(delay*2, maxWSBackoff) {
 		connected, err := f.watchOnce(ctx, hooks, handle)
 		if ctx.Err() != nil {
-			return ctx.Err()
+			break
 		}
 		if connected {
-			backoff = initialWSBackoff
+			delay = initialWSBackoff
 		}
-		f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		backoff *= 2
-		if backoff > maxWSBackoff {
-			backoff = maxWSBackoff
+		f.log.Error(err, "order feed disconnected; reconnecting", "backoff", delay.String())
+		if !waitForRetry(ctx, delay) {
+			break
 		}
 	}
+	return ctx.Err()
 }
 
 func (f *orderFeed) watchOnce(
@@ -81,7 +72,7 @@ func (f *orderFeed) watchOnce(
 	if f.apiKey != "" {
 		headers.Set("x-api-key", f.apiKey)
 	}
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.cfg.WSURL, headers)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -91,39 +82,29 @@ func (f *orderFeed) watchOnce(
 		}
 		return false, errors.Errorf("dial websocket: %w", err)
 	}
-	// A newly established connection always starts unready. Quotes must remain gated until this
-	// connection's REST recovery has converged, even if the previous connection was ready.
+	connectionCtx, cancel := context.WithCancel(ctx)
+	stopClose := context.AfterFunc(connectionCtx, func() { _ = conn.Close() })
+	defer stopClose()
+	conn.SetReadLimit(f.cfg.MaxMessageBytes)
 	f.recoveryReady.Store(false)
 	f.connected.Store(true)
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
-	defer conn.Close()
-
-	connectionCtx, cancelConnection := context.WithCancel(ctx)
-	var work sync.WaitGroup
+	var workers sync.WaitGroup
 	defer func() {
 		f.connected.Store(false)
-		cancelConnection()
-		work.Wait()
-		// Store after joining connection work so a late completion from the closing connection cannot
-		// leave readiness set for the next scrape or reconnect.
+		cancel()
+		_ = conn.Close()
+		workers.Wait()
+		// A late recovery completion must not re-enable the next connection's readiness.
 		f.recoveryReady.Store(false)
 	}()
 	if hooks.beforeRead != nil {
 		hooks.beforeRead(connectionCtx)
 	}
 	if hooks.whileConnected != nil {
-		work.Go(func() { hooks.whileConnected(connectionCtx) })
+		workers.Go(func() { hooks.whileConnected(connectionCtx) })
 	}
 
-	f.log.Info("order feed connected", "url", f.url)
+	f.log.Info("order feed connected", "url", f.cfg.WSURL)
 	for {
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -133,6 +114,9 @@ func (f *orderFeed) watchOnce(
 			continue
 		}
 		if pong, ok := pongFor(msg); ok {
+			if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return true, errors.Errorf("set pong deadline: %w", err)
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, pong); err != nil {
 				return true, errors.Errorf("write websocket pong: %w", err)
 			}
@@ -148,7 +132,9 @@ func (f *orderFeed) watchOnce(
 			f.log.V(1).Info("order feed event ignored", "event", envelope.Event)
 			continue
 		}
-		handle(connectionCtx, envelope)
+		if connectionCtx.Err() == nil {
+			handle(connectionCtx, envelope)
+		}
 	}
 }
 

@@ -5,8 +5,10 @@ package chain
 
 import (
 	"context"
+	"math"
 	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -61,72 +63,57 @@ func DialWithMetrics(
 	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, rpcMetrics, log)
 }
 
-func dial(
-	ctx context.Context,
-	rpcURLs []string,
-	writeRPCURL string,
-	multicallAddr string,
-	rpcMetrics *RPCMetrics,
-	log logr.Logger,
-) (*Client, error) {
+func dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr string, rpcMetrics *RPCMetrics, log logr.Logger) (_ *Client, err error) {
 	if len(rpcURLs) == 0 {
 		return nil, errors.New("chain: no rpc url configured")
 	}
 	if !common.IsHexAddress(multicallAddr) {
 		return nil, errors.Errorf("chain: invalid multicall address %q", multicallAddr)
 	}
-
 	writeEndpoint := writeRPCURL
 	if writeEndpoint == "" && len(rpcURLs) > 1 {
 		writeEndpoint = rpcURLs[0]
 	}
-	readRole := rpcRoleRead
-	if writeEndpoint == "" {
-		readRole = rpcRoleShared
+	role := rpcRoleShared
+	if writeEndpoint != "" {
+		role = rpcRoleRead
 	}
-	ec, err := dialClient(ctx, rpcURLs, readRole, rpcMetrics, log)
+	read, err := dialClient(ctx, rpcURLs, role, rpcMetrics, log)
 	if err != nil {
 		return nil, err
 	}
-	id, err := ec.ChainID(ctx)
+	client := &Client{Client: read, writeClient: read, multicall: common.HexToAddress(multicallAddr)}
+	defer func() {
+		if err != nil {
+			client.Close()
+		}
+	}()
+	client.chainID, err = read.ChainID(ctx)
 	if err != nil {
-		ec.Close()
 		return nil, errors.Errorf("chain: get chain id: %w", err)
 	}
-
-	// A distinct write endpoint (e.g. a private/MEV-protected relay) carries transaction broadcasts
-	// and nonce reads; all other reads stay on the primary. Even without writeRpcUrl, isolate
-	// writes from a multi-endpoint read client: replaying eth_sendRawTransaction across endpoints can
-	// hide an ambiguous acceptance behind a later nonce-too-low response.
-	writeClient := ec
-	if writeEndpoint != "" {
-		wc, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics, log)
-		if wcErr != nil {
-			ec.Close()
-			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
-		}
-		// An explicitly configured endpoint is an independent trust boundary and must prove it
-		// belongs to the read chain. Probing the implicit primary here would break read-only solvers
-		// that are running through a fallback while that primary is unavailable.
-		if writeRPCURL != "" {
-			writeID, writeIDErr := wc.ChainID(ctx)
-			if writeIDErr != nil {
-				wc.Close()
-				ec.Close()
-				return nil, errors.Errorf("chain: get write rpc chain id: %w", writeIDErr)
-			}
-			if writeID.Cmp(id) != 0 {
-				wc.Close()
-				ec.Close()
-				return nil, errors.Errorf(
-					"chain: write rpc chain id mismatch: read %s, write %s", id, writeID,
-				)
-			}
-		}
-		writeClient = wc
+	if client.chainID.Sign() <= 0 {
+		return nil, errors.New("chain: chain id must be positive")
 	}
-
-	return &Client{Client: ec, writeClient: writeClient, chainID: id, multicall: common.HexToAddress(multicallAddr)}, nil
+	if writeEndpoint != "" {
+		write, err := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics, log)
+		if err != nil {
+			return nil, errors.Errorf("chain: dial write rpc: %w", err)
+		}
+		client.writeClient = write
+		// An explicit relay is a separate trust boundary. The implicit primary is
+		// not probed: read-only solvers must still boot through a healthy fallback.
+		if writeRPCURL != "" {
+			id, err := write.ChainID(ctx)
+			if err != nil {
+				return nil, errors.Errorf("chain: get write rpc chain id: %w", err)
+			}
+			if id.Cmp(client.chainID) != 0 {
+				return nil, errors.Errorf("chain: write rpc chain id mismatch: read %s, write %s", client.chainID, id)
+			}
+		}
+	}
+	return client, nil
 }
 
 // SendTransaction broadcasts a signed transaction through the write client. It overrides the
@@ -183,40 +170,27 @@ func (c *Client) Close() {
 
 // dialClient builds the ethclient. A single non-HTTP endpoint keeps a plain dial; HTTP(S) endpoints
 // use fallbackTransport so each attempt remains bounded.
-func dialClient(
-	ctx context.Context,
-	rpcURLs []string,
-	role string,
-	rpcMetrics *RPCMetrics,
-	log logr.Logger,
-) (*ethclient.Client, error) {
-	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
-		ec, err := ethclient.DialContext(ctx, rpcURLs[0])
+func dialClient(ctx context.Context, rpcURLs []string, role string, rpcMetrics *RPCMetrics, log logr.Logger) (*ethclient.Client, error) {
+	operation := "chain: dial"
+	var options []rpc.ClientOption
+	if len(rpcURLs) != 1 || isHTTPURL(rpcURLs[0]) {
+		endpoints, err := parseHTTPEndpoints(rpcURLs)
 		if err != nil {
-			return nil, errors.Errorf("chain: dial: %w", err)
+			return nil, err
 		}
-		return ec, nil
+		rpcMetrics.bindTransport(role, len(endpoints))
+		httpClient := &http.Client{
+			Transport:     &fallbackTransport{endpoints: endpoints, base: http.DefaultTransport, metrics: rpcMetrics, role: role, log: log},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		options = append(options, rpc.WithHTTPClient(httpClient))
+		operation += " (fallback)"
 	}
-	endpoints, err := parseHTTPEndpoints(rpcURLs)
+	connection, err := rpc.DialOptions(ctx, rpcURLs[0], options...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("%s: %w", operation, err)
 	}
-	rpcMetrics.bindTransport(role, len(endpoints))
-	httpClient := &http.Client{
-		Transport: &fallbackTransport{
-			endpoints: endpoints,
-			base:      http.DefaultTransport,
-			metrics:   rpcMetrics,
-			role:      role,
-			log:       log,
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	rc, err := rpc.DialOptions(ctx, rpcURLs[0], rpc.WithHTTPClient(httpClient))
-	if err != nil {
-		return nil, errors.Errorf("chain: dial (fallback): %w", err)
-	}
-	return ethclient.NewClient(rc), nil
+	return ethclient.NewClient(connection), nil
 }
 
 // ChainID returns a copy of the cached chain id.
@@ -251,9 +225,29 @@ func (c *Client) Multicall(ctx context.Context, calls []Call) ([]CallResult, err
 	if err != nil {
 		return nil, errors.Errorf("chain: multicall unpack aggregate3: %w", err)
 	}
+	if len(out) != len(calls) {
+		return nil, errors.Errorf("chain: multicall returned %d results for %d calls", len(out), len(calls))
+	}
 	res := make([]CallResult, len(out))
 	for i, o := range out {
 		res[i] = CallResult{Success: o.Success, ReturnData: o.ReturnData}
 	}
 	return res, nil
+}
+
+// BlockTime reads the latest primary-chain timestamp for deadline calculations.
+func (c *Client) BlockTime(ctx context.Context) (time.Time, error) {
+	header, err := c.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return time.Time{}, errors.Errorf("latest block header: %w", err)
+	}
+	return HeaderTime(header)
+}
+
+// HeaderTime rejects timestamps that cannot be represented by the deadline clock.
+func HeaderTime(header *types.Header) (time.Time, error) {
+	if header == nil || header.Time > math.MaxInt64 {
+		return time.Time{}, errors.New("block header has no valid timestamp")
+	}
+	return time.Unix(int64(header.Time), 0), nil
 }

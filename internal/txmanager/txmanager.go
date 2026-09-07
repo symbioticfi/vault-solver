@@ -7,6 +7,7 @@ package txmanager
 import (
 	"context"
 	"math/big"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/tenderly"
 )
@@ -133,8 +135,6 @@ type pendingTransaction struct {
 	receiptReads      readStreak
 	obsolescenceReads readStreak
 	log               logr.Logger // m.log stamped with the request's solver
-	result            chan<- Result
-	resultOnce        sync.Once
 	cancelDeadline    time.Time
 	cancelRequested   chan struct{}
 	cancelOnce        sync.Once
@@ -162,22 +162,21 @@ type Manager struct {
 	admissionDemand atomic.Int64
 
 	laneStateMu          sync.Mutex
-	laneStateSubscribers map[uint64]chan struct{}
-	nextLaneStateID      uint64
+	laneStateSubscribers map[chan struct{}]struct{}
 
 	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
 	nonce     uint64
 	nonceInit bool
 	conflict  *nonceConflict
 
-	unminedMu   sync.Mutex
-	unmined     *pendingTransaction
+	active      atomic.Pointer[pendingTransaction]
 	lifecycleWG sync.WaitGroup
 }
 
 type job struct {
+	*completion
+
 	req              Request
-	res              chan Result
 	admissionStarted time.Time
 }
 
@@ -214,36 +213,24 @@ var (
 )
 
 // New constructs a Manager. Call Start to launch its worker.
-func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = defaultPollInterval
+func New(backend Backend, account signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
+	for _, duration := range []struct {
+		value    *time.Duration
+		fallback time.Duration
+	}{
+		{&cfg.PollInterval, defaultPollInterval}, {&cfg.BroadcastTimeout, defaultBroadcastTimeout},
+		{&cfg.AccountPollInterval, defaultAccountPollInterval}, {&cfg.ReplacementInterval, defaultReplacementInterval},
+		{&cfg.PendingTimeout, defaultPendingTimeout}, {&cfg.ShutdownTimeout, defaultShutdownTimeout},
+	} {
+		if *duration.value <= 0 {
+			*duration.value = duration.fallback
+		}
 	}
-	if cfg.BroadcastTimeout <= 0 {
-		cfg.BroadcastTimeout = defaultBroadcastTimeout
-	}
-	if cfg.AccountPollInterval <= 0 {
-		cfg.AccountPollInterval = defaultAccountPollInterval
-	}
-	if cfg.ReplacementInterval <= 0 {
-		cfg.ReplacementInterval = defaultReplacementInterval
-	}
-	if cfg.PendingTimeout <= 0 {
-		cfg.PendingTimeout = defaultPendingTimeout
-	}
-	if cfg.ShutdownTimeout <= 0 {
-		cfg.ShutdownTimeout = defaultShutdownTimeout
-	}
-	return &Manager{
-		backend:              backend,
-		signer:               s,
-		chainID:              chainID,
-		cfg:                  cfg,
-		log:                  log.WithName("txmanager"),
-		queue:                make(chan job),
-		lifecycleSlot:        make(chan struct{}, 1),
-		stopping:             make(chan struct{}),
-		laneStateSubscribers: make(map[uint64]chan struct{}),
-	}
+	manager := &Manager{backend: backend, signer: account, cfg: cfg, log: log.WithName("txmanager"),
+		queue: make(chan job), lifecycleSlot: make(chan struct{}, 1), stopping: make(chan struct{}),
+		laneStateSubscribers: make(map[chan struct{}]struct{})}
+	manager.chainID = bigmath.Clone(chainID)
+	return manager
 }
 
 // NewWithMetrics constructs a Manager with transaction lifecycle metrics.
@@ -309,19 +296,14 @@ func (m *Manager) LaneReady() bool {
 // subscriptions prevent readiness and solvers from stealing signals from each other.
 func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 	m.laneStateMu.Lock()
-	id := m.nextLaneStateID
-	m.nextLaneStateID++
 	changes := make(chan struct{}, 1)
-	m.laneStateSubscribers[id] = changes
+	m.laneStateSubscribers[changes] = struct{}{}
 	m.laneStateMu.Unlock()
 
-	var once sync.Once
 	return changes, func() {
-		once.Do(func() {
-			m.laneStateMu.Lock()
-			delete(m.laneStateSubscribers, id)
-			m.laneStateMu.Unlock()
-		})
+		m.laneStateMu.Lock()
+		delete(m.laneStateSubscribers, changes)
+		m.laneStateMu.Unlock()
 	}
 }
 
@@ -359,27 +341,38 @@ func (m *Manager) supportsAccountBalance() bool {
 }
 
 func (m *Manager) refreshAccount(ctx context.Context) {
-	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
+	readCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
 	defer cancel()
-	balance, err := m.transactionSenderBalance(refreshCtx)
-	if err == nil && (balance == nil || balance.Sign() < 0) {
-		err = errors.New("txmanager: invalid account balance")
+	balance, err := m.transactionSenderBalance(readCtx)
+	var mined, pending uint64
+	if err == nil {
+		if balance == nil || balance.Sign() < 0 {
+			err = errors.New("txmanager: invalid account balance")
+		} else {
+			mined, pending, err = m.accountNonces(readCtx)
+		}
 	}
 	if err == nil {
-		var latestNonce, pendingNonce uint64
-		latestNonce, err = m.backend.NonceAt(refreshCtx, m.signer.Address(), nil)
-		if err == nil {
-			pendingNonce, err = m.backend.PendingNonceAt(refreshCtx, m.signer.Address())
-		}
-		if err == nil {
-			m.metrics.observeAccount(balance, latestNonce, pendingNonce)
-			return
-		}
+		m.metrics.observeAccount(balance, mined, pending)
+		return
 	}
 	if ctx.Err() == nil {
 		m.metrics.observeAccountRefreshError()
 		m.log.V(1).Info("account metrics refresh failed", "error", err)
 	}
+}
+
+func (m *Manager) accountNonces(ctx context.Context) (mined, pending uint64, err error) {
+	account := m.signer.Address()
+	mined, err = m.backend.NonceAt(ctx, account, nil)
+	if err != nil {
+		return 0, 0, errors.Errorf("latest mined nonce: %w", err)
+	}
+	pending, err = m.backend.PendingNonceAt(ctx, account)
+	if err != nil {
+		return 0, 0, errors.Errorf("pending nonce: %w", err)
+	}
+	return mined, pending, nil
 }
 
 func (m *Manager) transactionSenderBalance(ctx context.Context) (*big.Int, error) {
@@ -397,84 +390,92 @@ func (m *Manager) transactionSenderBalance(ctx context.Context) (*big.Int, error
 // terminal deadline result, and the worker returns without waiting on a stuck dependency.
 func (m *Manager) Start(ctx context.Context) {
 	m.metrics.bindAccount(m.signer.Address())
-	accountMonitorDone := make(chan struct{})
-	go func() {
-		defer close(accountMonitorDone)
-		m.monitorAccount(ctx)
-	}()
-	defer func() { <-accountMonitorDone }()
-
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() { defer close(monitorDone); m.monitorAccount(monitorCtx) }()
+	defer func() { stopMonitor(); <-monitorDone }()
+	defer m.log.Info("stopped")
 	m.log.Info("started", "from", m.signer.Address().Hex())
-	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
-	defer cancelLifecycle(errManagerStopped)
-	stop := func(reason error) {
-		close(m.stopping)
-		m.requestActiveCancellation()
-		drained := make(chan struct{})
-		go func() {
-			m.lifecycleWG.Wait()
-			close(drained)
-		}()
-		timer := time.NewTimer(m.cfg.ShutdownTimeout)
-		defer timer.Stop()
-		select {
-		case <-drained:
-		case <-timer.C:
-			m.log.Error(errShutdownTimeout, "transaction lifecycle drain deadline reached",
-				"timeout", m.cfg.ShutdownTimeout.String(),
-			)
-			cancelLifecycle(errShutdownTimeout)
-			m.deliverActiveShutdownTimeout()
-			reason = errShutdownTimeout
-		}
-		m.log.Info("stopped", "reason", reason.Error())
-	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			stop(ctx.Err())
+			close(m.stopping)
 			return
-		case j := <-m.queue:
-			if err := ctx.Err(); err != nil {
-				m.metrics.finishAdmission(j.req.Label, j.admissionStarted, errManagerStopped)
-				j.res <- notAdmittedResult(err)
-				m.releaseLifecycleSlot()
-				stop(err)
+		case next := <-m.queue:
+			if !m.runJob(ctx, next) {
 				return
 			}
-			if err := m.nonceConflictError(); err != nil {
-				m.metrics.finishAdmission(j.req.Label, j.admissionStarted, err)
-				j.res <- notAdmittedResult(err)
-				m.releaseLifecycleSlot()
-				continue
-			}
-			m.metrics.finishAdmission(j.req.Label, j.admissionStarted, nil)
-			lifecycle := m.metrics.beginLifecycle(j.req.Label)
-			pending, err := m.broadcast(ctx, j.req)
-			if err != nil {
-				outcome := OutcomeSubmissionError
-				if ctx.Err() != nil {
-					outcome = OutcomeTrackingStopped
-				}
-				lifecycle.finish(outcome, nil)
-				j.res <- Result{
-					Outcome:     outcome,
-					Err:         err,
-					NotAdmitted: errors.Is(err, errNonceLanePaused) || ctx.Err() != nil,
-				}
-				m.releaseLifecycleSlot()
-				continue
-			}
-			lifecycle.transitionPhase(lifecyclePhasePending)
-			pending.lifecycle = lifecycle
-			pending.result = j.res
-			m.trackUnminedTransaction(pending)
-			m.lifecycleWG.Go(func() {
-				defer m.releaseLifecycleSlot()
-				m.complete(lifecycleCtx, pending)
-			})
 		}
 	}
+}
+
+// runJob owns a single accepted request from preparation to its terminal result. Only this worker
+// can advance the queue. A separate deadline path can return a terminal result even when a custom
+// signer ignores cancellation; signAndSend checks cancellation again before any later broadcast.
+func (m *Manager) runJob(ctx context.Context, next job) bool {
+	lifeCtx, stop := context.WithCancelCause(context.WithoutCancel(ctx))
+	defer stop(errManagerStopped)
+	finished := make(chan struct{})
+	m.lifecycleWG.Go(func() {
+		defer close(finished)
+		defer m.releaseLifecycleSlot()
+		m.executeJob(ctx, lifeCtx, next)
+	})
+	select {
+	case <-finished:
+		return true
+	case <-ctx.Done():
+		close(m.stopping)
+		m.requestActiveCancellation()
+		timer := time.NewTimer(m.cfg.ShutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-finished:
+		case <-timer.C:
+			stop(errShutdownTimeout)
+			hash := common.Hash{}
+			if active := m.active.Load(); active != nil {
+				hash = active.originalHash
+			}
+			next.finish(Result{Hash: hash, Outcome: OutcomeTrackingStopped, Err: errShutdownTimeout})
+			m.log.Error(errShutdownTimeout, "transaction lifecycle drain deadline reached", "timeout", m.cfg.ShutdownTimeout)
+		}
+		return false
+	}
+}
+
+func (m *Manager) executeJob(preparationCtx, lifeCtx context.Context, next job) {
+	err := preparationCtx.Err()
+	if err == nil {
+		err = m.nonceConflictError()
+	}
+	m.metrics.finishAdmission(next.req.Label, next.admissionStarted, err)
+	if err != nil {
+		next.finish(notAdmittedResult(err))
+		return
+	}
+	observation := m.metrics.beginLifecycle(next.req.Label)
+	pending, err := m.broadcast(preparationCtx, next.req)
+	if err != nil {
+		outcome := OutcomeSubmissionError
+		if preparationCtx.Err() != nil {
+			outcome = OutcomeTrackingStopped
+		}
+		observation.finish(outcome, nil)
+		next.finish(Result{
+			Outcome: outcome, Err: err, NotAdmitted: errors.Is(err, errNonceLanePaused) || preparationCtx.Err() != nil,
+		})
+		return
+	}
+	pending.lifecycle = observation
+	pending.lifecycle.transitionPhase(lifecyclePhasePending)
+	m.trackUnminedTransaction(pending)
+	// Cancellation may arrive while broadcast was resolving its signed hash, before publication.
+	if preparationCtx.Err() != nil {
+		requestCancellation(pending)
+	}
+	next.finish(m.complete(lifeCtx, pending))
 }
 
 // Send enqueues a transaction and blocks until it is confirmed or fails. Safe for concurrent
@@ -513,87 +514,106 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 }
 
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
-	admissionStarted := time.Now()
+	started := time.Now()
 	m.addAdmissionDemand()
-	releaseDemandOnReturn := true
+	acquired, transferred := false, false
 	defer func() {
-		if releaseDemandOnReturn {
-			m.releaseAdmissionDemand()
+		if transferred {
+			return
 		}
+		if acquired {
+			<-m.lifecycleSlot
+		}
+		m.releaseAdmissionDemand()
 	}()
-
 	admissionCtx := ctx
-	cancel := func() {}
 	if !req.CancelAt.IsZero() {
+		var cancel context.CancelFunc
 		admissionCtx, cancel = context.WithDeadline(ctx, req.CancelAt)
+		defer cancel()
 	}
-	defer cancel()
-	if err := admissionCtx.Err(); err != nil {
-		return m.admissionFailure(ctx, req, admissionStarted, err)
+	var err error
+	acquired, err = m.acquireLifecycle(admissionCtx, try)
+	if err != nil {
+		return m.admissionFailure(ctx, req, started, err)
 	}
+	if !acquired {
+		return nil, false
+	}
+	result := make(chan Result, 1)
+	next := job{completion: &completion{result: result}, req: cloneRequest(req), admissionStarted: started}
 	select {
+	case m.queue <- next:
+		// From this point the worker owns both demand and slot, including during shutdown.
+		transferred = true
+		return result, true
+	case <-admissionCtx.Done():
+		return m.admissionFailure(ctx, req, started, admissionCtx.Err())
 	case <-m.stopping:
-		return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
-	default:
+		return m.admissionFailure(ctx, req, started, errManagerStopped)
+	}
+}
+
+func (m *Manager) acquireLifecycle(ctx context.Context, try bool) (acquired bool, err error) {
+	if err := m.admissionContextError(ctx); err != nil {
+		return false, err
 	}
 	if try {
-		if m.nonceConflictError() != nil {
-			return nil, false
+		if !m.Available() {
+			return false, nil
 		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		default:
-			return nil, false
-		}
-		if m.nonceConflictError() != nil {
-			<-m.lifecycleSlot
-			return nil, false
+			return false, nil
 		}
 	} else {
-		if err := m.waitForNonceLane(admissionCtx); err != nil {
-			return m.admissionFailure(ctx, req, admissionStarted, err)
+		if err := m.waitForNonceLane(ctx); err != nil {
+			return false, err
 		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
-		case <-admissionCtx.Done():
-			return m.admissionFailure(ctx, req, admissionStarted, admissionCtx.Err())
+		case <-ctx.Done():
+			return false, ctx.Err()
 		case <-m.stopping:
-			return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
-		}
-		if err := m.waitForNonceLane(admissionCtx); err != nil {
-			<-m.lifecycleSlot
-			return m.admissionFailure(ctx, req, admissionStarted, err)
+			return false, errManagerStopped
 		}
 	}
-	res := make(chan Result, 1)
+	// Admission may have paused while the previous owner released its slot.
+	if try {
+		if m.nonceConflictError() == nil {
+			return true, nil
+		}
+	} else {
+		err = m.waitForNonceLane(ctx)
+		if err == nil {
+			return true, nil
+		}
+	}
+	<-m.lifecycleSlot
+	return false, err
+}
+
+func (m *Manager) admissionContextError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
-	case m.queue <- job{req: cloneRequest(req), res: res, admissionStarted: admissionStarted}:
-		releaseDemandOnReturn = false
-	case <-admissionCtx.Done():
-		m.releaseLifecycleSlot()
-		releaseDemandOnReturn = false
-		return m.admissionFailure(ctx, req, admissionStarted, admissionCtx.Err())
 	case <-m.stopping:
-		m.releaseLifecycleSlot()
-		releaseDemandOnReturn = false
-		return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
+		return errManagerStopped
+	default:
+		return nil
 	}
-	return res, true
 }
 
 func (m *Manager) waitForNonceLane(ctx context.Context) error {
 	changes, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := m.admissionContextError(ctx); err != nil {
 			return err
 		}
-		select {
-		case <-m.stopping:
-			return errManagerStopped
-		default:
-		}
-		if m.nonceConflictError() == nil {
+		if m.Available() {
 			return nil
 		}
 		select {
@@ -670,97 +690,80 @@ func (m *Manager) requestLog(req Request) logr.Logger {
 	return m.log.WithValues("solver", req.Solver)
 }
 
+// Preparation builds one owned pending record. Only a signed transaction can
+// commit its nonce: an ambiguous send keeps the signed bytes for reconciliation.
 func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransaction, error) {
-	broadcastCtx := ctx
-	cancel := func() {}
-	if !req.CancelAt.IsZero() {
-		broadcastCtx, cancel = context.WithDeadline(ctx, req.CancelAt)
+	deadline := req.CancelAt
+	if deadline.IsZero() {
+		if inherited, ok := ctx.Deadline(); ok {
+			deadline = inherited
+		}
+	}
+	var cancel context.CancelFunc
+	if deadline.IsZero() {
+		ctx, cancel = context.WithCancel(ctx)
+	} else {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
 	}
 	defer cancel()
-	if err := broadcastCtx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, errors.Errorf("send %q before broadcast: %w", req.Label, err)
 	}
-
 	if req.MaxFeePerGas != nil && req.MaxFeePerGas.Sign() <= 0 {
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
 	}
-	normalLimit := m.normalFeeLimit(req)
-	fees, err := m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
+	pending := &pendingTransaction{req: req, log: m.requestLog(req), gas: req.GasLimit, value: new(big.Int)}
+	if req.Value != nil {
+		pending.value.Set(req.Value)
+	}
+	fees, err := m.currentFees(ctx, reserveFeeBump(m.normalFeeLimit(req)))
 	if err != nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, err)
 	}
-
-	gas := req.GasLimit
-	if gas == 0 {
-		gas, err = m.estimateGas(broadcastCtx, req)
+	pending.fees = cloneFeeQuote(fees)
+	if pending.gas == 0 {
+		pending.gas, err = m.estimateGas(ctx, req)
 		if err != nil {
 			return nil, err
 		}
 	}
-	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
-	if obsoleteErr != nil {
-		// Obsolescence is only a liveness optimization. The solver already validated the call,
-		// and execution-time contracts remain authoritative, so an unknown check keeps it alive.
-		m.requestLog(req).Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
-			"label", req.Label)
-	} else if obsolete {
+	obsolete, err := m.requestObsolete(ctx, req)
+	switch {
+	case err != nil:
+		// Unknown obsolescence is not a rejection: execution contracts are authoritative.
+		pending.log.Error(err, "transaction obsolescence check unavailable; continuing", "label", req.Label)
+	case obsolete:
 		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
 	}
-
-	value := req.Value
-	if value == nil {
-		value = new(big.Int)
-	}
-	m.requestLog(req).V(1).Info(
-		"transaction prepared",
-		"label", req.Label,
-		"to", req.To.Hex(),
-		"value", value.String(),
-		"calldataBytes", len(req.Data),
-		"gasLimit", gas,
-		"baseFeePerGas", fees.baseFee.String(),
-		"maxPriorityFeePerGas", fees.tip.String(),
-		"maxFeePerGas", fees.maxFee.String(),
-		"requestMaxFeePerGas", optionalBigString(req.MaxFeePerGas),
-	)
-
-	nonce, err := m.nextNonce(broadcastCtx)
+	pending.log.V(1).Info("transaction prepared", "label", req.Label, "to", req.To.Hex(),
+		"value", pending.value.String(), "calldataBytes", len(req.Data), "gasLimit", pending.gas,
+		"baseFeePerGas", fees.baseFee.String(), "maxPriorityFeePerGas", fees.tip.String(),
+		"maxFeePerGas", fees.maxFee.String(), "requestMaxFeePerGas", optionalBigString(req.MaxFeePerGas))
+	pending.nonce, err = m.nextNonce(ctx)
 	if err != nil {
 		return nil, err
 	}
-	signed, sendErr := m.signAndSend(
-		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false,
-	)
+	signed, sendErr := m.signAndSend(ctx, pending.nonce, req.To, req.Data, pending.value, pending.gas, fees, false)
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
-	hash := signed.Hash()
-	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
-	if broadcastUncertain {
-		m.requestLog(req).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
-			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
-	} else if sendErr != nil {
-		m.requestLog(req).Info("transaction already known by write RPC",
-			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
-	} else {
-		m.requestLog(req).Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+	pending.originalHash = signed.Hash()
+	uncertain := sendErr != nil && !isKnownTransactionError(sendErr)
+	pending.attempts = []txAttempt{{hash: pending.originalHash, tx: signed, exactRebroadcastPending: uncertain}}
+	log := pending.log.WithValues("label", req.Label, "hash", pending.originalHash.Hex(), "nonce", pending.nonce)
+	switch {
+	case uncertain:
+		log.Error(sendErr, "transaction broadcast uncertain; tracking signed hash")
+	case sendErr != nil:
+		log.Info("transaction already known by write RPC", "rpcResult", sendErr.Error())
+	default:
+		log.Info("sent")
 	}
-	m.commitNonce(nonce)
-	return &pendingTransaction{
-		log:   m.requestLog(req),
-		req:   req,
-		nonce: nonce,
-		gas:   gas,
-		value: new(big.Int).Set(value),
-		fees:  cloneFeeQuote(fees),
-		attempts: []txAttempt{{
-			hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
-		}},
-		originalHash: hash,
-	}, nil
+	m.commitNonce(pending.nonce)
+	return pending, nil
 }
 
-func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
+func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) Result {
 	defer m.removeUnminedTransaction(pending)
 	outcome := m.waitForPendingTransaction(ctx, pending)
 	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
@@ -774,15 +777,16 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	if outcome.Receipt != nil {
 		m.clearNonceConflict(pending.nonce)
 	}
-	pending.deliver(outcome)
+	return outcome
 }
 
-func (pending *pendingTransaction) deliver(result Result) {
-	if pending.result == nil {
-		return
-	}
-	pending.resultOnce.Do(func() { pending.result <- result })
+// completion is the sole terminal-result owner, shared by the worker and hard-stop path.
+type completion struct {
+	once   sync.Once
+	result chan Result
 }
+
+func (c *completion) finish(result Result) { c.once.Do(func() { c.result <- result }) }
 
 func (m *Manager) confirmations(req Request) uint64 {
 	if req.Confirmations != nil {
@@ -791,90 +795,91 @@ func (m *Manager) confirmations(req Request) uint64 {
 	return m.cfg.Confirmations
 }
 
+// The admitted lifecycle owns all receipt, replacement and cancellation decisions.
+// Cancellation is a one-way transition: its wakeup channels are disabled after entry.
 func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendingTransaction) Result {
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
 	replace := time.NewTicker(m.cfg.ReplacementInterval)
 	defer replace.Stop()
-	timeout := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
-	defer timeout.Stop()
-
+	deadline := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
+	defer deadline.Stop()
+	cancelC, deadlineC := pending.cancelRequested, deadline.C
 	cancelling := false
-	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
-	startCancellation := func(reason string) {
-		if cancelling {
-			return
+	for {
+		if result, done := m.receiptResult(ctx, pending); done {
+			return result
 		}
-		if reason == "" {
+		reason := ""
+		switch {
+		case ctx.Err() != nil:
+			return Result{Hash: pending.originalHash, Outcome: OutcomeTrackingStopped, Err: context.Cause(ctx)}
+		default:
 			select {
-			case <-pending.cancelRequested:
+			case <-ctx.Done():
+				return Result{Hash: pending.originalHash, Outcome: OutcomeTrackingStopped, Err: context.Cause(ctx)}
+			case <-cancelC:
 				reason = "shutdown"
-			default:
-				reason = "pending_timeout"
-				if pending.cancelDeadline.Equal(pending.req.CancelAt) {
-					reason = "request_deadline"
+			case <-deadlineC:
+				reason = pending.cancellationReason()
+			case <-poll.C:
+				if cancelling || !m.pendingObsolete(ctx, pending) {
+					continue
+				}
+				reason = "obsolete"
+			case <-replace.C:
+				if !cancelling && pending.cancellationDue(time.Now()) {
+					reason = pending.cancellationReason()
 				}
 			}
 		}
-		cancelling, cancelRequested, timeoutC = true, nil, nil
-		pending.log.Info("pending transaction cancellation requested",
-			"label", pending.req.Label,
-			"hash", pending.originalHash.Hex(),
-			"nonce", pending.nonce,
-			"reason", reason,
-			"deadline", pending.cancelDeadline.UTC().Format(time.RFC3339Nano),
-			"pendingTimeout", m.cfg.PendingTimeout.String(),
-		)
-	}
-	for {
-		if receiptResult, done := m.receiptResult(ctx, pending); done {
-			return receiptResult
+		if reason != "" && !cancelling {
+			cancelling = true
+			pending.logCancellation(reason, m.cfg.PendingTimeout)
 		}
-		select {
-		case <-ctx.Done():
-			return Result{
-				Hash:    pending.attempts[0].hash,
-				Outcome: OutcomeTrackingStopped,
-				Err:     context.Cause(ctx),
-			}
-		case <-cancelRequested:
-			startCancellation("shutdown")
-			m.tryReplace(ctx, pending, true)
-		case <-poll.C:
-			if cancelling || pending.req.Obsolete == nil {
-				continue
-			}
-			obsolete, err := m.requestObsolete(ctx, pending.req)
-			if err != nil {
-				pending.obsolescenceReads.failed(pending.log, err,
-					"pending transaction obsolescence check unavailable; retaining lifecycle",
-					"label", pending.req.Label,
-					"hash", pending.originalHash.Hex(),
-					"nonce", pending.nonce,
-				)
-				continue
-			}
-			pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
-				"label", pending.req.Label, "nonce", pending.nonce)
-			if !obsolete {
-				continue
-			}
-			startCancellation("obsolete")
-			m.tryReplace(ctx, pending, true)
-		case <-replace.C:
-			if !cancelling && pending.cancellationDue(time.Now()) {
-				startCancellation("")
-			}
-			if m.tryReplace(ctx, pending, cancelling) {
-				// A fee lookup can cross the deadline and promote this replacement to
-				// cancellation. Disarm the expired timer before the next select.
-				startCancellation("")
-			}
-		case <-timeoutC:
-			startCancellation("")
-			m.tryReplace(ctx, pending, true)
+		if m.tryReplace(ctx, pending, cancelling) && !cancelling {
+			// Fee lookup may cross CancelAt; the sender promotes that attempt to cancellation.
+			cancelling = true
+			pending.logCancellation(pending.cancellationReason(), m.cfg.PendingTimeout)
+		}
+		if cancelling {
+			cancelC, deadlineC = nil, nil
 		}
 	}
+}
+
+func (pending *pendingTransaction) cancellationReason() string {
+	select {
+	case <-pending.cancelRequested:
+		return "shutdown"
+	default:
+	}
+	if pending.cancelDeadline.Equal(pending.req.CancelAt) {
+		return "request_deadline"
+	}
+	return "pending_timeout"
+}
+
+func (pending *pendingTransaction) logCancellation(reason string, timeout time.Duration) {
+	pending.log.Info("pending transaction cancellation requested", "label", pending.req.Label,
+		"hash", pending.originalHash.Hex(), "nonce", pending.nonce, "reason", reason,
+		"deadline", pending.cancelDeadline.UTC().Format(time.RFC3339Nano), "pendingTimeout", timeout.String())
+}
+
+func (m *Manager) pendingObsolete(ctx context.Context, pending *pendingTransaction) bool {
+	if pending.req.Obsolete == nil {
+		return false
+	}
+	obsolete, err := m.requestObsolete(ctx, pending.req)
+	if err != nil {
+		pending.obsolescenceReads.failed(pending.log, err,
+			"pending transaction obsolescence check unavailable; retaining lifecycle",
+			"label", pending.req.Label, "hash", pending.originalHash.Hex(), "nonce", pending.nonce)
+		return false
+	}
+	pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
+		"label", pending.req.Label, "nonce", pending.nonce)
+	return obsolete
 }
 
 func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error) {
@@ -906,131 +911,94 @@ func (m *Manager) receiptReadsRecovered(pending *pendingTransaction) {
 		"label", pending.req.Label, "nonce", pending.nonce)
 }
 
-func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancelLookup()
-	attempts := len(pending.attempts)
-	if attempts == 0 {
-		return Result{}, false
-	}
-	start := pending.receiptCursor % attempts
-	// Failures are judged per sweep, not per hash: with several tracked attempts one hash answering
-	// while another times out must not restart the streak every poll.
-	var (
-		readErr     error
-		readAttempt txAttempt
-		readOK      bool
-	)
-	for checked := range attempts {
+// pendingReceipt performs one bounded, rotating sweep. Read failures belong to the
+// whole sweep, so a healthy hash cannot repeatedly reset another hash's failure streak.
+func (m *Manager) pendingReceipt(ctx context.Context, pending *pendingTransaction) (*types.Receipt, txAttempt) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	var firstErr error
+	var failed txAttempt
+	readOK := false
+	count := len(pending.attempts)
+	for range count {
 		if lookupCtx.Err() != nil {
 			break
 		}
-		i := (start + checked) % attempts
-		pending.receiptCursor = (i + 1) % attempts
-		attempt := pending.attempts[i]
+		index := pending.receiptCursor % count
+		pending.receiptCursor = (index + 1) % count
+		attempt := pending.attempts[index]
 		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
 		if errors.Is(err, ethereum.NotFound) {
 			readOK = true
 			continue
 		}
 		if err != nil {
-			if readErr == nil {
-				readErr, readAttempt = err, attempt
+			if firstErr == nil {
+				firstErr, failed = err, attempt
 			}
 			continue
 		}
 		readOK = true
-		m.receiptReadsRecovered(pending)
 		if err := validateReceipt(attempt.hash, receipt); err != nil {
-			pending.log.Error(err, "invalid pending transaction receipt",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
+			pending.log.Error(err, "invalid pending transaction receipt", "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce)
 			continue
 		}
-		cancelLookup()
-		if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
-			if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
-				pending.log.Error(err, "owned receipt cannot reconcile nonce conflict",
-					"label", pending.req.Label,
-					"hash", attempt.hash.Hex(),
-					"nonce", pending.nonce,
-				)
-				continue
-			}
-			m.clearNonceConflict(pending.nonce)
-		}
-		pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
-		confirmations := m.confirmations(pending.req)
-		receipt, err = m.waitForConfirmations(ctx, pending.log, attempt.hash, receipt, confirmations)
-		if errors.Is(err, errReceiptReorged) {
-			pending.lifecycle.transitionPhase(lifecyclePhasePending)
-			if pending.nonceConflictHash != (common.Hash{}) {
-				m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
-			}
-			pending.log.Info("transaction inclusion reorged; resuming pending lifecycle",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
-			return Result{}, false
-		}
-		if receipt.Status == types.ReceiptStatusFailed {
-			revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
-			if err != nil {
-				revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
-			}
-			pending.log.Error(revertErr, "transaction reverted",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value),
-			)
-			return Result{
-				Hash:    attempt.hash,
-				Receipt: receipt,
-				Outcome: OutcomeReverted,
-				Err:     revertErr,
-			}, true
-		}
-		if err != nil {
-			outcome := OutcomeIncludedUnconfirmed
-			if attempt.cancellation {
-				outcome = OutcomeCancelled
-			}
-			return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
-		}
-		if attempt.cancellation {
-			return Result{
-				Hash:    attempt.hash,
-				Receipt: receipt,
-				Outcome: OutcomeCancelled,
-				Err: errors.Errorf(
-					"send %q: pending transaction cancelled at nonce %d",
-					pending.req.Label, pending.nonce,
-				),
-			}, true
-		}
-		pending.log.V(1).Info(
-			"transaction confirmed",
-			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
-			"nonce", pending.nonce,
-			"blockNumber", optionalBigString(receipt.BlockNumber),
-			"gasUsed", receipt.GasUsed,
-			"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice),
-			"confirmations", confirmations,
-		)
-		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
+		m.receiptReadsRecovered(pending)
+		return receipt, attempt
 	}
-	switch {
-	case readErr != nil:
-		m.receiptReadFailed(pending, readAttempt, readErr)
-	case readOK:
+	if firstErr != nil {
+		m.receiptReadFailed(pending, failed, firstErr)
+	} else if readOK {
 		m.receiptReadsRecovered(pending)
 	}
-	return Result{}, false
+	return nil, txAttempt{}
+}
+
+func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
+	receipt, attempt := m.pendingReceipt(ctx, pending)
+	if receipt == nil {
+		return Result{}, false
+	}
+	if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
+		if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
+			pending.log.Error(err, "owned receipt cannot reconcile nonce conflict", "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce)
+			return Result{}, false
+		}
+		m.clearNonceConflict(pending.nonce)
+	}
+	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
+	receipt, err := m.waitForConfirmations(ctx, pending.log, attempt.hash, receipt, m.confirmations(pending.req))
+	if errors.Is(err, errReceiptReorged) {
+		pending.lifecycle.transitionPhase(lifecyclePhasePending)
+		if pending.nonceConflictHash != (common.Hash{}) {
+			m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
+		}
+		pending.log.Info("transaction inclusion reorged; resuming pending lifecycle", "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce)
+		return Result{}, false
+	}
+	result := Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed, Err: err}
+	switch {
+	case receipt.Status == types.ReceiptStatusFailed:
+		result.Outcome = OutcomeReverted
+		result.Err = errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
+		if err != nil {
+			result.Err = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
+		}
+		pending.log.Error(result.Err, "transaction reverted", "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce,
+			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value))
+	case attempt.cancellation:
+		result.Outcome = OutcomeCancelled
+		if err == nil {
+			result.Err = errors.Errorf("send %q: pending transaction cancelled at nonce %d", pending.req.Label, pending.nonce)
+		}
+	case err != nil:
+		result.Outcome = OutcomeIncludedUnconfirmed
+	default:
+		pending.log.V(1).Info("transaction confirmed", "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce,
+			"blockNumber", optionalBigString(receipt.BlockNumber), "gasUsed", receipt.GasUsed,
+			"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice), "confirmations", m.confirmations(pending.req))
+	}
+	return result, true
 }
 
 // tryReplace reports whether cancellation mode was entered, even if submission fails.
@@ -1042,92 +1010,65 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
 		return false
 	}
-	limit := m.normalFeeLimit(pending.req)
-	if cancellation {
-		limit = m.globalFeeLimit()
-	}
-	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
-	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
-	}
-	if err != nil {
-		if errors.Is(err, errReplacementLimitReached) &&
-			m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
+	var fees feeQuote
+	for {
+		limit := m.normalFeeLimit(pending.req)
+		if cancellation {
+			limit = m.globalFeeLimit()
+		}
+		var err error
+		fees, err = m.nextReplacementFees(ctx, pending.fees, limit)
+		// Pricing can cross the fill deadline. Reprice the cancellation once under
+		// its own ceiling; never recursively re-enter the replacement lifecycle.
+		if !cancellation && pending.cancellationDue(time.Now()) {
+			cancellation = true
+			continue
+		}
+		if err != nil {
+			if !errors.Is(err, errReplacementLimitReached) || !m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
+				pending.log.Error(err, "cannot replace pending transaction", "label", pending.req.Label, "nonce", pending.nonce, "cancellation", cancellation)
+			}
 			return cancellation
 		}
-		pending.log.Error(err, "cannot replace pending transaction",
-			"label", pending.req.Label,
-			"nonce", pending.nonce,
-			"cancellation", cancellation,
-		)
-		return cancellation
+		break
 	}
-	to := pending.req.To
-	data := pending.req.Data
-	value := pending.value
-	gas := pending.gas
+	to, data, value, gas := pending.req.To, pending.req.Data, pending.value, pending.gas
 	if cancellation {
-		to = m.signer.Address()
-		data = nil
-		value = new(big.Int)
-		gas = cancellationGasLimit
-	}
-	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
+		to, data, value, gas = m.signer.Address(), nil, new(big.Int), cancellationGasLimit
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
 	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true)
 	cancelSend()
+	log := pending.log.WithValues("label", pending.req.Label, "nonce", pending.nonce, "cancellation", cancellation)
 	if signed == nil {
-		pending.log.Error(sendErr, "pending transaction replacement rejected",
-			"label", pending.req.Label,
-			"nonce", pending.nonce,
-			"cancellation", cancellation,
-		)
+		log.Error(sendErr, "pending transaction replacement rejected")
 		return cancellation
 	}
 	hash := signed.Hash()
-	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
+	log = log.WithValues("hash", hash.Hex())
+	known := isKnownTransactionError(sendErr)
+	uncertain := sendErr != nil && !known
 	pending.fees = cloneFeeQuote(fees)
 	pending.attempts = append(pending.attempts, txAttempt{
-		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
+		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: uncertain,
 	})
 	if isNonceConsumedError(sendErr) {
 		pending.nonceConflictHash = hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
 	}
-	if broadcastUncertain {
-		pending.log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash",
-			"label", pending.req.Label,
-			"hash", hash.Hex(),
-			"nonce", pending.nonce,
-			"cancellation", cancellation,
-		)
-		return cancellation
+	switch {
+	case uncertain:
+		log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash")
+	case known:
+		log.Info("replacement already known by write RPC", "rpcResult", sendErr.Error())
+	default:
+		kind := replacementKindReplacement
+		if cancellation {
+			kind = replacementKindCancellation
+		}
+		m.metrics.replacement(pending.req.Label, kind)
+		log.Info("pending transaction replaced", "maxFeePerGas", fees.maxFee.String(), "maxPriorityFeePerGas", fees.tip.String())
 	}
-	if sendErr != nil {
-		pending.log.Info("replacement already known by write RPC",
-			"label", pending.req.Label,
-			"hash", hash.Hex(),
-			"nonce", pending.nonce,
-			"cancellation", cancellation,
-			"rpcResult", sendErr.Error(),
-		)
-		return cancellation
-	}
-	kind := replacementKindReplacement
-	if cancellation {
-		kind = replacementKindCancellation
-	}
-	m.metrics.replacement(pending.req.Label, kind)
-	pending.log.Info("pending transaction replaced",
-		"label", pending.req.Label,
-		"hash", hash.Hex(),
-		"nonce", pending.nonce,
-		"cancellation", cancellation,
-		"maxFeePerGas", fees.maxFee.String(),
-		"maxPriorityFeePerGas", fees.tip.String(),
-	)
 	return cancellation
 }
 
@@ -1135,92 +1076,62 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 // before escalating its fees. It never appends a duplicate attempt or changes the cached fee state.
 func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pendingTransaction) bool {
 	now := time.Now()
-	if pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now) {
+	if len(pending.attempts) == 0 || pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now) {
 		return false
 	}
-	if len(pending.attempts) == 0 {
+	latest := &pending.attempts[len(pending.attempts)-1]
+	if latest.tx == nil || latest.cancellation || !latest.exactRebroadcastPending {
 		return false
 	}
-	attempt := &pending.attempts[len(pending.attempts)-1]
-	if attempt.cancellation || attempt.tx == nil || !attempt.exactRebroadcastPending {
-		return false
-	}
-	attempt.exactRebroadcastPending = false
-	err := m.sendSigned(ctx, attempt.tx, true)
-	known := isKnownTransactionError(err)
-	if isNonceConsumedError(err) {
-		pending.nonceConflictHash = attempt.hash
-		m.reconcileExistingLifecycleNonce(ctx, pending)
-	}
-	switch {
-	case err == nil:
-		pending.log.Info("uncertain transaction rebroadcast",
-			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
-			"nonce", pending.nonce,
-			"reason", "ambiguous-broadcast",
-		)
-	case known:
-		pending.log.Info("uncertain transaction already known by write RPC",
-			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
-			"nonce", pending.nonce,
-			"reason", "ambiguous-broadcast",
-			"rpcResult", err.Error(),
-		)
-	default:
-		pending.log.Error(err, "uncertain transaction exact rebroadcast failed; replacement deferred",
-			"label", pending.req.Label,
-			"hash", attempt.hash.Hex(),
-			"nonce", pending.nonce,
-			"reason", "ambiguous-broadcast",
-		)
-	}
+	latest.exactRebroadcastPending = false
+	m.rebroadcast(ctx, pending, *latest, true)
 	return true
 }
 
 func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time.Time) bool {
-	if pending.cancelDeadline.IsZero() {
-		return true
-	}
-	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval
+	return pending.cancelDeadline.IsZero() || now.Add(m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval).Before(pending.cancelDeadline)
 }
 
-func (m *Manager) rebroadcastLatestAttempt(
-	ctx context.Context,
-	pending *pendingTransaction,
-	cancellation bool,
-) bool {
-	for i := len(pending.attempts) - 1; i >= 0; i-- {
-		attempt := pending.attempts[i]
-		if attempt.cancellation != cancellation || attempt.tx == nil {
-			continue
+func (m *Manager) rebroadcastLatestAttempt(ctx context.Context, pending *pendingTransaction, cancellation bool) bool {
+	for index := len(pending.attempts); index > 0; index-- {
+		attempt := pending.attempts[index-1]
+		if attempt.tx != nil && attempt.cancellation == cancellation {
+			m.rebroadcast(ctx, pending, attempt, false)
+			return true
 		}
-		sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
-		err := m.sendSigned(sendCtx, attempt.tx, true)
-		cancelSend()
-		if isNonceConsumedError(err) {
-			pending.nonceConflictHash = attempt.hash
-			m.reconcileExistingLifecycleNonce(ctx, pending)
-		}
-		if err != nil {
-			pending.log.Error(err, "capped transaction rebroadcast failed",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"cancellation", cancellation,
-			)
-		} else {
-			pending.log.Info("capped transaction rebroadcast",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"cancellation", cancellation,
-			)
-		}
-		return true
 	}
 	return false
+}
+
+// Both retries resend stored bytes. They never advance the attempt list or its
+// fee baseline. Nonce reconciliation belongs here for every exact rebroadcast.
+func (m *Manager) rebroadcast(ctx context.Context, pending *pendingTransaction, attempt txAttempt, uncertain bool) {
+	ctx, cancel := replacementBroadcastContext(ctx, pending, attempt.cancellation)
+	defer cancel()
+	err := m.sendSigned(ctx, attempt.tx, true)
+	if isNonceConsumedError(err) {
+		pending.nonceConflictHash = attempt.hash
+		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
+	log := pending.log.WithValues("label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce)
+	if !uncertain {
+		log = log.WithValues("cancellation", attempt.cancellation)
+		if err != nil {
+			log.Error(err, "capped transaction rebroadcast failed")
+		} else {
+			log.Info("capped transaction rebroadcast")
+		}
+		return
+	}
+	log = log.WithValues("reason", "ambiguous-broadcast")
+	switch {
+	case err == nil:
+		log.Info("uncertain transaction rebroadcast")
+	case isKnownTransactionError(err):
+		log.Info("uncertain transaction already known by write RPC", "rpcResult", err.Error())
+	default:
+		log.Error(err, "uncertain transaction exact rebroadcast failed; replacement deferred")
+	}
 }
 
 // Normal replacement broadcasts must not outlive the request's cancellation deadline. Cancellation
@@ -1236,50 +1147,47 @@ func replacementBroadcastContext(
 	return context.WithDeadline(ctx, pending.cancelDeadline)
 }
 
-func (m *Manager) nextReplacementFees(
-	ctx context.Context,
-	previous feeQuote,
-	limit *big.Int,
-) (feeQuote, error) {
-	current, err := m.currentFees(ctx, nil)
-	if err != nil && !errors.Is(err, errFreshFeesUnavailable) {
+func (m *Manager) nextReplacementFees(ctx context.Context, previous feeQuote, limit *big.Int) (feeQuote, error) {
+	fresh, err := m.currentFees(ctx, nil)
+	if err == nil {
+		return replacementFees(previous, &fresh, limit)
+	}
+	if !errors.Is(err, errFreshFeesUnavailable) {
 		return feeQuote{}, err
 	}
-	requiredTip := bumpFee(previous.tip)
-	requiredMaxFee := bumpFee(previous.maxFee)
-	next := feeQuote{
-		baseFee: new(big.Int).Set(previous.baseFee),
-		tip:     new(big.Int).Set(requiredTip),
-		maxFee:  new(big.Int).Set(requiredMaxFee),
-	}
-	if err == nil {
-		next.baseFee.Set(current.baseFee)
-		next.maxFee = maxBigCopy(current.maxFee, next.maxFee)
-	} else {
-		m.log.V(1).Info("fresh replacement fees unavailable; using cached bump", "error", err)
+	m.log.V(1).Info("fresh replacement fees unavailable; using cached bump", "error", err)
+	return replacementFees(previous, nil, limit)
+}
+
+// The last signed fees impose replacement floors even when fresh reads fail.
+// A configured cap can clip fresh recommendations, never those protocol floors.
+func replacementFees(previous feeQuote, fresh *feeQuote, limit *big.Int) (feeQuote, error) {
+	floor := feeQuote{tip: bumpFee(previous.tip), maxFee: bumpFee(previous.maxFee)}
+	next := feeQuote{baseFee: new(big.Int).Set(previous.baseFee), tip: new(big.Int).Set(floor.tip), maxFee: new(big.Int).Set(floor.maxFee)}
+	if fresh != nil {
+		next.baseFee.Set(fresh.baseFee)
+		if fresh.maxFee.Cmp(next.maxFee) > 0 {
+			next.maxFee.Set(fresh.maxFee)
+		}
 	}
 	if limit != nil && next.maxFee.Cmp(limit) > 0 {
 		next.maxFee.Set(limit)
 	}
-	effectiveTipLimit := new(big.Int).Sub(next.maxFee, next.baseFee)
-	if effectiveTipLimit.Sign() < 0 {
-		return feeQuote{}, errors.Errorf(
-			"replacement base fee %s exceeds fee limit %s", next.baseFee, next.maxFee,
-		)
+	headroom := new(big.Int).Sub(next.maxFee, next.baseFee)
+	if headroom.Sign() < 0 {
+		return feeQuote{}, errors.Errorf("replacement base fee %s exceeds fee limit %s", next.baseFee, next.maxFee)
 	}
-	if err == nil {
-		freshTip := new(big.Int).Set(current.tip)
-		if freshTip.Cmp(effectiveTipLimit) > 0 {
-			freshTip.Set(effectiveTipLimit)
+	if fresh != nil {
+		recommended := new(big.Int).Set(fresh.tip)
+		if recommended.Cmp(headroom) > 0 {
+			recommended.Set(headroom)
 		}
-		next.tip = maxBigCopy(freshTip, requiredTip)
+		if recommended.Cmp(next.tip) > 0 {
+			next.tip.Set(recommended)
+		}
 	}
-	if next.maxFee.Cmp(requiredMaxFee) < 0 || next.tip.Cmp(next.maxFee) > 0 {
-		return feeQuote{}, errors.Errorf(
-			"%w: previous max fee %s tip %s, limit %s",
-			errReplacementLimitReached,
-			previous.maxFee, previous.tip, feeLimitString(limit),
-		)
+	if next.maxFee.Cmp(floor.maxFee) < 0 || next.tip.Cmp(next.maxFee) > 0 {
+		return feeQuote{}, errors.Errorf("%w: previous max fee %s tip %s, limit %s", errReplacementLimitReached, previous.maxFee, previous.tip, feeLimitString(limit))
 	}
 	return next, nil
 }
@@ -1306,40 +1214,18 @@ func (m *Manager) trackUnminedTransaction(pending *pendingTransaction) {
 	if pending.cancelRequested == nil {
 		pending.cancelRequested = make(chan struct{})
 	}
-	m.unminedMu.Lock()
-	defer m.unminedMu.Unlock()
-	if m.unmined != nil {
+	if !m.active.CompareAndSwap(nil, pending) {
 		panic("txmanager: multiple signed lifecycles")
 	}
-	m.unmined = pending
 }
 
 func (m *Manager) removeUnminedTransaction(pending *pendingTransaction) {
-	m.unminedMu.Lock()
-	defer m.unminedMu.Unlock()
-	if m.unmined == pending {
-		m.unmined = nil
-	}
+	m.active.CompareAndSwap(pending, nil)
 }
 
 func (m *Manager) requestActiveCancellation() {
-	m.unminedMu.Lock()
-	defer m.unminedMu.Unlock()
-	if m.unmined != nil {
-		requestCancellation(m.unmined)
-	}
-}
-
-func (m *Manager) deliverActiveShutdownTimeout() {
-	m.unminedMu.Lock()
-	pending := m.unmined
-	m.unminedMu.Unlock()
-	if pending != nil {
-		pending.deliver(Result{
-			Hash:    pending.originalHash,
-			Outcome: OutcomeTrackingStopped,
-			Err:     errShutdownTimeout,
-		})
+	if active := m.active.Load(); active != nil {
+		requestCancellation(active)
 	}
 }
 
@@ -1362,102 +1248,96 @@ func (pending *pendingTransaction) cancellationDue(now time.Time) bool {
 // currentFees computes the current EIP-1559 base fee, tip, and fee cap under the supplied lifecycle
 // limit. A nil limit is unbounded.
 func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, error) {
-	feeCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
+	readCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
 	defer cancel()
-
-	head, err := m.backend.HeaderByNumber(feeCtx, nil)
+	head, err := m.backend.HeaderByNumber(readCtx, nil)
 	if err != nil {
 		return feeQuote{}, errors.Errorf("%w: header by number: %w", errFreshFeesUnavailable, err)
 	}
 	if head == nil || head.BaseFee == nil || head.BaseFee.Sign() < 0 {
 		return feeQuote{}, errors.Errorf("%w: latest header must contain a non-negative base fee", errFreshFeesUnavailable)
 	}
-	baseFee := new(big.Int).Set(head.BaseFee)
+	floor := gweiToWei(m.cfg.TipGwei)
+	tip, err := m.priorityFee(readCtx, floor)
+	if err != nil {
+		return feeQuote{}, err
+	}
+	// A configured floor remains usable when only the tip endpoint fails, but not when
+	// the caller itself cancels this quote. This also preserves replacement fallback semantics.
+	if err := ctx.Err(); err != nil {
+		return feeQuote{}, errors.Errorf("%w: fee quote: %w", errFreshFeesUnavailable, err)
+	}
+	return priceFees(head.BaseFee, tip, floor, limit)
+}
 
-	tipFloor := gweiToWei(m.cfg.TipGwei)
-	var tip *big.Int
-	if tipFloor.Sign() == 0 {
-		history, historyErr := m.backend.FeeHistory(
-			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
-		)
-		if historyErr != nil {
-			return feeQuote{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
+func (m *Manager) priorityFee(ctx context.Context, floor *big.Int) (*big.Int, error) {
+	if floor.Sign() > 0 {
+		tip, err := m.backend.SuggestGasTipCap(ctx)
+		if err == nil && tip != nil && tip.Cmp(floor) > 0 {
+			floor = tip
 		}
-		var valid bool
-		tip, valid = feeHistoryTip(history)
-		if !valid {
-			return feeQuote{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
-		}
-	} else {
-		suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
-		if tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
-			tip = maxBigCopy(suggestedTip, tipFloor)
-		} else if ctx.Err() != nil {
-			return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
-		} else {
-			tip = tipFloor
-		}
+		return bigmath.Clone(floor), nil
 	}
+	history, err := m.backend.FeeHistory(ctx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile})
+	if err != nil {
+		return nil, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, err)
+	}
+	tip, valid := feeHistoryTip(history)
+	if !valid {
+		return nil, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
+	}
+	return tip, nil
+}
 
-	// 2*baseFee + tip leaves headroom for one base-fee doubling between now and inclusion.
-	maxFee := new(big.Int).Add(new(big.Int).Mul(baseFee, big.NewInt(2)), tip)
-	if limit != nil {
-		if maxFee.Cmp(limit) > 0 {
-			maxFee.Set(limit)
-		}
+// priceFees reserves room for one base-fee doubling and enforces a hard fee cap.
+// A configured priority floor is a requirement; a dynamically observed tip may be clipped.
+func priceFees(base, suggested, floor, limit *big.Int) (feeQuote, error) {
+	fees := feeQuote{baseFee: new(big.Int).Set(base), tip: new(big.Int).Set(suggested)}
+	fees.maxFee = new(big.Int).Add(new(big.Int).Lsh(base, 1), fees.tip)
+	if limit != nil && fees.maxFee.Cmp(limit) > 0 {
+		fees.maxFee.Set(limit)
 	}
-	maxTip := new(big.Int).Sub(maxFee, baseFee)
-	if maxTip.Sign() < 0 {
-		return feeQuote{}, errors.Errorf(
-			"fee limit reached: current base fee %s exceeds tx manager max fee %s", baseFee, maxFee,
-		)
+	headroom := new(big.Int).Sub(fees.maxFee, base)
+	if headroom.Sign() < 0 {
+		return feeQuote{}, errors.Errorf("fee limit reached: current base fee %s exceeds tx manager max fee %s", base, fees.maxFee)
 	}
-	if tipFloor.Sign() > 0 && tipFloor.Cmp(maxTip) > 0 {
-		return feeQuote{}, errors.Errorf(
-			"fee limit reached: fee limit %s cannot cover base fee %s plus priority fee floor %s",
-			maxFee, baseFee, tipFloor,
-		)
+	if floor.Cmp(headroom) > 0 {
+		return feeQuote{}, errors.Errorf("fee limit reached: fee limit %s cannot cover base fee %s plus priority fee floor %s", fees.maxFee, base, floor)
 	}
-	if tip.Cmp(maxTip) > 0 {
-		tip.Set(maxTip)
+	if fees.tip.Cmp(headroom) > 0 {
+		fees.tip.Set(headroom)
 	}
-	return feeQuote{baseFee: baseFee, tip: tip, maxFee: maxFee}, nil
+	return fees, nil
 }
 
 func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
 	if history == nil || len(history.Reward) != feeHistoryBlocks {
 		return nil, false
 	}
-	var tip *big.Int
-	for _, blockRewards := range history.Reward {
-		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
+	rewards := make([]*big.Int, len(history.Reward))
+	for index, row := range history.Reward {
+		if len(row) != 1 || row[0] == nil || row[0].Sign() < 0 {
 			return nil, false
 		}
-		if tip == nil || blockRewards[0].Cmp(tip) < 0 {
-			tip = new(big.Int).Set(blockRewards[0])
-		}
+		rewards[index] = row[0]
 	}
-	return tip, true
+	return new(big.Int).Set(slices.MinFunc(rewards, (*big.Int).Cmp)), true
 }
 
 func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) {
-	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{
-		From:  m.signer.Address(),
-		To:    &req.To,
-		Value: req.Value,
-		Data:  req.Data,
-	})
+	call := ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Value: req.Value, Data: req.Data}
+	estimate, err := m.backend.EstimateGas(ctx, call)
 	if err != nil {
-		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
-		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
-		m.requestLog(req).Error(err, "gas estimation failed",
-			"label", req.Label,
-			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
-		)
+		// Replay the exact call to diagnose reverts without exposing signing material.
+		m.requestLog(req).Error(err, "gas estimation failed", "label", req.Label,
+			"tenderly", tenderly.SimulatorURL(m.chainID, call.From, req.To, call.Data, call.Value))
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
-	// 5% headroom over the estimate.
-	return gas + gas/20, nil
+	headroom := estimate / 20
+	if estimate == 0 || estimate > ^uint64(0)-headroom {
+		return 0, errors.Errorf("estimate gas %q: invalid estimate %d", req.Label, estimate)
+	}
+	return estimate + headroom, nil
 }
 
 func optionalBigString(value *big.Int) string {
@@ -1467,39 +1347,30 @@ func optionalBigString(value *big.Int) string {
 	return value.String()
 }
 
-func (m *Manager) signAndSend(
-	ctx context.Context,
-	nonce uint64,
-	to common.Address,
-	data []byte,
-	value *big.Int,
-	gas uint64,
-	fees feeQuote,
-	existingLifecycle bool,
-) (*types.Transaction, error) {
-	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID:   m.chainID,
-		Nonce:     nonce,
-		GasTipCap: fees.tip,
-		GasFeeCap: fees.maxFee,
-		Gas:       gas,
-		To:        &to,
-		Value:     value,
-		Data:      data,
-	})
-	signed, err := m.signer.SignTx(ctx, tx, m.chainID)
+func (m *Manager) signAndSend(ctx context.Context, nonce uint64, to common.Address, data []byte,
+	value *big.Int, gas uint64, fees feeQuote, existingLifecycle bool) (*types.Transaction, error) {
+	unsigned := types.NewTx(&types.DynamicFeeTx{ChainID: m.chainID, Nonce: nonce, To: &to,
+		Data: data, Value: value, Gas: gas, GasTipCap: fees.tip, GasFeeCap: fees.maxFee})
+	signed, err := m.signer.SignTx(ctx, unsigned, m.chainID)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && signed == nil {
+		err = errors.New("signer returned no transaction")
+	}
 	if err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Errorf("sign transaction: %w", err)
+	err = m.sendSigned(ctx, signed, existingLifecycle)
+	rejected := isDefiniteBroadcastRejection(err) || errors.Is(err, errNonceLanePaused)
+	if !existingLifecycle {
+		rejected = rejected || isPendingNonceCollision(err)
 	}
-	sendErr := m.sendSigned(ctx, signed, existingLifecycle)
-	if errors.Is(sendErr, errNonceLanePaused) || isDefiniteBroadcastRejection(sendErr) ||
-		(!existingLifecycle && isPendingNonceCollision(sendErr)) {
-		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
+	if rejected {
+		return nil, errors.Errorf("broadcast rejected before acceptance: %w", err)
 	}
-	return signed, sendErr
+	// An uncertain send retains the signed hash. It must never allocate another nonce.
+	return signed, err
 }
 
 func (m *Manager) sendSigned(
@@ -1512,7 +1383,7 @@ func (m *Manager) sendSigned(
 			return err
 		}
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, m.broadcastTimeout())
+	sendCtx, cancel := context.WithTimeout(ctx, m.cfg.BroadcastTimeout)
 	defer cancel()
 	err := m.backend.SendTransaction(sendCtx, signed)
 	if !existingLifecycle && (isNonceConsumedError(err) || isPendingNonceCollision(err)) {
@@ -1533,38 +1404,26 @@ func (m *Manager) reconcileExistingLifecycleNonce(ctx context.Context, pending *
 }
 
 func (m *Manager) hasCanonicalTrackedReceipt(ctx context.Context, pending *pendingTransaction) bool {
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	ctx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
 	defer cancel()
 	for _, attempt := range pending.attempts {
-		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
+		receipt, err := m.backend.TransactionReceipt(ctx, attempt.hash)
 		if errors.Is(err, ethereum.NotFound) {
 			continue
 		}
-		if err != nil {
-			pending.log.Error(err, "tracked receipt unavailable during nonce reconciliation",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
-			continue
+		message := "tracked receipt unavailable during nonce reconciliation"
+		if err == nil {
+			message = "invalid tracked receipt during nonce reconciliation"
+			err = validateReceipt(attempt.hash, receipt)
 		}
-		if err := validateReceipt(attempt.hash, receipt); err != nil {
-			pending.log.Error(err, "invalid tracked receipt during nonce reconciliation",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
-			continue
+		if err == nil {
+			message = "tracked receipt is not canonically visible during nonce reconciliation"
+			err = m.confirmCanonicalReceipt(ctx, receipt)
 		}
-		if err := m.confirmCanonicalReceipt(lookupCtx, receipt); err != nil {
-			pending.log.Error(err, "tracked receipt is not canonically visible during nonce reconciliation",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
-			continue
+		if err == nil {
+			return true
 		}
-		return true
+		pending.log.Error(err, message, "label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce)
 	}
 	return false
 }
@@ -1653,7 +1512,7 @@ func (m *Manager) clearNonceConflict(nonce uint64) {
 func (m *Manager) notifyLaneStateChange() {
 	m.laneStateMu.Lock()
 	defer m.laneStateMu.Unlock()
-	for _, changes := range m.laneStateSubscribers {
+	for changes := range m.laneStateSubscribers {
 		select {
 		case changes <- struct{}{}:
 		default:
@@ -1687,22 +1546,14 @@ func (m *Manager) initializeNonceLocked(ctx context.Context) error {
 	if m.nonceInit {
 		return nil
 	}
-	latest, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
+	mined, pending, err := m.accountNonces(ctx)
 	if err != nil {
-		return errors.Errorf("latest mined nonce: %w", err)
+		return err
 	}
-	pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
-	if err != nil {
-		return errors.Errorf("pending nonce: %w", err)
+	if mined != pending {
+		return errors.Errorf("unmanaged pending nonce gap: latest mined nonce %d, pending nonce %d", mined, pending)
 	}
-	if pending != latest {
-		return errors.Errorf(
-			"unmanaged pending nonce gap: latest mined nonce %d, pending nonce %d",
-			latest, pending,
-		)
-	}
-	m.nonce = pending
-	m.nonceInit = true
+	m.nonce, m.nonceInit = mined, true
 	return nil
 }
 
@@ -1757,22 +1608,16 @@ func (m *Manager) waitForConfirmations(
 			receiptReads.recovered(log, "receipt confirmation reads recovered", "hash", hash.Hex())
 			receipt = refreshed
 			if headErr == nil {
-				head := headBefore.Number.Uint64()
-				included := receipt.BlockNumber.Uint64()
-				if head >= included && head-included >= confirmations {
-					if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
-						if errors.Is(err, errReceiptReorged) {
-							return receipt, err
-						}
-						ancestryReads.failed(log, err, "receipt ancestry check unavailable", "hash", hash.Hex())
-					} else {
-						ancestryReads.recovered(log, "receipt ancestry reads recovered", "hash", hash.Hex())
-						headAfter, afterErr := m.confirmationHead(ctx)
-						if afterErr != nil {
-							headReads.failed(log, afterErr, "confirmation head unavailable", "hash", hash.Hex())
-						} else if headBefore.Hash() == headAfter.Hash() {
-							return receipt, nil
-						}
+				confirmed, proofErr := m.confirmedAtHead(ctx, headBefore, receipt, confirmations)
+				if errors.Is(proofErr, errReceiptReorged) {
+					return receipt, proofErr
+				}
+				if proofErr != nil {
+					ancestryReads.failed(log, proofErr, "receipt ancestry check unavailable", "hash", hash.Hex())
+				} else {
+					ancestryReads.recovered(log, "receipt ancestry reads recovered", "hash", hash.Hex())
+					if confirmed {
+						return receipt, nil
 					}
 				}
 			}
@@ -1783,6 +1628,23 @@ func (m *Manager) waitForConfirmations(
 		case <-ticker.C:
 		}
 	}
+}
+
+// confirmedAtHead proves depth and ancestry against one head, then verifies the
+// head did not move while its ancestry was read.
+func (m *Manager) confirmedAtHead(ctx context.Context, head *types.Header, receipt *types.Receipt, confirmations uint64) (bool, error) {
+	height, included := head.Number.Uint64(), receipt.BlockNumber.Uint64()
+	if height < included || height-included < confirmations {
+		return false, nil
+	}
+	if err := m.confirmReceiptAncestry(ctx, head, receipt); err != nil {
+		return false, err
+	}
+	after, err := m.confirmationHead(ctx)
+	if err != nil {
+		return false, err
+	}
+	return head.Hash() == after.Hash(), nil
 }
 
 func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
@@ -1832,40 +1694,41 @@ func (m *Manager) confirmCanonicalReceipt(ctx context.Context, receipt *types.Re
 	return nil
 }
 
-func (m *Manager) confirmReceiptAncestry(
-	ctx context.Context,
-	head *types.Header,
-	receipt *types.Receipt,
-) error {
+func (m *Manager) confirmReceiptAncestry(ctx context.Context, head *types.Header, receipt *types.Receipt) error {
 	if head == nil || head.Number == nil || receipt == nil || receipt.BlockNumber == nil {
 		return errors.New("confirmation ancestry requires head and receipt block numbers")
 	}
 	if !head.Number.IsUint64() || !receipt.BlockNumber.IsUint64() {
 		return errors.New("confirmation ancestry block number exceeds uint64")
 	}
-	included := receipt.BlockNumber.Uint64()
-	current := head
-	for current.Number.Uint64() > included {
-		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-		parent, err := m.backend.HeaderByHash(lookupCtx, current.ParentHash)
-		cancel()
+	for head.Number.Cmp(receipt.BlockNumber) > 0 {
+		parent, err := m.confirmationParent(ctx, head)
 		if err != nil {
-			return errors.Errorf("parent header %s: %w", current.ParentHash.Hex(), err)
+			return err
 		}
-		if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
-			return errors.Errorf("parent header %s is invalid", current.ParentHash.Hex())
-		}
-		if parent.Hash() != current.ParentHash || parent.Number.Uint64() != current.Number.Uint64()-1 {
-			return errors.Errorf("parent header %s does not link to block %s", parent.Hash(), current.Hash())
-		}
-		current = parent
+		head = parent
 	}
-	if current.Number.Uint64() != included || current.Hash() != receipt.BlockHash {
-		return errors.Errorf(
-			"%w: receipt block %s is no longer canonical", errReceiptReorged, receipt.BlockHash.Hex(),
-		)
+	if head.Number.Cmp(receipt.BlockNumber) == 0 && head.Hash() == receipt.BlockHash {
+		return nil
 	}
-	return nil
+	return errors.Errorf("%w: receipt block %s is no longer canonical", errReceiptReorged, receipt.BlockHash.Hex())
+}
+
+func (m *Manager) confirmationParent(ctx context.Context, child *types.Header) (*types.Header, error) {
+	readCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	parent, err := m.backend.HeaderByHash(readCtx, child.ParentHash)
+	if err != nil {
+		return nil, errors.Errorf("parent header %s: %w", child.ParentHash.Hex(), err)
+	}
+	if parent == nil || parent.Number == nil || !parent.Number.IsUint64() {
+		return nil, errors.Errorf("parent header %s is invalid", child.ParentHash.Hex())
+	}
+	expected := new(big.Int).Sub(child.Number, big.NewInt(1))
+	if parent.Hash() != child.ParentHash || parent.Number.Cmp(expected) != 0 {
+		return nil, errors.Errorf("parent header %s does not link to block %s", parent.Hash(), child.Hash())
+	}
+	return parent, nil
 }
 
 func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
@@ -1885,12 +1748,8 @@ func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
 
 func cloneRequest(req Request) Request {
 	req.Data = append([]byte(nil), req.Data...)
-	if req.Value != nil {
-		req.Value = new(big.Int).Set(req.Value)
-	}
-	if req.MaxFeePerGas != nil {
-		req.MaxFeePerGas = new(big.Int).Set(req.MaxFeePerGas)
-	}
+	req.Value = bigmath.Clone(req.Value)
+	req.MaxFeePerGas = bigmath.Clone(req.MaxFeePerGas)
 	if req.Confirmations != nil {
 		confirmations := *req.Confirmations
 		req.Confirmations = &confirmations
@@ -1922,13 +1781,6 @@ func reserveFeeBump(limit *big.Int) *big.Int {
 	}
 	reserved := new(big.Int).Mul(limit, big.NewInt(replacementBumpDenominator))
 	return reserved.Div(reserved, big.NewInt(replacementBumpNumerator))
-}
-
-func maxBigCopy(a, b *big.Int) *big.Int {
-	if a.Cmp(b) >= 0 {
-		return new(big.Int).Set(a)
-	}
-	return new(big.Int).Set(b)
 }
 
 func feeLimitString(limit *big.Int) string {
@@ -1965,10 +1817,6 @@ func (m *Manager) feeReadTimeout() time.Duration {
 
 func (m *Manager) receiptReadTimeout() time.Duration {
 	return minPositiveDuration(maxReceiptReadTimeout, m.cfg.ReplacementInterval/2)
-}
-
-func (m *Manager) broadcastTimeout() time.Duration {
-	return m.cfg.BroadcastTimeout
 }
 
 func minPositiveDuration(fallback, candidate time.Duration) time.Duration {

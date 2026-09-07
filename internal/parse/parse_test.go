@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -217,9 +218,7 @@ func TestDuration(t *testing.T) {
 
 func TestDecodeStrict(t *testing.T) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte("known: value\nunknown: typo\n"), &doc); err != nil {
-		t.Fatalf("unmarshal yaml: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte("known: value\nunknown: typo\n"), &doc), "unmarshal yaml: %v")
 	var out struct {
 		Known string `yaml:"known"`
 	}

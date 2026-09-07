@@ -18,10 +18,12 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
+
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
@@ -41,11 +43,7 @@ func TestOrderInboxDoesNotBlockAndPreservesOrder(t *testing.T) {
 		}
 		close(enqueued)
 	}()
-	select {
-	case <-enqueued:
-	case <-time.After(time.Second):
-		t.Fatal("enqueue blocked without a consumer")
-	}
+	testcheck.ReceiveWithin(t, enqueued, time.Second, "enqueue blocked without a consumer")
 
 	orders := make(chan *submittedOrder)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -58,11 +56,7 @@ func TestOrderInboxDoesNotBlockAndPreservesOrder(t *testing.T) {
 		}
 	}
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("inbox did not stop after cancellation")
-	}
+	testcheck.ReceiveWithin(t, done, time.Second, "inbox did not stop after cancellation")
 }
 
 func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
@@ -70,21 +64,11 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 	for _, contextType := range tests {
 		t.Run(hexutil.Encode([]byte{contextType}), func(t *testing.T) {
 			cfg := testLifiConfig()
-			var body map[string]any
-			if err := json.Unmarshal(testOrderJSON(
-				t,
-				cfg,
-				common.HexToAddress("0x6666666666666666666666666666666666666666"),
-				common.HexToAddress("0x7777777777777777777777777777777777777777"),
-			), &body); err != nil {
-				t.Fatalf("unmarshal order: %v", err)
-			}
+			body := testOrderBody(t, cfg)
 			output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
 			output["context"] = hexutil.Encode([]byte{contextType})
 			raw, err := json.Marshal(body)
-			if err != nil {
-				t.Fatalf("marshal order: %v", err)
-			}
+			testcheck.NoError(t, err, "marshal order: %v")
 
 			var logs []string
 			solver := &Solver{
@@ -162,12 +146,8 @@ func TestParseOrderMessageKeepsTargetMismatchAtError(t *testing.T) {
 func TestOrderInboxCoalescesQueuedReplay(t *testing.T) {
 	inbox := newOrderInbox(2)
 	first := &submittedOrder{OrderID: "api-1", OnChainOrderID: "chain-1"}
-	if err := inbox.enqueue(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := inbox.enqueue(&submittedOrder{OrderID: "api-2", OnChainOrderID: "chain-1"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(first))
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "api-2", OnChainOrderID: "chain-1"}))
 	if len(inbox.orders) != 1 {
 		t.Fatalf("queued orders = %d, want 1", len(inbox.orders))
 	}
@@ -181,9 +161,7 @@ func TestOrderInboxRecoveryCoalescesDrainedReplay(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- inbox.run(ctx, orders) }()
 
-	if err := inbox.enqueue(&submittedOrder{OnChainOrderID: " 0xAbCd "}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OnChainOrderID: " 0xAbCd "}))
 	if order := <-orders; order.OnChainOrderID != " 0xAbCd " {
 		t.Fatalf("order = %+v", order)
 	}
@@ -192,16 +170,12 @@ func TestOrderInboxRecoveryCoalescesDrainedReplay(t *testing.T) {
 		t.Fatalf("inbox.run() error = %v", err)
 	}
 
-	if err := inbox.enqueue(&submittedOrder{OnChainOrderID: "0xabcd"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OnChainOrderID: "0xabcd"}))
 	if len(inbox.orders) != 0 {
 		t.Fatalf("REST replay was re-enqueued after live copy drained: %+v", inbox.orders)
 	}
 	inbox.endRecovery()
-	if err := inbox.enqueue(&submittedOrder{OnChainOrderID: "0xabcd"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OnChainOrderID: "0xabcd"}))
 	if len(inbox.orders) != 1 {
 		t.Fatalf("order was not admitted after recovery ended: %+v", inbox.orders)
 	}
@@ -215,13 +189,13 @@ func TestOrderInboxBoundsRecoveryDedupe(t *testing.T) {
 			t.Fatalf("enqueue %d: %v", index, err)
 		}
 	}
-	if len(inbox.recoverySeen) != orderRecoverySeenCapacity {
-		t.Fatalf("recovery seen keys = %d, want %d", len(inbox.recoverySeen), orderRecoverySeenCapacity)
+	if inbox.seen.Len() != orderRecoverySeenCapacity {
+		t.Fatalf("recovery seen keys = %d, want %d", inbox.seen.Len(), orderRecoverySeenCapacity)
 	}
-	if inbox.recoverySeen["0"] {
+	if inbox.entries["0"] != nil && inbox.entries["0"].seen != nil {
 		t.Fatal("oldest recovery key was not evicted")
 	}
-	if !inbox.recoverySeen[strconv.Itoa(orderRecoverySeenCapacity)] {
+	if inbox.entries[strconv.Itoa(orderRecoverySeenCapacity)] == nil || inbox.entries[strconv.Itoa(orderRecoverySeenCapacity)].seen == nil {
 		t.Fatal("newest recovery key is missing")
 	}
 	inbox.endRecovery()
@@ -237,30 +211,26 @@ func TestOrderInboxPreservesRecoveryEvictionOrderAfterCompaction(t *testing.T) {
 			t.Fatalf("enqueue %d: %v", index, err)
 		}
 	}
-	if inbox.recoverySeenNext == 0 {
-		t.Fatal("recovery seen ring did not wrap")
+	if inbox.seen.Front().Value != "1" {
+		t.Fatal("oldest recovery key was not evicted")
 	}
 
 	if retries := inbox.takeRecoveryRetries(); len(retries) != 0 {
 		t.Fatalf("recovery retries = %d, want 0", len(retries))
 	}
 	newest := strconv.Itoa(orderRecoverySeenCapacity + 1)
-	if err := inbox.enqueue(&submittedOrder{OrderID: newest}); err != nil {
-		t.Fatalf("enqueue newest: %v", err)
-	}
-	if inbox.recoverySeen["1"] {
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: newest}), "enqueue newest: %v")
+	if inbox.entries["1"] != nil && inbox.entries["1"].seen != nil {
 		t.Fatal("oldest recovery key was not evicted after compaction")
 	}
-	if !inbox.recoverySeen[strconv.Itoa(orderRecoverySeenCapacity)] || !inbox.recoverySeen[newest] {
+	if (inbox.entries[strconv.Itoa(orderRecoverySeenCapacity)] == nil || inbox.entries[strconv.Itoa(orderRecoverySeenCapacity)].seen == nil) || (inbox.entries[newest] == nil || inbox.entries[newest].seen == nil) {
 		t.Fatal("compaction evicted a newer recovery key")
 	}
 }
 
 func TestOrderInboxRecoveryBarrierBackpressuresUntilWorker(t *testing.T) {
 	inbox := newOrderInbox(1)
-	if err := inbox.enqueueWait(t.Context(), &submittedOrder{OrderID: "first"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueueWait(t.Context(), &submittedOrder{OrderID: "first"}))
 	barrierDone := make(chan error, 1)
 	go func() {
 		_, err := inbox.waitUntilProcessed(t.Context())
@@ -284,9 +254,7 @@ func TestOrderInboxRecoveryBarrierBackpressuresUntilWorker(t *testing.T) {
 		t.Fatalf("second work item is not a barrier: %+v", barrier)
 	}
 	close(barrier.processed)
-	if err := <-barrierDone; err != nil {
-		t.Fatalf("waitUntilProcessed: %v", err)
-	}
+	testcheck.NoError(t, <-barrierDone, "waitUntilProcessed: %v")
 	cancel()
 	if err := <-runDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("inbox.run() error = %v", err)
@@ -295,9 +263,7 @@ func TestOrderInboxRecoveryBarrierBackpressuresUntilWorker(t *testing.T) {
 
 func TestOrderInboxRejectsOverflow(t *testing.T) {
 	inbox := newOrderInbox(1)
-	if err := inbox.enqueue(&submittedOrder{OrderID: "first"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "first"}))
 	if err := inbox.enqueue(&submittedOrder{OrderID: "second"}); !errors.Is(err, errOrderInboxFull) {
 		t.Fatalf("enqueue error = %v, want %v", err, errOrderInboxFull)
 	}
@@ -307,12 +273,8 @@ func TestOrderInboxCloseDrainsQueuedOrders(t *testing.T) {
 	inbox := newOrderInbox(2)
 	first := &submittedOrder{OrderID: "first"}
 	second := &submittedOrder{OrderID: "second"}
-	if err := inbox.enqueue(first); err != nil {
-		t.Fatalf("enqueue first: %v", err)
-	}
-	if err := inbox.enqueue(second); err != nil {
-		t.Fatalf("enqueue second: %v", err)
-	}
+	testcheck.NoError(t, inbox.enqueue(first), "enqueue first: %v")
+	testcheck.NoError(t, inbox.enqueue(second), "enqueue second: %v")
 	inbox.closeInput()
 	if err := inbox.enqueue(&submittedOrder{OrderID: "late"}); !errors.Is(err, errOrderInboxClosed) {
 		t.Fatalf("enqueue after close error = %v, want %v", err, errOrderInboxClosed)
@@ -330,17 +292,13 @@ func TestOrderInboxCloseDrainsQueuedOrders(t *testing.T) {
 	if _, ok := <-out; ok {
 		t.Fatal("order output remained open after drain")
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("order inbox drain: %v", err)
-	}
+	testcheck.NoError(t, <-done, "order inbox drain: %v")
 }
 
 func TestOrderInboxRecoveryOverflowRequiresAnotherSweep(t *testing.T) {
 	inbox := newOrderInbox(1)
 	inbox.beginRecovery()
-	if err := inbox.enqueue(&submittedOrder{OrderID: "first"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "first"}))
 	if err := inbox.enqueue(&submittedOrder{OrderID: "dropped"}); !errors.Is(err, errOrderInboxFull) {
 		t.Fatalf("enqueue overflow error = %v", err)
 	}
@@ -368,23 +326,15 @@ func TestOrderInboxRecoveryGenerationRejectsPostBarrierEnqueue(t *testing.T) {
 		}
 	}()
 
-	if err := inbox.enqueue(&submittedOrder{OrderID: "before-barrier"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "before-barrier"}))
 	processedGen, err := inbox.waitUntilProcessed(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inbox.enqueue(&submittedOrder{OrderID: "after-barrier"}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "after-barrier"}))
 	if inbox.tryEndRecovery(processedGen) {
 		t.Fatal("recovery ended after an order was enqueued behind the processed barrier")
 	}
 	processedGen, err = inbox.waitUntilProcessed(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if !inbox.tryEndRecovery(processedGen) {
 		t.Fatal("recovery did not end after the later order passed a new barrier")
 	}
@@ -433,15 +383,11 @@ func TestReservationRetryQueueIsBoundedFIFO(t *testing.T) {
 	retries := newReservationRetryQueue(2)
 	first := &submittedOrder{OrderID: "first"}
 	second := &submittedOrder{OrderID: "second"}
-	if err := retries.enqueue(first, 0); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, retries.enqueue(first, 0))
 	if err := retries.enqueue(first, 0); err != nil || retries.len() != 1 {
 		t.Fatalf("duplicate enqueue: len=%d err=%v", retries.len(), err)
 	}
-	if err := retries.enqueue(second, 1); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, retries.enqueue(second, 1))
 	if err := retries.enqueue(&submittedOrder{OrderID: "dropped-newest"}, 1); !errors.Is(err, errOrderRetryFull) {
 		t.Fatalf("overflow error = %v, want %v", err, errOrderRetryFull)
 	}
@@ -462,9 +408,7 @@ func TestReservationRetryQueueIsBoundedFIFO(t *testing.T) {
 func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	txm := &fakeLifiTxSender{hold: true}
 	solver := newProcessTestSolver(
 		fixture.cfg,
@@ -493,16 +437,8 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 		)
 	}()
 
-	select {
-	case <-barrier.processed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("worker did not acknowledge recovery barrier")
-	}
-	select {
-	case <-inputDrained:
-	case <-time.After(3 * time.Second):
-		t.Fatal("worker did not acknowledge the drained input")
-	}
+	testcheck.ReceiveWithin(t, barrier.processed, 3*time.Second, "worker did not acknowledge recovery barrier")
+	testcheck.ReceiveWithin(t, inputDrained, 3*time.Second, "worker did not acknowledge the drained input")
 	if reservations := solver.capacity.Snapshot(); len(reservations) == 0 {
 		t.Fatal("recovery barrier passed before accepted fill reserved capacity")
 	}
@@ -510,22 +446,16 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 		t.Fatalf("pending transactions = %d, want 1", len(txm.results))
 	}
 	txm.results[0] <- txm.fillResult()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runOrderWorker: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("worker did not stop after pending fill completed")
+	{
+		err := testcheck.ReceiveWithin(t, done, 3*time.Second, "worker did not stop after pending fill completed")
+		testcheck.NoError(t, err, "runOrderWorker: %v")
 	}
 }
 
 func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	solver := newProcessTestSolver(
 		fixture.cfg,
 		fixture.caller,
@@ -547,11 +477,9 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	}
 	marked := make(chan markedRecovery, 1)
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
+	testcheck.NoError(t, solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
 		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
-	}, nil); err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	}, nil), "runOrderWorker: %v")
 	select {
 	case got := <-marked:
 		if got.order != order {
@@ -595,9 +523,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := immediateTestSetup(t)
 			strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-			if err != nil {
-				t.Fatalf("New strategy: %v", err)
-			}
+			testcheck.NoError(t, err, "New strategy: %v")
 			submitted := make(chan struct{}, 1)
 			txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
 			solver := newProcessTestSolver(
@@ -612,9 +538,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 			)
 			reg := prometheus.NewRegistry()
 			metrics, err := newLIFIMetrics(reg, nil, "")
-			if err != nil {
-				t.Fatalf("newLIFIMetrics: %v", err)
-			}
+			testcheck.NoError(t, err, "newLIFIMetrics: %v")
 			solver.metrics = metrics
 			solver.wallNow = time.Now
 			var statusReads atomic.Int32
@@ -637,15 +561,9 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				)
 			}()
 
-			select {
-			case <-submitted:
-			case <-time.After(3 * time.Second):
-				t.Fatal("worker did not fill after deposit became visible")
-			}
+			testcheck.ReceiveWithin(t, submitted, 3*time.Second, "worker did not fill after deposit became visible")
 			close(orders)
-			if err := <-done; err != nil {
-				t.Fatalf("runOrderWorker: %v", err)
-			}
+			testcheck.NoError(t, <-done, "runOrderWorker: %v")
 			if got, want := statusReads.Load(), int32(len(test.statuses)); got != want {
 				t.Fatalf("status reads = %d, want %d", got, want)
 			}
@@ -668,9 +586,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	solver := newProcessTestSolver(
 		fixture.cfg,
 		fixture.caller,
@@ -683,9 +599,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	)
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	solver.metrics = metrics
 	expired := make(chan struct{}, 1)
 	solver.log = funcr.NewJSON(func(entry string) {
@@ -711,15 +625,9 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	orders <- order
 	done := make(chan error, 1)
 	go func() { done <- solver.runOrderWorker(t.Context(), nil, orders, nil, nil) }()
-	select {
-	case <-expired:
-	case <-time.After(time.Second):
-		t.Fatal("deposit retry did not expire from the timer path")
-	}
+	testcheck.ReceiveWithin(t, expired, time.Second, "deposit retry did not expire from the timer path")
 	close(orders)
-	if err := <-done; err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	testcheck.NoError(t, <-done, "runOrderWorker: %v")
 	metricstest.RequireWorkflowEventCount(
 		t, reg, Name, "order_processing", string(orderProcessingDepositDeferred), 1,
 	)
@@ -732,9 +640,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	submitted := make(chan struct{}, 1)
 	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
 	solver := newProcessTestSolver(
@@ -772,15 +678,9 @@ func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
 		)
 	}()
 
-	select {
-	case <-submitted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("worker did not fill the retried order")
-	}
+	testcheck.ReceiveWithin(t, submitted, 3*time.Second, "worker did not fill the retried order")
 	close(orders)
-	if err := <-done; err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	testcheck.NoError(t, <-done, "runOrderWorker: %v")
 	if got := statusReads.Load(); got != 3 {
 		t.Fatalf("status reads = %d, duplicate delivery was not coalesced", got)
 	}
@@ -792,9 +692,7 @@ func TestOrderWorkerCoalescesDuplicateWhileWaitingForDeposit(t *testing.T) {
 func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	submitted := make(chan struct{}, 1)
 	txm := &fakeLifiTxSender{onSend: func(int, chan<- txmanager.Result) { submitted <- struct{}{} }}
 	solver := newProcessTestSolver(
@@ -862,9 +760,7 @@ func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
 	case <-time.After(3 * time.Second):
 	}
 	close(orders)
-	if err := <-done; err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	testcheck.NoError(t, <-done, "runOrderWorker: %v")
 	if !filled {
 		t.Fatalf("later deposited order was blocked by the delayed retry: first reads=%d second reads=%d txs=%d",
 			firstReads.Load(), secondReads.Load(), len(txm.reqs))
@@ -886,9 +782,7 @@ func TestOrderWorkerProcessesLaterOrdersWhileWaitingForDeposit(t *testing.T) {
 func TestOrderWorkerDepositRetryDoesNotHoldRecoveryBarrier(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-	if err != nil {
-		t.Fatalf("New strategy: %v", err)
-	}
+	testcheck.NoError(t, err, "New strategy: %v")
 	solver := newProcessTestSolver(
 		fixture.cfg,
 		fixture.caller,
@@ -916,11 +810,7 @@ func TestOrderWorkerDepositRetryDoesNotHoldRecoveryBarrier(t *testing.T) {
 		)
 	}()
 
-	select {
-	case <-barrier.processed:
-	case <-time.After(time.Second):
-		t.Fatal("deposit propagation retry held the recovery barrier")
-	}
+	testcheck.ReceiveWithin(t, barrier.processed, time.Second, "deposit propagation retry held the recovery barrier")
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("runOrderWorker error = %v, want context cancellation", err)
@@ -938,9 +828,7 @@ func TestOrderWorkerDropsDepositRetriesWhenIntakeStops(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := immediateTestSetup(t)
 			strategy, err := defaultstrategy.New(defaultstrategy.Config{})
-			if err != nil {
-				t.Fatalf("New strategy: %v", err)
-			}
+			testcheck.NoError(t, err, "New strategy: %v")
 			txm := &fakeLifiTxSender{}
 			solver := newProcessTestSolver(
 				fixture.cfg,
@@ -977,24 +865,18 @@ func TestOrderWorkerDropsDepositRetriesWhenIntakeStops(t *testing.T) {
 					nil,
 				)
 			}()
-			select {
-			case <-statusRead:
-			case <-time.After(time.Second):
-				t.Fatal("worker did not read the initial order status")
-			}
+			testcheck.ReceiveWithin(t, statusRead, time.Second, "worker did not read the initial order status")
 			if test.cancel {
 				cancel()
 			}
-			select {
-			case err := <-done:
+			{
+				err := testcheck.ReceiveWithin(t, done, time.Second, "worker retained a deposit retry after intake stopped")
 				if test.cancel && !errors.Is(err, context.Canceled) {
 					t.Fatalf("runOrderWorker error = %v, want context cancellation", err)
 				}
 				if !test.cancel && err != nil {
 					t.Fatalf("runOrderWorker: %v", err)
 				}
-			case <-time.After(time.Second):
-				t.Fatal("worker retained a deposit retry after intake stopped")
 			}
 			if len(txm.reqs) != 0 {
 				t.Fatalf("fill submissions = %d, want 0", len(txm.reqs))
@@ -1016,9 +898,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	}))
 	defer webhookServer.Close()
 	client, err := webhook.NewClient(webhook.Config{URL: webhookServer.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 
 	fixture := immediateTestSetup(t)
 	recoveredOrder := testListedOrderJSON(
@@ -1050,9 +930,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	solver.orders = newOrderClient(orderServer.URL, "test-key", time.Second, 11155111)
 	operationReg := prometheus.NewRegistry()
 	operationMetrics, err := newLIFIMetrics(operationReg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	solver.metrics = operationMetrics
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -1079,12 +957,8 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 		t.Fatalf("webhook fill attempts = %d, want bounded total %d", got, maximumStrategyRecoveryAttempts)
 	}
 	inbox.closeInput()
-	if err := <-inboxDone; err != nil {
-		t.Fatalf("inbox.run: %v", err)
-	}
-	if err := <-workerDone; err != nil {
-		t.Fatalf("runOrderWorker: %v", err)
-	}
+	testcheck.NoError(t, <-inboxDone, "inbox.run: %v")
+	testcheck.NoError(t, <-workerDone, "runOrderWorker: %v")
 	metricstest.RequireExternalOperationCount(
 		t, operationReg, Name, orderRecoveryOperation, "success", 1,
 	)
@@ -1203,9 +1077,7 @@ func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
 			}
 		}
 	}()
-	if err := inbox.enqueue(&submittedOrder{OrderID: "live-only"}); err != nil {
-		t.Fatalf("enqueue live order: %v", err)
-	}
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{OrderID: "live-only"}), "enqueue live order: %v")
 
 	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {
 		t.Fatalf("recovery did not converge: %v", ctx.Err())
@@ -1228,7 +1100,7 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 		orderID:        common.HexToHash("0x1"),
 		reservationKey: "order-1",
 	}
-	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+	pending := map[string]bool{"order-1": true}
 
 	solver.completeFill(pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Outcome: txmanager.OutcomeIncludedUnconfirmed,
@@ -1236,8 +1108,8 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}})
 
 	logged := strings.Join(logs, "\n")
-	if pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+	if len(pending) != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
 		!strings.Contains(logged, "order fill included but confirmation wait failed") {
-		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
+		t.Fatalf("included completion: pending=%d logs=%s", len(pending), logged)
 	}
 }

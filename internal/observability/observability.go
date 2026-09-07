@@ -22,14 +22,14 @@ import (
 // NewLogger builds the production (JSON) zap logger behind the logr interface and returns a flush
 // func. When debug is true the level is lowered to Debug so logr V(1) calls are emitted; otherwise
 // they're dropped. main is the only place that should reference a concrete logging backend.
-func NewLogger(debug bool) (logr.Logger, func()) {
+func NewLogger(debug bool) (logr.Logger, func(), error) {
 	cfg := zap.NewProductionConfig()
 	if debug {
 		cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 	}
 	zl, err := cfg.Build()
 	if err != nil {
-		return logr.Discard(), func() {}
+		return logr.Logger{}, nil, errors.Errorf("initialize logger: %w", err)
 	}
 	// Optional Sentry sink: when SENTRY_DSN is set, tee Error+ entries to Sentry. Disabled otherwise.
 	sentrySink, flushSentry := initSentry()
@@ -38,7 +38,7 @@ func NewLogger(debug bool) (logr.Logger, func()) {
 			return zapcore.NewTee(core, sentrySink)
 		}))
 	}
-	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }
+	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }, nil
 }
 
 // Metrics owns the Prometheus registry. Solvers register their domain collectors on Registerer();
@@ -54,43 +54,18 @@ type Metrics struct {
 // NewMetrics creates a registry seeded with framework and standard process metrics. Readiness is
 // returned as a separate framework-owned capability so solver-facing Metrics cannot mutate it.
 func NewMetrics() (*Metrics, *Health) {
-	reg := prometheus.NewRegistry()
-	health := &Health{}
-	buildInfo := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "solver_bot",
-			Name:      "build_info",
-			Help:      "Build metadata; constant 1, labeled by version and commit.",
-		},
-		[]string{"version", "commit"},
-	)
-	solverInfo := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "solver_bot",
-			Name:      "solver_info",
-			Help:      "Configured solver membership; constant 1 for each solver in this runtime.",
-		},
-		[]string{"solver"},
-	)
-	serviceReady := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Namespace: "solver_bot",
-		Name:      "service_ready",
-		Help:      "1 when the process admits work through its readiness gate; 0 otherwise.",
-	}, health.readyValue)
-	// Standard Go runtime + process metrics, so /metrics carries CPU, memory, goroutines, GC, FDs, etc.
-	reg.MustRegister(
-		buildInfo,
-		solverInfo,
-		serviceReady,
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-	)
-	metrics := &Metrics{
-		registry:     reg,
-		buildInfo:    buildInfo,
-		solverInfo:   solverInfo,
-		serviceReady: serviceReady,
-		health:       health,
+	health := new(Health)
+	group := NewMetricGroup("solver_bot_")
+	metrics := &Metrics{registry: group.Registry, health: health,
+		buildInfo:  group.Gauge("build_info", "Build metadata; constant 1, labeled by version and commit.", "version", "commit"),
+		solverInfo: group.Gauge("solver_info", "Configured solver membership; constant 1 for each solver in this runtime.", "solver"),
+		serviceReady: prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "solver_bot_service_ready",
+			Help: "1 when the process admits work through its readiness gate; 0 otherwise."}, health.readyValue),
+	}
+	group.Add(metrics.serviceReady, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	// These static descriptors cannot conflict unless the program's schema is wrong.
+	if group.err != nil {
+		panic(group.err)
 	}
 	return metrics, health
 }
@@ -223,25 +198,4 @@ func NewHTTPServer(addr string, m *Metrics) *http.Server {
 func writeText(w http.ResponseWriter, code int, body string) {
 	w.WriteHeader(code)
 	_, _ = w.Write([]byte(body))
-}
-
-// ServeUntil runs srv until ctx is cancelled, then shuts it down gracefully. Returns nil on a
-// clean shutdown; logs (does not crash on) an unexpected serve error.
-func ServeUntil(ctx context.Context, srv *http.Server, log logr.Logger) {
-	errCh := make(chan error, 1)
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-	select {
-	case <-ctx.Done():
-	case err := <-errCh:
-		log.Error(err, "observability server failed")
-	}
-	// Fresh context on purpose: the parent ctx is already cancelled here, so deriving from it
-	// would abort the graceful drain immediately.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(shutdownCtx) //nolint:contextcheck // fresh deadline for post-cancellation drain
 }

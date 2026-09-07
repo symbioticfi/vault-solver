@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackendinternal"
+	"github.com/symbioticfi/vault-solver/internal/httpclient"
 )
 
 const defaultTimeout = 10 * time.Second
@@ -79,39 +80,38 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 	body := rfqbackendinternal.ResolveDiscountRequest{
 		ResolveDiscountRequestOneOf: rfqbackendinternal.NewResolveDiscountRequestOneOf(discountID),
 	}
-	resp, httpResp, err := c.api.RFQAPI.ApiInternalV1DiscountsPost(ctx).ResolveDiscountRequest(body).Execute()
-	closeResp(httpResp)
+	resp, err := httpclient.Execute("private discounts: resolve", c.api.RFQAPI.ApiInternalV1DiscountsPost(ctx).ResolveDiscountRequest(body).Execute)
+
 	if err != nil {
-		return nil, errors.Errorf("private discounts: resolve: %w", err)
+		return nil, err
 	}
 	if resp == nil {
 		return nil, errors.New("private discounts: resolve: empty response")
 	}
 	if single := resp.ResolveDiscountResponseOneOf; single != nil {
-		return resolvedFromSingle(single), nil
+		return projectResolved(single.GetRequestId(), single), nil
 	}
 	if batch := resp.ResolveDiscountResponseOneOf1; batch != nil {
 		items := batch.GetDiscounts()
 		if len(items) != 1 {
 			return nil, errors.Errorf("private discounts: resolve: expected a single discount, got %d", len(items))
 		}
-		return resolvedFromBatchItem(batch.GetRequestId(), &items[0]), nil
+		return projectResolved(batch.GetRequestId(), &items[0]), nil
 	}
 	return nil, errors.New("private discounts: resolve: response matched neither discount shape")
 }
 
-func resolvedFromSingle(s *rfqbackendinternal.ResolveDiscountResponseOneOf) *Resolved {
-	return &Resolved{
-		RequestID:         s.GetRequestId(),
-		DiscountID:        s.GetDiscountId(),
-		Discount:          termsFromModel(s.GetDiscount()),
-		SignerSignature:   s.GetSignerSignature(),
-		ProtocolDeadline:  s.GetProtocolDeadline(),
-		ProtocolSignature: s.GetProtocolSignature(),
-	}
+// Both OpenAPI union members expose the same signed terms; only the envelope
+// carrying requestId differs.
+type resolvedPayload interface {
+	GetDiscountId() string
+	GetDiscount() rfqbackendinternal.ResolveDiscountResponseOneOfDiscount
+	GetSignerSignature() string
+	GetProtocolDeadline() int64
+	GetProtocolSignature() string
 }
 
-func resolvedFromBatchItem(requestID string, it *rfqbackendinternal.ResolveDiscountResponseOneOf1DiscountsInner) *Resolved {
+func projectResolved(requestID string, it resolvedPayload) *Resolved {
 	return &Resolved{
 		RequestID:         requestID,
 		DiscountID:        it.GetDiscountId(),
@@ -136,10 +136,10 @@ func termsFromModel(d rfqbackendinternal.ResolveDiscountResponseOneOfDiscount) T
 
 // ListDiscounts lists currently advertised private discounts.
 func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
-	resp, httpResp, err := c.api.RFQAPI.ApiInternalV1DiscountsGet(ctx).Execute()
-	closeResp(httpResp)
+	resp, err := httpclient.Execute("private discounts: list", c.api.RFQAPI.ApiInternalV1DiscountsGet(ctx).Execute)
+
 	if err != nil {
-		return nil, errors.Errorf("private discounts: list: %w", err)
+		return nil, err
 	}
 	out := &List{}
 	if resp == nil {
@@ -165,10 +165,4 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 		})
 	}
 	return out, nil
-}
-
-func closeResp(resp *http.Response) {
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
 }

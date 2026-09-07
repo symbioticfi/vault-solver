@@ -10,8 +10,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestServiceReadyMetricMirrorsReadinessProbe(t *testing.T) {
@@ -62,9 +62,7 @@ func TestExternalOperationObserversUseOnlyPreboundSeries(t *testing.T) {
 	metrics, err := NewWorkflowMetrics(prometheus.NewRegistry(), "lifi", WorkflowSpec{
 		Operations: []string{"poll", "refresh"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	poll := metrics.Operation("poll")
 	poll.Observe(ExternalOperationSuccess, 150*time.Millisecond)
 	poll.Observe(0, 250*time.Millisecond)
@@ -82,9 +80,7 @@ func TestExternalOperationObserversUseOnlyPreboundSeries(t *testing.T) {
 func TestOperationTimerPreservesCompletedOutcomeAcrossCancellation(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := NewWorkflowMetrics(reg, "solver", WorkflowSpec{Operations: []string{"poll"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	timer := StartOperation(metrics.Operation("poll"))
 	timer.Finish(ctx, ExternalOperationSuccess)
@@ -114,9 +110,7 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 		States: []string{"offers"},
 	}
 	metrics, err := NewWorkflowMetrics(reg, "solver-a", spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if _, err := NewWorkflowMetrics(reg, "solver-b", spec); err != nil {
 		t.Fatalf("register second solver: %v", err)
 	}
@@ -128,22 +122,16 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 	metrics.ObserveStateAt("offers", 3, now)
 	metrics.ObserveStateAt("request-derived", 8, now)
 
-	event := metrics.events[workflowEventKey{event: "quote", outcome: "success"}]
-	if count, timestamp := testutil.ToFloat64(event.count), testutil.ToFloat64(event.last); count != 2 || timestamp != 123 {
+	if count, timestamp := testutil.ToFloat64(metrics.eventCount.WithLabelValues("quote", "success")), testutil.ToFloat64(metrics.eventTime.WithLabelValues("quote", "success")); count != 2 || timestamp != 123 {
 		t.Fatalf("event = (%v, %v), want (2, 123)", count, timestamp)
 	}
-	if got := testutil.ToFloat64(metrics.amounts[workflowAmountKey{
-		event: "quote", kind: "input",
-	}].WithLabelValues("0xabc")); got != 50 {
+	if got := testutil.ToFloat64(metrics.amountCount.WithLabelValues("quote", "0xabc", "input")); got != 50 {
 		t.Fatalf("amount = %v, want 50", got)
 	}
-	state := metrics.states["offers"]
-	if count, timestamp := testutil.ToFloat64(state.value), testutil.ToFloat64(state.last); count != 3 || timestamp != 123 {
+	if count, timestamp := testutil.ToFloat64(metrics.stateCount.WithLabelValues("offers")), testutil.ToFloat64(metrics.stateTime.WithLabelValues("offers")); count != 3 || timestamp != 123 {
 		t.Fatalf("state = (%v, %v), want (3, 123)", count, timestamp)
 	}
-	if got := testutil.CollectAndCount(metrics.events[workflowEventKey{
-		event: "quote", outcome: "error",
-	}].count); got != 1 {
+	if got := testutil.CollectAndCount(metrics.eventCount.WithLabelValues("quote", "error")); got != 1 {
 		t.Fatalf("pre-bound error series = %d, want 1", got)
 	}
 	for reason, want := range map[string]float64{
@@ -163,13 +151,9 @@ func TestWorkflowMetricsAllowSharedPreinitializedAssetsAcrossKinds(t *testing.T)
 		{Event: "quote", Kinds: []string{"input"}, Assets: []string{"0xABC"}},
 		{Event: "quote", Kinds: []string{"output"}, Assets: []string{"0xABC"}},
 	}})
-	if err != nil {
-		t.Fatalf("register shared route asset: %v", err)
-	}
+	testcheck.NoError(t, err, "register shared route asset: %v")
 	families, err := reg.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() == "solver_bot_workflow_amount_atomic_units_total" && len(family.GetMetric()) == 2 {
 			return

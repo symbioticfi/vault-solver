@@ -9,7 +9,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -29,9 +32,7 @@ tokensToQuote: permissioned
 permissionedTokens:
   - "0x2Ee6f1A395Bce7a7c5bF1D07bAaF9F8A0828A8d3"
 `)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
+	testcheck.NoError(t, err, "parse: %v")
 	if cfg.TokenPolicy.Scope() != tokenpolicy.Permissioned {
 		t.Errorf("TokenPolicy.Scope() = %q, want %q", cfg.TokenPolicy.Scope(), tokenpolicy.Permissioned)
 	}
@@ -40,9 +41,7 @@ permissionedTokens:
 	}
 
 	def, err := parseCfg(t, base)
-	if err != nil {
-		t.Fatalf("parse default: %v", err)
-	}
+	testcheck.NoError(t, err, "parse default: %v")
 	if def.TokenPolicy.Scope() != tokenpolicy.All {
 		t.Errorf("default token scope = %q, want %q", def.TokenPolicy.Scope(), tokenpolicy.All)
 	}
@@ -58,9 +57,7 @@ minAmountsIn:
   "0x1204371AC0e5176f4B8c5B2F16C2Bec551b6FC1a": "100000000000000000000"
   "0xaaa0008c8cf3a7dca931adaf04336a5d808c82cc": "1000000000000000000"
 `)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
+	testcheck.NoError(t, err, "parse: %v")
 	if len(cfg.MinAmountsIn) != 2 {
 		t.Fatalf("minAmountsIn = %d entries, want 2", len(cfg.MinAmountsIn))
 	}
@@ -75,9 +72,7 @@ minAmountsIn:
 	}
 
 	def, err := parseCfg(t, minimalConfig+oneAdapter)
-	if err != nil {
-		t.Fatalf("parse default: %v", err)
-	}
+	testcheck.NoError(t, err, "parse default: %v")
 	if def.MinAmountsIn != nil {
 		t.Fatalf("default minAmountsIn = %v, want nil (no minimums)", def.MinAmountsIn)
 	}
@@ -228,16 +223,14 @@ func TestQuoteMinAmountIn(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			srv := testServer()
-			strategy := &countingStrategy{Strategy: newDefaultTestStrategy()}
+			strategy := &countingStrategy{Strategy: defaultstrategy.New()}
 			srv.quotes.strategy = strategy
 			srv.quotes.minAmountsIn = tc.minAmountsIn
 			request := validQuoteBody()
 			request.Amount = amountIn
 
 			decision, err := srv.quotes.quote(t.Context(), &request)
-			if err != nil {
-				t.Fatalf("quote: %v", err)
-			}
+			testcheck.NoError(t, err, "quote: %v")
 			if !tc.wantQuote {
 				if decision.response != nil {
 					t.Fatalf("quote = %+v, want no quote (204)", decision.response)
@@ -303,9 +296,7 @@ func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	request.TokenIn = permissionedToken.Hex()
 
 	decision, err := srv.quotes.quote(t.Context(), &request)
-	if err != nil {
-		t.Fatalf("quote: %v", err)
-	}
+	testcheck.NoError(t, err, "quote: %v")
 	if decision.response == nil {
 		t.Fatal("quote declined, want response")
 	}
@@ -353,8 +344,6 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 func testPermissionedPolicy(t *testing.T, tokens ...common.Address) tokenpolicy.Policy {
 	t.Helper()
 	policy, err := tokenpolicy.New(tokenpolicy.Permissioned, tokens)
-	if err != nil {
-		t.Fatalf("tokenpolicy.New: %v", err)
-	}
+	testcheck.NoError(t, err, "tokenpolicy.New: %v")
 	return policy
 }

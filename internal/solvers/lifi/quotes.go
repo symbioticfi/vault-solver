@@ -1,8 +1,10 @@
 package lifi
 
 import (
+	"cmp"
 	"context"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,88 +45,69 @@ type quoteState struct {
 	renewBefore time.Duration
 }
 
-func (s *Solver) quoteLoop(
-	ctx context.Context,
-	routes []route,
-	refresh <-chan struct{},
-	feedConnections <-chan context.Context,
-) error {
+//nolint:contextcheck // session.ctx is a child of ctx, additionally canceled when the feed disconnects.
+func (s *Solver) quoteLoop(ctx context.Context, routes []route, refresh <-chan struct{}, feedConnections <-chan context.Context) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
-	laneStateChanges, unsubscribe := s.subscribeTransactionLaneState()
+	laneChanges, unsubscribe := s.subscribeTransactionLaneState()
 	defer unsubscribe()
-
 	state := newQuoteState(max(s.cfg.QuoteInterval, s.cfg.QuoteTTL/3))
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(
-			context.WithoutCancel(ctx),
-			s.cfg.OrderServer.HTTPTimeout,
-		)
+		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.OrderServer.HTTPTimeout)
 		defer cancel()
-		s.suspendQuotes(shutdownCtx, state)
-		if err := shutdownCtx.Err(); err != nil && len(state.active) > 0 {
+		s.suspendQuotes(drain, state)
+		if err := drain.Err(); err != nil && len(state.active) > 0 {
 			s.log.Error(err, "quote shutdown incomplete", "activePairs", len(state.active))
 		}
 	}()
+	type quoteSession struct {
+		ctx     context.Context
+		release func()
+	}
+	session := quoteSession{ctx: ctx, release: func() {}}
+	var disconnected <-chan struct{}
+	defer func() { session.release() }()
 	var lastBlock uint64
 	for {
+		publish, retire := false, false
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case connectionCtx := <-feedConnections:
-			state.forceRenewal()
-			connectedCtx, stopConnected := context.WithCancel(connectionCtx)
-			stopOnShutdown := context.AfterFunc(ctx, stopConnected)
-			//nolint:contextcheck // connectedCtx is cancelled by either the feed connection or quote-loop context.
-			s.runConnectedQuoteLoop(
-				connectedCtx, routes, refresh, ticker.C, laneStateChanges, state, &lastBlock,
-			)
-			_ = stopOnShutdown()
-			stopConnected()
-			if ctx.Err() != nil {
-				return ctx.Err()
+		case connection, ok := <-feedConnections:
+			if !ok {
+				feedConnections = nil
+				continue
 			}
-			s.suspendQuotes(ctx, state)
+			session.release()
+			operation, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(connection, cancel)
+			session.release = func() { stop(); cancel() }
+			session.ctx = operation //nolint:fatcontext // Each connection replaces a canceled child of the root ctx; contexts never nest.
+			disconnected = connection.Done()
+			if connection.Err() != nil {
+				cancel()
+			}
+			state.forceRenewal()
+			publish = true
+		case <-disconnected:
+			session.release()
+			session.ctx, disconnected = ctx, nil
+			retire = true
 		case <-refresh:
-			s.suspendQuotes(ctx, state)
+			publish = true
 		case <-ticker.C:
-			s.suspendQuotes(ctx, state)
-		case <-laneStateChanges:
-			// A coalesced signal may represent pause followed by resume. Always retire any curve
-			// first so a missed intermediate state cannot leave a pre-pause commitment live.
+			publish = disconnected == nil || s.shouldRefreshQuotes(session.ctx, state, &lastBlock)
+		case <-laneChanges:
+			// Notifications coalesce. Retire even if the latest lane state has already
+			// returned to ready: the old commitment crossed an unobserved busy period.
+			retire, publish = true, true
+			state.forceRenewal()
+		}
+		if retire || disconnected == nil {
 			s.suspendQuotes(ctx, state)
 		}
-	}
-}
-
-func (s *Solver) runConnectedQuoteLoop(
-	ctx context.Context,
-	routes []route,
-	refresh <-chan struct{},
-	ticks <-chan time.Time,
-	laneStateChanges <-chan struct{},
-	state *quoteState,
-	lastBlock *uint64,
-) {
-	s.refreshQuotes(ctx, routes, state)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-refresh:
-			s.refreshQuotes(ctx, routes, state)
-		case <-ticks:
-			if s.shouldRefreshQuotes(ctx, state, lastBlock) {
-				s.refreshQuotes(ctx, routes, state)
-			}
-		case <-laneStateChanges:
-			// Signals are deliberately coalesced. Retire the current curve even when the latest
-			// state is already ready, then republish from fresh state below.
-			s.suspendQuotes(ctx, state)
-			if s.transactionLaneReady() {
-				state.forceRenewal()
-				s.refreshQuotes(ctx, routes, state)
-			}
+		if publish && disconnected != nil && session.ctx.Err() == nil {
+			s.refreshQuotes(session.ctx, routes, state)
 		}
 	}
 }
@@ -205,7 +188,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: read latest block time")
 		return
 	}
-	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor, chainTime)
+	snapshotSet, err := s.reader.Quote(ctx, routes, s.cfg.Executor, chainTime)
 	if err != nil {
 		s.log.Error(err, "quote refresh: read routes")
 		return
@@ -370,63 +353,55 @@ func (s *quoteState) reconcile(
 	now time.Time,
 ) (int, error) {
 	next := indexQuotePairs(quotes)
-	expire := make([]quotePairKey, 0)
-	publish := make(map[quotePairKey]bool, len(next))
-	for key, current := range s.active {
-		upcoming, ok := next[key]
-		if !ok {
-			expire = append(expire, key)
-			continue
-		}
-		if shouldReplaceQuotePair(current, upcoming, now, s.renewBefore) {
-			publish[key] = true
-		}
+	ordered := make([]quotePairKey, 0, len(s.active)+len(next))
+	for key := range s.active {
+		ordered = append(ordered, key)
 	}
 	for key := range next {
-		if _, ok := s.active[key]; !ok {
-			publish[key] = true
+		if _, exists := s.active[key]; !exists {
+			ordered = append(ordered, key)
 		}
 	}
-	publishKeys := make([]quotePairKey, 0, len(publish))
-	for key, enabled := range publish {
-		if enabled {
-			publishKeys = append(publishKeys, key)
-		}
-	}
-	sort.Slice(publishKeys, func(i, j int) bool {
-		return quotePairKeyString(publishKeys[i]) < quotePairKeyString(publishKeys[j])
-	})
-	sort.Slice(expire, func(i, j int) bool { return quotePairKeyString(expire[i]) < quotePairKeyString(expire[j]) })
-	toPublish := make([]types.Quote, 0, len(quotes)+len(expire))
-	for _, key := range expire {
-		for _, quote := range s.active[key].quotes {
-			quote.Expiry = now.Add(-time.Second).Unix()
-			toPublish = append(toPublish, quote)
-		}
-	}
-	for _, key := range publishKeys {
-		toPublish = append(toPublish, next[key].quotes...)
-	}
-	if len(toPublish) != 0 {
-		if err := submitter.submitQuotes(ctx, toPublish); err != nil {
-			// The server may have accepted a request even when the client did not
-			// receive its response. Track every attempted pair conservatively so
-			// disconnect suspension expires it before quoting resumes.
-			for _, key := range publishKeys {
-				uncertain := next[key]
-				uncertain.expiry = 0
-				s.active[key] = uncertain
+	slices.SortFunc(ordered, compareQuotePairs)
+	var expire, publish []quotePairKey
+	var payload []types.Quote
+	for _, key := range ordered {
+		current, exists := s.active[key]
+		upcoming, wanted := next[key]
+		switch {
+		case !wanted:
+			expire = append(expire, key)
+			for _, quote := range current.quotes {
+				quote.Expiry = now.Add(-time.Second).Unix()
+				payload = append(payload, quote)
 			}
-			return len(expire), err
+		case !exists || shouldReplaceQuotePair(current, upcoming, now, s.renewBefore):
+			publish = append(publish, key)
 		}
 	}
-	for _, key := range expire {
-		delete(s.active, key)
+	// Retire vanished pairs before advertising replacements in the same request.
+	for _, key := range publish {
+		payload = append(payload, next[key].quotes...)
 	}
-	for _, key := range publishKeys {
-		s.active[key] = next[key]
+	if len(payload) == 0 {
+		return 0, nil
 	}
-	return len(expire), nil
+	err := submitter.submitQuotes(ctx, payload)
+	for _, key := range publish {
+		pair := next[key]
+		// A lost response does not prove rejection. Retain every attempted pair so
+		// disconnect/shutdown can expire it, and force its renewal on the next attempt.
+		if err != nil {
+			pair.expiry = 0
+		}
+		s.active[key] = pair
+	}
+	if err == nil {
+		for _, key := range expire {
+			delete(s.active, key)
+		}
+	}
+	return len(expire), err
 }
 
 func shouldReplaceQuotePair(current, upcoming quotePairState, now time.Time, renewBefore time.Duration) bool {
@@ -437,34 +412,39 @@ func shouldReplaceQuotePair(current, upcoming quotePairState, now time.Time, ren
 }
 
 func indexQuotePairs(quotes []types.Quote) map[quotePairKey]quotePairState {
-	grouped := make(map[quotePairKey][]types.Quote)
+	pairs := make(map[quotePairKey]quotePairState)
 	for _, quote := range quotes {
 		key := pairKey(quote)
-		grouped[key] = append(grouped[key], quote)
+		pair := pairs[key]
+		pair.quotes = append(pair.quotes, quote)
+		if pair.expiry == 0 || quote.Expiry < pair.expiry {
+			pair.expiry = quote.Expiry
+		}
+		pairs[key] = pair
 	}
-
-	out := make(map[quotePairKey]quotePairState, len(grouped))
-	for key, pairQuotes := range grouped {
-		fingerprints := make([]string, 0, len(pairQuotes))
-		expiry := int64(0)
-		for _, quote := range pairQuotes {
-			ranges := make([]string, 0, len(quote.Ranges))
-			for _, r := range quote.Ranges {
-				ranges = append(ranges, bigString(r.MinAmount)+":"+bigString(r.MaxAmount)+":"+r.Quote)
+	for key, pair := range pairs {
+		fingerprints := make([]string, len(pair.quotes))
+		for index, quote := range pair.quotes {
+			var text strings.Builder
+			text.WriteString(strings.ToLower(quote.ExclusiveFor.Hex()))
+			text.WriteByte(':')
+			for index, segment := range quote.Ranges {
+				if index != 0 {
+					text.WriteByte(',')
+				}
+				text.WriteString(bigString(segment.MinAmount))
+				text.WriteByte(':')
+				text.WriteString(bigString(segment.MaxAmount))
+				text.WriteByte(':')
+				text.WriteString(segment.Quote)
 			}
-			fingerprints = append(fingerprints, strings.ToLower(quote.ExclusiveFor.Hex())+":"+strings.Join(ranges, ","))
-			if expiry == 0 || quote.Expiry < expiry {
-				expiry = quote.Expiry
-			}
+			fingerprints[index] = text.String()
 		}
 		sort.Strings(fingerprints)
-		out[key] = quotePairState{
-			fingerprint: strings.Join(fingerprints, "|"),
-			expiry:      expiry,
-			quotes:      append([]types.Quote(nil), pairQuotes...),
-		}
+		pair.fingerprint = strings.Join(fingerprints, "|")
+		pairs[key] = pair
 	}
-	return out
+	return pairs
 }
 
 func pairKey(quote types.Quote) quotePairKey {
@@ -474,11 +454,12 @@ func pairKey(quote types.Quote) quotePairKey {
 	}
 }
 
-func quotePairKeyString(key quotePairKey) string {
-	return strings.Join([]string{
-		strings.ToLower(key.fromAsset.Hex()), strings.ToLower(key.toAsset.Hex()),
-		strconv.Itoa(key.fromDecimals), strconv.Itoa(key.toDecimals),
-	}, ":")
+func compareQuotePairs(a, b quotePairKey) int {
+	// Address bytes have the same order as lower-case hex. Retain the separator
+	// after input decimals: in the original key, "10:" sorts before "1:".
+	return cmp.Or(a.fromAsset.Cmp(b.fromAsset), a.toAsset.Cmp(b.toAsset),
+		strings.Compare(strconv.Itoa(a.fromDecimals)+":", strconv.Itoa(b.fromDecimals)+":"),
+		strings.Compare(strconv.Itoa(a.toDecimals), strconv.Itoa(b.toDecimals)))
 }
 
 func bigString(n *big.Int) string {

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -91,7 +90,8 @@ func newUniswapXMetrics(
 	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
 		Event: "quote", Kinds: []string{"input", "output"},
 	})
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	group := observability.NewMetricGroup("")
+	workflow, err := observability.NewWorkflowMetrics(group, Name, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -154,14 +154,10 @@ func newUniswapXMetrics(
 		fillAmounts: liquidlane.NewFillMetrics(workflow),
 		now:         time.Now,
 	}
-	collectors := []prometheus.Collector{
-		m.quoteTime, m.exclusiveOutstanding, m.exclusiveDeadline, m.blockUntil, m.ready,
-		m.quoteRefresh, m.exclusivePoll, m.pendingFills,
-	}
-	for _, collector := range collectors {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("uniswapx: register metric: %w", err)
-		}
+	group.Add(m.quoteTime, m.exclusiveOutstanding, m.exclusiveDeadline, m.blockUntil,
+		m.ready, m.quoteRefresh, m.exclusivePoll, m.pendingFills)
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

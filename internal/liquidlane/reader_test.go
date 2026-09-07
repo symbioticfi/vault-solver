@@ -10,18 +10,16 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 type scriptedLiquidLaneBackend struct {
 	latest [][]chain.CallResult
 }
-
-func (b *scriptedLiquidLaneBackend) ChainID() *big.Int { return big.NewInt(11155111) }
 
 func (b *scriptedLiquidLaneBackend) Multicall(_ context.Context, _ []chain.Call) ([]chain.CallResult, error) {
 	result := b.latest[0]
@@ -116,11 +114,10 @@ func TestReaderResolveAdaptersFailsClosedForConfiguredAdapterMetadata(t *testing
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := &Reader{
-				chain:               &scriptedLiquidLaneBackend{latest: test.results},
-				log:                 logr.Discard(),
-				dec:                 test.dec,
-				chainID:             11155111,
-				maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
+				chain:   &scriptedLiquidLaneBackend{latest: test.results},
+				log:     logr.Discard(),
+				dec:     test.dec,
+				chainID: 11155111,
 			}
 
 			_, err := r.ResolveAdapters(context.Background(), []common.Address{route.Adapter})
@@ -214,11 +211,10 @@ func TestReaderResolveRoutesFailsClosedForConfiguredAdapterRoutes(t *testing.T) 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := &Reader{
-				chain:               &scriptedLiquidLaneBackend{latest: test.results},
-				log:                 logr.Discard(),
-				dec:                 test.dec,
-				chainID:             11155111,
-				maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
+				chain:   &scriptedLiquidLaneBackend{latest: test.results},
+				log:     logr.Discard(),
+				dec:     test.dec,
+				chainID: 11155111,
 			}
 
 			_, err := r.ResolveRoutes(t.Context(), []common.Address{route.Adapter})
@@ -247,14 +243,11 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 	}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111,
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
 	routes := []Route{testReaderRoute(1), testReaderRoute(2)}
 
 	inventory, err := r.ReadInventory(context.Background(), routes)
-	if err != nil {
-		t.Fatalf("ReadInventory: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadInventory: %v")
 	if len(inventory) != 1 || inventory[0].ID != routes[0].ID {
 		t.Fatalf("inventory = %+v", inventory)
 	}
@@ -276,7 +269,6 @@ func TestReaderReadFillQuotesFiltersTokenAtLatest(t *testing.T) {
 	}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111,
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
 	matching := testReaderRoute(1)
 	matching.TokenIn = tokenIn
@@ -284,9 +276,7 @@ func TestReaderReadFillQuotesFiltersTokenAtLatest(t *testing.T) {
 	amountIn := big.NewInt(500)
 
 	quotes, err := r.ReadFillQuotes(context.Background(), []Route{matching, nonMatching}, tokenIn, amountIn)
-	if err != nil {
-		t.Fatalf("ReadFillQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadFillQuotes: %v")
 	if len(quotes) != 1 || quotes[0].GrossAmountOut.String() != "900" ||
 		quotes[0].MaxAmountOut.String() != "810" || quotes[0].MinDiscount.String() != "100000" ||
 		quotes[0].MaxRate.String() != "1620000000000000000000000000000" {
@@ -308,16 +298,13 @@ func TestReaderReadFillQuotesKeepsAmountSpecificFillWhenRateRoundsToZero(t *test
 	}}}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111,
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
 	route := testReaderRoute(1)
 	route.TokenIn = tokenIn
 	amountIn := new(big.Int).Exp(big.NewInt(10), big.NewInt(37), nil)
 
 	quotes, err := r.ReadFillQuotes(context.Background(), []Route{route}, tokenIn, amountIn)
-	if err != nil {
-		t.Fatalf("ReadFillQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadFillQuotes: %v")
 	if len(quotes) != 1 || quotes[0].MaxAmountOut.String() != "1" || quotes[0].MaxRate.Sign() != 0 {
 		t.Fatalf("quotes = %+v", quotes)
 	}
@@ -348,9 +335,7 @@ func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testin
 	}}
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 	snapshot, err := r.ReadGasSnapshot(context.Background(), []Route{route, secondRoute})
-	if err != nil {
-		t.Fatalf("ReadGasSnapshot: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 	if len(snapshot.Vaults) != 1 || snapshot.Vaults[route.Vault].FreeAssets.String() != "200" ||
 		snapshot.Vaults[route.Vault].Withdrawable.String() != "150" {
 		t.Fatalf("gas vault state = %+v", snapshot.Vaults)
@@ -379,9 +364,7 @@ func TestReaderReadGasSnapshotReadsZeroMarketMakerKey(t *testing.T) {
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 	snapshot, err := r.ReadGasSnapshot(t.Context(), []Route{route})
-	if err != nil {
-		t.Fatalf("ReadGasSnapshot: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 	if got := snapshot.Adapters[route.Adapter].Acquire[route.TokenIn]; got == nil || got.String() != "30" {
 		t.Fatalf("acquire balance = %v, want 30", got)
 	}
@@ -408,9 +391,7 @@ func TestReaderReadGasSnapshotTreatsInvalidAcquireBalanceAsUnavailable(t *testin
 			r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 			snapshot, err := r.ReadGasSnapshot(context.Background(), []Route{route})
-			if err != nil {
-				t.Fatalf("ReadGasSnapshot: %v", err)
-			}
+			testcheck.NoError(t, err, "ReadGasSnapshot: %v")
 			if amount := snapshot.Adapters[route.Adapter].Acquire[route.TokenIn]; amount != nil {
 				t.Fatalf("acquire balance = %v, want unavailable", amount)
 			}
@@ -443,14 +424,11 @@ func TestReaderReadAdapterSnapshotCombinesSharedFacts(t *testing.T) {
 	}}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), chainID: 11155111,
-		dec:                 fixedDecimals{route.TokenIn: route.TokenInDecimals, route.TokenOut: route.TokenOutDecimals},
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
+		dec: fixedDecimals{route.TokenIn: route.TokenInDecimals, route.TokenOut: route.TokenOutDecimals},
 	}
 
 	snapshot, err := r.ReadAdapterSnapshot(context.Background(), route.Adapter, owner)
-	if err != nil {
-		t.Fatalf("ReadAdapterSnapshot: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadAdapterSnapshot: %v")
 	if !snapshot.Authorized || snapshot.Paused || snapshot.Vault != route.Vault || snapshot.TokenOut != route.TokenOut {
 		t.Fatalf("adapter snapshot = %+v", snapshot)
 	}
@@ -504,13 +482,10 @@ func TestReaderReadAdapterSnapshotKeepsZeroCapacityRoutes(t *testing.T) {
 			first.TokenIn: first.TokenInDecimals, second.TokenIn: second.TokenInDecimals,
 			first.TokenOut: first.TokenOutDecimals,
 		},
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
 
 	snapshot, err := r.ReadAdapterSnapshot(context.Background(), first.Adapter, owner)
-	if err != nil {
-		t.Fatalf("ReadAdapterSnapshot: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadAdapterSnapshot: %v")
 	if len(snapshot.Routes) != 2 {
 		t.Fatalf("routes = %+v", snapshot.Routes)
 	}
@@ -543,9 +518,7 @@ func TestReaderReadAuthUsesDirectRolesAndDelegatedFiller(t *testing.T) {
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 	auth, err := r.ReadAuth(context.Background(), adapters, filler)
-	if err != nil {
-		t.Fatalf("ReadAuth: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadAuth: %v")
 	if len(auth) != 3 || !auth[0].Authorized || !auth[1].Authorized || !auth[2].Authorized || !auth[2].IsFiller {
 		t.Fatalf("auth = %+v", auth)
 	}
@@ -562,9 +535,7 @@ func TestReaderReadAuthAcceptsDelegatedFillerForZeroMarketMaker(t *testing.T) {
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 	auth, err := r.ReadAuth(t.Context(), []common.Address{adapterAddress}, filler)
-	if err != nil {
-		t.Fatalf("ReadAuth: %v", err)
-	}
+	testcheck.NoError(t, err, "ReadAuth: %v")
 	if len(auth) != 1 || auth[0].MarketMaker != (common.Address{}) || auth[0].Owner != owner ||
 		!auth[0].Authorized || !auth[0].IsFiller {
 		t.Fatalf("auth = %+v", auth)
@@ -602,9 +573,7 @@ func TestReaderFilterAuthorizedRoutesDropsUnauthorizedAdapters(t *testing.T) {
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 	got, err := r.FilterAuthorizedRoutes(context.Background(), routes, filler)
-	if err != nil {
-		t.Fatalf("FilterAuthorizedRoutes: %v", err)
-	}
+	testcheck.NoError(t, err, "FilterAuthorizedRoutes: %v")
 	if len(got) != 1 || got[0].ID != routes[0].ID {
 		t.Fatalf("authorized routes = %+v", got)
 	}
@@ -621,9 +590,7 @@ func TestReaderFilterAuthorizedRoutesAcceptsAdapterOnlyEntries(t *testing.T) {
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
 	got, err := r.FilterAuthorizedRoutes(t.Context(), []Route{route}, filler)
-	if err != nil {
-		t.Fatalf("FilterAuthorizedRoutes: %v", err)
-	}
+	testcheck.NoError(t, err, "FilterAuthorizedRoutes: %v")
 	if len(got) != 1 || got[0].Adapter != adapterAddress {
 		t.Fatalf("authorized routes = %+v", got)
 	}
@@ -644,9 +611,7 @@ func testReaderRoute(index byte) Route {
 func successOutput(t *testing.T, method string, values ...any) chain.CallResult {
 	t.Helper()
 	parsed, err := adapter.LiquidLaneAdapterMetaData.ParseABI()
-	if err != nil {
-		t.Fatalf("parse adapter ABI: %v", err)
-	}
+	testcheck.NoError(t, err, "parse adapter ABI: %v")
 	data, err := packMethodOutput(parsed, method, values...)
 	if err != nil {
 		t.Fatalf("pack %s output: %v", method, err)
@@ -657,9 +622,7 @@ func successOutput(t *testing.T, method string, values ...any) chain.CallResult 
 func successVaultOutput(t *testing.T, method string, values ...any) chain.CallResult {
 	t.Helper()
 	parsed, err := vaultv2.IVaultV2MetaData.ParseABI()
-	if err != nil {
-		t.Fatalf("parse vault ABI: %v", err)
-	}
+	testcheck.NoError(t, err, "parse vault ABI: %v")
 	data, err := packMethodOutput(parsed, method, values...)
 	if err != nil {
 		t.Fatalf("pack %s output: %v", method, err)
@@ -670,13 +633,9 @@ func successVaultOutput(t *testing.T, method string, values ...any) chain.CallRe
 func successAssetOutput(t *testing.T, asset common.Address) chain.CallResult {
 	t.Helper()
 	parsed, err := erc4626.IERC4626MetaData.ParseABI()
-	if err != nil {
-		t.Fatalf("parse ERC4626 ABI: %v", err)
-	}
+	testcheck.NoError(t, err, "parse ERC4626 ABI: %v")
 	data, err := packMethodOutput(parsed, "asset", asset)
-	if err != nil {
-		t.Fatalf("pack asset output: %v", err)
-	}
+	testcheck.NoError(t, err, "pack asset output: %v")
 	return chain.CallResult{Success: true, ReturnData: data}
 }
 

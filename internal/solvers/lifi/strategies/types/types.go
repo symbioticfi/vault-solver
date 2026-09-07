@@ -6,11 +6,12 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 const (
@@ -23,8 +24,8 @@ const (
 )
 
 // LiquidLaneGasEnvelope returns the fixed LI.FI executor overhead around route execution.
-func LiquidLaneGasEnvelope() liquidstrategies.GasEnvelope {
-	return liquidstrategies.GasEnvelope{
+func LiquidLaneGasEnvelope() planning.GasEnvelope {
+	return planning.GasEnvelope{
 		SettlementUnits: settlementGasUnits, PrivateRouteUnits: privateRouteGasUnits,
 	}
 }
@@ -89,11 +90,11 @@ type FillInput struct {
 	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
 	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
 	ChainTime    time.Time                       `json:"chainTime"`
-	Trace        liquidstrategies.DecisionTrace  `json:"-"`
+	Trace        planning.DecisionTrace          `json:"-"`
 }
 
 type FillPlan struct {
 	Routes []FillRoute `json:"routes"`
 }
 
-type FillRoute = liquidstrategies.FillRoute
+type FillRoute = planning.FillRoute

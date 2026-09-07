@@ -1,6 +1,11 @@
 package redstoneoev
 
-import "sync"
+import (
+	"math"
+	"sync"
+
+	"github.com/go-errors/errors"
+)
 
 // nonceStore issues strictly-ascending EXECUTOR_V6 nonces. The Executor requires nonce >
 // nonces[signer] and only advances that on a settled (or failed) execution, so we track the last
@@ -23,12 +28,15 @@ func (n *nonceStore) reconcile(onchain uint64) {
 
 // next returns the next nonce to sign: strictly greater than both the on-chain nonce and any nonce
 // already issued this session.
-func (n *nonceStore) next(onchain uint64) uint64 {
+func (n *nonceStore) next(onchain uint64) (uint64, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if onchain > n.issued {
 		n.issued = onchain
 	}
+	if n.issued == math.MaxUint64 {
+		return 0, errors.New("bid nonce space exhausted")
+	}
 	n.issued++
-	return n.issued
+	return n.issued, nil
 }

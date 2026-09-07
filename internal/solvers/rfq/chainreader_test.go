@@ -5,71 +5,46 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
-func TestApplyResolvedQuoteAdaptersPreservesIndependentCapacity(t *testing.T) {
-	adapterA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000b2")
-	vaultA := common.HexToAddress("0x0000000000000000000000000000000000000011")
-	vaultB := common.HexToAddress("0x0000000000000000000000000000000000000022")
-	inventory := []solverInventory{
-		testInventory(adapterA, tIn, tOut, big.NewInt(100), big.NewInt(1)),
-		testInventory(adapterB, tIn, tOut, big.NewInt(100), big.NewInt(1)),
-	}
-
-	resolved, err := applyResolvedQuoteAdapters(1, inventory, resolvedQuoteAdapters([]recoveryVault{
-		{Adapter: adapterA, Vault: vaultA, TokenOut: tOut, TokenOutDecimals: 6},
-		{Adapter: adapterB, Vault: vaultB, TokenOut: tOut, TokenOutDecimals: 6},
-	}))
-	if err != nil {
-		t.Fatalf("applyResolvedQuoteAdapters: %v", err)
-	}
-	if resolved[0].CapacityID == resolved[1].CapacityID {
-		t.Fatalf("independent vaults share capacity ID %q", resolved[0].CapacityID)
-	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(resolved, nil, 0)
-	total := new(big.Int)
-	for _, item := range allocated {
-		total.Add(total, item.MaxAssets)
-	}
-	if total.Cmp(big.NewInt(200)) != 0 {
-		t.Fatalf("allocated capacity = %s, want 200", total)
-	}
-}
-
-func TestApplyResolvedQuoteAdaptersSharesVaultCapacity(t *testing.T) {
-	adapterA := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000b2")
-	vault := common.HexToAddress("0x0000000000000000000000000000000000000011")
-	inventory := []solverInventory{
-		testInventory(adapterA, tIn, tOut, big.NewInt(100), big.NewInt(1)),
-		testInventory(adapterB, tIn, tOut, big.NewInt(100), big.NewInt(1)),
-	}
-
-	resolved, err := applyResolvedQuoteAdapters(1, inventory, resolvedQuoteAdapters([]recoveryVault{
-		{Adapter: adapterA, Vault: vault, TokenOut: tOut, TokenOutDecimals: 6},
-		{Adapter: adapterB, Vault: vault, TokenOut: tOut, TokenOutDecimals: 6},
-	}))
-	if err != nil {
-		t.Fatalf("applyResolvedQuoteAdapters: %v", err)
-	}
-	if resolved[0].CapacityID != resolved[1].CapacityID {
-		t.Fatalf("shared vault capacity IDs = %q, %q", resolved[0].CapacityID, resolved[1].CapacityID)
-	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(resolved, nil, 0)
-	total := new(big.Int)
-	for _, item := range allocated {
-		total.Add(total, item.MaxAssets)
-	}
-	if total.Cmp(big.NewInt(100)) != 0 {
-		t.Fatalf("allocated capacity = %s, want shared limit 100", total)
+func TestBindQuoteAdaptersCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		secondVault common.Address
+		wantTotal   int64
+	}{
+		{"independent", common.HexToAddress("0x22"), 200},
+		{"shared", common.HexToAddress("0x11"), 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapterA, adapterB := common.HexToAddress("0xa1"), common.HexToAddress("0xb2")
+			resolved := []solverInventory{
+				testInventory(adapterA, tIn, tOut, big.NewInt(100), big.NewInt(1)),
+				testInventory(adapterB, tIn, tOut, big.NewInt(100), big.NewInt(1)),
+			}
+			err := bindQuoteAdapters(1, resolved, resolvedQuoteAdapters([]recoveryVault{
+				{Adapter: adapterA, Vault: common.HexToAddress("0x11"), TokenOut: tOut, TokenOutDecimals: 6},
+				{Adapter: adapterB, Vault: tc.secondVault, TokenOut: tOut, TokenOutDecimals: 6},
+			}))
+			testcheck.NoError(t, err, "bindQuoteAdapters: %v")
+			if shared := resolved[0].CapacityID == resolved[1].CapacityID; shared != (tc.wantTotal == 100) {
+				t.Fatalf("capacity IDs = %q, %q", resolved[0].CapacityID, resolved[1].CapacityID)
+			}
+			total := new(big.Int)
+			for _, item := range planning.AllocateInventoryCapacity(resolved, nil, 0) {
+				total.Add(total, item.MaxAssets)
+			}
+			if total.Cmp(big.NewInt(tc.wantTotal)) != 0 {
+				t.Fatalf("allocated capacity = %s, want %d", total, tc.wantTotal)
+			}
+		})
 	}
 }
 
-func TestApplyResolvedQuoteAdaptersFailsClosed(t *testing.T) {
+func TestBindQuoteAdaptersFailsClosed(t *testing.T) {
 	adapter := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	otherAsset := common.HexToAddress("0x0000000000000000000000000000000000000099")
 	vault := common.HexToAddress("0x0000000000000000000000000000000000000011")
@@ -89,7 +64,7 @@ func TestApplyResolvedQuoteAdaptersFailsClosed(t *testing.T) {
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := applyResolvedQuoteAdapters(1, inventory, resolvedQuoteAdapters(resolved)); err == nil {
+			if err := bindQuoteAdapters(1, inventory, resolvedQuoteAdapters(resolved)); err == nil {
 				t.Fatal("expected unresolved quote adapter error")
 			}
 		})

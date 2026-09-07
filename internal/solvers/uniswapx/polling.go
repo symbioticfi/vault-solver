@@ -6,185 +6,138 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
+// One poller serializes source snapshots and claims. An exclusive snapshot is
+// publishable only after terminal history and existing obligations reconcile.
 func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error {
 	defer close(out)
-	ticker := time.NewTicker(s.cfg.OrderServer.PollInterval)
-	defer ticker.Stop()
-	for {
-		if err := s.pollOrders(ctx, out); err != nil && !errors.Is(err, context.Canceled) {
+	tick := time.NewTicker(s.cfg.OrderServer.PollInterval)
+	defer tick.Stop()
+	for ctx.Err() == nil {
+		if err := s.pollOrders(ctx, out); err != nil && ctx.Err() == nil {
 			s.log.Error(err, "order poll failed")
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		case <-tick.C:
 		}
 	}
+	return ctx.Err()
 }
 
 func (s *Solver) pollOrders(ctx context.Context, out chan<- *resolvedOrder) error {
-	var pollErrs []error
-	if s.cfg.OrderServer.Sources.ExclusiveV2 {
-		timer := observability.StartOperation(s.operations.exclusiveOrderPoll)
-		outcome := observability.ExternalOperationError
-		now, err := s.pollSource(ctx, orderSourceExclusiveV2, &s.cfg.Executor, out)
+	sources := []struct {
+		enabled  bool
+		name     orderSource
+		filler   *common.Address
+		observer *observability.OperationObserver
+	}{
+		{s.cfg.OrderServer.Sources.ExclusiveV2, orderSourceExclusiveV2, &s.cfg.Executor, s.operations.exclusiveOrderPoll},
+		{s.cfg.OrderServer.Sources.PublicV2, orderSourcePublicV2, nil, s.operations.publicOrderPoll},
+	}
+	var failures []error
+	for _, source := range sources {
+		if !source.enabled {
+			continue
+		}
+		timer := observability.StartOperation(source.observer)
+		chainTime, err := s.pollSource(ctx, source.name, source.filler, out)
+		outcome := observability.ExternalOperationSuccess
+		// A read can deliver valid partial records while still withholding readiness.
 		if err != nil {
-			if !now.IsZero() {
+			outcome = observability.ExternalOperationError
+			if !chainTime.IsZero() {
 				outcome = observability.ExternalOperationDegraded
 			}
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
-		} else if err := s.reconcileExclusivePoll(ctx, now); err != nil {
-			s.markExclusiveStateUnknown()
-			s.observePoll(string(orderSourceExclusiveV2), "failed")
-			pollErrs = append(pollErrs, err)
+		} else if source.name == orderSourceExclusiveV2 {
+			err = s.reconcileExclusivePoll(ctx, chainTime)
+			if err != nil {
+				outcome = observability.ExternalOperationError
+			}
+		}
+		if err == nil {
+			if source.name == orderSourceExclusiveV2 {
+				s.recordExclusivePollSuccess(time.Now())
+			}
+			s.observePoll(string(source.name), "ok")
 		} else {
-			outcome = observability.ExternalOperationSuccess
-			s.recordExclusivePollSuccess(time.Now())
-			s.observePoll(string(orderSourceExclusiveV2), "ok")
+			if source.name == orderSourceExclusiveV2 {
+				s.markExclusiveStateUnknown()
+			}
+			s.observePoll(string(source.name), "failed")
+			failures = append(failures, err)
 		}
 		timer.Finish(ctx, outcome)
 	}
-	if s.cfg.OrderServer.Sources.PublicV2 {
-		timer := observability.StartOperation(s.operations.publicOrderPoll)
-		outcome := observability.ExternalOperationError
-		now, err := s.pollSource(ctx, orderSourcePublicV2, nil, out)
-		if err != nil {
-			if !now.IsZero() {
-				outcome = observability.ExternalOperationDegraded
-			}
-			pollErrs = append(pollErrs, err)
-			s.observePoll(string(orderSourcePublicV2), "failed")
-		} else {
-			outcome = observability.ExternalOperationSuccess
-			s.observePoll(string(orderSourcePublicV2), "ok")
-		}
-		timer.Finish(ctx, outcome)
-	}
-	return errors.Join(pollErrs...)
+	return errors.Join(failures...)
 }
 
 func (s *Solver) reconcileExclusivePoll(ctx context.Context, now time.Time) error {
+	var err error
 	if s.exclusiveStateUnknown.Load() {
-		if err := s.recoverRecentExclusive(ctx, now); err != nil {
-			return err
-		}
+		err = s.recoverRecentExclusive(ctx, now)
 	}
-	if err := s.sweepExclusive(ctx, now); err != nil {
+	if err == nil {
+		err = s.sweepExclusive(ctx, now)
+	}
+	if err != nil {
 		return errors.Errorf("reconcile exclusive orders: %w", err)
 	}
 	return nil
 }
 
 func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) error {
-	startup := s.lastExclusivePoll.Load() == 0
-	lookback := s.exclusiveRecoveryLookback()
-	createdAfter := now.Add(-lookback)
-	entries, err := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, createdAfter)
-	for _, entry := range entries {
-		if entry.OrderStatus == orderStatusOpen {
+	cutoff := now.Add(-s.exclusiveRecoveryLookback())
+	initial := s.lastExclusivePoll.Load() == 0
+	records, readErr := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, cutoff)
+	for _, record := range records {
+		if record.OrderStatus == orderStatusOpen {
 			continue
 		}
-		obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
-		if obligationErr != nil {
-			if errors.Is(obligationErr, errDifferentExclusiveFiller) {
-				continue
-			}
-			return errors.Errorf(
-				"track terminal exclusive order %q: %w",
-				entry.OrderHash,
-				obligationErr,
-			)
+		obligation, err := exclusiveObligationFromEntry(record, s.cfg, s.chainID)
+		if errors.Is(err, errDifferentExclusiveFiller) {
+			continue
 		}
-		obligation.recoveredAtStart = startup
-		s.trackExclusiveObligation(obligation, entry.QuoteID, now)
+		if err != nil {
+			return errors.Errorf("track terminal exclusive order %q: %w", record.OrderHash, err)
+		}
+		obligation.recoveredAtStart = initial
+		s.trackExclusiveObligation(obligation, record.QuoteID)
 	}
-	s.log.V(1).Info(
-		"recent exclusive history reconciled",
-		"orders", len(entries),
-		"createdAfter", createdAfter.Unix(),
-		"startup", startup,
-	)
-	if err != nil {
-		return errors.Errorf("poll recent exclusive orders: %w", err)
+	s.log.V(1).Info("recent exclusive history reconciled", "orders", len(records), "createdAfter", cutoff.Unix(), "startup", initial)
+	if readErr != nil {
+		return errors.Errorf("poll recent exclusive orders: %w", readErr)
 	}
 	return nil
 }
 
 func (s *Solver) exclusiveRecoveryLookback() time.Duration {
-	return max(time.Hour, 2*s.cfg.Breaker.Window)
+	return max(2*s.cfg.Breaker.Window, time.Hour)
 }
 
-func (s *Solver) pollSource(
-	ctx context.Context,
-	source orderSource,
-	filler *common.Address,
-	out chan<- *resolvedOrder,
-) (time.Time, error) {
-	entries, err := s.orders.openOrders(ctx, s.chainID, filler)
-	if err != nil && len(entries) == 0 {
-		return time.Time{}, errors.Errorf("poll %s orders: %w", source, err)
+func (s *Solver) pollSource(ctx context.Context, source orderSource, filler *common.Address, out chan<- *resolvedOrder) (time.Time, error) {
+	records, readErr := s.orders.openOrders(ctx, s.chainID, filler)
+	if len(records) == 0 && readErr != nil {
+		return time.Time{}, errors.Errorf("poll %s orders: %w", source, readErr)
 	}
-	s.log.V(1).Info(
-		"orders polled",
-		"source", source,
-		"orders", len(entries),
-		"partialError", err != nil,
-	)
-	now, nowErr := s.reader.latestBlockTime(ctx)
-	if nowErr != nil {
-		return time.Time{}, errors.Errorf("read chain time for %s orders: %w", source, nowErr)
+	now, err := s.reader.latestBlockTime(ctx)
+	if err != nil {
+		return time.Time{}, errors.Errorf("read chain time for %s orders: %w", source, err)
 	}
-	for _, entry := range entries {
-		order, parseErr := parseAndResolveOrder(entry, source, s.cfg, s.chainID, now)
-		if parseErr != nil {
-			if source == orderSourceExclusiveV2 {
-				obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
-				if obligationErr != nil {
-					return now, errors.Errorf(
-						"rejected exclusive order %q cannot be tracked: parse: %v; obligation: %w",
-						entry.OrderHash,
-						parseErr,
-						obligationErr,
-					)
-				}
-				obligation.liveObserved = true
-				if s.trackExclusiveObligation(obligation, entry.QuoteID, now) {
-					s.observeExclusiveWin()
-				}
-			}
-			s.log.V(1).Info("order rejected", "error", parseErr, "source", source,
-				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
+	s.cleanupOrderHistory(now)
+	s.log.V(1).Info("orders polled", "source", source, "orders", len(records), "partialError", readErr != nil)
+	for _, record := range records {
+		order, err := s.observePolledOrder(record, source, now)
+		if err != nil {
+			return now, err
+		}
+		if order == nil || !s.claim(order.Hash, now) {
 			continue
 		}
-		if s.trackExclusive(order, now) {
-			s.observeExclusiveWin()
-		}
-		if !s.claim(order.Hash, now) {
-			s.log.V(1).Info(
-				"order skipped: already handled or awaiting retry",
-				"source", source,
-				"orderHash", order.Hash.Hex(),
-				"quoteId", order.QuoteID,
-			)
-			continue
-		}
-		s.log.V(1).Info(
-			"order queued for fill",
-			"source", source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"tokenIn", order.TokenIn.Hex(),
-			"tokenOut", order.TokenOut.Hex(),
-			"amountIn", order.AmountIn.String(),
-			"amountOut", order.AmountOut.String(),
-			"deadline", order.Deadline,
-		)
+		s.log.V(1).Info("order queued for fill", "source", source, "orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID, "amountIn", order.AmountIn, "amountOut", order.AmountOut, "deadline", order.Deadline)
 		select {
 		case out <- order:
 		case <-ctx.Done():
@@ -193,80 +146,40 @@ func (s *Solver) pollSource(
 			return time.Time{}, ctx.Err()
 		}
 	}
-	if err != nil {
-		return now, errors.Errorf("poll %s orders: %w", source, err)
+	if readErr != nil {
+		return now, errors.Errorf("poll %s orders: %w", source, readErr)
 	}
 	return now, nil
 }
 
+// A rejected executable order can still impose an exclusive obligation. Parsing
+// failure must never erase that obligation or reopen quoting after a bad snapshot.
+func (s *Solver) observePolledOrder(record orderEntry, source orderSource, now time.Time) (*resolvedOrder, error) {
+	order, parseErr := parseAndResolveOrder(record, source, s.cfg, s.chainID, now)
+	if parseErr == nil {
+		if s.trackExclusive(order) {
+			s.observeExclusiveWin()
+		}
+		return order, nil
+	}
+	if source == orderSourceExclusiveV2 {
+		obligation, err := exclusiveObligationFromEntry(record, s.cfg, s.chainID)
+		if err != nil {
+			return nil, errors.Errorf("rejected exclusive order %q cannot be tracked: parse: %v; obligation: %w", record.OrderHash, parseErr, err)
+		}
+		obligation.liveObserved = true
+		if s.trackExclusiveObligation(obligation, record.QuoteID) {
+			s.observeExclusiveWin()
+		}
+	}
+	s.log.V(1).Info("order rejected", "error", parseErr, "source", source, "orderHash", record.OrderHash, "quoteId", record.QuoteID)
+	return nil, nil
+}
+
 func (s *Solver) recordExclusivePollSuccess(now time.Time) {
-	wasUnknown := s.exclusiveStateUnknown.Swap(false)
-	timestamp := now.Unix()
-	s.lastExclusivePoll.Store(timestamp)
-	if wasUnknown {
+	changed := s.exclusiveStateUnknown.Swap(false)
+	s.lastExclusivePoll.Store(now.Unix())
+	if changed {
 		s.requestQuoteRefresh()
 	}
-}
-
-func (s *Solver) claim(hash common.Hash, now time.Time) bool {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	for key, filledAt := range s.filled {
-		if now.Sub(filledAt) > time.Hour {
-			delete(s.filled, key)
-		}
-	}
-	for key, retryAt := range s.retryAt {
-		if now.Sub(retryAt) > time.Hour {
-			delete(s.retryAt, key)
-			delete(s.attempts, key)
-		}
-	}
-	if _, exists := s.filled[hash]; exists {
-		return false
-	}
-	if s.inFlight[hash] {
-		return false
-	}
-	if retryAt, exists := s.retryAt[hash]; exists && retryAt.After(now) {
-		return false
-	}
-	delete(s.retryAt, hash)
-	s.beginFillPlanning()
-	s.inFlight[hash] = true
-	return true
-}
-
-func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {
-	s.stateMu.Lock()
-	delete(s.inFlight, hash)
-	backoff := s.cfg.OrderServer.PollInterval
-	attempt := s.attempts[hash]
-	if failed {
-		attempt++
-		s.attempts[hash] = attempt
-		shift := min(attempt-1, 5)
-		backoff *= time.Duration(1 << shift)
-		backoff = min(backoff, 30*time.Second)
-	}
-	retryAt := now.Add(backoff)
-	s.retryAt[hash] = retryAt
-	s.stateMu.Unlock()
-	s.log.V(1).Info(
-		"order retry scheduled",
-		"orderHash", hash.Hex(),
-		"failed", failed,
-		"attempt", attempt,
-		"backoff", backoff,
-		"retryAt", retryAt.Unix(),
-	)
-}
-
-func (s *Solver) complete(hash common.Hash, now time.Time) {
-	s.stateMu.Lock()
-	delete(s.retryAt, hash)
-	delete(s.inFlight, hash)
-	delete(s.attempts, hash)
-	s.filled[hash] = now
-	s.stateMu.Unlock()
 }

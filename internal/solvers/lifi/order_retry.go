@@ -1,6 +1,6 @@
 package lifi
 
-import "sync"
+import "sync/atomic"
 
 type reservationRetry struct {
 	order      *submittedOrder
@@ -8,11 +8,10 @@ type reservationRetry struct {
 }
 
 // reservationRetryQueue is mutated exclusively by the order worker; metrics may
-// take read-only snapshots concurrently.
+// read an immutable published observation concurrently.
 type reservationRetryQueue struct {
-	mu       sync.RWMutex
+	observed atomic.Pointer[orderQueueSnapshot]
 	items    []reservationRetry
-	queued   map[string]bool
 	capacity int
 }
 
@@ -20,30 +19,29 @@ func newReservationRetryQueue(capacity int) *reservationRetryQueue {
 	if capacity <= 0 {
 		panic("lifi: order retry capacity must be positive")
 	}
-	return &reservationRetryQueue{queued: make(map[string]bool), capacity: capacity}
+	return &reservationRetryQueue{capacity: capacity}
 }
 
 func (q *reservationRetryQueue) enqueue(order *submittedOrder, generation uint64) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	defer q.publish()
 
 	key := orderInboxKey(order)
-	if key != "" && q.queued[key] {
-		return nil
+	if key != "" {
+		for _, item := range q.items {
+			if orderInboxKey(item.order) == key {
+				return nil
+			}
+		}
 	}
 	if len(q.items) >= q.capacity {
 		return errOrderRetryFull
 	}
 	q.items = append(q.items, reservationRetry{order: order, generation: generation})
-	if key != "" {
-		q.queued[key] = true
-	}
 	return nil
 }
 
 func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	defer q.publish()
 
 	if len(q.items) == 0 || q.items[0].generation >= generation {
 		return nil
@@ -54,32 +52,30 @@ func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {
 	if len(q.items) == 0 {
 		q.items = nil
 	}
-	delete(q.queued, orderInboxKey(item.order))
 	return item.order
 }
 
 func (q *reservationRetryQueue) len() int {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-
 	return len(q.items)
 }
 
 func (q *reservationRetryQueue) clear() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	defer q.publish()
 
 	q.items = nil
-	clear(q.queued)
 }
 
 func (q *reservationRetryQueue) orderQueueSnapshot() orderQueueSnapshot {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-
-	snapshot := orderQueueSnapshot{backlog: len(q.items)}
-	for _, item := range q.items {
-		snapshot.nearestDeadline = earlierOrderDeadlineUnix(snapshot.nearestDeadline, item.order)
+	if observed := q.observed.Load(); observed != nil {
+		return *observed
 	}
-	return snapshot
+	return orderQueueSnapshot{}
+}
+
+func (q *reservationRetryQueue) publish() {
+	state := &orderQueueSnapshot{backlog: len(q.items)}
+	for _, item := range q.items {
+		state.nearestDeadline = earlierOrderDeadlineUnix(state.nearestDeadline, item.order)
+	}
+	q.observed.Store(state)
 }

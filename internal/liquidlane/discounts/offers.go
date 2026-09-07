@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
@@ -42,125 +44,98 @@ func LiveOffers(listed *List, now time.Time) ([]Offer, []OfferIssue) {
 	return offers, issues
 }
 
-// MatchInventories maps advertised discounts onto current physical routes.
-func MatchInventories(
-	listed *List,
-	physical []liquidlane.Inventory,
-	options MatchOptions,
-) ([]liquidlane.Inventory, []OfferIssue) {
-	byRoute := inventoryByRoute(physical)
-	offers, issues := LiveOffers(listed, options.Now)
-	seen := make(map[common.Hash]bool, len(offers))
-	inventory := make([]liquidlane.Inventory, 0, len(offers))
-	for _, offer := range offers {
-		if seen[offer.DiscountID] || !tokenAllowed(offer.TokenToRedeem, options) {
-			continue
-		}
-		base, ok := byRoute[newRouteKey(offer.Adapter, offer.TokenToRedeem, offer.Collateral)]
-		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
-			continue
-		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
-		}
-		if base.AdapterMinDiscount == nil || base.AdapterMinDiscount.Sign() < 0 ||
-			offer.Discount.Cmp(base.AdapterMinDiscount) < 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
-			})
-			continue
-		}
-		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
-		if maxAssets.Sign() <= 0 {
-			continue
-		}
-		seen[offer.DiscountID] = true
-		candidate := liquidlane.DiscountInventory(
-			base.Route,
-			maxAssets,
-			offer.MaxRate,
-			offer.DiscountID,
-			time.Unix(offer.Deadline, 0),
-		)
-		candidate.AdapterMinDiscount = liquidlane.CloneBig(base.AdapterMinDiscount)
-		inventory = append(inventory, candidate)
+// MatchInventories binds advertised terms to the current physical capacity.
+func MatchInventories(listed *List, physical []liquidlane.Inventory, options MatchOptions) ([]liquidlane.Inventory, []OfferIssue) {
+	byRoute := make(map[routeKey]liquidlane.Inventory, len(physical))
+	for _, base := range physical {
+		byRoute[routeKey{base.Adapter, base.TokenIn, base.TokenOut}] = base
 	}
-	return inventory, issues
+	var out []liquidlane.Inventory
+	issues := matchOffers(listed, options, func(offer Offer) (bool, error) {
+		base, ok := byRoute[routeKey{offer.Adapter, offer.TokenToRedeem, offer.Collateral}]
+		if !ok {
+			return false, nil
+		}
+		candidate, err := bindOffer(offer, base, base.AdapterMinDiscount)
+		if err != nil || candidate == nil {
+			return false, err
+		}
+		out = append(out, *candidate)
+		return true, nil
+	})
+	return out, issues
 }
 
-// AdvertisedFillQuotes prices advertised discounts against current amount-specific adapter quotes.
-func AdvertisedFillQuotes(
-	listed *List,
-	physical []liquidlane.FillQuote,
-	options MatchOptions,
-) ([]liquidlane.FillQuote, []OfferIssue) {
-	byRoute := fillQuotesByRoute(physical)
+// AdvertisedFillQuotes applies the signed discount once to an amount-specific gross quote.
+func AdvertisedFillQuotes(listed *List, physical []liquidlane.FillQuote, options MatchOptions) ([]liquidlane.FillQuote, []OfferIssue) {
+	byRoute := make(map[routeKey]liquidlane.FillQuote, len(physical))
+	for _, base := range physical {
+		byRoute[routeKey{base.Adapter, base.TokenIn, base.TokenOut}] = base
+	}
+	var out []liquidlane.FillQuote
+	issues := matchOffers(listed, options, func(offer Offer) (bool, error) {
+		base, ok := byRoute[routeKey{offer.Adapter, offer.TokenToRedeem, offer.Collateral}]
+		if !ok {
+			return false, nil
+		}
+		inventory, err := bindOffer(offer, base.Inventory, base.MinDiscount)
+		if err != nil || inventory == nil {
+			return false, err
+		}
+		net := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
+		rate := liquidlane.RateForAmountOut(net, base.AmountIn, base.TokenInDecimals, base.TokenOutDecimals)
+		inventory.MaxRate = minPositive(rate, offer.MaxRate)
+		amountOut := liquidlane.AmountOutForRate(base.AmountIn, inventory.MaxRate, base.TokenInDecimals, base.TokenOutDecimals)
+		if amountOut.Sign() <= 0 {
+			return false, nil
+		}
+		out = append(out, liquidlane.FillQuote{
+			Inventory: *inventory, AmountIn: bigmath.Clone(base.AmountIn),
+			GrossAmountOut: bigmath.Clone(base.GrossAmountOut),
+			MaxAmountOut:   amountOut, MinDiscount: bigmath.Clone(offer.Discount),
+		})
+		return true, nil
+	})
+	return out, issues
+}
+
+// An ID is consumed only after a usable candidate was built. A malformed duplicate
+// must not hide a later valid advertisement for that ID.
+func matchOffers(listed *List, options MatchOptions, accept func(Offer) (bool, error)) []OfferIssue {
 	offers, issues := LiveOffers(listed, options.Now)
 	seen := make(map[common.Hash]bool, len(offers))
-	quotes := make([]liquidlane.FillQuote, 0, len(offers))
 	for _, offer := range offers {
-		if seen[offer.DiscountID] || !tokenAllowed(offer.TokenToRedeem, options) {
+		if seen[offer.DiscountID] || (options.AllowsToken != nil && !options.AllowsToken(offer.TokenToRedeem)) {
 			continue
 		}
-		base, ok := byRoute[newRouteKey(offer.Adapter, offer.TokenToRedeem, offer.Collateral)]
-		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
-			continue
+		accepted, err := accept(offer)
+		if err != nil {
+			issues = append(issues, OfferIssue{DiscountID: offer.DiscountID.Hex(), Err: err})
 		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
+		if accepted {
+			seen[offer.DiscountID] = true
 		}
-		if base.MinDiscount == nil || base.MinDiscount.Sign() < 0 || offer.Discount.Cmp(base.MinDiscount) < 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
-			})
-			continue
-		}
-		amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
-		currentRate := liquidlane.RateForAmountOut(
-			amountOut,
-			base.AmountIn,
-			base.TokenInDecimals,
-			base.TokenOutDecimals,
-		)
-		maxRate := minPositive(currentRate, offer.MaxRate)
-		maxAmountOut := liquidlane.AmountOutForRate(
-			base.AmountIn,
-			maxRate,
-			base.TokenInDecimals,
-			base.TokenOutDecimals,
-		)
-		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
-		if maxRate.Sign() <= 0 || maxAmountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
-			continue
-		}
-		seen[offer.DiscountID] = true
-		inventory := liquidlane.DiscountInventory(
-			base.Route,
-			maxAssets,
-			maxRate,
-			offer.DiscountID,
-			time.Unix(offer.Deadline, 0),
-		)
-		inventory.AdapterMinDiscount = liquidlane.CloneBig(base.AdapterMinDiscount)
-		quotes = append(quotes, liquidlane.FillQuote{
-			Inventory:      inventory,
-			AmountIn:       liquidlane.CloneBig(base.AmountIn),
-			GrossAmountOut: liquidlane.CloneBig(base.GrossAmountOut),
-			MaxAmountOut:   maxAmountOut,
-			MinDiscount:    liquidlane.CloneBig(offer.Discount),
-		})
 	}
-	return quotes, issues
+	return issues
+}
+
+func bindOffer(offer Offer, base liquidlane.Inventory, minimum *big.Int) (*liquidlane.Inventory, error) {
+	if offer.CollateralDecimals != base.TokenOutDecimals {
+		return nil, nil
+	}
+	if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
+		return nil, errors.New("advertised discount rate exceeds current adapter max rate")
+	}
+	if minimum == nil || minimum.Sign() < 0 || offer.Discount.Cmp(minimum) < 0 {
+		return nil, errors.New("advertised discount is below current adapter minimum")
+	}
+	capacity := minPositive(offer.MaxAssets, base.MaxAssets)
+	if capacity.Sign() <= 0 {
+		return nil, nil
+	}
+	out := liquidlane.DiscountInventory(base.Route, capacity, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0))
+	out.AdapterMinDiscount = bigmath.Clone(base.AdapterMinDiscount)
+	return &out, nil
 }
 
 type routeKey struct {
@@ -169,36 +144,9 @@ type routeKey struct {
 	tokenOut common.Address
 }
 
-func newRouteKey(adapter, tokenIn, tokenOut common.Address) routeKey {
-	return routeKey{adapter: adapter, tokenIn: tokenIn, tokenOut: tokenOut}
-}
-
-func inventoryByRoute(inventory []liquidlane.Inventory) map[routeKey]liquidlane.Inventory {
-	byRoute := make(map[routeKey]liquidlane.Inventory, len(inventory))
-	for _, item := range inventory {
-		byRoute[newRouteKey(item.Adapter, item.TokenIn, item.TokenOut)] = item
-	}
-	return byRoute
-}
-
-func fillQuotesByRoute(quotes []liquidlane.FillQuote) map[routeKey]liquidlane.FillQuote {
-	byRoute := make(map[routeKey]liquidlane.FillQuote, len(quotes))
-	for _, quote := range quotes {
-		byRoute[newRouteKey(quote.Adapter, quote.TokenIn, quote.TokenOut)] = quote
-	}
-	return byRoute
-}
-
-func tokenAllowed(token common.Address, options MatchOptions) bool {
-	return options.AllowsToken == nil || options.AllowsToken(token)
-}
-
 func minPositive(left, right *big.Int) *big.Int {
 	if left == nil || right == nil || left.Sign() <= 0 || right.Sign() <= 0 {
 		return new(big.Int)
 	}
-	if left.Cmp(right) <= 0 {
-		return liquidlane.CloneBig(left)
-	}
-	return liquidlane.CloneBig(right)
+	return bigmath.Min(left, right)
 }

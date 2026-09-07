@@ -1,8 +1,8 @@
 package observability
 
 import (
+	"math"
 	"math/big"
-	"slices"
 	"strings"
 	"time"
 
@@ -11,38 +11,14 @@ import (
 )
 
 const unspecifiedWorkflowStrategy = "unspecified"
-
 const (
 	workflowDropUnknownEvent  = "unknown_event"
 	workflowDropUnknownAmount = "unknown_amount"
 	workflowDropUnknownState  = "unknown_state"
 )
 
-type workflowEventKey struct {
-	event   string
-	outcome string
-}
-
-type workflowAmountKey struct {
-	event string
-	kind  string
-}
-
-// WorkflowEventSpec declares the bounded outcomes for one integration-owned event.
-type WorkflowEventSpec struct {
-	Event    string
-	Outcomes []string
-}
-
-// WorkflowAmountSpec declares the bounded amount kinds for one integration-owned event. Assets may
-// preinitialize configured or authoritative routes; observations can add other validated route assets.
-type WorkflowAmountSpec struct {
-	Event  string
-	Kinds  []string
-	Assets []string
-}
-
-// WorkflowSpec declares one solver's complete bounded workflow metric surface.
+// WorkflowSpec is the complete label vocabulary of one integration. Observations
+// select declared series; only validated asset addresses are added dynamically.
 type WorkflowSpec struct {
 	Strategy   string
 	Operations []string
@@ -51,246 +27,173 @@ type WorkflowSpec struct {
 	States     []string
 }
 
-type workflowEventMetrics struct {
-	count prometheus.Counter
-	last  prometheus.Gauge
+type WorkflowEventSpec struct {
+	Event    string
+	Outcomes []string
 }
 
-type workflowStateMetrics struct {
-	value prometheus.Gauge
-	last  prometheus.Gauge
+type WorkflowAmountSpec struct {
+	Event  string
+	Kinds  []string
+	Assets []string
 }
 
-// WorkflowMetrics records homogeneous solver events, amounts, and observed item counts through
-// shared metric families. All event, outcome, kind, and state labels are bound from WorkflowSpec at
-// construction; runtime input can only select an existing series.
+type workflowEventKey struct{ event, outcome string }
+type workflowAmountKey struct{ event, kind string }
+
+// The vocabulary is immutable after construction. Prometheus owns synchronization
+// of counters/gauges; callers never mutate a registry or grow outcome dimensions.
 type WorkflowMetrics struct {
-	operations map[string]*OperationObserver
-	events     map[workflowEventKey]workflowEventMetrics
-	amounts    map[workflowAmountKey]*prometheus.CounterVec
-	states     map[string]workflowStateMetrics
-	dropped    map[string]prometheus.Counter
+	operations  map[string]*OperationObserver
+	events      map[workflowEventKey]struct{}
+	amounts     map[workflowAmountKey]struct{}
+	states      map[string]struct{}
+	eventCount  *prometheus.CounterVec
+	eventTime   *prometheus.GaugeVec
+	amountCount *prometheus.CounterVec
+	stateCount  *prometheus.GaugeVec
+	stateTime   *prometheus.GaugeVec
+	dropped     *prometheus.CounterVec
 }
 
-// NewWorkflowMetrics registers one solver's bounded workflow metric surface.
-func NewWorkflowMetrics(
-	reg prometheus.Registerer,
-	solver string,
-	spec WorkflowSpec,
-) (*WorkflowMetrics, error) {
-	if reg == nil {
-		return nil, errors.New("observability: workflow metrics registerer is required")
+func NewWorkflowMetrics(reg prometheus.Registerer, solver string, spec WorkflowSpec) (*WorkflowMetrics, error) {
+	if reg == nil || solver == "" {
+		return nil, errors.New("observability: workflow registerer and solver are required")
 	}
-	if solver == "" {
-		return nil, errors.New("observability: workflow solver is required")
+	group := NewMetricGroup("solver_bot_")
+	m := &WorkflowMetrics{
+		operations: make(map[string]*OperationObserver),
+		events:     make(map[workflowEventKey]struct{}), amounts: make(map[workflowAmountKey]struct{}),
+		states:      make(map[string]struct{}),
+		eventCount:  group.Counter("workflow_events_total", "Bounded solver workflow events by integration-owned event and outcome.", "event", "outcome"),
+		eventTime:   group.Gauge("workflow_last_event_timestamp", "Unix timestamp of the last bounded solver workflow event by event and outcome.", "event", "outcome"),
+		amountCount: group.Counter("workflow_amount_atomic_units_total", "Solver workflow amounts in asset atomic units; assets and kinds must not be aggregated across unlike units.", "event", "asset", "kind"),
+		stateCount:  group.Gauge("workflow_observed_items", "Items in the last complete solver workflow observation by integration-owned state view.", "view"),
+		stateTime:   group.Gauge("workflow_last_observation_timestamp", "Unix timestamp of the last complete solver workflow observation by state view.", "view"),
+		dropped:     group.Counter("workflow_dropped_observations_total", "Workflow observations rejected because their event, amount, or state dimension was not declared.", "reason"),
 	}
-	if err := validateWorkflowSpec(spec); err != nil {
+	operations := group.Histogram("external_operation_duration_seconds",
+		"External operation duration by solver, allowlisted operation, and bounded outcome.",
+		[]float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}, "operation", "outcome")
+	if err := m.bind(spec, operations); err != nil {
 		return nil, err
+	}
+	for _, reason := range []string{workflowDropUnknownEvent, workflowDropUnknownAmount, workflowDropUnknownState} {
+		m.dropped.WithLabelValues(reason)
 	}
 	strategy := spec.Strategy
 	if strategy == "" {
 		strategy = unspecifiedWorkflowStrategy
 	}
-	wrapped := prometheus.WrapRegistererWith(prometheus.Labels{
-		"solver": solver, "strategy": strategy,
-	}, reg)
-	events := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_events_total",
-		Help:      "Bounded solver workflow events by integration-owned event and outcome.",
-	}, []string{"event", "outcome"})
-	lastEvents := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_last_event_timestamp",
-		Help:      "Unix timestamp of the last bounded solver workflow event by event and outcome.",
-	}, []string{"event", "outcome"})
-	amounts := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_amount_atomic_units_total",
-		Help:      "Solver workflow amounts in asset atomic units; assets and kinds must not be aggregated across unlike units.",
-	}, []string{"event", "asset", "kind"})
-	states := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_observed_items",
-		Help:      "Items in the last complete solver workflow observation by integration-owned state view.",
-	}, []string{"view"})
-	lastStates := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_last_observation_timestamp",
-		Help:      "Unix timestamp of the last complete solver workflow observation by state view.",
-	}, []string{"view"})
-	operations := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "solver_bot",
-		Name:      "external_operation_duration_seconds",
-		Help:      "External operation duration by solver, allowlisted operation, and bounded outcome.",
-		Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-	}, []string{"operation", "outcome"})
-	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_dropped_observations_total",
-		Help:      "Workflow observations rejected because their event, amount, or state dimension was not declared.",
-	}, []string{"reason"})
-	for _, collector := range []prometheus.Collector{
-		events, lastEvents, amounts, states, lastStates, operations, dropped,
-	} {
-		if err := wrapped.Register(collector); err != nil {
-			return nil, errors.Errorf("observability: register workflow metric: %w", err)
-		}
+	if err := group.Publish(prometheus.WrapRegistererWith(prometheus.Labels{"solver": solver, "strategy": strategy}, reg)); err != nil {
+		return nil, err
 	}
-
-	metrics := &WorkflowMetrics{
-		operations: make(map[string]*OperationObserver),
-		events:     make(map[workflowEventKey]workflowEventMetrics),
-		amounts:    make(map[workflowAmountKey]*prometheus.CounterVec),
-		states:     make(map[string]workflowStateMetrics),
-		dropped: map[string]prometheus.Counter{
-			workflowDropUnknownEvent:  dropped.WithLabelValues(workflowDropUnknownEvent),
-			workflowDropUnknownAmount: dropped.WithLabelValues(workflowDropUnknownAmount),
-			workflowDropUnknownState:  dropped.WithLabelValues(workflowDropUnknownState),
-		},
-	}
-	for _, operation := range spec.Operations {
-		observer := &OperationObserver{}
-		for outcome := ExternalOperationSuccess; outcome <= ExternalOperationError; outcome++ {
-			observer.observers[outcome] = operations.WithLabelValues(
-				operation, externalOperationOutcomeLabels[outcome],
-			)
-		}
-		metrics.operations[operation] = observer
-	}
-	for _, event := range spec.Events {
-		for _, outcome := range event.Outcomes {
-			key := workflowEventKey{event: event.Event, outcome: outcome}
-			metrics.events[key] = workflowEventMetrics{
-				count: events.WithLabelValues(event.Event, outcome),
-				last:  lastEvents.WithLabelValues(event.Event, outcome),
-			}
-		}
-	}
-	for _, amount := range spec.Amounts {
-		for _, kind := range amount.Kinds {
-			key := workflowAmountKey{event: amount.Event, kind: kind}
-			bound := amounts.MustCurryWith(prometheus.Labels{"event": amount.Event, "kind": kind})
-			metrics.amounts[key] = bound
-			for _, asset := range amount.Assets {
-				bound.WithLabelValues(strings.ToLower(asset))
-			}
-		}
-	}
-	for _, state := range spec.States {
-		metrics.states[state] = workflowStateMetrics{
-			value: states.WithLabelValues(state),
-			last:  lastStates.WithLabelValues(state),
-		}
-	}
-	return metrics, nil
+	return m, nil
 }
 
-func validateWorkflowSpec(spec WorkflowSpec) error {
-	seen := make(map[string]struct{})
-	add := func(kind string, parts ...string) error {
-		if slices.Contains(parts, "") {
-			return errors.Errorf("observability: workflow %s label is required", kind)
+// Bind validates and instantiates the vocabulary in the same pass. No caller can
+// observe an incompletely bound component because publication happens afterwards.
+func (m *WorkflowMetrics) bind(spec WorkflowSpec, durations *prometheus.HistogramVec) error {
+	for _, name := range spec.Operations {
+		if name == "" || m.operations[name] != nil {
+			return errors.Errorf("observability: empty or duplicate workflow operation %q", name)
 		}
-		key := kind + "\x00" + strings.Join(parts, "\x00")
-		if _, exists := seen[key]; exists {
-			return errors.Errorf("observability: duplicate workflow %s %q", kind, strings.Join(parts, "/"))
+		observer := &OperationObserver{}
+		for outcome := ExternalOperationSuccess; outcome <= ExternalOperationError; outcome++ {
+			observer.observers[outcome] = durations.WithLabelValues(name, externalOperationOutcomeLabels[outcome])
 		}
-		seen[key] = struct{}{}
-		return nil
-	}
-	for _, operation := range spec.Operations {
-		if err := add("operation", operation); err != nil {
-			return err
-		}
+		m.operations[name] = observer
 	}
 	for _, event := range spec.Events {
-		if len(event.Outcomes) == 0 {
-			return errors.New("observability: workflow event outcomes are required")
+		if event.Event == "" || len(event.Outcomes) == 0 {
+			return errors.New("observability: workflow event and outcomes are required")
 		}
 		for _, outcome := range event.Outcomes {
-			if err := add("event", event.Event, outcome); err != nil {
-				return err
+			key := workflowEventKey{event.Event, outcome}
+			if _, exists := m.events[key]; outcome == "" || exists {
+				return errors.Errorf("observability: empty or duplicate workflow event %q/%q", event.Event, outcome)
 			}
+			m.events[key] = struct{}{}
+			m.eventCount.WithLabelValues(event.Event, outcome)
+			m.eventTime.WithLabelValues(event.Event, outcome)
 		}
 	}
 	for _, amount := range spec.Amounts {
-		if len(amount.Kinds) == 0 {
-			return errors.New("observability: workflow amount kinds are required")
+		if amount.Event == "" || len(amount.Kinds) == 0 {
+			return errors.New("observability: workflow amount event and kinds are required")
 		}
 		for _, kind := range amount.Kinds {
-			if err := add("amount", amount.Event, kind); err != nil {
-				return err
+			key := workflowAmountKey{amount.Event, kind}
+			if _, exists := m.amounts[key]; kind == "" || exists {
+				return errors.Errorf("observability: empty or duplicate workflow amount %q/%q", amount.Event, kind)
 			}
-			for _, asset := range amount.Assets {
-				if err := add("amount asset", amount.Event, kind, strings.ToLower(asset)); err != nil {
-					return err
+			m.amounts[key] = struct{}{}
+			assets := make(map[string]struct{}, len(amount.Assets))
+			for _, raw := range amount.Assets {
+				asset := strings.ToLower(raw)
+				if _, exists := assets[asset]; asset == "" || exists {
+					return errors.Errorf("observability: empty or duplicate workflow amount asset %q", raw)
 				}
+				assets[asset] = struct{}{}
+				m.amountCount.WithLabelValues(amount.Event, asset, kind)
 			}
 		}
 	}
-	for _, state := range spec.States {
-		if err := add("state", state); err != nil {
-			return err
+	for _, view := range spec.States {
+		if _, exists := m.states[view]; view == "" || exists {
+			return errors.Errorf("observability: empty or duplicate workflow state %q", view)
 		}
+		m.states[view] = struct{}{}
+		m.stateCount.WithLabelValues(view)
+		m.stateTime.WithLabelValues(view)
 	}
 	return nil
 }
 
-// Operation returns one construction-time-bound dependency observer.
 func (m *WorkflowMetrics) Operation(name string) *OperationObserver {
-	if m == nil {
-		return nil
+	var observer *OperationObserver
+	if m != nil {
+		observer = m.operations[name]
 	}
-	return m.operations[name]
+	return observer
 }
 
-// ObserveEventAt adds a positive event count and updates its timestamp. Unknown event/outcome pairs
-// increment a bounded drop counter rather than creating runtime-derived labels.
-func (m *WorkflowMetrics) ObserveEventAt(event, outcome string, count float64, at time.Time) {
-	if m == nil || count <= 0 {
-		return
-	}
-	metric, ok := m.events[workflowEventKey{event: event, outcome: outcome}]
-	if !ok {
-		m.dropped[workflowDropUnknownEvent].Inc()
-		return
-	}
-	metric.count.Add(count)
-	metric.last.Set(float64(at.Unix()))
-}
-
-// ObserveEvent records one event at the current wall-clock time.
 func (m *WorkflowMetrics) ObserveEvent(event, outcome string) {
 	m.ObserveEventAt(event, outcome, 1, time.Now())
 }
 
-// AddAmount adds a positive atomic-unit amount to a pre-bound event/kind pair. Empty assets are
-// ignored, unknown pairs increment a bounded drop counter, and asset labels are normalized to lowercase.
+func (m *WorkflowMetrics) ObserveEventAt(event, outcome string, count float64, at time.Time) {
+	if m == nil || !(count > 0) || math.IsInf(count, 0) {
+		return
+	}
+	if _, allowed := m.events[workflowEventKey{event, outcome}]; !allowed {
+		m.dropped.WithLabelValues(workflowDropUnknownEvent).Inc()
+		return
+	}
+	m.eventCount.WithLabelValues(event, outcome).Add(count)
+	m.eventTime.WithLabelValues(event, outcome).Set(float64(at.Unix()))
+}
+
 func (m *WorkflowMetrics) AddAmount(event, asset, kind string, amount *big.Int) {
 	if m == nil || asset == "" || amount == nil || amount.Sign() <= 0 {
 		return
 	}
-	metric, ok := m.amounts[workflowAmountKey{event: event, kind: kind}]
-	if !ok {
-		m.dropped[workflowDropUnknownAmount].Inc()
+	if _, allowed := m.amounts[workflowAmountKey{event, kind}]; !allowed {
+		m.dropped.WithLabelValues(workflowDropUnknownAmount).Inc()
 		return
 	}
 	value, _ := new(big.Float).SetInt(amount).Float64()
-	metric.WithLabelValues(strings.ToLower(asset)).Add(value)
+	m.amountCount.WithLabelValues(event, strings.ToLower(asset), kind).Add(value)
 }
 
-// ObserveStateAt publishes one complete state count and its observation timestamp. Unknown views
-// increment a bounded drop counter rather than creating runtime-derived labels.
 func (m *WorkflowMetrics) ObserveStateAt(view string, count int, at time.Time) {
 	if m == nil {
 		return
 	}
-	metric, ok := m.states[view]
-	if !ok {
-		m.dropped[workflowDropUnknownState].Inc()
+	if _, allowed := m.states[view]; !allowed {
+		m.dropped.WithLabelValues(workflowDropUnknownState).Inc()
 		return
 	}
-	metric.value.Set(float64(count))
-	metric.last.Set(float64(at.Unix()))
+	m.stateCount.WithLabelValues(view).Set(float64(count))
+	m.stateTime.WithLabelValues(view).Set(float64(at.Unix()))
 }

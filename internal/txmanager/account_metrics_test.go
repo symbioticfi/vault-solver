@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 var accountMetricFamilyNames = []string{
@@ -26,9 +28,7 @@ var accountMetricFamilyNames = []string{
 func TestAccountMetricsActivateOnlyWhenManagerStarts(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := NewMetrics(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	sgnr := mustSigner(t)
 	manager := NewWithMetrics(
 		newMockBackend(), sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard(),
@@ -43,10 +43,9 @@ func TestAccountMetricsActivateOnlyWhenManagerStarts(t *testing.T) {
 	// Identity plus both zero-valued refresh outcomes produce three series; snapshot gauges remain
 	// absent because this backend does not expose balance reads.
 	assertAccountMetricSeriesCount(t, reg, 3)
-	metrics.account.mu.RLock()
-	address := metrics.account.address
-	hasSnapshot := metrics.account.hasSnapshot
-	metrics.account.mu.RUnlock()
+	state := metrics.account.state.Load()
+	address := state.address
+	hasSnapshot := state.initialized
 	if want := strings.ToLower(sgnr.Address().Hex()); address != want {
 		t.Fatalf("account address = %q, want %q", address, want)
 	}
@@ -64,9 +63,7 @@ func TestAccountMetricsRetainLastSuccessfulSnapshot(t *testing.T) {
 	backend.pendingNonce = 12
 	reg := prometheus.NewRegistry()
 	metrics, err := NewMetrics(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	metrics.account.now = func() time.Time { return time.Unix(123, 0) }
 	sgnr := mustSigner(t)
 	metrics.bindAccount(sgnr.Address())
@@ -93,9 +90,7 @@ func TestAccountMetricsRetainLastSuccessfulSnapshot(t *testing.T) {
 func TestAccountMetricsScrapeIsSnapshotConsistent(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := NewMetrics(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	metrics.bindAccount(common.HexToAddress("0x1234"))
 	value := int64(1)
 	metrics.account.now = func() time.Time { return time.Unix(value, 0) }
@@ -151,9 +146,7 @@ func (b *accountMetricsBackend) TransactionSenderBalanceAt(
 func assertAccountMetricSeriesCount(t *testing.T, gatherer prometheus.Gatherer, want int) {
 	t.Helper()
 	got, err := testutil.GatherAndCount(gatherer, accountMetricFamilyNames...)
-	if err != nil {
-		t.Fatalf("gather account metrics: %v", err)
-	}
+	testcheck.NoError(t, err, "gather account metrics: %v")
 	if got != want {
 		t.Fatalf("account metric series = %d, want %d", got, want)
 	}
@@ -161,13 +154,12 @@ func assertAccountMetricSeriesCount(t *testing.T, gatherer prometheus.Gatherer, 
 
 func assertAccountRefreshes(t *testing.T, metrics *accountMetrics, success, failed uint64) {
 	t.Helper()
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	if metrics.successRefreshes != success || metrics.errorRefreshes != failed {
+	state := metrics.state.Load()
+	if state.successes != success || state.failures != failed {
 		t.Fatalf(
 			"account refreshes = (%d, %d), want (%d, %d)",
-			metrics.successRefreshes,
-			metrics.errorRefreshes,
+			state.successes,
+			state.failures,
 			success,
 			failed,
 		)
@@ -177,9 +169,7 @@ func assertAccountRefreshes(t *testing.T, metrics *accountMetrics, success, fail
 func gatherAccountSnapshot(t *testing.T, gatherer prometheus.Gatherer) accountSnapshot {
 	t.Helper()
 	families, err := gatherer.Gather()
-	if err != nil {
-		t.Fatalf("gather account metrics: %v", err)
-	}
+	testcheck.NoError(t, err, "gather account metrics: %v")
 	var snapshot accountSnapshot
 	found := 0
 	for _, family := range families {
@@ -205,4 +195,26 @@ func gatherAccountSnapshot(t *testing.T, gatherer prometheus.Gatherer) accountSn
 		t.Fatalf("complete account snapshot families = %d, want 4", found)
 	}
 	return snapshot
+}
+
+func TestAccountMetricsConcurrentUpdatesKeepEveryRefresh(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, err := NewMetrics(reg)
+	testcheck.NoError(t, err)
+	metrics.bindAccount(common.Address{19: 1})
+	var workers sync.WaitGroup
+	for range 4 {
+		workers.Go(func() {
+			for range 100 {
+				metrics.observeAccount(big.NewInt(10), 2, 3)
+				metrics.observeAccountRefreshError()
+			}
+		})
+	}
+	workers.Wait()
+	assertAccountRefreshes(t, metrics.account, 400, 400)
+	got := gatherAccountSnapshot(t, reg)
+	if got.balanceWei != 10 || got.latestNonce != 2 || got.pendingNonce != 3 {
+		t.Fatalf("incoherent account snapshot: %+v", got)
+	}
 }

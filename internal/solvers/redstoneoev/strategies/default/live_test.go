@@ -11,8 +11,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // TestLiveAPIMonitorSnapshotAndCandidates exercises the same production API path the OEV monitor uses:
@@ -30,16 +30,14 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	wantMarket := common.HexToHash("0x8eaf7b29f02ba8d8c1d7aeb587403dcb16e2e943e4e2f5f94b0963c2386406c9")
 
 	mon := &apiMonitor{
-		api:          newMorphoClient("https://api.morpho.org/graphql"),
-		maxPositions: 100,
-		maxHF:        1.30,
-		log:          logr.Discard(),
+		api:           newMorphoClient("https://api.morpho.org/graphql"),
+		maxPositions:  100,
+		maxHF:         1.30,
+		marketMonitor: marketMonitor{log: logr.Discard()},
 	}
 
 	apiMarkets, err := mon.api.DiscoverMarketData(ctx, 1, []common.Address{loan}, []common.Address{coll})
-	if err != nil {
-		t.Fatalf("DiscoverMarketData live API failed: %v", err)
-	}
+	testcheck.NoError(t, err, "DiscoverMarketData live API failed: %v")
 	apiSnap := mon.apiMarketSnapshot(apiMarkets, loan, []common.Address{coll})
 	if len(apiSnap.markets) == 0 {
 		t.Fatal("apiMonitor snapshot has no usable USDC/PAXG markets")
@@ -69,9 +67,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 		quotes[id] = newQuote("1780000000000000000000", nil)
 	}
 	apiPositions, err := mon.api.PositionsByMarket(ctx, ids, mon.maxPositions, &mon.maxHF)
-	if err != nil {
-		t.Fatalf("PositionsByMarket live API failed: %v", err)
-	}
+	testcheck.NoError(t, err, "PositionsByMarket live API failed: %v")
 	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)
 	if len(positions) == 0 {
 		t.Skip("live API returned no USDC/PAXG positions inside healthFactor <= 1.30 right now")
@@ -100,7 +96,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	oracle := apiSnap.markets[targetMarket].Params.Oracle
 	price := apiSnap.prices[targetMarket]
 	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: price}}}
-	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{})
+	cands := candidatesFromAuctionWithAdapter(mon.log, mon.snapshot(), auction, apiSnap.blockTime, types.AdapterSnapshot{})
 	if len(cands) == 0 {
 		t.Fatal("apiMonitor.candidates returned no candidates for a snapshot position with matching oracle price")
 	}

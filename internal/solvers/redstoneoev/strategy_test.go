@@ -6,14 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+	"gopkg.in/yaml.v3"
 )
 
 func TestNewStrategyRejectsUnknown(t *testing.T) {
-	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, strategies.Deps{})
+	_, err := newStrategy(&Config{Strategy: StrategyConfig{Name: "bogus"}}, types.Dependencies{})
 	if err == nil || !strings.Contains(err.Error(), "unknown OEV strategy") {
 		t.Fatalf("error = %v, want unknown strategy", err)
 	}
@@ -21,26 +20,15 @@ func TestNewStrategyRejectsUnknown(t *testing.T) {
 
 func TestNewStrategyParsesWebhookConfig(t *testing.T) {
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(`
+	testcheck.NoError(t, yaml.Unmarshal([]byte(`
 url: https://strategy.example
 maxRequestBytes: 2048
 maxResponseBytes: 4096
-`), &node); err != nil {
-		t.Fatal(err)
-	}
+`), &node))
 	if _, err := newStrategy(&Config{
 		Strategy: StrategyConfig{Name: "webhook", Config: *node.Content[0]},
-	}, strategies.Deps{}); err != nil {
+	}, types.Dependencies{}); err != nil {
 		t.Fatalf("new webhook strategy: %v", err)
-	}
-}
-
-func TestStrategyBidCapPolicyComesFromRegistry(t *testing.T) {
-	if strategies.RequiresBidCap("default") {
-		t.Fatal("default strategy must keep maxBidWei optional")
-	}
-	if !strategies.RequiresBidCap("webhook") {
-		t.Fatal("webhook strategy must require maxBidWei")
 	}
 }
 
@@ -70,14 +58,12 @@ func TestCheckExecutionEnvelopeAcceptsGenericOperationData(t *testing.T) {
 		BidAmount:     big.NewInt(1),
 		OperationData: []byte{1},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 }
 
 func TestPendingAuctionsForStrategyFiltersExpired(t *testing.T) {
 	now := time.Unix(1000, 0)
-	got := pendingAuctionsForStrategy([]pendingAuction{
+	got := pendingAuctionsForStrategy([]types.PendingAuction{
 		{ID: "", SentAt: now},
 		{ID: "expired", SentAt: now.Add(-reservationTTL - time.Second)},
 		{ID: "pending", SentAt: now.Add(-time.Minute), Won: true},

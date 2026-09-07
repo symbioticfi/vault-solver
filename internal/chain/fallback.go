@@ -44,124 +44,94 @@ type fallbackTransport struct {
 }
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Buffer the body once so it can be replayed against each endpoint.
 	var body []byte
 	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
+		var err error
+		body, err = io.ReadAll(req.Body)
 		_ = req.Body.Close()
 		if err != nil {
 			return nil, errors.Errorf("rpc fallback: read body: %w", err)
 		}
-		body = b
 	}
-	request := inspectRPCRequest(body)
-	method := "unknown"
-	if t.metrics != nil {
-		method = request.boundedMethod
-	}
-	var (
-		nullFallbackID     json.RawMessage
-		nullFallbackMethod string
-		nullFallback       bool
-	)
-	if len(t.endpoints) > 1 {
-		nullFallbackID = request.id
-		nullFallbackMethod = request.rawMethod
-		nullFallback = request.nullFallback
-	}
-	pendingLookup := isPendingLookupMethod(request.rawMethod)
-	requestObservation := t.metrics.beginRequest(t.role, method)
-
-	var (
-		lastErr     error
-		lastOutcome = rpcOutcomeTransportError
-	)
-	for i, ep := range t.endpoints {
-		endpoint := endpointLabel(i)
-		attemptTimeout := endpointAttemptTimeout(req.Context(), len(t.endpoints)-i)
-		if attemptTimeout <= 0 {
-			lastErr = req.Context().Err()
-			if lastErr == nil {
-				lastErr = context.DeadlineExceeded
-			}
-			lastOutcome = classifyRPCFailure(lastErr, req.Context().Err())
+	info := inspectRPCRequest(body)
+	observation := t.metrics.beginRequest(t.role, info.boundedMethod)
+	outcome := rpcOutcomeTransportError
+	var lastErr error
+	for index := range t.endpoints {
+		response, attemptOutcome, err := t.attempt(req, body, info, index, observation)
+		if err == nil {
+			return response, nil
+		}
+		lastErr, outcome = err, attemptOutcome
+		t.metrics.observeAttempt(t.role, endpointLabel(index), info.boundedMethod, outcome)
+		if req.Context().Err() != nil {
 			break
 		}
-		ctx, cancel := context.WithTimeout(req.Context(), attemptTimeout)
-		attempt := req.Clone(ctx)
-		attempt.URL = ep
-		attempt.Host = ep.Host
-		if pendingLookup {
-			attempt.Header.Set(erpcRetryEmptyHeader, "false")
-		}
-		if body != nil {
-			attempt.Body = io.NopCloser(bytes.NewReader(body))
-			attempt.ContentLength = int64(len(body))
-		}
-
-		resp, err := t.base.RoundTrip(attempt)
-		var inspectedOutcome *rpcOutcome
-		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
-			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, nullFallbackID)
-				if inspectErr != nil || unavailable {
-					_ = resp.Body.Close()
-					cancel()
-					if inspectErr != nil {
-						lastErr = inspectErr
-						lastOutcome = classifyRPCFailure(inspectErr, req.Context().Err())
-					} else {
-						lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
-						lastOutcome = rpcOutcomeNullResult
-					}
-					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
-					t.log.V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
-					continue
-				}
-				if t.metrics != nil {
-					outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
-					inspectedOutcome = &outcome
-				}
-			}
-			// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
-			// classify JSON-RPC error envelopes only after that body has been consumed.
-			if t.metrics == nil {
-				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-			} else if inspectedOutcome != nil {
-				outcome := *inspectedOutcome
-				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func() {
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
-				})
-			} else {
-				statusCode := resp.StatusCode
-				resp.Body = newObservedRPCBody(resp.Body, cancel, func(responseBody []byte, truncated bool, readErr error) {
-					outcome := classifyRPCResponse(method, statusCode, responseBody, truncated, readErr)
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
-				})
-			}
-			return resp, nil
-		}
-
-		if err != nil {
-			lastErr = err
-			lastOutcome = classifyRPCFailure(err, req.Context().Err())
-		} else {
-			lastErr = errors.Errorf("status %d", resp.StatusCode)
-			lastOutcome = classifyHTTPStatus(resp.StatusCode)
-			_ = resp.Body.Close()
-		}
-		cancel()
-		t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
-		if i < len(t.endpoints)-1 {
-			t.log.V(1).Info("rpc endpoint failed; trying fallback",
-				"endpoint", ep.Redacted(), "err", lastErr.Error())
+		if index+1 < len(t.endpoints) {
+			t.log.V(1).Info("rpc endpoint unavailable; trying fallback", "endpoint", t.endpoints[index].Redacted(), "method", info.rawMethod, "err", err.Error())
 		}
 	}
-	requestObservation.finish(lastOutcome)
+	observation(outcome)
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
+}
+
+func (t *fallbackTransport) attempt(req *http.Request, body []byte, info rpcRequestInfo, index int, observation func(rpcOutcome)) (*http.Response, rpcOutcome, error) {
+	timeout := endpointAttemptTimeout(req.Context(), len(t.endpoints)-index)
+	if timeout <= 0 {
+		err := req.Context().Err()
+		if err == nil {
+			err = context.DeadlineExceeded
+		}
+		return nil, classifyRPCFailure(err, req.Context().Err()), err
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	request := req.Clone(ctx)
+	request.URL, request.Host = t.endpoints[index], t.endpoints[index].Host
+	request.Body, request.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
+	if isPendingLookupMethod(info.rawMethod) {
+		request.Header.Set(erpcRetryEmptyHeader, "false")
+	}
+	response, err := t.base.RoundTrip(request)
+	if err != nil {
+		cancel()
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, classifyRPCFailure(err, req.Context().Err()), err
+	}
+	if unavailableHTTPStatus(response.StatusCode) {
+		_ = response.Body.Close()
+		cancel()
+		return nil, classifyHTTPStatus(response.StatusCode), errors.Errorf("status %d", response.StatusCode)
+	}
+	reader := io.Reader(response.Body)
+	if info.nullFallback && index+1 < len(t.endpoints) && response.StatusCode >= 200 && response.StatusCode < 300 {
+		// A null JSON-RPC envelope is small. Peek only a bounded prefix; large valid
+		// block/receipt payloads remain streaming and are never buffered in full.
+		prefix, err := io.ReadAll(io.LimitReader(response.Body, rpcResponseObservationLimit+1))
+		if err != nil {
+			_ = response.Body.Close()
+			cancel()
+			return nil, classifyRPCFailure(err, req.Context().Err()), errors.Errorf("read rpc response body: %w", err)
+		}
+		if len(prefix) <= rpcResponseObservationLimit && matchingNullResult(prefix, info.id) {
+			_ = response.Body.Close()
+			cancel()
+			return nil, rpcOutcomeNullResult, errors.Errorf("%s returned a null result", info.rawMethod)
+		}
+		reader = io.MultiReader(bytes.NewReader(prefix), response.Body)
+	}
+	// The attempt deadline and logical request span end together when the RPC
+	// decoder closes the body, including errors while streaming that body.
+	response.Body = &rpcBody{
+		reader: reader, closer: response.Body, cancel: cancel,
+		observe: t.metrics != nil, method: info.boundedMethod, status: response.StatusCode,
+		finish: func(outcome rpcOutcome) {
+			t.metrics.observeAttempt(t.role, endpointLabel(index), info.boundedMethod, outcome)
+			observation(outcome)
+		},
+	}
+	return response, rpcOutcomeSuccess, nil
 }
 
 type rpcRequestInfo struct {
@@ -172,35 +142,34 @@ type rpcRequestInfo struct {
 }
 
 func inspectRPCRequest(body []byte) rpcRequestInfo {
+	info := rpcRequestInfo{boundedMethod: "unknown"}
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return rpcRequestInfo{boundedMethod: "unknown"}
+		return info
 	}
 	if trimmed[0] == '[' {
-		return rpcRequestInfo{boundedMethod: "batch"}
+		info.boundedMethod = "batch"
+		return info
 	}
 	var request struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Method  string          `json:"method"`
 	}
-	if err := json.Unmarshal(trimmed, &request); err != nil || request.Method == "" {
-		return rpcRequestInfo{boundedMethod: "unknown"}
-	}
-	info := rpcRequestInfo{
-		boundedMethod: boundedRPCMethodName(request.Method),
-		rawMethod:     request.Method,
-	}
-	if request.JSONRPC != jsonRPCVersion || len(request.ID) == 0 ||
-		bytes.Equal(bytes.TrimSpace(request.ID), []byte("null")) {
+	if json.Unmarshal(trimmed, &request) != nil || request.Method == "" {
 		return info
 	}
-	switch request.Method {
-	case rpcMethodGetTransactionReceipt, "eth_getBlockByHash", "eth_getBlockByNumber":
-		info.id = request.ID
-		info.nullFallback = true
+	info.rawMethod, info.boundedMethod = request.Method, boundedRPCMethodName(request.Method)
+	lookup := request.Method == rpcMethodGetTransactionReceipt || request.Method == "eth_getBlockByHash" || request.Method == "eth_getBlockByNumber"
+	if lookup && request.JSONRPC == jsonRPCVersion && hasJSONValue(request.ID) {
+		info.id, info.nullFallback = request.ID, true
 	}
 	return info
+}
+
+func hasJSONValue(value json.RawMessage) bool {
+	value = bytes.TrimSpace(value)
+	return len(value) != 0 && !bytes.Equal(value, []byte("null"))
 }
 
 // erpcRetryEmptyHeader opts a request out of eRPC's empty-result retry. Transactions are sent
@@ -213,10 +182,6 @@ const erpcRetryEmptyHeader = "X-ERPC-Retry-Empty"
 // isPendingLookupMethod reports the methods whose null result means "not mined yet", not "missing".
 func isPendingLookupMethod(method string) bool {
 	return method == rpcMethodGetTransactionReceipt || method == "eth_getTransactionByHash"
-}
-
-func boundedRPCMethod(body []byte) string {
-	return inspectRPCRequest(body).boundedMethod
 }
 
 func boundedRPCMethodName(method string) string {
@@ -269,92 +234,53 @@ func classifyRPCResponse(method string, statusCode int, body []byte, truncated b
 	if readErr != nil {
 		return classifyRPCFailure(readErr, nil)
 	}
-	if outcome := classifyHTTPStatus(statusCode); outcome != rpcOutcomeSuccess {
-		return outcome
+	status := classifyHTTPStatus(statusCode)
+	if status != rpcOutcomeSuccess || truncated {
+		// Responses larger than the observation cap are ordinary large results.
+		return status
 	}
-	if truncated {
-		// JSON-RPC errors are small; a response exceeding the observation cap is an ordinary large result.
-		return rpcOutcomeSuccess
-	}
+	var responses []rpcResponseEnvelope
 	if method == "batch" {
-		var responses []rpcResponseEnvelope
-		if err := json.Unmarshal(body, &responses); err != nil || len(responses) == 0 {
+		if json.Unmarshal(body, &responses) != nil || len(responses) == 0 {
 			return rpcOutcomeDecodeError
 		}
-		for _, response := range responses {
-			if len(response.Error) > 0 && !bytes.Equal(bytes.TrimSpace(response.Error), []byte("null")) {
-				return rpcOutcomeRPCError
-			}
+	} else {
+		response, valid := decodeRPCResponse(body)
+		if !valid || response.JSONRPC != jsonRPCVersion {
+			return rpcOutcomeDecodeError
 		}
-		return rpcOutcomeSuccess
+		responses = []rpcResponseEnvelope{response}
 	}
-	response, valid := decodeRPCResponse(body)
-	if !valid || response.JSONRPC != jsonRPCVersion {
-		return rpcOutcomeDecodeError
-	}
-	if len(response.Error) > 0 && !bytes.Equal(bytes.TrimSpace(response.Error), []byte("null")) {
-		return rpcOutcomeRPCError
+	for _, response := range responses {
+		if hasJSONValue(response.Error) {
+			return rpcOutcomeRPCError
+		}
 	}
 	return rpcOutcomeSuccess
 }
 
 const rpcResponseObservationLimit = 64 << 10
 
-type observedRPCBody struct {
-	io.ReadCloser
-
+type rpcBody struct {
+	reader    io.Reader
+	closer    io.Closer
 	cancel    context.CancelFunc
-	observe   func([]byte, bool, error)
-	body      []byte
+	observe   bool
+	method    string
+	status    int
+	finish    func(rpcOutcome)
+	prefix    []byte
 	truncated bool
 	readErr   error
 	once      sync.Once
 }
 
-func newObservedRPCBody(
-	body io.ReadCloser,
-	cancel context.CancelFunc,
-	observe func([]byte, bool, error),
-) *observedRPCBody {
-	return &observedRPCBody{ReadCloser: body, cancel: cancel, observe: observe}
-}
-
-type classifiedRPCBody struct {
-	io.ReadCloser
-
-	cancel  context.CancelFunc
-	observe func()
-	once    sync.Once
-}
-
-func newClassifiedRPCBody(
-	body io.ReadCloser,
-	cancel context.CancelFunc,
-	observe func(),
-) *classifiedRPCBody {
-	return &classifiedRPCBody{ReadCloser: body, cancel: cancel, observe: observe}
-}
-
-func (b *classifiedRPCBody) Close() error {
-	closeErr := b.ReadCloser.Close()
-	b.once.Do(func() {
-		b.observe()
-		b.cancel()
-	})
-	return closeErr
-}
-
-func (b *observedRPCBody) Read(p []byte) (int, error) {
-	n, err := b.ReadCloser.Read(p)
-	if n > 0 {
-		remaining := rpcResponseObservationLimit - len(b.body)
-		if remaining > 0 {
-			copied := min(n, remaining)
-			b.body = append(b.body, p[:copied]...)
-			b.truncated = copied < n
-		} else {
-			b.truncated = true
-		}
+func (b *rpcBody) Read(data []byte) (int, error) {
+	n, err := b.reader.Read(data)
+	if b.observe && n > 0 {
+		take := min(n, rpcResponseObservationLimit-len(b.prefix))
+		b.prefix = append(b.prefix, data[:take]...)
+		b.truncated = b.truncated || take < n
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		b.readErr = err
@@ -362,17 +288,18 @@ func (b *observedRPCBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (b *observedRPCBody) Close() error {
-	closeErr := b.ReadCloser.Close()
+func (b *rpcBody) Close() error {
+	err := b.closer.Close()
 	b.once.Do(func() {
-		readErr := b.readErr
-		if readErr == nil {
-			readErr = closeErr
+		defer b.cancel()
+		if b.readErr == nil {
+			b.readErr = err
 		}
-		b.observe(b.body, b.truncated, readErr)
-		b.cancel()
+		if b.observe {
+			b.finish(classifyRPCResponse(b.method, b.status, b.prefix, b.truncated, b.readErr))
+		}
 	})
-	return closeErr
+	return err
 }
 
 type rpcResponseEnvelope struct {
@@ -390,29 +317,12 @@ func decodeRPCResponse(body []byte) (rpcResponseEnvelope, bool) {
 	return response, true
 }
 
-// hasNullRPCResult buffers and restores resp.Body, then reports whether it is a matching successful
-// JSON-RPC response whose result is null. It returns the inspected bytes so metrics do not copy and
-// decode the same response again after the RPC client consumes the restored body.
-func hasNullRPCResult(resp *http.Response, requestID json.RawMessage) (bool, []byte, error) {
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
-	if err != nil {
-		return false, body, errors.Errorf("read rpc response body: %w", err)
-	}
-
-	response, valid := decodeRPCResponse(body)
-	if !valid || response.JSONRPC != jsonRPCVersion {
-		return false, body, nil
-	}
-	if !bytes.Equal(bytes.TrimSpace(response.ID), bytes.TrimSpace(requestID)) {
-		return false, body, nil
-	}
-	if len(response.Error) > 0 && !bytes.Equal(bytes.TrimSpace(response.Error), []byte("null")) {
-		return false, body, nil
-	}
-	return bytes.Equal(bytes.TrimSpace(response.Result), []byte("null")), body, nil
+func matchingNullResult(body []byte, requestID json.RawMessage) bool {
+	response, ok := decodeRPCResponse(body)
+	return ok && response.JSONRPC == jsonRPCVersion &&
+		bytes.Equal(bytes.TrimSpace(response.ID), bytes.TrimSpace(requestID)) &&
+		(len(response.Error) == 0 || bytes.Equal(bytes.TrimSpace(response.Error), []byte("null"))) &&
+		bytes.Equal(bytes.TrimSpace(response.Result), []byte("null"))
 }
 
 func endpointAttemptTimeout(ctx context.Context, endpointsLeft int) time.Duration {
@@ -428,20 +338,6 @@ func endpointAttemptTimeout(ctx context.Context, endpointsLeft int) time.Duratio
 		return 0
 	}
 	return min(rpcAttemptTimeout, remaining/time.Duration(endpointsLeft))
-}
-
-// cancelOnClose cancels the per-attempt context when the response body is closed, so the timeout
-// covers the full request+body-read without aborting an in-flight read.
-type cancelOnClose struct {
-	io.ReadCloser
-
-	cancel context.CancelFunc
-}
-
-func (c *cancelOnClose) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
-	return err
 }
 
 // isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the

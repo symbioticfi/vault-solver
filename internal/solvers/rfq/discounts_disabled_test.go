@@ -28,7 +28,7 @@ func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (no inventory: no vaults, discounts disabled)", rec)
 	}
 	if be.listCalls != 0 {
@@ -53,7 +53,7 @@ func TestExecution_DiscountsDisabled_FillFailsClosed(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}

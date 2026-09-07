@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func testAdapter(id byte, fundable int64) types.AdapterSnapshot {
@@ -48,9 +48,7 @@ func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 2 {
 		t.Fatalf("offers = %d, want 2", len(got.Offers))
 	}
@@ -60,6 +58,10 @@ func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 	}
 	if got.Offers[1].Maker != a1.Adapter || got.Offers[1].Principal.Int64() != 20_000_000 {
 		t.Fatalf("offer1 = %+v, want adapter 1 / 20M", got.Offers[1])
+	}
+	if input.Adapters[0].Fundable.Cmp(big.NewInt(50_000_000)) != 0 || input.Adapters[1].Fundable.Cmp(big.NewInt(80_000_000)) != 0 ||
+		input.Adapters[0].OpenCount != 0 || input.Adapters[1].OpenCount != 0 {
+		t.Fatal("strategy changed input funding or open counts")
 	}
 	// 200 bps of each principal, both positive (a 0-return clamped offer would be skipped, not posted).
 	if got.Offers[0].ExpectedReturn.Int64() != 1_600_000 || got.Offers[1].ExpectedReturn.Int64() != 400_000 {
@@ -77,9 +79,7 @@ func TestStrategyClampsOfferToAdapterCapacity(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 1 {
 		t.Fatalf("offers = %d, want 1", len(got.Offers))
 	}
@@ -98,9 +98,7 @@ func TestStrategyRejectsZeroAdapterCapacity(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 0 {
 		t.Fatalf("offers = %+v, want none because adapter capacity is zero", got.Offers)
 	}
@@ -119,9 +117,7 @@ func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 2 {
 		t.Fatalf("offers = %d, want 2", len(got.Offers))
 	}
@@ -142,9 +138,7 @@ func TestStrategySkipsClampedOfferBelowMinAssets(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	// a2 (80) fills first, leaving 10 for a1 — below a1's min-request size of 20, so a1 is skipped.
 	if len(got.Offers) != 1 || got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 80 {
 		t.Fatalf("offers = %+v, want only adapter 2 / 80", got.Offers)
@@ -168,9 +162,7 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 		Auctions: []types.AuctionSnapshot{auction},
 	}
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 0 {
 		t.Fatalf("offers = %+v, want none: truncated expectedReturn is below the 190 ppm floor", got.Offers)
 	}
@@ -182,9 +174,7 @@ func TestStrategyDropsOfferBelowMinYieldFloor(t *testing.T) {
 	auction.MaxRateBps = 1.91
 	input.Auctions = []types.AuctionSnapshot{auction}
 	got, err = New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 1 {
 		t.Fatalf("offers = %+v, want 1: 1.91 bps leaves room above the 190 ppm floor", got.Offers)
 	}
@@ -209,9 +199,7 @@ func TestStrategyPricesPartialConsumeMarginAboveFloor(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 1 {
 		t.Fatalf("offers = %+v, want 1", got.Offers)
 	}
@@ -233,9 +221,7 @@ func TestStrategySkipsZeroRatePair(t *testing.T) {
 		Auctions: []types.AuctionSnapshot{auction},
 	}
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 0 {
 		t.Fatalf("offers = %+v, want none: a 0-floor / 0-maxRate pair must not be offered at 0 return", got.Offers)
 	}
@@ -256,9 +242,7 @@ func TestStrategyOwnsEligibility(t *testing.T) {
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(got.Offers) != 0 {
 		t.Fatalf("offers = %+v, want none: live, collateral, and min-yield filters are strategy-owned", got.Offers)
 	}

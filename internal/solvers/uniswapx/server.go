@@ -1,17 +1,16 @@
 package uniswapx
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"math/big"
 	"net/http"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -43,173 +42,92 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 			s.metrics.observeQuoteLatency(time.Since(started))
 		}
 	}()
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteRequestBytes+1))
-	if err != nil {
-		s.log.V(1).Info("quote request rejected", "reason", "read-body", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if len(body) > maxQuoteRequestBytes {
-		s.log.V(1).Info("quote request rejected", "reason", "body-too-large", "bytes", len(body))
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
 	var request quoteRequest
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	if err := parse.JSON(http.MaxBytesReader(w, r.Body, maxQuoteRequestBytes), &request); err != nil {
 		s.log.V(1).Info("quote request rejected", "reason", "invalid-json", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		s.log.V(1).Info(
-			"quote request rejected",
-			"reason", "trailing-json",
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-		)
 		s.observeQuote(quoteOutcomeInvalid)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
-			s.log.V(1).Info("quote request rejected", "reason", "invalid-breaker-notification")
 			s.observeQuote(quoteOutcomeInvalid)
 			http.Error(w, "invalid blockUntilTimestamp", http.StatusBadRequest)
 			return
 		}
-		s.log.V(1).Info(
-			"quote breaker notification received",
-			"blockUntilTimestamp", *request.BlockUntilTimestamp,
-		)
 		s.setBlockUntil(*request.BlockUntilTimestamp)
+		s.log.V(1).Info("quote breaker notification received", "blockUntilTimestamp", *request.BlockUntilTimestamp)
 		s.observeQuote(quoteOutcomeBreakerNotification)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.log.V(1).Info(
-		"quote request received",
-		"requestId", request.RequestID,
-		"quoteId", request.QuoteID,
-		"type", request.Type,
-		"protocol", request.Protocol,
-		"tokenIn", request.TokenIn,
-		"tokenOut", request.TokenOut,
-		"amount", request.Amount,
-	)
+	log := s.log.WithValues("requestId", request.RequestID, "quoteId", request.QuoteID, "type", request.Type)
+	log.V(1).Info("quote request received", "protocol", request.Protocol,
+		"tokenIn", request.TokenIn, "tokenOut", request.TokenOut, "amount", request.Amount)
 	response, err := s.quote(r.Context(), request)
 	if err != nil {
 		s.observeQuote(quoteOutcomeError)
-		s.log.Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		log.Error(err, "quote failed")
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if response.AmountOut == "0" {
 		s.observeQuoteDecline(response.declineReason)
-		s.log.V(1).Info(
-			"quote declined",
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-			"type", request.Type,
-			"reason", response.declineReason,
-			"blockUntil", s.blockUntil.Load(),
-			"localBlockUntil", s.localBlockUntil.Load(),
-			"exclusiveBlockUntil", s.exclusiveBlockUntil.Load(),
-			"warmupUntil", s.warmupUntil.Load(),
-			"planningFills", s.planningFills.Load(),
-		)
+		log.V(1).Info("quote declined", "reason", response.declineReason,
+			"blockUntil", s.timeBasedBlockUntil(), "planningFills", s.quotes.planningCount())
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	s.observeQuote(quoteOutcomeQuoted)
 	s.observeQuotedAmounts(response)
-	s.log.V(1).Info(
-		"quote returned",
-		"requestId", request.RequestID,
-		"quoteId", request.QuoteID,
-		"type", request.Type,
-		"amountIn", response.AmountIn,
-		"amountOut", response.AmountOut,
-	)
+	log.V(1).Info("quote returned", "amountIn", response.AmountIn, "amountOut", response.AmountOut)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.log.Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		log.Error(err, "write quote response")
 	}
 }
 
 func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse, error) {
-	response := quoteResponse{
-		ChainID: s.chainID, RequestID: request.RequestID, Swapper: request.Swapper, TokenIn: request.TokenIn,
-		AmountIn: "0", TokenOut: request.TokenOut, AmountOut: "0",
-		Filler: s.cfg.Executor.Hex(), QuoteID: request.QuoteID,
-	}
+	response := quoteResponse{ChainID: s.chainID, RequestID: request.RequestID, QuoteID: request.QuoteID,
+		Swapper: request.Swapper, TokenIn: request.TokenIn, TokenOut: request.TokenOut,
+		Filler: s.cfg.Executor.Hex(), AmountIn: "0", AmountOut: "0"}
 	if request.Type == quoteTypeExactInput {
 		response.AmountIn = request.Amount
 	}
-	now := s.currentTime()
-	if s.quoteBlocked(now) {
+	now := s.quoteClock()
+	if s.quoteBlocked(now.Unix()) {
 		return declinedQuote(response, quoteDeclineBlocked), nil
 	}
-	if request.RequestID == "" || request.QuoteID == "" || !supportedQuoteType(request.Type) || request.NumOutputs < 1 ||
-		!supportedQuoteProtocol(request.Protocol) || request.TokenInChainID != s.chainID || request.TokenOutChainID != s.chainID ||
-		!common.IsHexAddress(request.Swapper) ||
-		!common.IsHexAddress(request.TokenIn) || !common.IsHexAddress(request.TokenOut) {
-		return declinedQuote(response, quoteDeclineInvalidRequest), nil
+	input, decline := request.strategyInput(s.chainID, s.cfg.TokenPolicy)
+	if decline != "" {
+		return declinedQuote(response, decline), nil
 	}
-	tokenIn := common.HexToAddress(request.TokenIn)
-	tokenOut := common.HexToAddress(request.TokenOut)
-	if tokenIn == tokenOut || tokenOut == (common.Address{}) || !s.cfg.TokenPolicy.Allows(tokenIn) {
-		return declinedQuote(response, quoteDeclinePairOutOfScope), nil
-	}
-	requestAmount, amountOK := new(big.Int).SetString(request.Amount, 10)
-	if !amountOK || requestAmount.Sign() <= 0 {
-		return declinedQuote(response, quoteDeclineInvalidAmount), nil
-	}
-	epoch := s.quoteEpoch.Load()
-	state := s.quoteState.Load()
-	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
+	snapshot := s.quotes.current()
+	if !s.currentQuoteSnapshot(snapshot, now) {
 		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
 	}
-	input := strategytypes.QuoteInput{
-		RequestID: request.RequestID, QuoteID: request.QuoteID,
-		TokenIn: tokenIn, TokenOut: tokenOut,
-		RequireSingleRoute: state.singleRouteFor[tokenIn],
-		Inventory:          state.inventory,
-		Reservations:       s.capacity.Snapshot(),
-		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
-		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: s.decisionTrace(
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-			"quoteType", request.Type,
-		),
-	}
-	if request.Type == quoteTypeExactInput {
-		input.AmountIn = requestAmount
-	} else {
-		input.AmountOut = requestAmount
-	}
-	quote, err := s.strategy.DecideQuote(ctx, input)
+	input.RequireSingleRoute, input.Inventory = snapshot.singleRouteFor[input.TokenIn], snapshot.inventory
+	input.Reservations = s.capacity.Snapshot()
+	input.GasSnapshot, input.GasPrices, input.MaxFeePerGas = snapshot.gasSnapshot, snapshot.gasPrices, snapshot.maxFeePerGas
+	input.ChainTime, input.QuoteExpiresAt = snapshot.chainTime, snapshot.expiresAt
+	input.Trace = planning.NewDecisionTrace(s.log, "requestId", request.RequestID, "quoteId", request.QuoteID, "quoteType", request.Type)
+	decision, err := s.strategy.DecideQuote(ctx, input)
 	if err != nil {
 		return response, err
 	}
-	if quote == nil {
+	if decision == nil {
 		return declinedQuote(response, quoteDeclineStrategy), nil
 	}
-	if err := validateStrategyQuote(input, quote); err != nil {
+	if err := validateStrategyQuote(input, decision); err != nil {
 		return response, err
 	}
-	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.quoteBlocked(s.currentTime()) {
+	// A slow strategy consumes the snapshot's lifetime even if no refresh replaced it.
+	now = s.quoteClock()
+	if !s.currentQuoteSnapshot(snapshot, now) || s.quoteBlocked(now.Unix()) {
 		return declinedQuote(response, quoteDeclineStateChanged), nil
 	}
-	response.AmountIn = quote.AmountIn.String()
-	response.AmountOut = quote.AmountOut.String()
-	response.quotedPairBounded = quotePairIsBounded(state, tokenIn, tokenOut)
+	response.AmountIn, response.AmountOut = decision.AmountIn.String(), decision.AmountOut.String()
+	response.quotedPairBounded = quotePairIsBounded(snapshot, input.TokenIn, input.TokenOut)
 	return response, nil
 }
 
@@ -220,7 +138,7 @@ func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteRespo
 
 func (s *Solver) quoteBlocked(now int64) bool {
 	return s.timeBasedBlockUntil() > now ||
-		s.planningFills.Load() != 0 ||
+		s.quotes.planningCount() != 0 ||
 		(s.txm != nil && !s.txm.LaneReady()) ||
 		!s.exclusiveDeliveryHealthy()
 }
@@ -255,10 +173,13 @@ func validateStrategyQuote(input strategytypes.QuoteInput, quote *strategytypes.
 	return nil
 }
 
-func (s *Solver) currentTime() int64 {
-	now := time.Now().Unix()
-	if chainTime := s.chainTime.Load(); chainTime > now {
-		return chainTime
+func (s *Solver) currentTime() int64 { return s.quoteClock().Unix() }
+
+func (s *Solver) quoteClock() time.Time {
+	now := time.Now()
+	observed := time.Unix(s.chainTime.Load(), 0)
+	if observed.After(now) {
+		return observed
 	}
 	return now
 }

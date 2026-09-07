@@ -11,8 +11,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -46,9 +47,7 @@ func TestQuoteDelegatesOneRequestedAmountToStrategy(t *testing.T) {
 	request := validQuoteRequest(tokenIn, tokenOut)
 
 	response, err := solver.quote(t.Context(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if response.AmountIn != "100" || response.AmountOut != "90" {
 		t.Fatalf("response = %+v", response)
 	}
@@ -119,7 +118,7 @@ func TestQuoteDeclinesExpiredState(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
 	solver := newQuoteTestSolver(t, tokenIn, strategy)
-	state := solver.quoteState.Load()
+	state := solver.quotes.current()
 	state.expiresAt = time.Now().Add(-time.Second)
 
 	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
@@ -134,7 +133,7 @@ func TestQuoteDeclinesStatePublishedForOldEpoch(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
 	solver := newQuoteTestSolver(t, tokenIn, strategy)
-	solver.quoteEpoch.Store(1)
+	solver.invalidateQuotes()
 
 	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
 
@@ -193,9 +192,7 @@ func TestQuoteDeclinesWhenStateChangesDuringStrategy(t *testing.T) {
 			tc.invalidate(solver)
 			close(strategy.release)
 
-			if err := <-errs; err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, <-errs)
 			if response := <-result; response.AmountOut != "0" {
 				t.Fatalf("invalidated quote = %+v", response)
 			}
@@ -268,9 +265,7 @@ func TestQuoteHandlerRejectsTrailingJSON(t *testing.T) {
 func newQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy *quoteTestStrategy) *Solver {
 	t.Helper()
 	policy, err := tokenpolicy.New(tokenpolicy.All, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	now := time.Now()
 	solver := &Solver{
 		chainID: 1,
@@ -280,7 +275,7 @@ func newQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy *quoteTes
 		},
 		strategy: strategy,
 	}
-	solver.quoteState.Store(&quoteState{
+	solver.quotes.setForTest(&quoteState{
 		maxFeePerGas: big.NewInt(1), chainTime: now, expiresAt: now.Add(time.Minute),
 		singleRouteFor: map[common.Address]bool{tokenIn: true},
 	})
@@ -290,9 +285,7 @@ func newQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy *quoteTes
 func newBlockingQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy strategytypes.Strategy) *Solver {
 	t.Helper()
 	policy, err := tokenpolicy.New(tokenpolicy.All, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	now := time.Now()
 	solver := &Solver{
 		chainID: 1,
@@ -302,7 +295,7 @@ func newBlockingQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy s
 		},
 		strategy: strategy,
 	}
-	solver.quoteState.Store(&quoteState{
+	solver.quotes.setForTest(&quoteState{
 		maxFeePerGas: big.NewInt(1), chainTime: now, expiresAt: now.Add(time.Minute),
 		singleRouteFor: map[common.Address]bool{tokenIn: true},
 	})
@@ -356,4 +349,28 @@ func (s *blockingQuoteStrategy) DecideFill(
 	strategytypes.FillInput,
 ) (*strategytypes.FillPlan, error) {
 	return nil, nil
+}
+
+func TestQuoteExpiresWhileStrategyRuns(t *testing.T) {
+	tokenIn, tokenOut := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	solver := newQuoteTestSolver(t, tokenIn, &quoteTestStrategy{})
+	strategy := &blockingQuoteStrategy{entered: make(chan struct{}), release: make(chan struct{}),
+		quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+	solver.strategy = strategy
+	type result struct {
+		quote quoteResponse
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		quote, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+		done <- result{quote, err}
+	}()
+	<-strategy.entered
+	solver.chainTime.Store(solver.quotes.current().expiresAt.Unix() + 1)
+	close(strategy.release)
+	got := <-done
+	if got.err != nil || got.quote.AmountOut != "0" || got.quote.declineReason != quoteDeclineStateChanged {
+		t.Fatalf("expired strategy response = %+v, err=%v", got.quote, got.err)
+	}
 }

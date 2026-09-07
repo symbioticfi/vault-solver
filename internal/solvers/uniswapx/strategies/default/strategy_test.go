@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
@@ -17,19 +18,15 @@ var quoteRateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
 func TestDefaultExecutionBufferIsOneBlock(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strategy.executionBuffer != 12*time.Second {
-		t.Fatalf("execution buffer = %s", strategy.executionBuffer)
+	testcheck.NoError(t, err)
+	if strategy.policy.ExecutionBuffer != 12*time.Second {
+		t.Fatalf("execution buffer = %s", strategy.policy.ExecutionBuffer)
 	}
 }
 
 func TestDecideQuoteRequiresOneRequestedAmountAndFreshState(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	now := time.Unix(1_800_000_000, 0)
 	for _, input := range []types.QuoteInput{
 		{ChainTime: now, QuoteExpiresAt: now},
@@ -44,14 +41,10 @@ func TestDecideQuoteRequiresOneRequestedAmountAndFreshState(t *testing.T) {
 
 func TestDecideQuoteReturnsOneExactInputAmountWithBuffer(t *testing.T) {
 	strategy, err := New(Config{PriceBufferBps: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(1_000, 1_000, quoteRateScale)
 	quote, err := strategy.DecideQuote(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if quote == nil || quote.AmountIn.String() != "1000" || quote.AmountOut.String() != "980" {
 		t.Fatalf("quote = %+v", quote)
 	}
@@ -59,9 +52,7 @@ func TestDecideQuoteReturnsOneExactInputAmountWithBuffer(t *testing.T) {
 
 func TestDecideQuoteSubtractsCompleteFillGas(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(1_000_000, 2_000_000, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
 	route := input.Inventory[0].Route
 	input.MaxFeePerGas = big.NewInt(1)
@@ -69,9 +60,7 @@ func TestDecideQuoteSubtractsCompleteFillGas(t *testing.T) {
 	input.GasSnapshot = acquireGasSnapshot(route, 2_000_000)
 
 	quote, err := strategy.DecideQuote(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if quote == nil || quote.AmountOut.String() != "1450000" {
 		t.Fatalf("quote = %+v, want output 1450000", quote)
 	}
@@ -79,9 +68,7 @@ func TestDecideQuoteSubtractsCompleteFillGas(t *testing.T) {
 
 func TestDecideQuoteExactOutputFindsInputIncludingGas(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(1, 2_000_000, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
 	input.AmountIn = nil
 	input.AmountOut = big.NewInt(900_000)
@@ -91,9 +78,7 @@ func TestDecideQuoteExactOutputFindsInputIncludingGas(t *testing.T) {
 	input.GasSnapshot = acquireGasSnapshot(route, 2_000_000)
 
 	quote, err := strategy.DecideQuote(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if quote == nil || quote.AmountIn.String() != "725000" || quote.AmountOut.String() != "900000" {
 		t.Fatalf("quote = %+v", quote)
 	}
@@ -101,9 +86,7 @@ func TestDecideQuoteExactOutputFindsInputIncludingGas(t *testing.T) {
 
 func TestDecideQuoteAggregatesRoutesOnlyWhenAllowed(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(900, 500, quoteRateScale)
 	second := input.Inventory[0]
 	second.ID = "route-2"
@@ -124,9 +107,7 @@ func TestDecideQuoteAggregatesRoutesOnlyWhenAllowed(t *testing.T) {
 
 func TestDecideQuoteUsesCurrentCapacityAndReservations(t *testing.T) {
 	strategy, err := New(Config{InventoryReserveBps: 1_000})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(50, 100, quoteRateScale)
 	input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(50)}
 	quote, err := strategy.DecideQuote(context.Background(), input)
@@ -148,9 +129,7 @@ func TestDecideQuoteUsesCurrentCapacityAndReservations(t *testing.T) {
 
 func TestDecideQuoteDoesNotSplitCapacityWithUnrelatedPairs(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(100, 100, quoteRateScale)
 	for index, tokenIn := range []common.Address{
 		common.HexToAddress("0x3333333333333333333333333333333333333333"),
@@ -178,9 +157,7 @@ func TestDecideQuoteDoesNotSplitCapacityWithUnrelatedPairs(t *testing.T) {
 
 func TestDecideQuoteKeepsMatchingRoutesWithinSharedCapacity(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(100, 100, quoteRateScale)
 	second := input.Inventory[0]
 	second.ID = "route-2"
@@ -200,9 +177,7 @@ func TestDecideQuoteKeepsMatchingRoutesWithinSharedCapacity(t *testing.T) {
 
 func TestDecideQuoteChoosesFreshPrivateAlternative(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	input := directQuoteInput(100, 200, quoteRateScale)
 	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	private := input.Inventory[0]
@@ -224,9 +199,7 @@ func TestDecideQuoteChoosesFreshPrivateAlternative(t *testing.T) {
 
 func TestDecideFillBuildsCurrentMultiRoutePlan(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	tokenIn, tokenOut := testPair()
 	quotes := []liquidlane.FillQuote{
 		directFillQuote(testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut), 1_000, 500, 1_000),
@@ -252,9 +225,7 @@ func TestDecideFillBuildsCurrentMultiRoutePlan(t *testing.T) {
 
 func TestDecideFillDoesNotDoubleSpendSharedCapacity(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	tokenIn, tokenOut := testPair()
 	quotes := []liquidlane.FillQuote{
 		directFillQuote(testRoute("route-1", "shared", 1, tokenIn, tokenOut), 1_000, 600, 1_000),
@@ -271,9 +242,7 @@ func TestDecideFillDoesNotDoubleSpendSharedCapacity(t *testing.T) {
 
 func TestDecideFillSelectsBestCurrentRoute(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	tokenIn, tokenOut := testPair()
 	first := testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut)
 	best := testRoute("route-2", "capacity-2", 2, tokenIn, tokenOut)
@@ -291,9 +260,7 @@ func TestDecideFillSelectsBestCurrentRoute(t *testing.T) {
 
 func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 	strategy, err := New(Config{ExecutionDeadlineBuffer: "30s"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	tokenIn, tokenOut := testPair()
 	now := time.Unix(1_800_000_000, 0)
 	quote := directFillQuote(testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut), 100, 100, 100)
@@ -316,9 +283,7 @@ func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 
 func TestDecideFillCommitsSelectedPrivateDiscount(t *testing.T) {
 	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	tokenIn, tokenOut := testPair()
 	route := testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut)
 	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

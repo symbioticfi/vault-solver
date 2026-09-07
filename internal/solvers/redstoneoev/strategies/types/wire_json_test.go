@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
@@ -67,9 +68,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 		}},
 	}
 	b, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
-	}
+	testcheck.NoError(t, err, "MarshalJSON: %v")
 	js := string(b)
 	for _, want := range []string{
 		`"timeoutMs":400`,
@@ -101,9 +100,7 @@ func TestBidInputMarshalJSON(t *testing.T) {
 	}
 	input.Context.GasPrices = nil
 	disabled, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("MarshalJSON without gas: %v", err)
-	}
+	testcheck.NoError(t, err, "MarshalJSON without gas: %v")
 	if !strings.Contains(string(disabled), `"gasPrices":null`) {
 		t.Fatalf("disabled gas JSON = %s, want explicit null gasPrices", disabled)
 	}
@@ -111,13 +108,11 @@ func TestBidInputMarshalJSON(t *testing.T) {
 
 func TestBidOutputUnmarshalJSON(t *testing.T) {
 	var out BidOutput
-	if err := json.Unmarshal([]byte(`{
+	testcheck.NoError(t, json.Unmarshal([]byte(`{
 		"decision":"bid",
 		"bidAmount":"10",
 		"operationData":"0x1234"
-	}`), &out); err != nil {
-		t.Fatalf("UnmarshalJSON: %v", err)
-	}
+	}`), &out), "UnmarshalJSON: %v")
 	if out.BidAmount.String() != "10" || string(out.OperationData) != "\x12\x34" {
 		t.Fatalf("unexpected output: %+v", out)
 	}
@@ -131,16 +126,12 @@ func TestBidOutputJSONRoundTrip(t *testing.T) {
 		OperationData: []byte{0x12, 0x34},
 	}
 	b, err := json.Marshal(want)
-	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
-	}
+	testcheck.NoError(t, err, "MarshalJSON: %v")
 	if got := string(b); got != `{"decision":"bid","reason":"profitable","bidAmount":"10","operationData":"0x1234"}` {
 		t.Fatalf("json = %s", got)
 	}
 	var got BidOutput
-	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("UnmarshalJSON: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(b, &got), "UnmarshalJSON: %v")
 	if got.Decision != want.Decision || got.Reason != want.Reason ||
 		got.BidAmount.Cmp(want.BidAmount) != 0 || string(got.OperationData) != string(want.OperationData) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)

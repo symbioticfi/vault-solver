@@ -6,7 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
 type RouteID string
@@ -130,9 +133,7 @@ func NewRoute(
 }
 
 func NewCapacityID(chainID int64, vault, tokenOut common.Address) CapacityID {
-	return CapacityID(strings.ToLower(
-		"capacity:" + strconv.FormatInt(chainID, 10) + ":" + vault.Hex() + ":" + tokenOut.Hex(),
-	))
+	return CapacityID("capacity:" + strconv.FormatInt(chainID, 10) + ":" + hexutil.Encode(vault[:]) + ":" + hexutil.Encode(tokenOut[:]))
 }
 
 func RouteCapacityID(route Route) CapacityID {
@@ -143,9 +144,7 @@ func RouteCapacityID(route Route) CapacityID {
 }
 
 func NewRouteID(chainID int64, adapter, tokenIn, tokenOut common.Address) RouteID {
-	return RouteID(strings.ToLower(
-		"route:" + strconv.FormatInt(chainID, 10) + ":" + adapter.Hex() + ":" + tokenIn.Hex() + ":" + tokenOut.Hex(),
-	))
+	return RouteID("route:" + strconv.FormatInt(chainID, 10) + ":" + hexutil.Encode(adapter[:]) + ":" + hexutil.Encode(tokenIn[:]) + ":" + hexutil.Encode(tokenOut[:]))
 }
 
 func NewCandidateID(route Route, discountID *common.Hash) CandidateID {
@@ -159,8 +158,8 @@ func NewCandidateID(route Route, discountID *common.Hash) CandidateID {
 func DirectInventory(route Route, maxAssets, maxRate *big.Int) Inventory {
 	return Inventory{
 		Route:     route,
-		MaxAssets: CloneBig(maxAssets),
-		MaxRate:   CloneBig(maxRate),
+		MaxAssets: bigmath.Clone(maxAssets),
+		MaxRate:   bigmath.Clone(maxRate),
 	}
 }
 
@@ -172,18 +171,11 @@ func DiscountInventory(
 ) Inventory {
 	return Inventory{
 		Route:      route,
-		MaxAssets:  CloneBig(maxAssets),
-		MaxRate:    CloneBig(maxRate),
+		MaxAssets:  bigmath.Clone(maxAssets),
+		MaxRate:    bigmath.Clone(maxRate),
 		DiscountID: CloneHash(&discountID),
 		ValidUntil: validUntil,
 	}
-}
-
-func CloneBig(n *big.Int) *big.Int {
-	if n == nil {
-		return nil
-	}
-	return new(big.Int).Set(n)
 }
 
 func CloneHash(h *common.Hash) *common.Hash {

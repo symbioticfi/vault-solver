@@ -18,13 +18,13 @@ decisions, and the live TODO lists (§10).
 
 ## The modularity rule (most important)
 
-Two layers, and code lives in exactly one:
+Two layers are wired by the explicit composition root in `internal/app`:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
-  `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
+  `internal/{config,chain,signer,txmanager,solver,observability,version}`.
   Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/`
-  (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
+  (3F, RFQ, LI.FI, UniswapX and RedStone OEV). All protocol-specific logic, types, ABIs usage, pricing, and config
   live here.
 
 **Shared protocol code** used by ≥2 solvers lives in its own shared package or generated binding — e.g.
@@ -32,12 +32,13 @@ Morpho's math in `internal/morpho/`, generated Morpho GraphQL bindings in `api/m
 contract bindings like `api/bindings/liquidlane/adapter` / `api/bindings/erc4626` (shared by redstone-oev +
 rfq). Hand-written domain adapters stay inside the solver that owns the workflow unless a second solver
 actually reuses them. Neutral, protocol-agnostic helpers (config parsing, etc.) live in their own small
-helper package — `internal/parse`.
+helper package — `internal/parse`; owned integer primitives live in `internal/bigmath`.
 
 To add a new integration (e.g. `rfq`):
 1. Create `internal/solvers/rfq/` implementing `solver.Solver` (`Name()`, `Run(ctx)`), with a
-   `Factory(raw yaml.Node, deps solver.Deps) (Solver, error)`.
-2. Self-register in `init()` via `solver.Register(Name, factory)`; blank-import the package from `main`.
+   `New(raw yaml.Node, deps solver.Deps) (solver.Solver, error)`.
+2. Add its constructor case to `newSolver` in `internal/app`. The CLI only calls
+   the application; no `init()` registration or blank imports.
 3. Put generated bindings under `api/bindings/<name>/...` (the existing 3F bindings are under
    `api/bindings/3f/`; shared Symbiotic core stays in `api/bindings/vaultv2/`).
 4. Decode your own config from the deferred `solvers[].config` YAML node — no framework edits.
@@ -72,9 +73,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   boundary; compare with `errors.Is`/`errors.As`. Return errors, don't log-and-continue silently —
   a swallowed error is a bug. `panic` only for genuine programmer errors (e.g. a `mustPack` of a
   static, known-good ABI call), never for runtime/IO failures.
-- **Logging:** `logr.Logger` everywhere (backed by zap, wired only in `main`). Info level for
+- **Logging:** `logr.Logger` everywhere (backed by zap, wired only in `internal/app`). Info level for
   operational events; `V(1)` for debug detail. Structured key/values, not formatted strings. Every line
-  names the integration it serves: with one configured solver `main` stamps the root logger with
+  names the integration it serves: with one configured solver `internal/app` stamps the root logger with
   `solver=<name>` (shared components such as `txmanager` included); with several, each solver's
   `deps.Log` is stamped instead and the txmanager stamps each request's lifecycle logs from
   `Request.Solver` (set it to the package `Name` at every `txmanager.Request{}` site) plus `label`.
@@ -253,7 +254,7 @@ reader or operator would be surprised to discover.
 ## Quick reference
 
 - Run gate: `make format && make test && make lint && go build ./...`
-- Add an integration: new `internal/solvers/<name>/` + `solver.Register` in `init()` + bindings under
+- Add an integration: new `internal/solvers/<name>/` + explicit `internal/app.newSolver` case + bindings under
   `api/bindings/<name>/` + a `solvers[]` entry. No framework changes.
 - Config is king: if it varies by deployment, it belongs in the YAML, not in code.
 - Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;

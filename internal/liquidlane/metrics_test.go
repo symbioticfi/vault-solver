@@ -8,9 +8,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestFillMetricsObserve(t *testing.T) {
@@ -20,9 +20,7 @@ func TestFillMetricsObserve(t *testing.T) {
 		Event: "fill", Outcomes: []string{FillOutcomeFailure, FillOutcomeNotAdmitted},
 	})
 	workflow, err := observability.NewWorkflowMetrics(reg, "rfq", spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if _, err := observability.NewWorkflowMetrics(reg, "lifi", FillWorkflowSpec()); err != nil {
 		t.Fatalf("register second solver: %v", err)
 	}

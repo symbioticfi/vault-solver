@@ -2,12 +2,10 @@ package webhookstrategy
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -22,17 +20,8 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
-}
-
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
-	cfg, err := webhook.ParseConfig(raw)
-	if err != nil {
-		return nil, err
-	}
-	client, err := webhook.NewClient(cfg)
+	client, err := webhook.NewFromConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -44,28 +33,18 @@ func New(client *webhook.Client) *Strategy {
 }
 
 func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (*types.Quote, error) {
-	var out *types.Quote
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideQuoteRoute, input, &out); err != nil {
+	quote, err := webhook.Post[*types.Quote](ctx, s.client, decideQuoteRoute, input)
+	if err != nil || quote == nil {
 		return nil, err
 	}
-	if out == nil {
-		return nil, nil
-	}
-	if err := validateQuote(input, out); err != nil {
+	if err := validateQuote(input, quote); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return quote, nil
 }
 
 func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
-	var out *types.FillPlan
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideFillRoute, input, &out); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return nil, nil
-	}
-	return out, nil
+	return webhook.Post[*types.FillPlan](ctx, s.client, decideFillRoute, input)
 }
 
 func validateQuote(input types.QuoteInput, quote *types.Quote) error {

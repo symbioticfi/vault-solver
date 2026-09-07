@@ -13,6 +13,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 const (
@@ -68,21 +69,6 @@ func isDutchAuctionContext(context []byte) bool {
 	return context[0] == dutchAuctionContextType || context[0] == exclusiveDutchAuctionContextType
 }
 
-type parsedStandardOrder struct {
-	order        inputsettler.StandardOrder
-	tokenIn      common.Address
-	amountIn     *big.Int
-	tokenOut     common.Address
-	outputAmount *big.Int
-	output       inputsettler.MandateOutput
-}
-
-type parsedOutput struct {
-	output   inputsettler.MandateOutput
-	tokenOut common.Address
-	amount   *big.Int
-}
-
 func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrder, error) {
 	var event submittedOrderEvent
 	if err := json.Unmarshal(data, &event); err != nil {
@@ -116,27 +102,20 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOrderTarget(inputSettler, parsed.order, cfg, chainID); err != nil {
+	if err := validateOrderTarget(inputSettler, parsed.Order, cfg, chainID); err != nil {
 		return nil, err
 	}
-	dedupeKey, err := localOrderKey(parsed.order)
+	dedupeKey, err := localOrderKey(parsed.Order)
 	if err != nil {
 		return nil, err
 	}
-	return &submittedOrder{
-		QuoteID:        eventQuoteID(event),
-		OrderStatus:    event.Meta.OrderStatus,
-		OrderID:        event.Meta.OrderID,
-		OnChainOrderID: event.Meta.OnChainOrderID,
-		dedupeKey:      dedupeKey,
-		Order:          parsed.order,
-		InputSettler:   inputSettler,
-		TokenIn:        parsed.tokenIn,
-		AmountIn:       parsed.amountIn,
-		TokenOut:       parsed.tokenOut,
-		OutputAmount:   new(big.Int).Set(parsed.outputAmount),
-		Output:         parsed.output,
-	}, nil
+	parsed.QuoteID = eventQuoteID(event)
+	parsed.OrderStatus = event.Meta.OrderStatus
+	parsed.OrderID = event.Meta.OrderID
+	parsed.OnChainOrderID = event.Meta.OnChainOrderID
+	parsed.dedupeKey = dedupeKey
+	parsed.InputSettler = inputSettler
+	return parsed, nil
 }
 
 func localOrderKey(order inputsettler.StandardOrder) (string, error) {
@@ -183,7 +162,7 @@ func isOnChainOrderEvent(event submittedOrderEvent) bool {
 
 func parseStandardOrder(
 	dto lifiorder.SubmitOrderDtoOrder,
-) (*parsedStandardOrder, error) {
+) (*submittedOrder, error) {
 	user, err := parseAddress(dto.User, "order.user")
 	if err != nil {
 		return nil, err
@@ -247,68 +226,65 @@ func parseStandardOrder(
 		Expires:       expires,
 		FillDeadline:  fillDeadline,
 		InputOracle:   inputOracle,
-		Inputs:        [][2]*big.Int{{new(big.Int).Set(tokenID), new(big.Int).Set(amountIn)}},
-		Outputs:       []inputsettler.MandateOutput{output.output},
+		Inputs:        [][2]*big.Int{{tokenID, new(big.Int).Set(amountIn)}},
+		Outputs:       []inputsettler.MandateOutput{output},
 	}
-	return &parsedStandardOrder{
-		order:        order,
-		tokenIn:      tokenIn,
-		amountIn:     amountIn,
-		tokenOut:     output.tokenOut,
-		outputAmount: output.amount,
-		output:       output.output,
+	tokenOut, err := identifierAddress(output.Token, "order.outputs[0].token")
+	if err != nil {
+		return nil, err
+	}
+	return &submittedOrder{
+		Order: order, TokenIn: tokenIn, AmountIn: amountIn,
+		TokenOut:     tokenOut,
+		OutputAmount: new(big.Int).Set(output.Amount), Output: output,
 	}, nil
 }
 
 func parseOutput(
 	dto lifiorder.SubmitOrderDtoOrderOutputsInner,
-) (*parsedOutput, error) {
+) (inputsettler.MandateOutput, error) {
 	oracle, err := parseBytes32(dto.Oracle, "order.outputs[0].oracle")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	settler, err := parseBytes32(dto.Settler, "order.outputs[0].settler")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	tokenID, err := parseBytes32(dto.Token, "order.outputs[0].token")
 	if err != nil {
-		return nil, err
-	}
-	tokenOut, err := identifierAddress(tokenID, "order.outputs[0].token")
-	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	recipientID, err := parseBytes32(dto.Recipient, "order.outputs[0].recipient")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	if _, err := identifierAddress(recipientID, "order.outputs[0].recipient"); err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 
 	amountOut, err := parseUint(dto.Amount, "order.outputs[0].amount")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	if amountOut.Sign() <= 0 {
-		return nil, errors.New("order.outputs[0].amount: must be positive")
+		return inputsettler.MandateOutput{}, errors.New("order.outputs[0].amount: must be positive")
 	}
 	outputChainID, err := parseUint(dto.ChainId, "order.outputs[0].chainId")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 
 	callbackData, err := nullableHexBytes(dto.CallbackData, "order.outputs[0].callbackData")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	contextData, err := nullableHexBytes(dto.Context, "order.outputs[0].context")
 	if err != nil {
-		return nil, err
+		return inputsettler.MandateOutput{}, err
 	}
 	if len(callbackData) != 0 {
-		return nil, errors.New("non-empty output callbackData is not supported")
+		return inputsettler.MandateOutput{}, errors.New("non-empty output callbackData is not supported")
 	}
 
 	output := inputsettler.MandateOutput{
@@ -321,42 +297,30 @@ func parseOutput(
 		CallbackData: callbackData,
 		Context:      contextData,
 	}
-	return &parsedOutput{output: output, tokenOut: tokenOut, amount: amountOut}, nil
+	return output, nil
 }
 
-func validateOrderTarget(
-	inputSettler common.Address,
-	order inputsettler.StandardOrder,
-	cfg *Config,
-	chainID int64,
-) error {
-	wantChainID := big.NewInt(chainID)
-	outputChainID := order.Outputs[0].ChainId
-	if order.OriginChainId.Cmp(wantChainID) != 0 || outputChainID.Cmp(wantChainID) != 0 {
-		return errors.Errorf(
-			"%w: originChainId %s, outputChainId %s, configuredChainId %d",
-			errOrderForDifferentChain,
-			order.OriginChainId,
-			outputChainID,
-			chainID,
-		)
+func validateOrderTarget(inputSettler common.Address, order inputsettler.StandardOrder, cfg *Config, chainID int64) error {
+	if cfg == nil || order.OriginChainId == nil || len(order.Outputs) != 1 || order.Outputs[0].ChainId == nil {
+		return errors.New("order target is incomplete")
 	}
-	if inputSettler != cfg.InputSettler {
-		return errors.Errorf("inputSettler %s does not match configured %s", inputSettler.Hex(), cfg.InputSettler.Hex())
+	target := order.Outputs[0]
+	configuredChain := big.NewInt(chainID)
+	if order.OriginChainId.Cmp(configuredChain) != 0 || target.ChainId.Cmp(configuredChain) != 0 {
+		return errors.Errorf("%w: originChainId %s, outputChainId %s, configuredChainId %d", errOrderForDifferentChain, order.OriginChainId, target.ChainId, chainID)
 	}
-	if order.InputOracle != cfg.OutputSettler {
-		return errors.Errorf(
-			"order.inputOracle %s does not match outputSettler %s",
-			order.InputOracle.Hex(),
-			cfg.OutputSettler.Hex(),
-		)
-	}
-	wantSettler := addressIdentifier(cfg.OutputSettler)
-	if order.Outputs[0].Oracle != wantSettler {
-		return errors.New("order.outputs[0].oracle does not match outputSettler")
-	}
-	if order.Outputs[0].Settler != wantSettler {
-		return errors.New("order.outputs[0].settler does not match outputSettler")
+	for _, check := range []struct {
+		field, expected string
+		valid           bool
+	}{
+		{"inputSettler", "configured inputSettler", inputSettler == cfg.InputSettler},
+		{"order.inputOracle", "outputSettler", order.InputOracle == cfg.OutputSettler},
+		{"order.outputs[0].oracle", "outputSettler", target.Oracle == addressIdentifier(cfg.OutputSettler)},
+		{"order.outputs[0].settler", "outputSettler", target.Settler == addressIdentifier(cfg.OutputSettler)},
+	} {
+		if !check.valid {
+			return errors.Errorf("%s does not match %s", check.field, check.expected)
+		}
 	}
 	return nil
 }
@@ -406,15 +370,7 @@ func parseTupleUint(raw any, field string) (*big.Int, error) {
 }
 
 func parseUint(raw, field string) (*big.Int, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.Errorf("%s: empty integer", field)
-	}
-	n, ok := new(big.Int).SetString(raw, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid uint %q", field, raw)
-	}
-	return n, nil
+	return parse.Uint(strings.TrimSpace(raw), field, 256)
 }
 
 func parseBytes32(raw, field string) ([32]byte, error) {

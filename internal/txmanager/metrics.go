@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -37,14 +38,19 @@ type admissionRejectionReason string
 type admissionOutcome string
 type lifecyclePhase uint8
 
+type phaseMeasurement struct {
+	elapsed time.Duration
+	seen    bool
+}
+
+// One transaction worker owns this sample until finish consumes its metrics
+// pointer. Revisiting a phase extends that phase's cumulative measurement.
 type lifecycleObservation struct {
-	metrics        *Metrics
-	label          string
-	started        time.Time
-	phase          lifecyclePhase
-	phaseStarted   time.Time
-	phaseDurations [lifecyclePhaseCount]time.Duration
-	phaseObserved  [lifecyclePhaseCount]bool
+	metrics          *Metrics
+	label            string
+	started, entered time.Time
+	phase            lifecyclePhase
+	phases           [lifecyclePhaseCount]phaseMeasurement
 }
 
 // Metrics records the transaction lifecycle shared by every solver.
@@ -66,139 +72,73 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	if reg == nil {
 		return nil, errors.New("txmanager: metrics registerer is required")
 	}
+	group := observability.NewMetricGroup("solver_bot_txmanager_")
 	m := &Metrics{
-		account: newAccountMetrics(),
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "requests_total",
-			Help:      "Logical transaction requests by terminal outcome.",
-		}, []string{"label", "outcome"}),
-		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "inflight",
-			Help:      "Accepted transaction requests awaiting a terminal result.",
-		}, []string{"label"}),
-		gasUsed: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "gas_used_total",
-			Help:      "Gas used by mined transaction receipts.",
-		}, []string{"label", "outcome"}),
-		feePaidWei: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "fee_paid_wei_total",
-			Help:      "Actual transaction fees paid from mined receipt gas usage and effective gas price.",
-		}, []string{"label", "outcome"}),
-		replacements: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "replacements_total",
-			Help:      "Successfully broadcast transaction replacements and cancellations.",
-		}, []string{"label", "kind"}),
-		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "admission_rejections_total",
-			Help:      "Transaction requests rejected before the worker lifecycle by a bounded reason.",
-		}, []string{"label", "reason"}),
-		admissionWait: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "admission_wait_duration_seconds",
-			Help:      "Time from submission until worker lifecycle admission or a terminal pre-admission outcome; busy TrySend probes are excluded.",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300},
-		}, []string{"label", "outcome"}),
-		lifecycleDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "lifecycle_duration_seconds",
-			Help:      "Worker lifecycle duration from admission to terminal outcome; nonce-lane wait is excluded.",
-			Buckets:   []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-		}, []string{"label", "outcome"}),
-		phaseDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: metricsNamespace,
-			Subsystem: metricsSubsystem,
-			Name:      "phase_duration_seconds",
-			Help:      "Cumulative time spent in observed prebroadcast, pending, and confirming phases by terminal outcome.",
-			Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-		}, []string{"label", "phase", "outcome"}),
+		account:             newAccountMetrics(),
+		requests:            group.Counter("requests_total", "Logical transaction requests by terminal outcome.", "label", "outcome"),
+		inflight:            group.Gauge("inflight", "Accepted transaction requests awaiting a terminal result.", "label"),
+		gasUsed:             group.Counter("gas_used_total", "Gas used by mined transaction receipts.", "label", "outcome"),
+		feePaidWei:          group.Counter("fee_paid_wei_total", "Actual transaction fees paid from mined receipt gas usage and effective gas price.", "label", "outcome"),
+		replacements:        group.Counter("replacements_total", "Successfully broadcast transaction replacements and cancellations.", "label", "kind"),
+		admissionRejections: group.Counter("admission_rejections_total", "Transaction requests rejected before the worker lifecycle by a bounded reason.", "label", "reason"),
+		admissionWait:       group.Histogram("admission_wait_duration_seconds", "Time from submission until worker lifecycle admission or a terminal pre-admission outcome; busy TrySend probes are excluded.", []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300}, "label", "outcome"),
+		lifecycleDuration:   group.Histogram("lifecycle_duration_seconds", "Worker lifecycle duration from admission to terminal outcome; nonce-lane wait is excluded.", []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}, "label", "outcome"),
+		phaseDuration:       group.Histogram("phase_duration_seconds", "Cumulative time spent in observed prebroadcast, pending, and confirming phases by terminal outcome.", []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600}, "label", "phase", "outcome"),
 	}
-	for _, collector := range []prometheus.Collector{
-		m.requests,
-		m.inflight,
-		m.gasUsed,
-		m.feePaidWei,
-		m.replacements,
-		m.admissionRejections,
-		m.admissionWait,
-		m.lifecycleDuration,
-		m.phaseDuration,
-		m.account,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("txmanager: register metric: %w", err)
-		}
+	group.Add(m.account)
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
 
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
-	if m == nil {
-		return lifecycleObservation{}
+	observation := lifecycleObservation{metrics: m, label: label}
+	if m != nil {
+		m.inflight.WithLabelValues(label).Inc()
+		observation.started = time.Now()
+		observation.entered = observation.started
+		observation.phases[lifecyclePhasePrebroadcast].seen = true
 	}
-	m.inflight.WithLabelValues(label).Inc()
-	now := time.Now()
-	observation := lifecycleObservation{
-		metrics:      m,
-		label:        label,
-		started:      now,
-		phase:        lifecyclePhasePrebroadcast,
-		phaseStarted: now,
-	}
-	observation.phaseObserved[lifecyclePhasePrebroadcast] = true
 	return observation
 }
 
-func (observation *lifecycleObservation) transitionPhase(next lifecyclePhase) {
-	if observation.metrics == nil || observation.phase == next {
+func (o *lifecycleObservation) transitionPhase(next lifecyclePhase) {
+	if o.metrics == nil || next == o.phase {
 		return
 	}
-	now := time.Now()
-	observation.phaseDurations[observation.phase] += now.Sub(observation.phaseStarted)
-	observation.phase = next
-	observation.phaseStarted = now
-	observation.phaseObserved[next] = true
+	if next >= lifecyclePhaseCount {
+		panic("txmanager: invalid lifecycle phase")
+	}
+	at := time.Now()
+	o.phases[o.phase].elapsed += at.Sub(o.entered)
+	o.phases[next].seen = true
+	o.phase, o.entered = next, at
 }
 
-func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.Receipt) {
-	if observation.metrics == nil {
+func (o *lifecycleObservation) finish(outcome Outcome, receipt *types.Receipt) {
+	m := o.metrics
+	if m == nil {
 		return
 	}
-	now := time.Now()
-	observation.phaseDurations[observation.phase] += now.Sub(observation.phaseStarted)
-	outcomeLabel := string(outcome)
-	observation.metrics.requests.WithLabelValues(observation.label, outcomeLabel).Inc()
-	observation.metrics.inflight.WithLabelValues(observation.label).Dec()
-	observation.metrics.lifecycleDuration.WithLabelValues(observation.label, outcomeLabel).
-		Observe(now.Sub(observation.started).Seconds())
-	for phase := range lifecyclePhaseCount {
-		if observation.phaseObserved[phase] {
-			observation.metrics.phaseDuration.WithLabelValues(
-				observation.label,
-				phase.label(),
-				outcomeLabel,
-			).Observe(observation.phaseDurations[phase].Seconds())
+	o.metrics = nil
+	at := time.Now()
+	o.phases[o.phase].elapsed += at.Sub(o.entered)
+	result := string(outcome)
+	m.requests.WithLabelValues(o.label, result).Inc()
+	m.inflight.WithLabelValues(o.label).Dec()
+	m.lifecycleDuration.WithLabelValues(o.label, result).Observe(at.Sub(o.started).Seconds())
+	for phase, sample := range o.phases {
+		if sample.seen {
+			m.phaseDuration.WithLabelValues(o.label, lifecyclePhase(phase).label(), result).Observe(sample.elapsed.Seconds())
 		}
 	}
-	if receipt != nil {
-		observation.metrics.gasUsed.WithLabelValues(observation.label, outcomeLabel).
-			Add(float64(receipt.GasUsed))
-		if fee, ok := receiptFeePaidWei(receipt); ok {
-			observation.metrics.feePaidWei.WithLabelValues(observation.label, outcomeLabel).Add(fee)
-		}
+	if receipt == nil {
+		return
+	}
+	m.gasUsed.WithLabelValues(o.label, result).Add(float64(receipt.GasUsed))
+	if fee, valid := receiptFeePaidWei(receipt); valid {
+		m.feePaidWei.WithLabelValues(o.label, result).Add(fee)
 	}
 }
 
@@ -212,18 +152,11 @@ func receiptFeePaidWei(receipt *types.Receipt) (float64, bool) {
 }
 
 func (phase lifecyclePhase) label() string {
-	switch phase {
-	case lifecyclePhasePrebroadcast:
-		return "prebroadcast"
-	case lifecyclePhasePending:
-		return "pending"
-	case lifecyclePhaseConfirming:
-		return "confirming"
-	case lifecyclePhaseCount:
-		panic("txmanager: lifecycle phase count has no metrics label")
-	default:
+	labels := [...]string{"prebroadcast", "pending", "confirming"}
+	if int(phase) >= len(labels) {
 		panic("txmanager: invalid lifecycle metrics phase")
 	}
+	return labels[phase]
 }
 
 func (m *Metrics) finishAdmission(label string, started time.Time, err error) {
@@ -241,18 +174,20 @@ func (m *Metrics) finishAdmission(label string, started time.Time, err error) {
 
 // classifyAdmissionRejection keeps errors out of labels and bounds future failure modes to "other".
 func classifyAdmissionRejection(err error) admissionRejectionReason {
-	switch {
-	case errors.Is(err, errManagerStopped):
-		return admissionRejectionManagerStopped
-	case errors.Is(err, errNonceLanePaused):
-		return admissionRejectionNonceConflict
-	case errors.Is(err, context.DeadlineExceeded):
-		return admissionRejectionDeadline
-	case errors.Is(err, context.Canceled):
-		return admissionRejectionCallerCancelled
-	default:
-		return admissionRejectionOther
+	for _, match := range []struct {
+		cause  error
+		reason admissionRejectionReason
+	}{
+		{errManagerStopped, admissionRejectionManagerStopped},
+		{errNonceLanePaused, admissionRejectionNonceConflict},
+		{context.DeadlineExceeded, admissionRejectionDeadline},
+		{context.Canceled, admissionRejectionCallerCancelled},
+	} {
+		if errors.Is(err, match.cause) {
+			return match.reason
+		}
 	}
+	return admissionRejectionOther
 }
 
 func (m *Metrics) replacement(label, kind string) {

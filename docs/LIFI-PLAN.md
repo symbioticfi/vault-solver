@@ -397,8 +397,9 @@ type Strategy interface {
   shared greedy candidates, and keeps at most three physical routes (one for permissioned inputs). LI.FI
   retains only the range-shaped protocol adapter: selected capacity is divided geometrically into at most
   `rangeCount` candidate ranges (default eight, hard protocol limit sixteen). For each
-  `[inputLow,inputHigh]` the strategy calls the same exact-input `greedy.SolveQuote` used by concrete
-  RFQ-style solvers at both endpoints. Each endpoint is converted to the largest fixed-point rate that
+  `[inputLow,inputHigh]` the strategy queries the same exact-input `planning.QuotePool.Solve` used by
+  RFQ-style solvers at both endpoints. One immutable pool is prepared per token pair and reused for
+  endpoints and floor searches. Each endpoint is converted to the largest fixed-point rate that
   cannot overquote its integer output, then capped by a linear conservative floor derived from the
   alternatives able to cover each route at `inputHigh`, integer rounding, and configured worst-case complete-plan gas.
   The published minimum is revalidated for positive integer output. Two price-movement stages are deducted
@@ -955,3 +956,30 @@ still requires the redeploy in phase 0.
 - **Private-discount deployment config** — internal mode needs the reachable RFQ/private-discounts
   backend URL and live signer/protocol policies for the configured adapters. The code path is complete;
   Sepolia E2E still needs a real advertised discount and newly deployed executor ABI.
+
+### Runtime ownership
+
+A single inbox entry owns a match's queue membership, deduplication history and retry state. Recovery
+uses connection generations; completion from an old connection cannot make a new connection ready.
+The execution worker owns pending requests, capacity retries and deposit retries in one event loop.
+Quote reconciliation visits the sorted union of existing and desired pairs and retains uncertain
+remote writes for reconciliation. The WebSocket owns its socket and joins connection work before
+reconnecting. `orderServer.maxMessageBytes` limits input to 1 MiB by default.
+
+Retry scheduling is owned by the order worker. Metrics read atomic immutable queue observations;
+they never inspect the worker's mutable maps or lists. Deposit retry state remains indexed while a
+retry is executing, preserving the original retry window across feed replays. Capacity retries retain
+FIFO generation ordering and cannot release the recovery barrier until their earlier generation drains.
+
+The protocol reader embeds the shared LiquidLane snapshot interface. Fill calldata assembly
+validates and projects routes directly into the generated Executor call; it does not retain an
+intermediate executor-route object.
+
+Standing-quote metrics publish an immutable observation. Prometheus collection reads it without
+holding any lock used by quote publication, and every scrape sees one complete observation.
+
+Range quoting prepares physical-route alternatives, capacities and the worst gas cost once for the
+whole curve. Each interval computes one guaranteed rate/loss floor and uses it for both the first-safe
+input search and endpoint pricing. Endpoint rates use `liquidlane.MaxRateForAmountOut`: the exact
+maximum integer rate is `ceil((amountOut + 1) * 10^(18 + inDecimals - outDecimals) / amountIn) - 1`, including the exactly divisible boundary.
+The same physical-route exclusivity, gas bounds, buffers and expiry rules still constrain every range.

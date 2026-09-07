@@ -11,10 +11,16 @@ import (
 type breaker struct {
 	mu          sync.Mutex
 	blacklisted bool
-	failures    []time.Time
-	failureIDs  map[string]time.Time
+	failures    map[failureKey]time.Time
+	serial      uint64
 	maxFailures int
 	window      time.Duration
+}
+
+// A numbered key identifies a failure without an upstream auction ID.
+type failureKey struct {
+	auction string
+	serial  uint64
 }
 
 func newBreaker(maxFailures int, window time.Duration) *breaker {
@@ -32,22 +38,26 @@ func (b *breaker) blacklist() {
 func (b *breaker) recordFailure(now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.failures = append(b.failures, now)
-	b.prune(now)
+	b.serial++
+	b.record(failureKey{serial: b.serial}, now)
 }
 
 func (b *breaker) recordFailureOnce(id string, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.record(failureKey{auction: id}, now)
+}
+
+// record requires the lock and stores each counted event exactly once.
+func (b *breaker) record(key failureKey, now time.Time) bool {
 	b.prune(now)
-	if _, exists := b.failureIDs[id]; exists {
+	if _, exists := b.failures[key]; exists {
 		return false
 	}
-	if b.failureIDs == nil {
-		b.failureIDs = make(map[string]time.Time)
+	if b.failures == nil {
+		b.failures = make(map[failureKey]time.Time)
 	}
-	b.failureIDs[id] = now
-	b.failures = append(b.failures, now)
+	b.failures[key] = now
 	return true
 }
 
@@ -68,16 +78,9 @@ func (b *breaker) tripped(now time.Time) (bool, string) {
 // prune drops failures older than the window. Caller holds the lock.
 func (b *breaker) prune(now time.Time) {
 	cutoff := now.Add(-b.window)
-	keep := b.failures[:0]
-	for _, t := range b.failures {
-		if t.After(cutoff) {
-			keep = append(keep, t)
-		}
-	}
-	b.failures = keep
-	for id, observedAt := range b.failureIDs {
+	for key, observedAt := range b.failures {
 		if !observedAt.After(cutoff) {
-			delete(b.failureIDs, id)
+			delete(b.failures, key)
 		}
 	}
 }

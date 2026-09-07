@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -47,22 +46,16 @@ func newRFQMetrics(
 	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
 		Event: "quote", Kinds: []string{"input", "output"},
 	})
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	group := observability.NewMetricGroup("")
+	workflow, err := observability.NewWorkflowMetrics(group, Name, spec)
 	if err != nil {
 		return nil, err
 	}
 	m := &rfqMetrics{
 		workflow:          workflow,
 		orderPollObserver: workflow.Operation(orderPollOperation),
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "rfq_filler_http_requests_total",
-			Help: "Deprecated compatibility counter for total RFQ filler HTTP requests; use rfq_filler_http_request_duration_seconds_count.",
-		}, []string{"method", "route", "status"}),
-		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "rfq_filler_http_request_duration_seconds",
-			Help:    "RFQ filler HTTP request count and duration in seconds.",
-			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}, []string{"method", "route", "status"}),
+		requests:          group.Counter("rfq_filler_http_requests_total", "Deprecated compatibility counter for total RFQ filler HTTP requests; use rfq_filler_http_request_duration_seconds_count.", "method", "route", "status"),
+		duration:          group.Histogram("rfq_filler_http_request_duration_seconds", "RFQ filler HTTP request count and duration in seconds.", []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}, "method", "route", "status"),
 		activeOrders: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "rfq_active_orders",
 			Help: "RFQ orders currently queued, submitting, or awaiting backend settlement.",
@@ -80,10 +73,9 @@ func newRFQMetrics(
 		fillAmounts: liquidlane.NewFillMetrics(workflow),
 		now:         time.Now,
 	}
-	for _, collector := range []prometheus.Collector{m.requests, m.duration, m.activeOrders, m.oldestActive} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("rfq: register metric: %w", err)
-		}
+	group.Add(m.activeOrders, m.oldestActive)
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
@@ -132,21 +124,15 @@ func (m *rfqMetrics) observeOrderPoll(at time.Time) {
 	}
 }
 
-// instrument wraps a handler to record per-request count + duration. The route label is drawn from a
-// fixed allowlist and the method is normalized, so unmatched inputs can't blow up label cardinality.
-func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		labels := prometheus.Labels{
-			"method": methodLabel(r.Method),
-			"route":  routeLabel(r.URL.Path),
-			"status": strconv.Itoa(rec.status),
-		}
-		m.requests.With(labels).Inc()
-		m.duration.With(labels).Observe(time.Since(start).Seconds())
-	})
+func (m *rfqMetrics) observeHTTP(method, path string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		"method": methodLabel(method), "route": routeLabel(path), "status": strconv.Itoa(status),
+	}
+	m.requests.With(labels).Inc()
+	m.duration.With(labels).Observe(duration.Seconds())
 }
 
 // methodLabel bounds arbitrary HTTP methods to the methods served by this process.
@@ -157,22 +143,6 @@ func methodLabel(method string) string {
 	default:
 		return "other"
 	}
-}
-
-// statusRecorder captures the response status code for the metrics labels.
-type statusRecorder struct {
-	http.ResponseWriter
-
-	status      int
-	wroteHeader bool
-}
-
-func (s *statusRecorder) WriteHeader(code int) {
-	if !s.wroteHeader {
-		s.status = code
-		s.wroteHeader = true
-	}
-	s.ResponseWriter.WriteHeader(code)
 }
 
 // routeLabel maps a path to a bounded set of route labels (known routes, else "other").

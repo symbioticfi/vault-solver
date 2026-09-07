@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net/url"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -40,23 +41,16 @@ func SimulatorURL(chainID *big.Int, from, to common.Address, data []byte, value 
 	if chainID == nil {
 		return ""
 	}
-	amount := "0"
+	prepared := draft{V: 1, Network: network{ID: chainID.String()}, Row: row{
+		ContractAddress: to.Hex(), From: from.Hex(), InputDataType: "raw", RawFunctionInput: hexutil.Encode(data), Value: "0",
+	}}
 	if value != nil {
-		amount = value.String()
+		prepared.Row.Value = value.String()
 	}
-	payload, err := json.Marshal(draft{
-		V:       1,
-		Network: network{ID: chainID.String()},
-		Row: row{
-			ContractAddress:  to.Hex(),
-			From:             from.Hex(),
-			InputDataType:    "raw",
-			RawFunctionInput: hexutil.Encode(data),
-			Value:            amount,
-		},
-	})
+	encoded, err := json.Marshal(prepared)
 	if err != nil {
 		return ""
 	}
-	return simulatorBaseURL + "?draft=" + base64.RawURLEncoding.EncodeToString(payload)
+	query := url.Values{"draft": {base64.RawURLEncoding.EncodeToString(encoded)}}
+	return simulatorBaseURL + "?" + query.Encode()
 }

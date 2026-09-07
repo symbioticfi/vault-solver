@@ -1,132 +1,83 @@
 package bridgefacilitator
 
 import (
-	"math/big"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 
-	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
+	local "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
+	remote "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 )
 
 func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	name := spec.Name
-	if name == "" {
-		name = defaultStrategyName
+	switch spec.Name {
+	case "", local.Name:
+		return local.NewFromConfig(spec.Config)
+	case remote.Name:
+		return remote.NewFromConfig(spec.Config)
+	default:
+		return nil, errors.Errorf("unknown 3F strategy %q (available: default, webhook)", spec.Name)
 	}
-	return strategies.New(name, spec.Config, strategies.Deps{})
 }
 
 // buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
 func buildStrategyInput(
-	auctions []threef.AuctionDto,
-	offerings []*adapterOffering,
-	offers *offerTracker,
+	auctions []auction,
+	offerings []adapterOffering,
+	offers offerSnapshot,
 	now time.Time,
 ) types.OfferInput {
 	adapters := make([]types.AdapterSnapshot, 0, len(offerings))
 	for _, off := range offerings {
 		adapters = append(adapters, types.AdapterSnapshot{
-			ID:            adapterID(off.target.Adapter),
+			ID:            lowerAddr(off.target.Adapter),
 			Adapter:       off.target.Adapter,
 			Vault:         off.target.Vault,
 			Collateral:    off.target.Collateral,
-			Fundable:      cloneBig(off.st.fundable),
+			Fundable:      bigmath.Clone(off.st.fundable),
 			OpenCount:     off.st.openCount,
-			MaxAssets:     cloneBig(off.st.maxAssets),
-			MinAssets:     cloneBig(off.st.minAssets),
-			MinYieldPpm:   cloneBig(off.st.minYieldPpm),
+			MaxAssets:     bigmath.Clone(off.st.maxAssets),
+			MinAssets:     bigmath.Clone(off.st.minAssets),
+			MinYieldPpm:   bigmath.Clone(off.st.minYieldPpm),
 			MaxConcurrent: maxRequests,
 		})
 	}
 
 	input := types.OfferInput{Now: now, Adapters: adapters}
-	for i := range auctions {
-		av := auctionView{auctions[i]}
-		auction, ok := buildAuctionSnapshot(av, i, offers, now)
-		if !ok {
+	for i, av := range auctions {
+		if !av.quotable() {
 			continue
 		}
-		input.Auctions = append(input.Auctions, auction)
+		remaining := bigmath.Clone(av.amount)
+		if covered := offers.coverage[av.id]; covered != nil {
+			remaining.Sub(remaining, covered)
+		}
+		if remaining.Sign() < 0 {
+			remaining.SetInt64(0)
+		}
+		input.Auctions = append(input.Auctions, types.AuctionSnapshot{
+			ID: strconv.FormatInt(av.id, 10), AuctionID: av.id, OriginalIndex: i,
+			Request: av.request, Status: av.status, DepositAsset: av.asset,
+			AmountRequested: bigmath.Clone(av.amount), RemainingAmount: remaining, MaxRateBps: *av.maxRate,
+		})
 	}
-	for _, k := range offers.liveEntries(now) {
+	for _, k := range offers.entries {
 		input.LiveOffers = append(input.LiveOffers, types.LiveOffer{
-			AdapterID: adapterID(k.adapter),
+			AdapterID: lowerAddr(k.adapter),
 			AuctionID: k.auction,
 		})
 	}
 	return input
 }
 
-func auctionViewsByID(auctions []threef.AuctionDto) map[int64]auctionView {
-	views := make(map[int64]auctionView, len(auctions))
+func auctionsByID(auctions []auction) map[int64]auction {
+	views := make(map[int64]auction, len(auctions))
 	for i := range auctions {
-		av := auctionView{auctions[i]}
-		views[int64(av.dto.Id)] = av
+		av := auctions[i]
+		views[av.id] = av
 	}
 	return views
-}
-
-func buildAuctionSnapshot(
-	av auctionView,
-	originalIndex int,
-	offers *offerTracker,
-	now time.Time,
-) (types.AuctionSnapshot, bool) {
-	auctionID := int64(av.dto.Id)
-	if !av.isOpen() {
-		return types.AuctionSnapshot{}, false
-	}
-	request := av.requestAddr()
-	if request == (common.Address{}) {
-		return types.AuctionSnapshot{}, false
-	}
-	amountRequested := av.amountRequested()
-	if amountRequested == nil || amountRequested.Sign() <= 0 {
-		return types.AuctionSnapshot{}, false
-	}
-	rateBps, rateOk := av.maxRateBps()
-	if !rateOk {
-		return types.AuctionSnapshot{}, false
-	}
-	depositAsset := av.depositAsset()
-	if !common.IsHexAddress(depositAsset) {
-		return types.AuctionSnapshot{}, false
-	}
-	remaining := new(big.Int).Sub(amountRequested, offers.liveCoverage(auctionID, now))
-	if remaining.Sign() < 0 {
-		remaining = new(big.Int)
-	}
-	return types.AuctionSnapshot{
-		ID:              auctionIDString(auctionID),
-		AuctionID:       auctionID,
-		OriginalIndex:   originalIndex,
-		Request:         request,
-		Status:          av.dto.Status,
-		DepositAsset:    common.HexToAddress(depositAsset),
-		AmountRequested: cloneBig(amountRequested),
-		RemainingAmount: remaining,
-		MaxRateBps:      rateBps,
-	}, true
-}
-
-func adapterID(adapter common.Address) string {
-	return strings.ToLower(adapter.Hex())
-}
-
-func auctionIDString(auctionID int64) string {
-	return strconv.FormatInt(auctionID, 10)
-}
-
-func cloneBig(n *big.Int) *big.Int {
-	if n == nil {
-		return nil
-	}
-	return new(big.Int).Set(n)
 }

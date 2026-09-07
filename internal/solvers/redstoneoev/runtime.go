@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -42,6 +44,8 @@ func (s *Solver) Run(ctx context.Context) error {
 
 	err := s.ws.Run(runCtx)
 	cancel()
+	// The WebSocket has stopped dispatching; join the single outstanding decision.
+	s.bidWG.Wait()
 	wg.Wait()
 	return err
 }
@@ -72,23 +76,20 @@ func (s *Solver) refreshStateAndLog(ctx context.Context) {
 // bracketing head changes. A second crossing returns to the caller: startup fails visibly, while the
 // runtime loop retains its last-known-good cache and tries again on the next poll or refresh signal.
 func (s *Solver) refreshStateWithBoundaryRetry(ctx context.Context) error {
-	err := s.refreshState(ctx)
-	if !errors.Is(err, errStateRefreshBlockBoundary) {
-		return err
+	for attempt := range 2 {
+		err := s.refreshState(ctx)
+		if !errors.Is(err, errStateRefreshBlockBoundary) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt != 0 {
+			return errors.Errorf("state refresh head remained unstable after immediate retry: %w", err)
+		}
+		s.log.V(1).Info("state refresh crossed block boundary; retrying latest snapshot", "error", err)
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-	s.log.V(1).Info("state refresh crossed block boundary; retrying latest snapshot", "error", err)
-
-	err = s.refreshState(ctx)
-	if !errors.Is(err, errStateRefreshBlockBoundary) {
-		return err
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-	return errors.Errorf("state refresh head remained unstable after immediate retry: %w", err)
+	return nil
 }
 
 func (s *Solver) requestStateRefresh() {
@@ -101,23 +102,21 @@ func (s *Solver) requestStateRefresh() {
 // refreshState reads solver-owned Executor and adapter state into the cache. Strategy-owned
 // callback/funding state is read inside strategies.
 func (s *Solver) refreshState(ctx context.Context) error {
-	timer := observability.StartOperation(s.stateRefreshObserver)
-	_, hadLastKnownGood := s.state.load()
-	outcome := observability.ExternalOperationError
-	defer func() { timer.Finish(ctx, outcome) }()
-
-	snapshot, err := s.stateSource.Snapshot(ctx)
-	if err != nil {
-		if hadLastKnownGood && errors.Is(err, errStateRefreshBlockBoundary) {
-			outcome = observability.ExternalOperationDegraded
-		}
-		return err
+	observation := observability.StartOperation(s.stateRefreshObserver)
+	outcome := observability.ExternalOperationSuccess
+	defer func() { observation.Finish(ctx, outcome) }()
+	next, err := s.stateSource.Snapshot(ctx)
+	if err == nil {
+		s.state.store(next)
+		s.applyExecutorState(next.Exec, next.UpdatedAt)
+		s.metrics.stateRefreshed()
+		return nil
 	}
-	s.state.store(snapshot)
-	s.applyExecutorState(snapshot.Exec, snapshot.UpdatedAt)
-	s.metrics.stateRefreshed()
-	outcome = observability.ExternalOperationSuccess
-	return nil
+	outcome = observability.ExternalOperationError
+	if _, retained := s.state.load(); retained && errors.Is(err, errStateRefreshBlockBoundary) {
+		outcome = observability.ExternalOperationDegraded
+	}
+	return err
 }
 
 // stateSnapshotSource owns the cross-read consistency boundary. A successful result is complete and
@@ -148,41 +147,32 @@ type coherentStateSource struct {
 }
 
 func (r *coherentStateSource) Snapshot(ctx context.Context) (cachedState, error) {
-	observedAt := time.Now()
-	startHead, err := readHead(ctx, r.heads)
+	next := cachedState{UpdatedAt: time.Now()}
+	before, err := readHead(ctx, r.heads)
 	if err != nil {
 		return cachedState{}, err
 	}
-	st, err := r.reader.ReadExecutorState(ctx, r.executor, r.signer)
+	next.GasLimit = before.GasLimit
+	next.Exec, err = r.reader.ReadExecutorState(ctx, r.executor, r.signer)
 	if err != nil {
 		return cachedState{}, errors.Errorf("read executor state: %w", err)
 	}
-	adapter, err := r.reader.ReadAdapterSnapshot(ctx, r.adapter, r.callback)
+	next.Adapter, err = r.reader.ReadAdapterSnapshot(ctx, r.adapter, r.callback)
 	if err != nil {
 		return cachedState{}, errors.Errorf("read adapter snapshot %s: %w", r.adapter.Hex(), err)
 	}
-	gasPrices, err := r.reader.ReadGasPrices(ctx, adapter, time.Unix(int64(startHead.Time), 0))
+	next.GasPrices, err = r.reader.ReadGasPrices(ctx, next.Adapter, time.Unix(int64(before.Time), 0))
 	if err != nil {
-		return cachedState{}, errors.Errorf("read gas prices for loan %s: %w", adapter.Loan.Hex(), err)
+		return cachedState{}, errors.Errorf("read gas prices for loan %s: %w", next.Adapter.Loan.Hex(), err)
 	}
-	endHead, err := readHead(ctx, r.heads)
+	after, err := readHead(ctx, r.heads)
 	if err != nil {
 		return cachedState{}, err
 	}
-	if !startHead.sameBlock(endHead) {
-		return cachedState{}, errors.Errorf(
-			"%w: start %d/%s, end %d/%s",
-			errStateRefreshBlockBoundary,
-			startHead.Number,
-			startHead.Hash.Hex(),
-			endHead.Number,
-			endHead.Hash.Hex(),
-		)
+	if !before.sameBlock(after) {
+		return cachedState{}, errors.Errorf("%w: start %d/%s, end %d/%s", errStateRefreshBlockBoundary, before.Number, before.Hash.Hex(), after.Number, after.Hash.Hex())
 	}
-	return cachedState{
-		Exec: st, Adapter: adapter, GasPrices: gasPrices,
-		GasLimit: startHead.GasLimit, UpdatedAt: observedAt,
-	}, nil
+	return next, nil
 }
 
 type headSnapshot struct {
@@ -255,17 +245,21 @@ func (s *Solver) adapterSnapshot() (strategytypes.AdapterSnapshot, bool) {
 	return state.Adapter, ok
 }
 
-func (s *stateCache) store(v cachedState) {
-	v.Adapter = cloneAdapterSnapshot(v.Adapter)
-	s.p.Store(&v)
+func (s *stateCache) store(snapshot cachedState) {
+	owned := snapshot.clone()
+	s.p.Store(&owned)
 }
 
 func (s *stateCache) load() (cachedState, bool) {
-	v := s.p.Load()
-	if v == nil {
-		return cachedState{}, false
+	if snapshot := s.p.Load(); snapshot != nil {
+		return snapshot.clone(), true
 	}
-	out := *v
-	out.Adapter = cloneAdapterSnapshot(out.Adapter)
-	return out, true
+	return cachedState{}, false
+}
+
+func (snapshot cachedState) clone() cachedState {
+	snapshot.Adapter = snapshot.Adapter.Clone()
+	snapshot.Exec.Nonce, snapshot.Exec.Deposit = bigmath.Clone(snapshot.Exec.Nonce), bigmath.Clone(snapshot.Exec.Deposit)
+	// Gas prices expose only copying accessors and are immutable after construction.
+	return snapshot
 }

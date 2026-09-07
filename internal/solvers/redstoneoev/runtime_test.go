@@ -7,10 +7,13 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -48,9 +51,7 @@ func TestCoherentStateSourceRequiresStableHeadIdentity(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("Snapshot(): %v", err)
-			}
+			testcheck.NoError(t, err, "Snapshot(): %v")
 			if snapshot.GasLimit != start.GasLimit {
 				t.Fatalf("gas limit = %d, want %d", snapshot.GasLimit, start.GasLimit)
 			}

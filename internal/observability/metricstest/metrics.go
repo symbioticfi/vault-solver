@@ -44,48 +44,40 @@ func RequireFamilyValue(
 
 // FamilyValue returns the unique counter or gauge selected by a label subset. It fails when the
 // subset is ambiguous, so an assertion cannot accidentally validate an arbitrary strategy or series.
-func FamilyValue(
-	tb testing.TB,
-	gatherer prometheus.Gatherer,
-	familyName string,
-	labels map[string]string,
-) float64 {
+func FamilyValue(tb testing.TB, gatherer prometheus.Gatherer, familyName string, labels map[string]string) float64 {
+	tb.Helper()
+	metric := selectedMetric(tb, gatherer, familyName, labels)
+	if metric.GetCounter() != nil {
+		return metric.GetCounter().GetValue()
+	}
+	if metric.GetGauge() != nil {
+		return metric.GetGauge().GetValue()
+	}
+	tb.Fatalf("metric family %s is not a counter or gauge", familyName)
+	return 0
+}
+
+func selectedMetric(tb testing.TB, gatherer prometheus.Gatherer, familyName string, labels map[string]string) *dto.Metric {
 	tb.Helper()
 	families, err := gatherer.Gather()
 	if err != nil {
 		tb.Fatalf("gather metrics: %v", err)
 	}
-	var (
-		value float64
-		found bool
-	)
+	matches := make([]*dto.Metric, 0, 1)
 	for _, family := range families {
-		if family.GetName() != familyName {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			if !hasLabels(metric, labels) {
-				continue
+		if family.GetName() == familyName {
+			for _, sample := range family.GetMetric() {
+				if hasLabels(sample, labels) {
+					matches = append(matches, sample)
+				}
 			}
-			if found {
-				tb.Fatalf("ambiguous metric %s%v; add distinguishing labels", familyName, labels)
-			}
-			switch family.GetType() {
-			case dto.MetricType_COUNTER:
-				value = metric.GetCounter().GetValue()
-			case dto.MetricType_GAUGE:
-				value = metric.GetGauge().GetValue()
-			case dto.MetricType_SUMMARY, dto.MetricType_UNTYPED, dto.MetricType_HISTOGRAM,
-				dto.MetricType_GAUGE_HISTOGRAM:
-				tb.Fatalf("metric family %s has unsupported type %s", familyName, family.GetType())
-			}
-			found = true
 		}
 	}
-	if !found {
-		tb.Fatalf("missing metric %s%v", familyName, labels)
+	if len(matches) != 1 {
+		tb.Fatalf("metric %s%v matched %d series, want exactly one", familyName, labels, len(matches))
+		return nil
 	}
-	return value
+	return matches[0]
 }
 
 // HistogramCount returns the sample count exposed by a histogram observer.
@@ -182,38 +174,14 @@ func RequireWorkflowState(
 }
 
 // RequireExternalOperationCount checks one pre-bound solver/operation/outcome series.
-func RequireExternalOperationCount(
-	tb testing.TB,
-	gatherer prometheus.Gatherer,
-	solver, operation, outcome string,
-	want uint64,
-) {
+func RequireExternalOperationCount(tb testing.TB, gatherer prometheus.Gatherer, solver, operation, outcome string, want uint64) {
 	tb.Helper()
-	families, err := gatherer.Gather()
-	if err != nil {
-		tb.Fatalf("gather metrics: %v", err)
+	labels := map[string]string{"solver": solver, "operation": operation, "outcome": outcome}
+	sample := selectedMetric(tb, gatherer, externalOperationFamily, labels)
+	if sample.GetHistogram() == nil {
+		tb.Fatalf("external operation %v is not a histogram", labels)
 	}
-	var matched *dto.Metric
-	for _, family := range families {
-		if family.GetName() != externalOperationFamily {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			if !hasLabels(metric, map[string]string{
-				"solver": solver, "operation": operation, "outcome": outcome,
-			}) {
-				continue
-			}
-			if matched != nil {
-				tb.Fatalf("ambiguous external operation series %s/%s/%s", solver, operation, outcome)
-			}
-			matched = metric
-		}
-	}
-	if matched == nil {
-		tb.Fatalf("missing external operation series %s/%s/%s", solver, operation, outcome)
-	}
-	if got := matched.GetHistogram().GetSampleCount(); got != want {
-		tb.Fatalf("%s/%s/%s count = %d, want %d", solver, operation, outcome, got, want)
+	if got := sample.GetHistogram().GetSampleCount(); got != want {
+		tb.Fatalf("external operation %v count = %d, want %d", labels, got, want)
 	}
 }

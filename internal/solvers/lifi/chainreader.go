@@ -2,7 +2,6 @@ package lifi
 
 import (
 	"context"
-	"math/big"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -22,8 +21,9 @@ var (
 )
 
 type reader struct {
-	chain     *chain.Client
-	snapshots *liquidsnapshot.Reader
+	*liquidsnapshot.Reader
+
+	chain *chain.Client
 }
 
 type route = liquidlane.Route
@@ -36,35 +36,7 @@ func newReader(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleCon
 	if err != nil {
 		return nil, err
 	}
-	return &reader{chain: c, snapshots: snapshots}, nil
-}
-
-func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error) {
-	return r.snapshots.ResolveRoutes(ctx, adapters)
-}
-
-func (r *reader) validateGasTokens(routes []route) error {
-	return r.snapshots.ValidateGasTokens(routes)
-}
-
-func (r *reader) quoteSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	chainTime time.Time,
-) (quoteSnapshotSet, error) {
-	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
-}
-
-func (r *reader) fillSnapshots(
-	ctx context.Context,
-	routes []route,
-	executorAddr common.Address,
-	tokenIn common.Address,
-	amountIn *big.Int,
-	chainTime time.Time,
-) (fillSnapshotSet, error) {
-	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
+	return &reader{chain: c, Reader: snapshots}, nil
 }
 
 func (r *reader) validateExecutor(
@@ -127,7 +99,7 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
+	direct, err := r.FilterAuthorizedRoutes(ctx, routes, executorAddr)
 	if err != nil {
 		return err
 	}
@@ -185,9 +157,5 @@ func (r *reader) latestBlockNumber(ctx context.Context) (uint64, error) {
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
-	header, err := r.chain.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return time.Time{}, errors.Errorf("latest block header: %w", err)
-	}
-	return time.Unix(int64(header.Time), 0), nil
+	return r.chain.BlockTime(ctx)
 }

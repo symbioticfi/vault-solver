@@ -5,17 +5,19 @@ runs a pluggable **solver** against them. A solver is a self-contained integrati
 protocol that sources, prices, or routes liquidity on top of a Symbiotic vault adapter; the bot
 handles discovery, pricing/signing, on-chain reads, reconciliation, and settlement for it.
 
-The framework is **solver-agnostic**: each integration lives in its own package, registers itself,
-and is selected by config — adding one never touches the generic engine. The available integrations
+The framework is **solver-agnostic**: each integration lives in its own package and is selected by config.
+The application explicitly assembles integrations without global registration. The available integrations
 are listed under [Solvers](#solvers).
 
 > **Status:** early build. Engineering guidelines: [`CLAUDE.md`](./CLAUDE.md). Per-solver scope,
 > architecture, and roadmap live under [`docs/`](docs).
 
+
 ## Architecture at a glance
 
-- **`cmd/vault-solver`** — process bootstrap: flags, logging, signal-driven shutdown.
-- **`internal/solver`** — generic `Solver` interface, registry, and engine.
+- **`cmd/vault-solver`** — CLI flags and signal handling.
+- **`internal/app`** — explicit integration assembly, startup, health serving, and shutdown.
+- **`internal/solver`** — generic `Solver` interface and shared dependencies.
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
@@ -26,6 +28,9 @@ are listed under [Solvers](#solvers).
 
 State is intentionally minimal — positions, liquidity, and readiness are read from on-chain views and
 the relevant protocol API on each tick; no database.
+
+Startup fails if a configured HTTP listener cannot bind. On shutdown, solvers stop admitting work
+and finish their accepted work before the transaction manager stops; its final drain is bounded.
 
 ## Solvers
 
@@ -496,7 +501,17 @@ the stable dashboard URL from resource metadata rather than a `DashboardSpec` fi
 UID is embedded. Namespace/pod selectors are query-driven over the standard Kubernetes target labels
 `namespace`, `pod`, `job`, and `instance`; no cluster namespace or pod-name pattern is embedded.
 
+WebSocket input is bounded by `orderServer.maxMessageBytes` for LI.FI and `ws.maxMessageBytes`
+for OEV; both default to 1 MiB. Oversized messages close the connection and trigger recovery.
+OEV processes one bid decision at a time; concurrent auctions are skipped as `bid_busy`, while result
+messages continue to be processed. Queued solves expire with their auction or originating connection.
+
 ## Configuration
+
+Configuration validation rejects duplicate adapter addresses, nonpositive explicit RFQ polling intervals,
+negative order/redemption limits and durations that overflow. Optional contract addresses may be omitted;
+an explicitly configured zero address is rejected. UniswapX quote snapshot TTL includes time spent
+reading RPC and API state, so a slow refresh can leave the quote endpoint temporarily unavailable.
 
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. Each solver has its

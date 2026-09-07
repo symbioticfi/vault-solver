@@ -15,13 +15,32 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
+
+func TestQuotePairSortPreservesDecimalSeparatorOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		left, right quotePairKey
+		want        int
+	}{
+		{name: "input prefix includes separator", left: quotePairKey{fromDecimals: 10, toDecimals: 6}, right: quotePairKey{fromDecimals: 1, toDecimals: 6}, want: -1},
+		{name: "input decimals remain lexical", left: quotePairKey{fromDecimals: 18}, right: quotePairKey{fromDecimals: 6}, want: -1},
+		{name: "last field has no separator", left: quotePairKey{fromDecimals: 18, toDecimals: 1}, right: quotePairKey{fromDecimals: 18, toDecimals: 10}, want: -1},
+		{name: "equal fields", left: quotePairKey{fromDecimals: 18, toDecimals: 6}, right: quotePairKey{fromDecimals: 18, toDecimals: 6}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := compareQuotePairs(tc.left, tc.right); got != tc.want {
+				t.Fatalf("comparison = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
 
 type fakeQuoteSubmitter struct {
 	calls [][]types.Quote
@@ -57,9 +76,7 @@ func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
 	strategy := &recordingQuoteStrategy{}
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	feeReads := 0
 	solver := &Solver{
 		cfg: cfg, reader: fakeLifiReader{}, strategy: strategy, log: logr.Discard(),
@@ -131,9 +148,7 @@ func TestQuoteStatePublishesAndReplacesChangedTopology(t *testing.T) {
 
 	first := testStandingQuote(routeItem, 1_000)
 	removed, err := state.reconcile(context.Background(), submitter, []types.Quote{first}, now)
-	if err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
+	testcheck.NoError(t, err, "first reconcile: %v")
 	if removed != 0 || len(submitter.calls) != 1 || len(submitter.calls[0][0].Ranges) == 0 {
 		t.Fatalf("initial reconcile: removed=%d calls=%#v", removed, submitter.calls)
 	}
@@ -149,9 +164,7 @@ func TestQuoteStatePublishesAndReplacesChangedTopology(t *testing.T) {
 
 	changed := testStandingQuote(routeItem, 2_000)
 	removed, err = state.reconcile(context.Background(), submitter, []types.Quote{changed}, now)
-	if err != nil {
-		t.Fatalf("changed topology reconcile: %v", err)
-	}
+	testcheck.NoError(t, err, "changed topology reconcile: %v")
 	if removed != 0 || len(submitter.calls) != 3 || submitter.calls[2][0].Ranges[0].MaxAmount.String() != "2000" {
 		t.Fatalf("changed topology: removed=%d calls=%#v", removed, submitter.calls)
 	}
@@ -233,9 +246,7 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 	submitter.calls = nil
 
 	removed, err := state.reconcile(context.Background(), submitter, nil, now)
-	if err != nil {
-		t.Fatalf("remove: %v", err)
-	}
+	testcheck.NoError(t, err, "remove: %v")
 	if removed != 1 || len(submitter.calls) != 1 || len(submitter.calls[0]) != 1 ||
 		len(submitter.calls[0][0].Ranges) == 0 || submitter.calls[0][0].Expiry >= now.Unix() {
 		t.Fatalf("remove: removed=%d calls=%#v", removed, submitter.calls)
@@ -268,9 +279,7 @@ func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
 	submitter.err = nil
 	submitter.calls = nil
 	removed, err := state.reconcile(context.Background(), submitter, nil, now)
-	if err != nil {
-		t.Fatalf("expire uncertain pair: %v", err)
-	}
+	testcheck.NoError(t, err, "expire uncertain pair: %v")
 	if removed != 1 || len(state.active) != 0 || len(submitter.calls) != 1 ||
 		len(submitter.calls[0]) != 1 || submitter.calls[0][0].Expiry >= now.Unix() {
 		t.Fatalf(
@@ -326,9 +335,7 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 	}
 
 	removed, err = state.reconcile(context.Background(), client, nil, now)
-	if err != nil {
-		t.Fatalf("retry expire: %v", err)
-	}
+	testcheck.NoError(t, err, "retry expire: %v")
 	if removed != 1 || len(state.active) != 0 || calls != 3 {
 		t.Fatalf("retried expire: removed=%d active=%d calls=%d, want 1/0/3", removed, len(state.active), calls)
 	}
@@ -339,10 +346,8 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 
 func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, newOrderFeed("", "", logr.Discard()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	metrics, err := newLIFIMetrics(reg, newOrderFeed(OrderServerConfig{}, "", logr.Discard()), "")
+	testcheck.NoError(t, err)
 	quoteRoute := testQuoteRoute()
 	state := newQuoteState(time.Minute)
 	state.active = indexQuotePairs([]types.Quote{
@@ -355,21 +360,21 @@ func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 		t.Fatalf("gather quote metrics: %v", err)
 	}
 
-	maxInput := metrics.quotes.pairMaxInput.WithLabelValues(
-		strings.ToLower(quoteRoute.TokenIn.Hex()), strings.ToLower(quoteRoute.TokenOut.Hex()), "6", "6",
-	)
-	firstRefresh := testutil.ToFloat64(metrics.quotes.lastRefreshAt)
-	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 3 ||
-		testutil.ToFloat64(metrics.quotes.activeRanges) != 3 ||
-		testutil.ToFloat64(maxInput) != 3_000 || firstRefresh <= 0 {
-		t.Fatal("unexpected quote metrics")
+	firstRefresh := metricstest.FamilyValue(t, reg, "lifi_last_successful_refresh_timestamp", nil)
+	metricstest.RequireFamilyValue(t, reg, "lifi_active_quotes", nil, 3)
+	metricstest.RequireFamilyValue(t, reg, "lifi_active_quote_ranges", nil, 3)
+	metricstest.RequireFamilyValue(t, reg, "lifi_active_quote_max_input_atomic_units", map[string]string{
+		"token_in": strings.ToLower(quoteRoute.TokenIn.Hex()), "token_out": strings.ToLower(quoteRoute.TokenOut.Hex()),
+		"token_in_decimals": "6", "token_out_decimals": "6",
+	}, 3000)
+	if firstRefresh <= 0 {
+		t.Fatal("missing successful refresh timestamp")
 	}
-
 	(&Solver{metrics: metrics}).observeQuoteRefresh(newQuoteState(time.Minute))
-	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 0 ||
-		testutil.ToFloat64(metrics.quotes.activeRanges) != 0 ||
-		testutil.CollectAndCount(metrics.quotes.pairMaxInput) != 0 ||
-		testutil.ToFloat64(metrics.quotes.lastRefreshAt) < firstRefresh {
+	metricstest.RequireFamilyValue(t, reg, "lifi_active_quotes", nil, 0)
+	metricstest.RequireFamilyValue(t, reg, "lifi_active_quote_ranges", nil, 0)
+	if testutil.CollectAndCount(metrics.quotes, "lifi_active_quote_max_input_atomic_units") != 0 ||
+		metricstest.FamilyValue(t, reg, "lifi_last_successful_refresh_timestamp", nil) < firstRefresh {
 		t.Fatal("unexpected empty quote metrics")
 	}
 }
@@ -397,10 +402,9 @@ func TestSuspendQuotesPublishesRetiredQuoteMetrics(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	reg := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(reg, nil, "")
+	testcheck.NoError(t, err)
 	now := time.Unix(1_800_000_000, 0)
 	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
 	state := newQuoteState(30 * time.Second)
@@ -413,7 +417,9 @@ func TestSuspendQuotesPublishesRetiredQuoteMetrics(t *testing.T) {
 		t.Fatalf("publish quote: %v", err)
 	}
 	metrics.quotes.observe(state)
-	metrics.quotes.lastRefreshAt.Set(1)
+	observed := *metrics.quotes.current.Load()
+	observed.updatedAt = 1
+	metrics.quotes.current.Store(&observed)
 	solver := &Solver{
 		orders: client, metrics: metrics, wallNow: func() time.Time { return now }, log: logr.Discard(),
 	}
@@ -426,8 +432,8 @@ func TestSuspendQuotesPublishesRetiredQuoteMetrics(t *testing.T) {
 	if got := state.activeQuoteCount(); got != 0 {
 		t.Fatalf("active quote state = %d, want 0", got)
 	}
-	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 0 ||
-		testutil.ToFloat64(metrics.quotes.lastRefreshAt) <= 1 {
+	if metricstest.FamilyValue(t, reg, "lifi_active_quotes", nil) != 0 ||
+		metricstest.FamilyValue(t, reg, "lifi_last_successful_refresh_timestamp", nil) <= 1 {
 		t.Fatal("unexpected suspended quote metrics")
 	}
 }

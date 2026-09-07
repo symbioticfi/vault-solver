@@ -2,11 +2,14 @@ package lifi
 
 import (
 	"context"
-	"sort"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -56,63 +59,34 @@ func (s *Solver) fillDiscountQuotes(
 	}
 	candidates, issues := discounts.MatchInventories(listed, inventory, discounts.MatchOptions{Now: now})
 	s.logDiscountIssues(issues)
-	sort.Slice(candidates, func(i, j int) bool {
-		if cmp := candidates[i].MaxRate.Cmp(candidates[j].MaxRate); cmp != 0 {
-			return cmp > 0
+	slices.SortFunc(candidates, func(a, b liquidlane.Inventory) int {
+		if order := b.MaxRate.Cmp(a.MaxRate); order != 0 {
+			return order
 		}
-		return candidates[i].DiscountID.Hex() < candidates[j].DiscountID.Hex()
+		return a.DiscountID.Cmp(*b.DiscountID)
 	})
 	if len(candidates) > maxPrivateDiscountsPerFill {
 		candidates = candidates[:maxPrivateDiscountsPerFill]
 	}
 
-	type resolution struct {
-		quote  *liquidlane.FillQuote
-		signed *discounts.Signed
-	}
-	resolutions := make([]resolution, len(candidates))
-	g, resolveCtx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentResolutions)
-	for i, candidate := range candidates {
-		g.Go(func() error {
-			if candidate.DiscountID == nil {
-				return nil
+	resolutions := make([]discountResolution, len(candidates))
+	var next atomic.Uint64
+	var workers sync.WaitGroup
+	for range min(maxConcurrentResolutions, len(candidates)) {
+		workers.Go(func() {
+			for ctx.Err() == nil {
+				i := int(next.Add(1) - 1)
+				if i >= len(candidates) {
+					return
+				}
+				candidate := candidates[i]
+				if base, ok := baseByRoute[candidate.ID]; ok {
+					resolutions[i] = s.resolveFillDiscount(ctx, candidate, base, now)
+				}
 			}
-			baseQuote, ok := baseByRoute[candidate.ID]
-			if !ok {
-				return nil
-			}
-			selection := discounts.Selection{
-				DiscountID: *candidate.DiscountID,
-				Adapter:    candidate.Adapter, TokenIn: candidate.TokenIn,
-			}
-			resolved, resolveErr := s.discounts.Resolve(resolveCtx, candidate.DiscountID.Hex())
-			if resolveErr != nil {
-				s.log.Error(resolveErr, "private discounts: resolve", "discountId", candidate.DiscountID.Hex())
-				return nil
-			}
-			signed, validateErr := discounts.ParseAndValidate(resolved, selection, baseQuote, now)
-			if validateErr != nil {
-				s.logInvalidDiscount(candidate.DiscountID.Hex(), validateErr)
-				return nil
-			}
-			maxAmountOut := liquidlane.AmountOutAfterDiscount(baseQuote.GrossAmountOut, signed.Terms.Discount)
-			if maxAmountOut.Sign() <= 0 {
-				return nil
-			}
-			candidate.ValidUntil = discounts.ValidUntil(signed)
-			quote := &liquidlane.FillQuote{
-				Inventory:      candidate,
-				AmountIn:       liquidlane.CloneBig(baseQuote.AmountIn),
-				GrossAmountOut: liquidlane.CloneBig(baseQuote.GrossAmountOut),
-				MaxAmountOut:   maxAmountOut,
-				MinDiscount:    liquidlane.CloneBig(baseQuote.MinDiscount),
-			}
-			resolutions[i] = resolution{quote: quote, signed: signed}
-			return nil
 		})
 	}
-	_ = g.Wait()
+	workers.Wait()
 	quotes := make([]liquidlane.FillQuote, 0, len(candidates))
 	resolvedByID := make(map[common.Hash]*discounts.Signed, len(candidates))
 	for _, resolution := range resolutions {
@@ -123,6 +97,44 @@ func (s *Solver) fillDiscountQuotes(
 		resolvedByID[resolution.signed.DiscountID] = resolution.signed
 	}
 	return quotes, resolvedByID
+}
+
+type discountResolution struct {
+	quote  *liquidlane.FillQuote
+	signed *discounts.Signed
+}
+
+// Resolve at most one signed candidate per result slot; a failed candidate never
+// cancels independent routes. The owner joins all workers before exposing results.
+func (s *Solver) resolveFillDiscount(ctx context.Context, candidate liquidlane.Inventory,
+	base liquidlane.FillQuote, now time.Time,
+) discountResolution {
+	if candidate.DiscountID == nil {
+		return discountResolution{}
+	}
+	id := candidate.DiscountID.Hex()
+	resolved, err := s.discounts.Resolve(ctx, id)
+	if err != nil {
+		s.log.Error(err, "private discounts: resolve", "discountId", id)
+		return discountResolution{}
+	}
+	signed, err := discounts.ParseAndValidate(resolved, discounts.Selection{
+		DiscountID: *candidate.DiscountID, Adapter: candidate.Adapter, TokenIn: candidate.TokenIn,
+	}, base, now)
+	if err != nil {
+		s.logInvalidDiscount(id, err)
+		return discountResolution{}
+	}
+	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
+	if amountOut.Sign() <= 0 {
+		return discountResolution{}
+	}
+	candidate.ValidUntil = discounts.ValidUntil(signed)
+	return discountResolution{signed: signed, quote: &liquidlane.FillQuote{
+		Inventory: candidate, AmountIn: bigmath.Clone(base.AmountIn),
+		GrossAmountOut: bigmath.Clone(base.GrossAmountOut), MaxAmountOut: amountOut,
+		MinDiscount: bigmath.Clone(base.MinDiscount),
+	}}
 }
 
 func (s *Solver) logInvalidDiscount(discountID string, err error) {

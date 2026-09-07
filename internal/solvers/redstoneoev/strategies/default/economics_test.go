@@ -12,9 +12,9 @@ func TestLegProfitFloorsIncludeFirstSwapOverhead(t *testing.T) {
 	rate := new(big.Int).Set(morpho.Wad)
 	gasPrice := big.NewInt(1)
 	routes := []liquidlanegas.Route{liquidlanegas.RouteAcquire, liquidlanegas.RouteAllocate}
-	legs := []selectedLeg{{}, {}}
+	bundle := chosenBundle{legs: []bundleLeg{{}, {}}}
 
-	got := legsWithProfitFloors(legs, gasPrediction{Routes: routes}, gasPrice, rate)
+	got := bundle.legsWithProfitFloors(gasPrediction{Routes: routes}, gasPrice, rate)
 	if want := liquidlanegas.UnitsForRouteAt(routes[0], true); got[0].MinProfit.Uint64() != want {
 		t.Fatalf("first leg floor = %s, want %d", got[0].MinProfit, want)
 	}

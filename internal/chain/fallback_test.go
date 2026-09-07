@@ -19,17 +19,15 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
 func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
 	t.Helper()
 	eps, err := parseHTTPEndpoints(raws)
-	if err != nil {
-		t.Fatalf("parseHTTPEndpoints: %v", err)
-	}
+	testcheck.NoError(t, err, "parseHTTPEndpoints: %v")
 	return eps
 }
 
@@ -37,251 +35,76 @@ func roundTrip(t *testing.T, eps []*url.URL, payload string) (*http.Response, er
 	t.Helper()
 	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, eps[0].String(), strings.NewReader(payload))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
+	testcheck.NoError(t, err, "new request: %v")
 	return rt.RoundTrip(req)
 }
 
-func TestFallbackTransport_FallsOverOn5xx(t *testing.T) {
-	var primaryHits, fallbackHits int
-	var gotBody string
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		primaryHits++
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fallbackHits++
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		_, _ = io.WriteString(w, `ok`)
-	}))
-	defer fallback.Close()
-
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{"jsonrpc":"2.0"}`)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fell over to fallback)", resp.StatusCode)
-	}
-	if primaryHits != 1 || fallbackHits != 1 {
-		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
-	}
-	if gotBody != `{"jsonrpc":"2.0"}` {
-		t.Fatalf("fallback got body %q, want the original payload (replayed)", gotBody)
-	}
-}
-
-func TestFallbackTransport_FallsOverOn3xx(t *testing.T) {
-	var primaryHits, fallbackHits int
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fallbackHits++
-		_, _ = io.WriteString(w, `fallback`)
-	}))
-	defer fallback.Close()
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		primaryHits++
-		w.Header().Set("Location", "https://redirect.invalid")
-		w.WriteHeader(http.StatusTemporaryRedirect)
-	}))
-	defer primary.Close()
-
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if readErr != nil {
-		t.Fatalf("read response: %v", readErr)
-	}
-	if resp.StatusCode != http.StatusOK || string(body) != "fallback" {
-		t.Fatalf("response = (%d, %q), want fallback 200", resp.StatusCode, body)
-	}
-	if primaryHits != 1 || fallbackHits != 1 {
-		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
-	}
-}
-
-func TestFallbackTransport_PrimaryOKNoFallover(t *testing.T) {
-	var fallbackHits int
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `ok`)
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		fallbackHits++
-	}))
-	defer fallback.Close()
-
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `{}`)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK || fallbackHits != 0 {
-		t.Fatalf("status=%d fallbackHits=%d, want 200/0 (no fallover on healthy primary)", resp.StatusCode, fallbackHits)
-	}
-}
-
-func TestFallbackTransport_FallsOverOnNullAvailabilityResult(t *testing.T) {
-	methods := []string{
-		"eth_getTransactionReceipt",
-		"eth_getBlockByHash",
-		"eth_getBlockByNumber",
-	}
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
+func TestFallbackTransportResponses(t *testing.T) {
+	const nullResult = `{"jsonrpc":"2.0","id":7,"result":null}`
+	const receiptRequest = `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`
+	const fallbackResult = `{"jsonrpc":"2.0","id":7,"result":{"endpoint":"fallback"}}`
+	for _, test := range []struct {
+		name, request, primary, fallback string
+		status                           int
+		fallover                         bool
+	}{
+		{name: "HTTP 5xx", request: receiptRequest, status: http.StatusServiceUnavailable, fallover: true},
+		{name: "HTTP redirect", request: `{}`, status: http.StatusTemporaryRedirect, fallover: true},
+		{name: "healthy primary", request: `{}`, primary: "ok"},
+		{name: "null receipt", request: receiptRequest, primary: nullResult, fallover: true},
+		{name: "null block by hash", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`, primary: nullResult, fallover: true},
+		{name: "null block by number", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}`, primary: nullResult, fallover: true},
+		{name: "non availability null", request: `{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}`, primary: nullResult},
+		{name: "RPC error", request: receiptRequest, primary: `{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"not found"}}`},
+		{name: "error alongside null", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`, primary: `{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-32000,"message":"not found"}}`},
+		{name: "batch", request: `[{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}]`, primary: `[{"jsonrpc":"2.0","id":7,"result":null}]`},
+		{name: "malformed request", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash"`, primary: nullResult},
+		{name: "malformed response", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}`, primary: `{"jsonrpc":"2.0","id":7,"result":`},
+		{name: "mismatched ID", request: receiptRequest, primary: `{"jsonrpc":"2.0","id":8,"result":null}`},
+		{name: "preserve body whitespace", request: `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`, primary: "  {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n"},
+		{name: "final null preserved", request: receiptRequest, primary: `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"primary"}`, fallback: `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"fallback"}`, fallover: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			var primaryHits, fallbackHits int
+			fallbackBody := test.fallback
+			if fallbackBody == "" {
+				fallbackBody = fallbackResult
+			}
 			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				primaryHits++
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":7,"result":null}`)
+				if test.status == http.StatusTemporaryRedirect {
+					w.Header().Set("Location", "https://redirect.invalid")
+				}
+				if test.status != 0 {
+					w.WriteHeader(test.status)
+				}
+				_, _ = io.WriteString(w, test.primary)
 			}))
 			defer primary.Close()
-			const fallbackBody = `{"jsonrpc":"2.0","id":7,"result":{"endpoint":"fallback"}}`
-			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fallbackHits++
+				body, err := io.ReadAll(r.Body)
+				if err != nil || string(body) != test.request {
+					t.Errorf("replayed request = %q, %v; want %q", body, err, test.request)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, fallbackBody)
 			}))
 			defer fallback.Close()
-
-			payload := `{"jsonrpc":"2.0","id":7,"method":"` + method + `","params":[]}`
-			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), payload)
-			if err != nil {
-				t.Fatalf("RoundTrip: %v", err)
-			}
-			body, readErr := io.ReadAll(resp.Body)
+			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), test.request)
+			testcheck.NoError(t, err)
+			body, err := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if readErr != nil {
-				t.Fatalf("read response: %v", readErr)
+			testcheck.NoError(t, err)
+			wantBody, wantFallbackHits := test.primary, 0
+			if test.fallover {
+				wantBody, wantFallbackHits = fallbackBody, 1
 			}
-			if string(body) != fallbackBody {
-				t.Fatalf("response body = %s, want fallback body %s", body, fallbackBody)
-			}
-			if primaryHits != 1 || fallbackHits != 1 {
-				t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
+			if resp.StatusCode != http.StatusOK || string(body) != wantBody || primaryHits != 1 || fallbackHits != wantFallbackHits {
+				t.Fatalf("response=(%d,%q), hits=%d/%d; want (200,%q), 1/%d", resp.StatusCode, body, primaryHits, fallbackHits, wantBody, wantFallbackHits)
 			}
 		})
-	}
-}
-
-func TestFallbackTransport_PreservesNonAvailabilityResponses(t *testing.T) {
-	tests := []struct {
-		name     string
-		request  string
-		response string
-	}{
-		{
-			name:     "non target method null",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}`,
-			response: `{"jsonrpc":"2.0","id":7,"result":null}`,
-		},
-		{
-			name:     "json rpc error",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`,
-			response: `{"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"not found"}}`,
-		},
-		{
-			name:     "error alongside null result",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`,
-			response: `{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-32000,"message":"not found"}}`,
-		},
-		{
-			name:     "batch request",
-			request:  `[{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}]`,
-			response: `[{"jsonrpc":"2.0","id":7,"result":null}]`,
-		},
-		{
-			name:     "malformed request",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash"`,
-			response: `{"jsonrpc":"2.0","id":7,"result":null}`,
-		},
-		{
-			name:     "malformed response",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}`,
-			response: `{"jsonrpc":"2.0","id":7,"result":`,
-		},
-		{
-			name:     "mismatched response id",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`,
-			response: `{"jsonrpc":"2.0","id":8,"result":null}`,
-		},
-		{
-			name:     "non null body is restored",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash","params":[]}`,
-			response: "  {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var fallbackHits int
-			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, tt.response)
-			}))
-			defer primary.Close()
-			fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-				fallbackHits++
-			}))
-			defer fallback.Close()
-
-			resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), tt.request)
-			if err != nil {
-				t.Fatalf("RoundTrip: %v", err)
-			}
-			body, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if readErr != nil {
-				t.Fatalf("read response: %v", readErr)
-			}
-			if string(body) != tt.response {
-				t.Fatalf("response body = %q, want preserved primary body %q", body, tt.response)
-			}
-			if fallbackHits != 0 {
-				t.Fatalf("fallback hits = %d, want 0", fallbackHits)
-			}
-		})
-	}
-}
-
-func TestFallbackTransport_PreservesNullResultFromFinalEndpoint(t *testing.T) {
-	var primaryHits, fallbackHits int
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		primaryHits++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"primary"}`)
-	}))
-	defer primary.Close()
-	const fallbackBody = `{"jsonrpc":"2.0","id":7,"result":null,"endpoint":"fallback"}`
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fallbackHits++
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, fallbackBody)
-	}))
-	defer fallback.Close()
-
-	payload := `{"jsonrpc":"2.0","id":7,"method":"eth_getTransactionReceipt","params":[]}`
-	resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), payload)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if readErr != nil {
-		t.Fatalf("read response: %v", readErr)
-	}
-	if string(body) != fallbackBody {
-		t.Fatalf("response body = %s, want final fallback body %s", body, fallbackBody)
-	}
-	if primaryHits != 1 || fallbackHits != 1 {
-		t.Fatalf("hits: primary=%d fallback=%d, want 1/1", primaryHits, fallbackHits)
 	}
 }
 
@@ -307,13 +130,9 @@ func TestFallbackTransport_EachReadCanSelectAHealthyEndpoint(t *testing.T) {
 	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
 	request := func(payload string) {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, primary.URL, strings.NewReader(payload))
-		if err != nil {
-			t.Fatalf("new request: %v", err)
-		}
+		testcheck.NoError(t, err, "new request: %v")
 		resp, err := rt.RoundTrip(req)
-		if err != nil {
-			t.Fatalf("RoundTrip: %v", err)
-		}
+		testcheck.NoError(t, err, "RoundTrip: %v")
 		_ = resp.Body.Close()
 	}
 
@@ -366,13 +185,9 @@ func TestFallbackTransport_ShortCallerDeadlineStillReachesFallback(t *testing.T)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, primary.URL, strings.NewReader(`{}`))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
+	testcheck.NoError(t, err, "new request: %v")
 	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	testcheck.NoError(t, err, "RoundTrip: %v")
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK || fallbackHits != 1 {
 		t.Fatalf("status=%d fallbackHits=%d, want 200/1", resp.StatusCode, fallbackHits)
@@ -383,9 +198,7 @@ func TestParseHTTPEndpoints_Dedups(t *testing.T) {
 	eps, err := parseHTTPEndpoints([]string{
 		"https://a.example", "https://b.example", "https://a.example", // dup of #1
 	})
-	if err != nil {
-		t.Fatalf("parseHTTPEndpoints: %v", err)
-	}
+	testcheck.NoError(t, err, "parseHTTPEndpoints: %v")
 	if len(eps) != 2 {
 		t.Fatalf("got %d endpoints, want 2 (duplicate dropped)", len(eps))
 	}
@@ -435,9 +248,7 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial single http endpoint: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial single http endpoint: %v")
 	defer c.Close()
 	if got := c.ChainID().Uint64(); got != 31337 {
 		t.Fatalf("chainID = %d, want 31337", got)
@@ -464,9 +275,7 @@ func TestDial_FallbackServesChainID(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial via fallback: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial via fallback: %v")
 	defer c.Close()
 	if got := c.ChainID().Uint64(); got != 31337 {
 		t.Fatalf("chainID = %d, want 31337 (served by fallback)", got)
@@ -487,9 +296,7 @@ func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
 		BlockHash:         blockHash,
 		BlockNumber:       big.NewInt(42),
 	})
-	if err != nil {
-		t.Fatalf("marshal receipt: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal receipt: %v")
 	headerJSON, err := json.Marshal(&types.Header{
 		ParentHash:  common.HexToHash("0x01"),
 		UncleHash:   types.EmptyUncleHash,
@@ -502,9 +309,7 @@ func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
 		Time:        1,
 		Extra:       []byte{},
 	})
-	if err != nil {
-		t.Fatalf("marshal header: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal header: %v")
 
 	var primaryMethods, fallbackMethods []string
 	primary := rpcRecorder(&primaryMethods, func(method string) string {
@@ -524,29 +329,21 @@ func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 
 	receipt, err := c.TransactionReceipt(t.Context(), txHash)
-	if err != nil {
-		t.Fatalf("TransactionReceipt: %v", err)
-	}
+	testcheck.NoError(t, err, "TransactionReceipt: %v")
 	if receipt.TxHash != txHash || receipt.BlockHash != blockHash {
 		t.Fatalf("receipt hashes = tx %s block %s, want %s/%s", receipt.TxHash, receipt.BlockHash, txHash, blockHash)
 	}
 	headerByHash, err := c.HeaderByHash(t.Context(), blockHash)
-	if err != nil {
-		t.Fatalf("HeaderByHash: %v", err)
-	}
+	testcheck.NoError(t, err, "HeaderByHash: %v")
 	if headerByHash.Number.Cmp(big.NewInt(42)) != 0 {
 		t.Fatalf("HeaderByHash number = %s, want 42", headerByHash.Number)
 	}
 	headerByNumber, err := c.HeaderByNumber(t.Context(), big.NewInt(42))
-	if err != nil {
-		t.Fatalf("HeaderByNumber: %v", err)
-	}
+	testcheck.NoError(t, err, "HeaderByNumber: %v")
 	if headerByNumber.Number.Cmp(big.NewInt(42)) != 0 {
 		t.Fatalf("HeaderByNumber number = %s, want 42", headerByNumber.Number)
 	}
@@ -580,9 +377,7 @@ func TestDial_FinalNullReceiptReturnsNotFound(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 
 	if receipt, receiptErr := c.TransactionReceipt(t.Context(), common.HexToHash("0x1234")); receipt != nil ||
@@ -652,15 +447,11 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	rpcMetrics, err := NewRPCMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	c, err := DialWithMetrics(
 		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics, logr.Discard(),
 	)
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 
 	// A read hits the primary endpoint.
@@ -691,9 +482,7 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		Gas:       21000,
 		Value:     big.NewInt(0),
 	})
-	if err := c.SendTransaction(t.Context(), tx); err != nil {
-		t.Fatalf("SendTransaction: %v", err)
-	}
+	testcheck.NoError(t, c.SendTransaction(t.Context(), tx), "SendTransaction: %v")
 
 	if !slices.Contains(writeMethods, "eth_sendRawTransaction") {
 		t.Fatalf("write endpoint did not receive the broadcast, saw: %v", writeMethods)
@@ -741,9 +530,7 @@ func TestDialDoesNotFollowRPCRedirects(t *testing.T) {
 	defer redirect.Close()
 	reg := prometheus.NewRegistry()
 	metrics, err := NewRPCMetrics(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	client, err := DialWithMetrics(
@@ -793,15 +580,11 @@ func TestTransactionSenderBalanceFallsBackWhenWriteRPCRejectsRead(t *testing.T) 
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer client.Close()
 
 	balance, err := client.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil)
-	if err != nil {
-		t.Fatalf("TransactionSenderBalanceAt: %v", err)
-	}
+	testcheck.NoError(t, err, "TransactionSenderBalanceAt: %v")
 	if balance.Cmp(big.NewInt(4)) != 0 {
 		t.Fatalf("TransactionSenderBalanceAt = %s, want 4", balance)
 	}
@@ -870,9 +653,7 @@ func TestDial_BroadcastDoesNotFallBackAcrossReadEndpoints(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(31337), GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1),
@@ -922,9 +703,7 @@ func TestMulticallUsesLatestBlockTag(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{server.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 	if _, err = c.Multicall(t.Context(), nil); err != nil {
 		t.Fatalf("Multicall: %v", err)
@@ -952,15 +731,11 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
+	testcheck.NoError(t, err, "Dial: %v")
 	defer c.Close()
 
 	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(31337), GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 21000, Value: big.NewInt(0)})
-	if err := c.SendTransaction(t.Context(), tx); err != nil {
-		t.Fatalf("SendTransaction: %v", err)
-	}
+	testcheck.NoError(t, c.SendTransaction(t.Context(), tx), "SendTransaction: %v")
 	if !slices.Contains(methods, "eth_sendRawTransaction") {
 		t.Fatalf("primary endpoint did not receive the broadcast, saw: %v", methods)
 	}
@@ -987,9 +762,7 @@ func TestFallbackTransport_OptsPendingLookupsOutOfERPCEmptyRetry(t *testing.T) {
 		t.Run(tc.method, func(t *testing.T) {
 			body := `{"jsonrpc":"2.0","id":1,"method":"` + tc.method + `","params":[]}`
 			resp, err := roundTrip(t, mustEndpoints(t, srv.URL), body)
-			if err != nil {
-				t.Fatalf("RoundTrip: %v", err)
-			}
+			testcheck.NoError(t, err, "RoundTrip: %v")
 			_ = resp.Body.Close()
 			if v := got.Get(erpcRetryEmptyHeader); v != tc.want {
 				t.Fatalf("%s header = %q, want %q", erpcRetryEmptyHeader, v, tc.want)

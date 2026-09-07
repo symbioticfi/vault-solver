@@ -16,32 +16,32 @@ var readFailureReminderInterval = 5 * time.Minute
 type readStreak struct {
 	failures    int
 	since       time.Time
-	lastAlertAt time.Time
+	nextAlertAt time.Time
 }
 
-func (s *readStreak) failed(log logr.Logger, err error, msg string, fields ...any) {
-	s.failures++
+func (s *readStreak) failed(log logr.Logger, err error, message string, fields ...any) {
 	now := time.Now()
-	fields = append(fields, "consecutiveFailures", s.failures)
-	switch {
-	case s.failures == 1:
-		s.since, s.lastAlertAt = now, now
-		log.Error(err, msg, fields...)
-	case now.Sub(s.lastAlertAt) >= readFailureReminderInterval:
-		s.lastAlertAt = now
-		log.Error(err, msg, append(fields, "since", now.Sub(s.since).Round(time.Second).String())...)
-	default:
-		log.V(1).Info(msg, append(fields, "error", err.Error())...)
+	first := s.failures == 0
+	if first {
+		s.since = now
+	}
+	s.failures++
+	log = log.WithValues(fields...).WithValues("consecutiveFailures", s.failures)
+	if first || !now.Before(s.nextAlertAt) {
+		s.nextAlertAt = now.Add(readFailureReminderInterval)
+		if !first {
+			log = log.WithValues("since", now.Sub(s.since).Round(time.Second).String())
+		}
+		log.Error(err, message)
+	} else {
+		log.V(1).Info(message, "error", err.Error())
 	}
 }
 
-func (s *readStreak) recovered(log logr.Logger, msg string, fields ...any) {
+func (s *readStreak) recovered(log logr.Logger, message string, fields ...any) {
 	if s.failures == 0 {
 		return
 	}
-	log.Info(msg, append(fields,
-		"consecutiveFailures", s.failures,
-		"outage", time.Since(s.since).Round(time.Millisecond).String(),
-	)...)
-	s.failures = 0
+	log.WithValues(fields...).Info(message, "consecutiveFailures", s.failures, "outage", time.Since(s.since).Round(time.Millisecond).String())
+	*s = readStreak{}
 }

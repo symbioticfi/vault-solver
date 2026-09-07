@@ -3,6 +3,8 @@ package redstoneoev
 import (
 	"encoding/json"
 	"testing"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // capturedAuction is a real `oev/liquidations` frame shape (docs/OEV-PLAN.md §6.1): note `timeoutMs`
@@ -31,13 +33,11 @@ const capturedAuction = `{
 }`
 
 func TestDecodeAuctionFrame(t *testing.T) {
-	if op, err := opName([]byte(capturedAuction)); err != nil || op != "auction" {
-		t.Fatalf("opName = %q, %v; want auction", op, err)
+	if frame, err := decodeFrame([]byte(capturedAuction)); err != nil || frame.Op != "auction" {
+		t.Fatalf("frame op = %q, %v; want auction", frame.Op, err)
 	}
 	var a AuctionMessage
-	if err := json.Unmarshal([]byte(capturedAuction), &a); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, json.Unmarshal([]byte(capturedAuction), &a))
 	if a.ID != "6382e936-c915-496a-bb3e-fa3b4ccc3a8d" {
 		t.Fatalf("id = %q", a.ID)
 	}
@@ -55,10 +55,10 @@ func TestDetectFeedAuctionFrame(t *testing.T) {
 	  "timestamp":1726058300000,"durationMs":400,
 	  "payload":{"ETH":"250000000000","BTC":"6000000000000","USDC":"99878787"}
 	}`)
-	if !isFeedAuction(feed) {
+	if frame, err := decodeFrame(feed); err != nil || !frame.feedAuction() {
 		t.Fatal("flat feed auction must be detected")
 	}
-	if isFeedAuction([]byte(capturedAuction)) {
+	if frame, err := decodeFrame([]byte(capturedAuction)); err != nil || frame.feedAuction() {
 		t.Fatal("liquidation auction must not be detected as a feed auction")
 	}
 }
@@ -69,9 +69,7 @@ func TestMarshalSolve(t *testing.T) {
 		LiquidationSig: "0xdead", MaxTxGasPrice: "60000000000",
 	}}
 	var back map[string]any
-	if err := json.Unmarshal(marshal(msg), &back); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, json.Unmarshal(marshal(msg), &back))
 	if back["op"] != "solve" || back["id"] != "abc" {
 		t.Fatalf("solve top-level wrong: %v", back)
 	}
@@ -80,5 +78,12 @@ func TestMarshalSolve(t *testing.T) {
 		if _, ok := data[k]; !ok {
 			t.Fatalf("solve.data missing %q", k)
 		}
+	}
+}
+
+func TestResultFrameAllowsUnrelatedPayloadShape(t *testing.T) {
+	frame, err := decodeFrame([]byte(`{"op":"liquidation-result","payload":"extra upstream detail","data":{"success":true}}`))
+	if err != nil || frame.Op != "liquidation-result" || frame.feedAuction() {
+		t.Fatalf("result envelope = %+v, error = %v", frame, err)
 	}
 }

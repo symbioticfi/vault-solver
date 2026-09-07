@@ -12,13 +12,16 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-logr/logr"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	callbackbinding "github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+
 	appconfig "github.com/symbioticfi/vault-solver/internal/config"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 )
 
@@ -51,32 +54,22 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 
 	cfgPath := getenvDefault("OEV_CONFIG", "../../../config/redstone-oev.example.yaml")
 	cfg, err := appconfig.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
+	testcheck.NoError(t, err, "load config: %v")
 	if len(cfg.Solvers) != 1 || cfg.Solvers[0].Name != Name {
 		t.Fatalf("expected single %s solver in %s", Name, cfgPath)
 	}
 	chainClient, err := chain.Dial(ctx, []string{cfg.Chain.RPCURL}, "", cfg.Chain.MulticallAddress, logr.Discard())
-	if err != nil {
-		t.Fatalf("dial chain: %v", err)
-	}
+	testcheck.NoError(t, err, "dial chain: %v")
 	defer chainClient.Close()
 	sgnr, err := signer.FromConfig(cfg.Signer)
-	if err != nil {
-		t.Fatalf("load signer: %v", err)
-	}
-	built, err := factory(cfg.Solvers[0].Config, solver.Deps{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
-	if err != nil {
-		t.Fatalf("build solver: %v", err)
-	}
+	testcheck.NoError(t, err, "load signer: %v")
+	built, err := New(cfg.Solvers[0].Config, solver.Deps{Chain: chainClient, Signer: sgnr, Log: logr.Discard()})
+	testcheck.NoError(t, err, "build solver: %v")
 	s, ok := built.(*Solver)
 	if !ok {
 		t.Fatalf("unexpected solver type %T", built)
 	}
-	if err := s.refreshState(ctx); err != nil {
-		t.Fatalf("refresh solver state: %v", err)
-	}
+	testcheck.NoError(t, s.refreshState(ctx), "refresh solver state: %v")
 	strategy := defaultStrategyOf(t, s)
 	go strategy.Run(ctx)
 	snap := waitForStrategySnapshot(t, ctx, strategy)
@@ -98,13 +91,9 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 	}
 
 	opData, err := hexutil.Decode(decision.solve.Data.OperationData)
-	if err != nil {
-		t.Fatalf("decode operationData: %v", err)
-	}
+	testcheck.NoError(t, err, "decode operationData: %v")
 	bid, err := parse.EthToWei(decision.solve.Data.Bid, "solve.bid")
-	if err != nil {
-		t.Fatalf("parse bid: %v", err)
-	}
+	testcheck.NoError(t, err, "parse bid: %v")
 	callbackAddr := common.HexToAddress(decision.solve.Data.OperationCallback)
 	callbackABI := callbackbinding.NewSymbioticOevSolver()
 	out := forkPayload{
@@ -121,12 +110,8 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 		PayBidCalldata:    hexutil.Encode(callbackABI.PackPayBid(bid)),
 	}
 	raw, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
-	if err := os.WriteFile("/tmp/oev-fork-payload.json", raw, 0o600); err != nil {
-		t.Fatalf("write payload: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal payload: %v")
+	testcheck.NoError(t, os.WriteFile("/tmp/oev-fork-payload.json", raw, 0o600), "write payload: %v")
 	t.Logf("wrote /tmp/oev-fork-payload.json: nonce=%s maxTxGasPrice=%s", out.Nonce, out.MaxTxGasPrice)
 }
 

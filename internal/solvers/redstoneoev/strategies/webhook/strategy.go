@@ -2,11 +2,9 @@ package webhookstrategy
 
 import (
 	"context"
-	"net/http"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -19,17 +17,8 @@ type Strategy struct {
 
 const decideBidRoute = "/decide-bid"
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig, RequiresBidCap: true})
-}
-
-func NewFromConfig(raw yaml.Node, _ strategies.Deps) (types.Strategy, error) {
-	clientCfg, err := webhook.ParseConfig(raw)
-	if err != nil {
-		return nil, err
-	}
-	client, err := webhook.NewClient(clientCfg)
+func NewFromConfig(raw yaml.Node, _ types.Dependencies) (types.Strategy, error) {
+	client, err := webhook.NewFromConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -43,11 +32,7 @@ func New(client *webhook.Client) *Strategy {
 func (s *Strategy) Run(context.Context) {}
 
 func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
-	var out types.BidOutput
-	if err := s.client.DoJSON(ctx, http.MethodPost, decideBidRoute, input, &out); err != nil {
-		return types.BidOutput{}, err
-	}
-	return out, nil
+	return webhook.Post[types.BidOutput](ctx, s.client, decideBidRoute, input)
 }
 
 var _ types.Strategy = (*Strategy)(nil)

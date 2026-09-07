@@ -1,5 +1,5 @@
-// Package snapshot reads the common LiquidLane inventory, fill quote, and gas state
-// consumed by protocol solvers.
+// Package snapshot assembles the same direct/physical/gas decision view for
+// inventory publication and amount-specific execution.
 package snapshot
 
 import (
@@ -15,178 +15,117 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
-// Quote contains direct and physical inventory plus optional gas state from the same decision boundary.
-type Quote struct {
-	Direct      []liquidlane.Inventory
-	Physical    []liquidlane.Inventory
-	GasSnapshot *liquidlanegas.Snapshot
-	GasPrices   *liquidlanegas.PriceSnapshot
+// View owns one read result. Direct is an authorized subset of Physical; both
+// share immutable numeric values. All gas observations belong to this decision.
+type View[T any] struct {
+	Direct, Physical []T
+	GasSnapshot      *liquidlanegas.Snapshot
+	GasPrices        *liquidlanegas.PriceSnapshot
 }
 
-// Fill contains amount-specific direct and physical quotes plus optional current gas state.
-type Fill struct {
-	Direct      []liquidlane.FillQuote
-	Physical    []liquidlane.FillQuote
-	GasSnapshot *liquidlanegas.Snapshot
-	GasPrices   *liquidlanegas.PriceSnapshot
-}
+type Quote = View[liquidlane.Inventory]
+type Fill = View[liquidlane.FillQuote]
 
 type liquidReader interface {
 	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
 	ReadInventory(ctx context.Context, routes []liquidlane.Route) ([]liquidlane.Inventory, error)
-	FilterAuthorized(
-		ctx context.Context,
-		inventory []liquidlane.Inventory,
-		filler common.Address,
-	) ([]liquidlane.Inventory, error)
-	ReadFillQuotes(
-		ctx context.Context,
-		routes []liquidlane.Route,
-		tokenIn common.Address,
-		amountIn *big.Int,
-	) ([]liquidlane.FillQuote, error)
-	FilterAuthorizedRoutes(
-		ctx context.Context,
-		routes []liquidlane.Route,
-		filler common.Address,
-	) ([]liquidlane.Route, error)
+	ReadFillQuotes(ctx context.Context, routes []liquidlane.Route, tokenIn common.Address, amountIn *big.Int) ([]liquidlane.FillQuote, error)
+	FilterAuthorizedRoutes(ctx context.Context, routes []liquidlane.Route, executor common.Address) ([]liquidlane.Route, error)
 	ReadGasSnapshot(ctx context.Context, routes []liquidlane.Route) (*liquidlanegas.Snapshot, error)
 }
 
 type gasReader interface {
-	ValidateTokens(tokens []liquidlanegas.Token) error
+	ValidateTokens([]liquidlanegas.Token) error
 	Read(ctx context.Context, tokens []liquidlanegas.Token, now time.Time) (*liquidlanegas.PriceSnapshot, error)
 }
 
-// Reader owns the protocol-neutral LiquidLane read path shared by solver integrations.
+// Reader composes protocol-neutral chain reads and optional price feeds. It owns
+// no cache or goroutine; every returned view is assembled for the caller's context.
 type Reader struct {
-	liquid liquidReader
-	gas    gasReader
+	liquidReader
+
+	gas gasReader
 }
 
-func New(
-	c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig, liquidityLens common.Address,
-) (*Reader, error) {
-	var gas gasReader
+func New(c *chain.Client, log logr.Logger, gasCfg *liquidlanegas.OracleConfig, lens common.Address) (*Reader, error) {
+	r := &Reader{liquidReader: liquidlane.NewReader(c, log, lens)}
 	if gasCfg != nil {
-		reader, err := liquidlanegas.NewOracleReader(c, *gasCfg)
+		gas, err := liquidlanegas.NewOracleReader(c, *gasCfg)
 		if err != nil {
 			return nil, err
 		}
-		gas = reader
+		r.gas = gas
 	}
-	return newReader(liquidlane.NewReader(c, log, liquidityLens), gas), nil
-}
-
-func newReader(liquid liquidReader, gas gasReader) *Reader {
-	return &Reader{liquid: liquid, gas: gas}
-}
-
-func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error) {
-	return r.liquid.ResolveRoutes(ctx, adapters)
+	return r, nil
 }
 
 func (r *Reader) ValidateGasTokens(routes []liquidlane.Route) error {
-	if r.gas == nil {
-		return nil
+	if r.gas != nil {
+		return r.gas.ValidateTokens(routeTokens(routes))
 	}
-	return r.gas.ValidateTokens(routeTokens(routes))
+	return nil
 }
 
-func (r *Reader) FilterAuthorizedRoutes(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	executor common.Address,
-) ([]liquidlane.Route, error) {
-	return r.liquid.FilterAuthorizedRoutes(ctx, routes, executor)
-}
-
-// ReadFillQuotes reads amount-specific physical quotes without direct-route authorization or gas state.
-func (r *Reader) ReadFillQuotes(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	tokenIn common.Address,
-	amountIn *big.Int,
-) ([]liquidlane.FillQuote, error) {
-	return r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
-}
-
-func (r *Reader) Quote(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	executor common.Address,
-	now time.Time,
-) (Quote, error) {
-	physical, err := r.liquid.ReadInventory(ctx, routes)
+func (r *Reader) Quote(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (Quote, error) {
+	physical, err := r.ReadInventory(ctx, routes)
 	if err != nil {
 		return Quote{}, err
 	}
-	direct, err := r.liquid.FilterAuthorized(ctx, physical, executor)
-	if err != nil {
-		return Quote{}, err
-	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
-	if err != nil {
-		return Quote{}, err
-	}
-	return Quote{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices}, nil
+	return assemble(ctx, r, routes, executor, now, physical, func(item liquidlane.Inventory) liquidlane.Route { return item.Route })
 }
 
-func (r *Reader) Fill(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	executor, tokenIn common.Address,
-	amountIn *big.Int,
-	now time.Time,
-) (Fill, error) {
-	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+func (r *Reader) Fill(ctx context.Context, routes []liquidlane.Route, executor, tokenIn common.Address, amountIn *big.Int, now time.Time) (Fill, error) {
+	physical, err := r.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
 	if err != nil {
 		return Fill{}, err
 	}
-	authorized, err := r.liquid.FilterAuthorizedRoutes(ctx, routes, executor)
-	if err != nil {
-		return Fill{}, err
-	}
-	directRoute := make(map[liquidlane.RouteID]bool, len(authorized))
-	for _, route := range authorized {
-		directRoute[route.ID] = true
-	}
-	direct := make([]liquidlane.FillQuote, 0, len(physical))
-	for _, quote := range physical {
-		if directRoute[quote.ID] {
-			direct = append(direct, quote)
+	return assemble(ctx, r, routes, executor, now, physical, func(item liquidlane.FillQuote) liquidlane.Route { return item.Route })
+}
+
+// Authorization is evaluated only for returned physical routes. Private routes
+// keep the same physical observation even when direct access is unavailable.
+func assemble[T any](ctx context.Context, r *Reader, routes []liquidlane.Route, executor common.Address,
+	now time.Time, physical []T, routeOf func(T) liquidlane.Route,
+) (View[T], error) {
+	view := View[T]{Physical: physical}
+	if len(physical) > 0 {
+		observed := make([]liquidlane.Route, len(physical))
+		for i, item := range physical {
+			observed[i] = routeOf(item)
+		}
+		authorized, err := r.FilterAuthorizedRoutes(ctx, observed, executor)
+		if err != nil {
+			return View[T]{}, err
+		}
+		allowed := make(map[liquidlane.RouteID]struct{}, len(authorized))
+		for _, route := range authorized {
+			allowed[route.ID] = struct{}{}
+		}
+		for _, item := range physical {
+			if _, ok := allowed[routeOf(item).ID]; ok {
+				view.Direct = append(view.Direct, item)
+			}
 		}
 	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
-	if err != nil {
-		return Fill{}, err
-	}
-	return Fill{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices}, nil
-}
-
-func (r *Reader) readGas(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	now time.Time,
-) (*liquidlanegas.Snapshot, *liquidlanegas.PriceSnapshot, error) {
 	if r.gas == nil {
-		return nil, nil, nil
+		return view, nil
 	}
-	snapshot, err := r.liquid.ReadGasSnapshot(ctx, routes)
+	gas, err := r.ReadGasSnapshot(ctx, routes)
 	if err != nil {
-		return nil, nil, err
+		return View[T]{}, err
 	}
 	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
 	if err != nil {
-		return nil, nil, err
+		return View[T]{}, err
 	}
-	return snapshot, prices, nil
+	view.GasSnapshot, view.GasPrices = gas, prices
+	return view, nil
 }
 
 func routeTokens(routes []liquidlane.Route) []liquidlanegas.Token {
-	tokens := make([]liquidlanegas.Token, 0, len(routes))
-	for _, route := range routes {
-		tokens = append(tokens, liquidlanegas.Token{Address: route.TokenOut, Decimals: route.TokenOutDecimals})
+	result := make([]liquidlanegas.Token, len(routes))
+	for i := range routes {
+		result[i].Address, result[i].Decimals = routes[i].TokenOut, routes[i].TokenOutDecimals
 	}
-	return tokens
+	return result
 }

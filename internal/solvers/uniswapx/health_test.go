@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
@@ -20,12 +20,12 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 	if solver.ready() {
 		t.Fatal("solver without a quote state should not be ready")
 	}
-	solver.quoteState.Store(&quoteState{epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second)})
+	solver.quotes.setForTest(&quoteState{expiresAt: now.Add(30 * time.Second)})
 	if solver.ready() {
 		t.Fatal("solver without quote inventory should not be ready")
 	}
-	solver.quoteState.Store(&quoteState{
-		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second),
+	solver.quotes.setForTest(&quoteState{
+		expiresAt: now.Add(30 * time.Second),
 		inventory: []liquidlane.Inventory{{}},
 	})
 	if !solver.ready() {
@@ -53,8 +53,8 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 		t.Fatal("solver planning a fill should not be ready")
 	}
 	solver.endFillPlanning()
-	solver.quoteState.Store(&quoteState{
-		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(30 * time.Second),
+	solver.quotes.setForTest(&quoteState{
+		expiresAt: now.Add(30 * time.Second),
 		inventory: []liquidlane.Inventory{{}},
 	})
 	solver.warmupUntil.Store(now.Add(time.Minute).Unix())
@@ -75,22 +75,18 @@ func TestReadinessMetricIsEvaluatedAtCollection(t *testing.T) {
 		OrderServer: OrderServerConfig{PollInterval: time.Second},
 	}}
 	solver.lastExclusivePoll.Store(now.Unix())
-	solver.quoteState.Store(&quoteState{
-		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(time.Minute),
+	solver.quotes.setForTest(&quoteState{
+		expiresAt: now.Add(time.Minute),
 		inventory: []liquidlane.Inventory{{}},
 	})
 	metrics := newUniswapXTestMetrics(t, solver)
 
-	if got := testutil.ToFloat64(metrics.ready); got != 1 {
-		t.Fatalf("ready metric = %v, want 1", got)
-	}
-	solver.quoteState.Store(&quoteState{
-		epoch: solver.quoteEpoch.Load(), expiresAt: now.Add(-time.Minute),
+	metricstest.RequireValue(t, metrics.ready, 1)
+	solver.quotes.setForTest(&quoteState{
+		expiresAt: now.Add(-time.Minute),
 		inventory: []liquidlane.Inventory{{}},
 	})
-	if got := testutil.ToFloat64(metrics.ready); got != 0 {
-		t.Fatalf("stale ready metric = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, metrics.ready, 0)
 }
 
 func TestBlockUntilMetricIncludesEveryTimeBasedBlocker(t *testing.T) {
@@ -101,13 +97,9 @@ func TestBlockUntilMetricIncludesEveryTimeBasedBlocker(t *testing.T) {
 	solver.exclusiveBlockUntil.Store(30)
 	solver.warmupUntil.Store(40)
 
-	if got := testutil.ToFloat64(metrics.blockUntil); got != 40 {
-		t.Fatalf("block until metric = %v, want 40", got)
-	}
+	metricstest.RequireValue(t, metrics.blockUntil, 40)
 	solver.warmupUntil.Store(0)
-	if got := testutil.ToFloat64(metrics.blockUntil); got != 30 {
-		t.Fatalf("block until metric without warmup = %v, want 30", got)
-	}
+	metricstest.RequireValue(t, metrics.blockUntil, 30)
 }
 
 func TestStateMetricsAreEvaluatedAtCollection(t *testing.T) {
@@ -120,16 +112,10 @@ func TestStateMetricsAreEvaluatedAtCollection(t *testing.T) {
 		t.Fatal("capacity reservation was not stored")
 	}
 
-	if got := testutil.ToFloat64(metrics.exclusivePoll); got != 123 {
-		t.Fatalf("exclusive poll metric = %v, want 123", got)
-	}
-	if got := testutil.ToFloat64(metrics.pendingFills); got != 1 {
-		t.Fatalf("pending fills metric = %v, want 1", got)
-	}
+	metricstest.RequireValue(t, metrics.exclusivePoll, 123)
+	metricstest.RequireValue(t, metrics.pendingFills, 1)
 	if !solver.capacity.Delete("order") {
 		t.Fatal("capacity reservation was not released")
 	}
-	if got := testutil.ToFloat64(metrics.pendingFills); got != 0 {
-		t.Fatalf("released pending fills metric = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, metrics.pendingFills, 0)
 }

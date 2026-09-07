@@ -30,32 +30,49 @@ func (reservations CapacityReservations) AddAll(additions CapacityReservations) 
 type CapacityLedger struct {
 	mu    sync.RWMutex
 	byKey map[string]CapacityReservations
+	total CapacityReservations
 }
 
 // Set stores one pending fill reservation. It reports whether the ledger changed.
 func (ledger *CapacityLedger) Set(key string, reservations CapacityReservations) bool {
-	normalized, ok := cloneValidReservations(reservations)
-	if key == "" || !ok {
+	owned, valid := cloneValidReservations(reservations)
+	if key == "" || !valid {
 		return false
 	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	if ledger.byKey == nil {
 		ledger.byKey = make(map[string]CapacityReservations)
+		ledger.total = make(CapacityReservations)
 	}
-	ledger.byKey[key] = normalized
+	ledger.subtract(ledger.byKey[key])
+	ledger.byKey[key] = owned
+	ledger.total.AddAll(owned)
 	return true
 }
 
-// Delete releases one pending fill reservation. It reports whether the ledger changed.
+// Delete releases a fill and its contribution to the aggregate in one critical section.
 func (ledger *CapacityLedger) Delete(key string) bool {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
-	if _, ok := ledger.byKey[key]; !ok {
+	owned, exists := ledger.byKey[key]
+	if !exists {
 		return false
 	}
+	ledger.subtract(owned)
 	delete(ledger.byKey, key)
 	return true
+}
+
+// subtract requires the write lock; each amount belongs to an existing ledger entry.
+func (ledger *CapacityLedger) subtract(owned CapacityReservations) {
+	for id, amount := range owned {
+		remaining := ledger.total[id]
+		remaining.Sub(remaining, amount)
+		if remaining.Sign() == 0 {
+			delete(ledger.total, id)
+		}
+	}
 }
 
 // Snapshot returns the aggregate reservation without exposing ledger state.
@@ -68,12 +85,15 @@ func (ledger *CapacityLedger) Snapshot() CapacityReservations {
 func (ledger *CapacityLedger) SnapshotExcluding(excludedKey string) CapacityReservations {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
-	out := make(CapacityReservations)
-	for key, reservations := range ledger.byKey {
-		if key == excludedKey {
-			continue
+	out := make(CapacityReservations, len(ledger.total))
+	for id, amount := range ledger.total {
+		value := new(big.Int).Set(amount)
+		if excluded := ledger.byKey[excludedKey][id]; excluded != nil {
+			value.Sub(value, excluded)
 		}
-		out.AddAll(reservations)
+		if value.Sign() > 0 {
+			out[id] = value
+		}
 	}
 	return out
 }

@@ -3,7 +3,6 @@ package uniswapx
 import (
 	"net"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -12,7 +11,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
+
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -43,7 +42,7 @@ type rawConfig struct {
 	Discounts     *rawDiscountConfig       `yaml:"discounts"`
 	Gas           *liquidlanegas.RawConfig `yaml:"gas"`
 	Breaker       rawBreakerConfig         `yaml:"breaker"`
-	Strategy      rawStrategyConfig        `yaml:"strategy"`
+	Strategy      StrategyConfig           `yaml:"strategy"`
 }
 
 type rawDiscountConfig struct {
@@ -71,11 +70,6 @@ type rawOrderServerConfig struct {
 type rawOrderSourcesConfig struct {
 	ExclusiveV2 *bool `yaml:"exclusiveV2"`
 	PublicV2    bool  `yaml:"publicV2"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
 }
 
 type rawBreakerConfig struct {
@@ -128,10 +122,7 @@ type OrderSourcesConfig struct {
 	PublicV2    bool
 }
 
-type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
-}
+type StrategyConfig = parse.NamedConfig
 
 type BreakerConfig struct {
 	MaxFailures int
@@ -140,7 +131,7 @@ type BreakerConfig struct {
 
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := parse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	reactor, err := parse.NonZeroAddress(raw.Reactor, "reactor")
@@ -151,13 +142,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	liquidityLens, err := parse.OptionalAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
-	adapters, err := parseAddressList(raw.Adapters, "adapters")
+	adapters, err := parse.Addresses(raw.Adapters, "adapters")
 	if err != nil {
 		return nil, err
 	}
@@ -331,21 +320,4 @@ func validateServiceURL(raw, field string) error {
 		}
 	}
 	return errors.Errorf("%s must use https, except loopback http for local development", field)
-}
-
-func parseAddressList(values []string, field string) ([]common.Address, error) {
-	out := make([]common.Address, 0, len(values))
-	seen := make(map[common.Address]bool, len(values))
-	for i, value := range values {
-		address, err := parse.NonZeroAddress(value, field+"["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return nil, err
-		}
-		if seen[address] {
-			return nil, errors.Errorf("%s[%d]: duplicate address %s", field, i, address.Hex())
-		}
-		seen[address] = true
-		out = append(out, address)
-	}
-	return out, nil
 }

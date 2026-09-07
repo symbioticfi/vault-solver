@@ -17,9 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/go-logr/logr"
-
-	"github.com/symbioticfi/vault-solver/internal/signer"
+	"github.com/go-logr/logr/testr"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
@@ -29,7 +28,7 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 
 func testAnvilReplacement(t *testing.T) {
 	rpcClient, ethClient := startAnvilWithoutMining(t)
-	sgnr := anvilSigner(t)
+	sgnr := mustSigner(t)
 	manager := New(
 		ethClient,
 		sgnr,
@@ -40,7 +39,7 @@ func testAnvilReplacement(t *testing.T) {
 			ReplacementInterval: 200 * time.Millisecond,
 			PendingTimeout:      5 * time.Second,
 		},
-		logr.Discard(),
+		testr.New(t),
 	)
 	go manager.Start(t.Context())
 
@@ -50,8 +49,8 @@ func testAnvilReplacement(t *testing.T) {
 	if !accepted {
 		t.Fatal("transaction was not accepted")
 	}
-	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
-	replacement := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, result, func(poolTransaction) bool { return true })
+	replacement := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, result, func(tx poolTransaction) bool {
 		return tx.Hash != initial.Hash
 	})
 	if compareHexQuantity(replacement.MaxFeePerGas, initial.MaxFeePerGas) <= 0 ||
@@ -77,7 +76,7 @@ func testAnvilReplacement(t *testing.T) {
 
 func testAnvilCancellation(t *testing.T) {
 	rpcClient, ethClient := startAnvilWithoutMining(t)
-	sgnr := anvilSigner(t)
+	sgnr := mustSigner(t)
 	manager := New(
 		ethClient,
 		sgnr,
@@ -88,7 +87,7 @@ func testAnvilCancellation(t *testing.T) {
 			ReplacementInterval: 5 * time.Second,
 			PendingTimeout:      300 * time.Millisecond,
 		},
-		logr.Discard(),
+		testr.New(t),
 	)
 	go manager.Start(t.Context())
 
@@ -115,18 +114,14 @@ func testAnvilCancellation(t *testing.T) {
 		secondSubmission <- submission{result: second, accepted: secondAccepted}
 	}()
 
-	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, first, func(tx poolTransaction) bool {
 		return !strings.EqualFold(tx.To, sgnr.Address().Hex())
 	})
 	dropAnvilTransaction(t, rpcClient, initial.Hash)
 	latest, err := ethClient.NonceAt(t.Context(), sgnr.Address(), nil)
-	if err != nil {
-		t.Fatalf("latest nonce: %v", err)
-	}
+	testcheck.NoError(t, err, "latest nonce: %v")
 	pending, err := ethClient.PendingNonceAt(t.Context(), sgnr.Address())
-	if err != nil {
-		t.Fatalf("pending nonce: %v", err)
-	}
+	testcheck.NoError(t, err, "pending nonce: %v")
 	if latest != 0 || pending != 0 {
 		t.Fatalf("nonce after dropping blocker = latest %d pending %d, want 0/0", latest, pending)
 	}
@@ -140,7 +135,7 @@ func testAnvilCancellation(t *testing.T) {
 		t.Fatalf("future request was admitted before nonce 0 completed: %+v", got)
 	default:
 	}
-	cancellation := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+	cancellation := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, first, func(tx poolTransaction) bool {
 		return strings.EqualFold(tx.To, sgnr.Address().Hex()) && tx.Input == "0x" && tx.Value == "0x0"
 	})
 	if cancellation.Gas != "0x5208" {
@@ -161,7 +156,7 @@ func testAnvilCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("second transaction remained blocked after nonce 0 completed")
 	}
-	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
+	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, second.result, func(poolTransaction) bool { return true })
 	mineAnvilBlock(t, rpcClient)
 	if secondResult := waitForTxResult(t, second.result); secondResult.Err != nil {
 		t.Fatalf("later transaction remained blocked: %v", secondResult.Err)
@@ -188,15 +183,19 @@ func waitForPoolTransaction(
 	client *rpc.Client,
 	sender common.Address,
 	nonce uint64,
+	result <-chan Result,
 	accept func(poolTransaction) bool,
 ) poolTransaction {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		tx, ok, err := poolTransactionAt(t.Context(), client, sender, nonce)
-		if err != nil {
-			t.Fatalf("txpool_content: %v", err)
+		select {
+		case ended := <-result:
+			t.Fatalf("transaction lifecycle ended before mempool observation: %+v", ended)
+		default:
 		}
+		tx, ok, err := poolTransactionAt(t.Context(), client, sender, nonce)
+		testcheck.NoError(t, err, "txpool_content: %v")
 		if ok && accept(tx) {
 			return tx
 		}
@@ -242,17 +241,13 @@ func compareHexQuantity(left, right string) int {
 
 func mineAnvilBlock(t *testing.T, client *rpc.Client) {
 	t.Helper()
-	if err := client.CallContext(t.Context(), nil, "anvil_mine", 1); err != nil {
-		t.Fatalf("anvil_mine: %v", err)
-	}
+	testcheck.NoError(t, client.CallContext(t.Context(), nil, "anvil_mine", 1), "anvil_mine: %v")
 }
 
 func dropAnvilTransaction(t *testing.T, client *rpc.Client, hash string) {
 	t.Helper()
 	var dropped string
-	if err := client.CallContext(t.Context(), &dropped, "anvil_dropTransaction", hash); err != nil {
-		t.Fatalf("anvil_dropTransaction: %v", err)
-	}
+	testcheck.NoError(t, client.CallContext(t.Context(), &dropped, "anvil_dropTransaction", hash), "anvil_dropTransaction: %v")
 	if !strings.EqualFold(dropped, hash) {
 		t.Fatalf("anvil dropped %s, want %s", dropped, hash)
 	}
@@ -260,22 +255,7 @@ func dropAnvilTransaction(t *testing.T, client *rpc.Client, hash string) {
 
 func waitForTxResult(t *testing.T, result <-chan Result) Result {
 	t.Helper()
-	select {
-	case got := <-result:
-		return got
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for transaction result")
-		return Result{}
-	}
-}
-
-func anvilSigner(t *testing.T) signer.Signer {
-	t.Helper()
-	sgnr, err := signer.NewFromHexKey(testKey)
-	if err != nil {
-		t.Fatalf("signer: %v", err)
-	}
-	return sgnr
+	return testcheck.ReceiveWithin(t, result, 5*time.Second, "timed out waiting for transaction result")
 }
 
 func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
@@ -285,13 +265,9 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 		t.Skip("anvil is not installed")
 	}
 	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve anvil port: %v", err)
-	}
+	testcheck.NoError(t, err, "reserve anvil port: %v")
 	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release anvil port: %v", err)
-	}
+	testcheck.NoError(t, listener.Close(), "release anvil port: %v")
 
 	var output bytes.Buffer
 
@@ -307,9 +283,7 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	)
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start anvil: %v", err)
-	}
+	testcheck.NoError(t, cmd.Start(), "start anvil: %v")
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() {
@@ -329,6 +303,12 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 		if dialErr == nil {
 			var chainID string
 			if callErr := client.CallContext(t.Context(), &chainID, "eth_chainId"); callErr == nil {
+				// Dynamic tip selection needs a complete five-block fee-history window.
+				// Genesis-only Anvil cannot provide it; automining remains disabled.
+				if err := client.CallContext(t.Context(), nil, "anvil_mine", feeHistoryBlocks); err != nil {
+					client.Close()
+					t.Fatalf("seed fee history: %v", err)
+				}
 				ethClient := ethclient.NewClient(client)
 				t.Cleanup(ethClient.Close)
 				return client, ethClient

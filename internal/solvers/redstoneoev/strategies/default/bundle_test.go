@@ -1,6 +1,7 @@
 package defaultstrategy
 
 import (
+	"context"
 	"math/big"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func testBundleEngine(cfg Config) bundleEngine {
-	return newBundleEngine(cfg, logr.Discard())
+	return bundleEngine{cfg: cfg, log: logr.Discard()}
 }
 
 func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
@@ -73,7 +74,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			Withdrawable: big.NewInt(0),
 			Acquire:      map[common.Address]*big.Int{{}: mustBig("100000000000")},
 		}
-		b, skip := testBundleEngine(Config{}).selectBundleWithGas([]scoredLeg{
+		b, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), []scoredLeg{
 			scoredFor(1, mustBig("60000000")),
 			scoredFor(2, mustBig("30000000")),
 			scoredFor(3, mustBig("9000000")),
@@ -95,7 +96,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			Withdrawable: big.NewInt(0),
 			Acquire:      map[common.Address]*big.Int{{}: mustBig("100000000")},
 		}
-		b, skip := testBundleEngine(Config{}).selectBundleWithGas([]scoredLeg{
+		b, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), []scoredLeg{
 			scoredFor(1, mustBig("10000000")),
 			scoredFor(2, mustBig("30000000")),
 			scoredFor(3, mustBig("20000000")),
@@ -109,13 +110,13 @@ func TestSelectBundleSingleToken(t *testing.T) {
 	})
 
 	t.Run("empty scored set", func(t *testing.T) {
-		if _, skip := testBundleEngine(Config{}).selectBundleWithGas(nil, nil, 0, defaultPriceUpdateFeeds); skip != "no_legs" {
+		if _, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), nil, nil, 0, defaultPriceUpdateFeeds); skip != "no_legs" {
 			t.Fatalf("skip = %q, want no_legs", skip)
 		}
 	})
 
 	t.Run("net selection rejects an invalid rate", func(t *testing.T) {
-		if _, skip := testBundleEngine(Config{}).selectNetBundle(
+		if _, skip := testBundleEngine(Config{}).selectNetBundle(t.Context(),
 			[]scoredLeg{scoredFor(1, big.NewInt(1))}, nil, nil, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds,
 		); skip != skipGasUnprofitable {
 			t.Fatalf("skip = %q, want %q", skip, skipGasUnprofitable)
@@ -128,7 +129,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			Withdrawable: big.NewInt(0),
 			Acquire:      map[common.Address]*big.Int{{}: mustBig("30000000")},
 		}
-		b, skip := testBundleEngine(Config{}).selectBundleWithGas([]scoredLeg{
+		b, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), []scoredLeg{
 			scoredFor(3, mustBig("10000000")),
 			scoredFor(1, mustBig("10000000")),
 			scoredFor(2, mustBig("10000000")),
@@ -198,7 +199,7 @@ func TestSelectBundlePerCollateralBudget(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{collA: big.NewInt(100), collB: big.NewInt(100)},
 	}
-	b, skip := testBundleEngine(Config{}).selectBundleWithGas([]scoredLeg{
+	b, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), []scoredLeg{
 		withColl(1, 60, collA, 100),
 		withColl(2, 60, collA, 100),
 		withColl(3, 10, collB, 100),
@@ -231,7 +232,7 @@ func TestSelectBundleAllowsSameMarketStaticLegs(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{{}: big.NewInt(150)},
 	}
-	b, skip := testBundleEngine(Config{}).selectBundleWithGas([]scoredLeg{
+	b, skip := testBundleEngine(Config{}).selectBundleWithGas(t.Context(), []scoredLeg{
 		withMarket(1, 60, marketA),
 		withMarket(2, 50, marketA),
 		withMarket(3, 40, marketB),
@@ -253,7 +254,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	market := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	coll := common.HexToAddress("0x00000000000000000000000000000000000000c0")
 	info := MarketInfo{
-		Params: abiMarketParams{LoanToken: tokenA, CollateralToken: coll, Lltv: mustBig("500000000000000000")},
+		Params: MarketParams{LoanToken: tokenA, CollateralToken: coll, Lltv: mustBig("500000000000000000")},
 		State: morpho.MarketState{
 			TotalSupplyAssets: mustBig("5000000000"),
 			TotalSupplyShares: mustBig("5000000000"),
@@ -271,7 +272,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		borrower[19] = byteID
 		pos := morpho.PositionState{BorrowShares: mustBig("1200000000"), Collateral: mustBig("1000000000000000000")}
 		cand := Candidate{MarketID: market, Borrower: borrower, Market: info, Position: pos}
-		sized, ok := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, cfg.Sizing)
+		sized, ok := sizeLeg(cand, price, quote, cfg.Sizing)
 		if !ok {
 			t.Fatal("fixture should size")
 		}
@@ -284,8 +285,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 				collateral:      coll,
 			},
 			profit: mustBig("999999999999999999"),
-			source: evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
-			replay: true,
+			source: &evalItem{cand: cand, price: price, quote: quote},
 		}
 	}
 
@@ -294,7 +294,8 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{coll: mustBig("10000000000000000000000")},
 	}
-	b, skip := testBundleEngine(cfg).selectBundleWithGas([]scoredLeg{replayable(1), replayable(2)}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
+	sources := []scoredLeg{replayable(1), replayable(2)}
+	b, skip := testBundleEngine(cfg).selectBundleWithGas(t.Context(), sources, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
 	if skip != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
@@ -309,6 +310,15 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	}
 	if _, ok := morpho.ApplySeizeLiquidation(info.State, replayable(1).source.cand.Position, b.legs[0].MaxSeizeAssets, price); !ok {
 		t.Fatal("first replayed leg should apply to initial market state")
+	}
+	if info.State.TotalBorrowAssets.String() != "3000000000" || info.State.TotalBorrowShares.String() != "3000000000" ||
+		info.State.TotalSupplyAssets.String() != "5000000000" || info.State.TotalSupplyShares.String() != "5000000000" {
+		t.Fatal("branch expansion changed the source market accounting")
+	}
+	for _, source := range sources {
+		if source.source.cand.Position.BorrowShares.String() != "1200000000" || source.source.cand.Position.Collateral.String() != "1000000000000000000" {
+			t.Fatal("branch expansion changed a source borrower position")
+		}
 	}
 }
 
@@ -326,7 +336,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{collLow: big.NewInt(1_000_000)},
 	}
-	b, skip := engine.selectNetBundle([]scoredLeg{
+	b, skip := engine.selectNetBundle(t.Context(), []scoredLeg{
 		withColl(1, 640_000, collHigh),
 		withColl(2, 600_000, collLow),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
@@ -336,7 +346,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 	if len(b.legs) != 1 || b.legs[0].Borrower[19] != 2 {
 		t.Fatalf("selected borrowers = %+v, want only lower-gross acquire leg", b.legs)
 	}
-	if got := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
+	if got := engine.bundleNetNative(b, morpho.Wad, big.NewInt(1), predictGasForFeeds(gasDemands(b.legs), laneState, defaultPriceUpdateFeeds).Units); got.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", got)
 	}
 
@@ -359,7 +369,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		wantBorrower := common.BigToAddress(big.NewInt(10_000))
 		scored = append(scored, withAddr(wantBorrower, 600_000, collLow))
 
-		gotBundle, gotSkip := engine.selectNetBundle(scored, morpho.Wad, laneState, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds)
+		gotBundle, gotSkip := engine.selectNetBundle(t.Context(), scored, morpho.Wad, laneState, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds)
 		if gotSkip != "" {
 			t.Fatalf("lower-gross passing leg after the old window should be selected, got skip %q", gotSkip)
 		}
@@ -387,7 +397,7 @@ func TestSelectNetBundleAllowsSameMarketStaticLegs(t *testing.T) {
 			collB: big.NewInt(700_000),
 		},
 	}
-	b, skip := testBundleEngine(Config{}).selectNetBundle([]scoredLeg{
+	b, skip := testBundleEngine(Config{}).selectNetBundle(t.Context(), []scoredLeg{
 		withMarket(1, 700_000, collA),
 		withMarket(2, 700_000, collB),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
@@ -416,7 +426,7 @@ func TestSelectNetBundleSharesBaseGasAcrossLegs(t *testing.T) {
 			collB: big.NewInt(590_000),
 		},
 	}
-	b, skip := engine.selectNetBundle([]scoredLeg{
+	b, skip := engine.selectNetBundle(t.Context(), []scoredLeg{
 		withColl(1, 590_000, collA),
 		withColl(2, 590_000, collB),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
@@ -426,7 +436,7 @@ func TestSelectNetBundleSharesBaseGasAcrossLegs(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d legs, want 2", len(b.legs))
 	}
-	if got := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); got.Cmp(big.NewInt(1)) < 0 {
+	if got := engine.bundleNetNative(b, morpho.Wad, big.NewInt(1), predictGasForFeeds(gasDemands(b.legs), laneState, defaultPriceUpdateFeeds).Units); got.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", got)
 	}
 }
@@ -445,7 +455,7 @@ func TestSelectNetBundleSearchesPastGreedyBudgetTrap(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{coll: big.NewInt(1_400_000)},
 	}
-	b, skip := engine.selectNetBundle([]scoredLeg{
+	b, skip := engine.selectNetBundle(t.Context(), []scoredLeg{
 		withColl(1, 700_000),
 		withColl(2, 620_000),
 		withColl(3, 620_000),
@@ -460,7 +470,7 @@ func TestSelectNetBundleSearchesPastGreedyBudgetTrap(t *testing.T) {
 	if len(b.legs) != 2 || got[1] || !got[2] || !got[3] {
 		t.Fatalf("selected borrowers = %v (legs=%d), want {2,3}", got, len(b.legs))
 	}
-	if gotNet := engine.bundleNetNative(b, morpho.Wad, laneState, big.NewInt(1)); gotNet.Cmp(big.NewInt(1)) < 0 {
+	if gotNet := engine.bundleNetNative(b, morpho.Wad, big.NewInt(1), predictGasForFeeds(gasDemands(b.legs), laneState, defaultPriceUpdateFeeds).Units); gotNet.Cmp(big.NewInt(1)) < 0 {
 		t.Fatalf("selected bundle net = %s, want >= min margin", gotNet)
 	}
 }
@@ -471,7 +481,7 @@ func TestSearchBundleDoesNotRequireMonotonicScore(t *testing.T) {
 		scoredFor(1, big.NewInt(1)),
 		scoredFor(2, big.NewInt(1)),
 	}
-	scoreFn := func(b chosenBundle) *big.Int {
+	scoreFn := func(b chosenBundle, _ uint64) *big.Int {
 		if len(b.legs) < 2 {
 			return big.NewInt(-1)
 		}
@@ -483,7 +493,7 @@ func TestSearchBundleDoesNotRequireMonotonicScore(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{{}: big.NewInt(2)},
 	}
-	best, ok := engine.searchBundle(legs, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds, scoreFn)
+	best, ok := engine.searchBundle(t.Context(), legs, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds, scoreFn)
 	if !ok {
 		t.Fatal("search should keep temporary negative states when a deeper bundle can become profitable")
 	}
@@ -501,5 +511,19 @@ func TestBundleBidNativeUsesProfitShareFloor(t *testing.T) {
 	engine = testBundleEngine(Config{BidWei: big.NewInt(100), TotalBundleProfitBps: 500})
 	if got := engine.bundleBidNative(b, morpho.Wad); got.Cmp(big.NewInt(100)) != 0 {
 		t.Fatalf("bid = %s, want minimal bid floor", got)
+	}
+}
+
+func TestBundleSearchStopsDuringExpansion(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	_, ok := testBundleEngine(Config{}).searchBundle(ctx, []scoredLeg{scoredFor(1, big.NewInt(5)), scoredFor(2, big.NewInt(4))}, nil, 0, defaultPriceUpdateFeeds, func(b chosenBundle, _ uint64) *big.Int {
+		calls++
+		cancel()
+		return b.grossLoan
+	})
+	if ok || calls != 1 {
+		t.Fatalf("canceled search: selected=%v score calls=%d", ok, calls)
 	}
 }

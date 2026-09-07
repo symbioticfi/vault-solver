@@ -13,10 +13,12 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -39,12 +41,12 @@ func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*back
 }
 func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
 
-func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
+func (f *fakeBackend) Resolve(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++
 	return f.discount, nil
 }
 
-func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
+func (f *fakeBackend) ListDiscounts(context.Context) (*discountsResponse, error) {
 	f.listCalls++
 	if f.discounts == nil {
 		return &discountsResponse{}, nil
@@ -117,9 +119,6 @@ func confirmedTxResult() txmanager.Result {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-func i64Ptr(i int64) *int64   { return &i }
-
 // newExec builds an internal-solver service (discountsEnabled: true); the external path is covered by
 // the TestExecution_DiscountsDisabled* tests, which flip the field.
 func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionService {
@@ -130,7 +129,6 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		strategy: fixedFillStrategy{plan: baseFillPlan()},
 		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
-		inflight: make(map[string]bool),
 	}
 }
 
@@ -183,14 +181,12 @@ func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 	t.Helper()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	encoded, err := orderTupleArgs.Pack(sampleOrder())
-	if err != nil {
-		t.Fatalf("pack order: %v", err)
-	}
+	testcheck.NoError(t, err, "pack order: %v")
 	filler := "0x0000000000000000000000000000000000000010"
 	executable := &backendOrder{
 		OrderID: "o1", OrderStatus: "open", QuoteID: "q1",
 		Outputs:      []backendOut{{Token: tOut.Hex(), Amount: "900000", Recipient: "0x0000000000000000000000000000000000000099"}},
-		EncodedOrder: strPtr(hexutil.Encode(encoded)), ProtocolSignature: strPtr("0xabcd"), Deadline: i64Ptr(4_102_444_800), Filler: &filler,
+		EncodedOrder: new(hexutil.Encode(encoded)), ProtocolSignature: new("0xabcd"), Deadline: new(int64(4_102_444_800)), Filler: &filler,
 	}
 	be := &fakeBackend{
 		open:       []backendOrder{{OrderID: "o1", OrderStatus: "open", QuoteID: "q1", Filler: &filler}},
@@ -207,7 +203,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
@@ -260,7 +256,7 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 	if txm.lastReq.Data != nil {
 		t.Fatal("fill was admitted after its chain deadline elapsed")
 	}
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusFailed ||
 		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
 		t.Fatalf("status = %+v, want deadline failure", rec)
@@ -296,7 +292,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 	if len(txm.lastReq.Data) != 0 {
@@ -315,7 +311,7 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
 }
@@ -350,15 +346,13 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 			st, be := fillFixtures(t)
 			reg := prometheus.NewRegistry()
 			metrics, err := newRFQMetrics(reg, st, "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, err)
 			e := newExec(t, st, be, &fakeTxm{result: test.result})
 			e.metrics = metrics
 
 			e.syncOnce(t.Context())
 
-			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+			if rec := orderFixture(st); rec == nil || rec.Status != statusFailed {
 				t.Fatalf("status = %v, want failed", rec)
 			}
 			for _, outcome := range []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted} {
@@ -384,7 +378,7 @@ func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusSubmitted {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusSubmitted {
 		t.Fatalf("status = %v, want submitted", rec)
 	}
 }
@@ -408,7 +402,7 @@ func TestExecution_DiscountFill(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -453,11 +447,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
 	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
-	e.strategy = newDefaultTestStrategy()
+	e.strategy = defaultstrategy.New()
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
 	}
 	if be.resolveCalls != 1 {
@@ -493,7 +487,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
 	}
@@ -510,7 +504,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	if be.resolveCalls != 2 {
 		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
 	}
-	if rec = st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec = orderFixture(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("second cycle status = %v, want failed again", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -575,7 +569,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 
 	e.syncOnce(context.Background())
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
+	if rec := orderFixture(st); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
 	}
 	if txm.lastReq.Data != nil {
@@ -593,9 +587,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	plan, err := e.buildFillPlan(
 		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
-	if err != nil {
-		t.Fatalf("buildFillPlan: %v", err)
-	}
+	testcheck.NoError(t, err, "buildFillPlan: %v")
 	if plan == nil {
 		t.Fatal("buildFillPlan returned nil")
 	}
@@ -637,14 +629,14 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 	for _, status := range []string{"", "brand-new-status"} {
 		t.Run(fmt.Sprintf("status %q", status), func(t *testing.T) {
 			st := newStore(func() time.Time { return time.Unix(0, 0) })
-			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			st.upsertQueued("o1")
 			st.markStatus("o1", statusSubmitted, common.HexToHash("0x1"), "")
 			be := &fakeBackend{order: &backendOrder{OrderID: "o1", OrderStatus: status}}
 			e := newExec(t, st, be, &fakeTxm{})
 
 			e.reconcileTerminalStatus(t.Context(), "o1")
 
-			if got := st.order("o1").Status; got != statusSubmitted {
+			if got := orderFixture(st).Status; got != statusSubmitted {
 				t.Fatalf("status = %q, want %q", got, statusSubmitted)
 			}
 		})

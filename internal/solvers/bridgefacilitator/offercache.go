@@ -5,97 +5,93 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// offerKey identifies our offer on a given auction made on behalf of a given adapter (the maker).
-// Dedup is per-adapter: two adapters may each hold a live offer on the same auction.
 type offerKey struct {
 	adapter common.Address
 	auction int64
 }
-
-// offerState is one outstanding offer: when it expires and the principal it covers.
 type offerState struct {
 	expiry    time.Time
 	principal *big.Int
 }
 
-// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through the
-// same adapter while one is live, and so we can tell when an auction is fully covered. It is a snapshot
-// of the 3F API's live offers, rebuilt from the API before every offer pass (reconcileAdapter); Run
-// goroutine only, no locking.
+type offerSnapshot struct {
+	entries  []offerKey
+	coverage map[int64]*big.Int
+}
+
+// The Run goroutine replaces one adapter's authoritative API snapshot at a time.
+// A failed read leaves that adapter's previous coverage until its offers expire.
 type offerTracker struct {
-	offers map[offerKey]offerState
+	adapters map[common.Address]map[int64]offerState
 }
 
 func newOfferTracker() *offerTracker {
-	return &offerTracker{offers: make(map[offerKey]offerState)}
+	return &offerTracker{adapters: make(map[common.Address]map[int64]offerState)}
 }
 
-// liveEntries returns the (adapter, auction) keys of every unexpired offer as of now, for the strategy
-// to dedup against. Cheaper than probing each adapter/auction pair: it walks only the offers we hold.
-func (t *offerTracker) liveEntries(now time.Time) []offerKey {
-	keys := make([]offerKey, 0, len(t.offers))
-	for k, st := range t.offers {
-		if st.expiry.After(now) {
-			keys = append(keys, k)
+func (t *offerTracker) reconcileAdapter(adapter common.Address, offers map[int64]offerState) {
+	if len(offers) == 0 {
+		delete(t.adapters, adapter)
+		return
+	}
+	snapshot := make(map[int64]offerState, len(offers))
+	for id, offer := range offers {
+		snapshot[id] = offerState{expiry: offer.expiry, principal: bigmath.Clone(offer.principal)}
+	}
+	t.adapters[adapter] = snapshot
+}
+
+// snapshot collects deduplication keys and auction coverage in the same pass.
+// Coverage owns its amounts; no strategy can mutate the authoritative tracker.
+func (t *offerTracker) snapshot(now time.Time) offerSnapshot {
+	out := offerSnapshot{coverage: make(map[int64]*big.Int)}
+	for adapter, offers := range t.adapters {
+		for auction, offer := range offers {
+			if !offer.expiry.After(now) {
+				continue
+			}
+			out.entries = append(out.entries, offerKey{adapter: adapter, auction: auction})
+			if offer.principal != nil {
+				if out.coverage[auction] == nil {
+					out.coverage[auction] = new(big.Int)
+				}
+				out.coverage[auction].Add(out.coverage[auction], offer.principal)
+			}
 		}
 	}
-	return keys
+	return out
 }
 
-// reconcileAdapter replaces all of this adapter's cached offers with the API's current live set. The
-// 1-2 minute poll is authoritative — it always reflects our own just-submitted offers as well as any
-// made out of band — so anything not in `live` is gone and dropped.
-func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]offerState) {
-	for k := range t.offers {
-		if k.adapter == adapter {
-			delete(t.offers, k)
-		}
-	}
-	for auctionID, st := range live {
-		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: new(big.Int).Set(st.principal)}
-	}
-}
-
-// retainAdapters drops cached offers made by adapters that are no longer usable. In particular,
-// rotating an adapter's offerSigner invalidates its outstanding signatures, so those offers must no
-// longer reduce the amount covered by the active snapshot.
 func (t *offerTracker) retainAdapters(active map[common.Address]struct{}) {
-	for key := range t.offers {
-		if _, ok := active[key.adapter]; !ok {
-			delete(t.offers, key)
+	for adapter := range t.adapters {
+		if _, ok := active[adapter]; !ok {
+			delete(t.adapters, adapter)
 		}
 	}
 }
 
-// liveCoverage sums the principal of our unexpired offers on auctionID across every adapter — how much
-// of the auction's requested amount we already cover.
-func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
-	total := new(big.Int)
-	for k, st := range t.offers {
-		if k.auction == auctionID && st.expiry.After(now) {
-			total.Add(total, st.principal)
-		}
-	}
-	return total
-}
-
-// pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
 func (t *offerTracker) pruneExpired(now time.Time) {
-	for k, st := range t.offers {
-		if !st.expiry.After(now) {
-			delete(t.offers, k)
+	for adapter, offers := range t.adapters {
+		for id, offer := range offers {
+			if !offer.expiry.After(now) {
+				delete(offers, id)
+			}
+		}
+		if len(offers) == 0 {
+			delete(t.adapters, adapter)
 		}
 	}
 }
 
-// parseUnixTime parses a uint256 unix-seconds string (as the API encodes expirations).
-func parseUnixTime(s string) (time.Time, error) {
-	sec, err := strconv.ParseInt(s, 10, 64)
+func parseUnixTime(value string) (time.Time, error) {
+	seconds, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return time.Time{}, err
 	}
-	return time.Unix(sec, 0), nil
+	return time.Unix(seconds, 0), nil
 }

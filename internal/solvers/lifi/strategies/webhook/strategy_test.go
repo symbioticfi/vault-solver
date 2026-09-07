@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
@@ -46,17 +46,13 @@ func TestWebhookStrategyDelegatesQuotesAndFill(t *testing.T) {
 	}))
 	defer server.Close()
 	client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	strategy := New(client)
 	inventory := liquidlane.Inventory{Route: route, MaxAssets: big.NewInt(100), MaxRate: big.NewInt(1)}
 	quotes, err := strategy.DecideQuotes(t.Context(), types.QuoteInput{
 		Solver: solver, Inventory: []liquidlane.Inventory{inventory}, ServerTime: now, QuoteExpiresAt: now.Add(time.Minute),
 	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuotes: %v")
 	if len(quotes.Quotes) != 1 || quotes.Quotes[0].ExclusiveFor != solver {
 		t.Fatalf("quotes = %+v", quotes.Quotes)
 	}
@@ -66,9 +62,7 @@ func TestWebhookStrategyDelegatesQuotesAndFill(t *testing.T) {
 			Inventory: inventory, AmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideFill: %v")
 	if plan == nil || len(plan.Routes) != 1 || plan.Routes[0].RouteID != route.ID {
 		t.Fatalf("plan = %+v", plan)
 	}
@@ -99,9 +93,7 @@ func TestWebhookStrategyClassifiesFillHTTPFailures(t *testing.T) {
 			}))
 			defer server.Close()
 			client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
-			if err != nil {
-				t.Fatalf("NewClient: %v", err)
-			}
+			testcheck.NoError(t, err, "NewClient: %v")
 
 			_, err = New(client).DecideFill(t.Context(), types.FillInput{})
 			if err == nil {
@@ -117,9 +109,7 @@ func TestWebhookStrategyClassifiesFillHTTPFailures(t *testing.T) {
 func TestWebhookStrategyKeepsFillTransportFailureTransient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	server.Close()
 
 	_, err = New(client).DecideFill(t.Context(), types.FillInput{})

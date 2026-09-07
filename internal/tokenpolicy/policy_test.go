@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 var (
@@ -32,9 +33,7 @@ func TestPolicyScopes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			policy, err := New(tt.scope, []common.Address{permissionedToken})
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
+			testcheck.NoError(t, err, "New: %v")
 			if got := policy.Allows(tt.token); got != tt.wantAllowed {
 				t.Fatalf("Allows() = %v, want %v", got, tt.wantAllowed)
 			}
@@ -52,9 +51,7 @@ func TestPolicyScopes(t *testing.T) {
 func TestParseValidatesConfig(t *testing.T) {
 	address := permissionedToken.Hex()
 	policy, err := Parse("", []string{address})
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	testcheck.NoError(t, err, "Parse: %v")
 	if policy.Scope() != All || !policy.Allows(permissionlessToken) {
 		t.Fatalf("default policy = %q", policy.Scope())
 	}
@@ -68,7 +65,7 @@ func TestParseValidatesConfig(t *testing.T) {
 		{"invalid scope", "private", nil, "tokensToQuote"},
 		{"invalid address", "all", []string{"bad"}, "invalid address"},
 		{"zero address", "all", []string{common.Address{}.Hex()}, "zero address"},
-		{"duplicate", "all", []string{address, address}, "duplicate token"},
+		{"duplicate", "all", []string{address, address}, "duplicate address"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,9 +79,7 @@ func TestParseValidatesConfig(t *testing.T) {
 
 func TestSingleRouteTokensReturnsCopy(t *testing.T) {
 	policy, err := New(Permissioned, []common.Address{permissionedToken})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	testcheck.NoError(t, err, "New: %v")
 	tokens := policy.SingleRouteTokens()
 	delete(tokens, permissionedToken)
 	if !policy.RequiresSingleRoute(permissionedToken) {

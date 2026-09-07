@@ -9,39 +9,27 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
 	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 
 	inbox := newOrderInbox(4)
-	if err := inbox.enqueue(metricOrder("inbox-later", 1_500, 1_400)); err != nil {
-		t.Fatal(err)
-	}
-	if err := inbox.enqueue(metricOrder("inbox-nearer", 1_300, 1_350)); err != nil {
-		t.Fatal(err)
-	}
-	if err := inbox.enqueue(&submittedOrder{processed: make(chan struct{})}); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(metricOrder("inbox-later", 1_500, 1_400)))
+	testcheck.NoError(t, inbox.enqueue(metricOrder("inbox-nearer", 1_300, 1_350)))
+	testcheck.NoError(t, inbox.enqueue(&submittedOrder{processed: make(chan struct{})}))
 	inbox.beginRecovery()
 	inbox.markRecoveryRetry(metricOrder("recovery-retry", 1_150, 1_175), 0)
 
 	capacityRetries := newReservationRetryQueue(2)
-	if err := capacityRetries.enqueue(metricOrder("capacity", 1_200, 1_250), 0); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, capacityRetries.enqueue(metricOrder("capacity", 1_200, 1_250), 0))
 
 	depositRetries := newOrderDepositRetryQueue(2)
-	if err := depositRetries.schedule(metricOrder("deposit", 1_020, 1_030), time.Unix(1_000, 0)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, depositRetries.schedule(metricOrder("deposit", 1_020, 1_030), time.Unix(1_000, 0)))
 
 	stopInbox := metrics.trackOrderQueue(orderQueueInbox, inbox.orderQueueSnapshot)
 	stopRecovery := metrics.trackOrderQueue(
@@ -77,19 +65,13 @@ func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
 
 func TestLIFIOrderQueueMetricsIncludeBlockedInboxDelivery(t *testing.T) {
 	inbox := newOrderInbox(1)
-	if err := inbox.enqueue(metricOrder("waiting", 1_200, 1_100)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, inbox.enqueue(metricOrder("waiting", 1_200, 1_100)))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	out := make(chan *submittedOrder)
 	done := make(chan error, 1)
 	go func() { done <- inbox.run(ctx, out) }()
-	select {
-	case <-inbox.space:
-	case <-time.After(time.Second):
-		t.Fatal("inbox did not start blocked delivery")
-	}
+	testcheck.ReceiveWithin(t, inbox.space, time.Second, "inbox did not start blocked delivery")
 
 	if snapshot := inbox.orderQueueSnapshot(); snapshot != (orderQueueSnapshot{backlog: 1, nearestDeadline: 1_100}) {
 		t.Fatalf("blocked delivery snapshot = %+v", snapshot)
@@ -103,9 +85,7 @@ func TestLIFIOrderQueueMetricsIncludeBlockedInboxDelivery(t *testing.T) {
 func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(registry, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 
 	const iterations = 256
 	inbox := newOrderInbox(iterations)
@@ -159,9 +139,7 @@ func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 		}
 		select {
 		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, err)
 			return
 		default:
 		}
@@ -171,9 +149,7 @@ func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 func TestLIFIMetricsRecordOnlyBoundedOrderSignals(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := newLIFIMetrics(reg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 
 	metrics.observeOrderProcessing(orderProcessingSubmitted)
 	metrics.observeOrderProcessing(orderProcessingOutcome("request-derived-value"))

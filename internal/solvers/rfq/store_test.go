@@ -12,12 +12,12 @@ import (
 func TestUpsertQueued_RearmsFailedOrder(t *testing.T) {
 	t.Parallel()
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
-	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	st.upsertQueued("o1")
 	st.markStatus("o1", statusFailed, common.Hash{}, "fill reverted")
 
-	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"}) // backend still lists it open
+	st.upsertQueued("o1") // backend still lists it open
 
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusQueued {
 		t.Fatalf("status = %v, want queued (re-armed)", rec)
 	}
@@ -32,12 +32,12 @@ func TestUpsertQueued_DoesNotRegressInFlightOrTerminal(t *testing.T) {
 	t.Parallel()
 	for _, status := range []orderStatus{statusSubmitting, statusSubmitted, statusFilled, statusExpired} {
 		st := newStore(func() time.Time { return time.Unix(0, 0) })
-		st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+		st.upsertQueued("o1")
 		st.markStatus("o1", status, common.Hash{}, "")
 
-		st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+		st.upsertQueued("o1")
 
-		if rec := st.order("o1"); rec == nil || rec.Status != status {
+		if rec := orderFixture(st); rec == nil || rec.Status != status {
 			t.Fatalf("status = %v, want %v (unchanged)", rec, status)
 		}
 	}

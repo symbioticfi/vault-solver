@@ -4,15 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func writeTemp(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write temp config: %v", err)
-	}
+	testcheck.NoError(t, os.WriteFile(path, []byte(body), 0o600), "write temp config: %v")
 	return path
 }
 
@@ -33,9 +33,7 @@ solvers:
 
 func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	cfg, err := Load(writeTemp(t, validConfig))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	if cfg.TxManager.Confirmations != DefaultConfirmations {
 		t.Fatalf("expected default confirmations %d, got %d", DefaultConfirmations, cfg.TxManager.Confirmations)
 	}
@@ -68,9 +66,7 @@ solvers:
 
 func TestLoad_MultipleSolvers(t *testing.T) {
 	cfg, err := Load(writeTemp(t, multiSolverConfig))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	if len(cfg.Solvers) != 2 ||
 		cfg.Solvers[0].Name != "3f-bridge-facilitator" || cfg.Solvers[1].Name != "rfq-filler" {
 		t.Fatalf("expected two distinct solvers, got %+v", cfg.Solvers)
@@ -99,17 +95,13 @@ solvers:
 
 func TestLoad_TwoStageSolverDecode(t *testing.T) {
 	cfg, err := Load(writeTemp(t, validConfig))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	// The framework keeps solver.config opaque; a solver decodes it into its own type.
 	var sub struct {
 		APIBaseURL string `yaml:"apiBaseUrl"`
 		Answer     int    `yaml:"answer"`
 	}
-	if err := cfg.Solvers[0].Config.Decode(&sub); err != nil {
-		t.Fatalf("decode solver.config: %v", err)
-	}
+	testcheck.NoError(t, cfg.Solvers[0].Config.Decode(&sub), "decode solver.config: %v")
 	if sub.APIBaseURL != "https://bf.dev.gcp.3f.xyz" || sub.Answer != 42 {
 		t.Fatalf("unexpected decoded solver config: %+v", sub)
 	}
@@ -130,9 +122,7 @@ solvers:
     config: {}
 `
 	cfg, err := Load(writeTemp(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	if cfg.Chain.RPCURL != "https://rpc.from.env" {
 		t.Fatalf("rpcUrl not expanded from env: %q", cfg.Chain.RPCURL)
 	}
@@ -158,9 +148,7 @@ solvers:
     config: {}
 `
 	cfg, err := Load(writeTemp(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	if cfg.Chain.WriteRPCURL != "https://write.from.env" {
 		t.Fatalf("writeRpcUrl not expanded from env: %q", cfg.Chain.WriteRPCURL)
 	}
@@ -184,9 +172,7 @@ solvers:
     config: {}
 `
 	cfg, err := Load(writeTemp(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	if cfg.Chain.WriteRPCURL != "" {
 		t.Fatalf("writeRpcUrl should default to empty, got %q", cfg.Chain.WriteRPCURL)
 	}
@@ -206,15 +192,11 @@ solvers:
       apiBaseUrl: ${TEST_API_URL}
 `
 	cfg, err := Load(writeTemp(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	testcheck.NoError(t, err, "Load: %v")
 	var sub struct {
 		APIBaseURL string `yaml:"apiBaseUrl"`
 	}
-	if err := cfg.Solvers[0].Config.Decode(&sub); err != nil {
-		t.Fatalf("decode solver.config: %v", err)
-	}
+	testcheck.NoError(t, cfg.Solvers[0].Config.Decode(&sub), "decode solver.config: %v")
 	if sub.APIBaseURL != "https://api.from.env" {
 		t.Fatalf("solver.config not env-expanded: %q", sub.APIBaseURL)
 	}
@@ -323,15 +305,11 @@ chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 solvers: [{name: x}]
 `))
-	if err != nil {
-		t.Fatalf("Load without txManager: %v", err)
-	}
+	testcheck.NoError(t, err, "Load without txManager: %v")
 	if err := cfg.ValidateTxManager(); err == nil {
 		t.Fatal("expected maxFeeGwei to be required for a transaction-sending solver")
 	}
 
 	cfg.TxManager.MaxFeeGwei = 100
-	if err := cfg.ValidateTxManager(); err != nil {
-		t.Fatalf("valid txManager: %v", err)
-	}
+	testcheck.NoError(t, cfg.ValidateTxManager(), "valid txManager: %v")
 }

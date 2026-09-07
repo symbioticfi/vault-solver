@@ -4,6 +4,8 @@ import (
 	"context"
 	"math/big"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -18,8 +20,6 @@ import (
 
 const (
 	DefaultMaxTokensPerAdapter = 64
-	inventoryReadsPerRoute     = 4
-	fillReadsPerRoute          = 4
 )
 
 var (
@@ -30,27 +30,15 @@ var (
 )
 
 type Reader struct {
-	chain liquidLaneBackend
+	chain chain.Multicaller
 	log   logr.Logger
 	dec   decimalsReader
 
-	chainID             int64
-	maxTokensPerAdapter int
+	chainID int64
 	// lens is the FrontendLiquidityLens address. When non-zero, swappable headroom is read from the lens's
 	// cross-adapter deallocation-cascade estimate instead of the adapter's own getMaxAssets(tokenToRedeem);
 	// zero falls back to the adapter getter.
 	lens common.Address
-}
-
-type gasAdapterState struct {
-	owner       common.Address
-	marketMaker common.Address
-	state       *liquidlanegas.AdapterState
-}
-
-type liquidLaneBackend interface {
-	ChainID() *big.Int
-	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
 }
 
 type decimalsReader interface {
@@ -59,12 +47,11 @@ type decimalsReader interface {
 
 func NewReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *Reader {
 	return &Reader{
-		chain:               c,
-		log:                 log,
-		dec:                 chain.NewDecimals(c),
-		chainID:             c.ChainID().Int64(),
-		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
-		lens:                liquidityLens,
+		chain:   c,
+		log:     log,
+		dec:     chain.NewDecimals(c),
+		chainID: c.ChainID().Int64(),
+		lens:    liquidityLens,
 	}
 }
 
@@ -95,26 +82,16 @@ func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address)
 	for i, a := range adapters {
 		vaultCalls[i] = chain.Call{Target: a, AllowFailure: true, Data: llAdapter.PackVault()}
 	}
-	vaultResults, err := r.chain.Multicall(ctx, vaultCalls)
+	vaultResults, err := r.checkedMulticall(ctx, "vault", vaultCalls)
 	if err != nil {
 		return nil, err
-	}
-	if len(vaultResults) != len(vaultCalls) {
-		return nil, errors.Errorf(
-			"liquidlane: vault multicall: got %d results, want %d",
-			len(vaultResults),
-			len(vaultCalls),
-		)
 	}
 
 	out := make([]Adapter, len(adapters))
 	assetCalls := make([]chain.Call, len(adapters))
 	for i := range adapters {
 		out[i].Adapter = adapters[i]
-		if !vaultResults[i].Success {
-			return nil, errors.Errorf("liquidlane: resolve adapter %s vault: call failed", adapters[i].Hex())
-		}
-		vault, unpackErr := llAdapter.UnpackVault(vaultResults[i].ReturnData)
+		vault, unpackErr := chain.Decode(vaultResults[i], llAdapter.UnpackVault)
 		if unpackErr != nil {
 			return nil, errors.Errorf("liquidlane: resolve adapter %s vault: %w", adapters[i].Hex(), unpackErr)
 		}
@@ -124,27 +101,13 @@ func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address)
 		out[i].Vault = vault
 		assetCalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: erc4626b.PackAsset()}
 	}
-	assetResults, err := r.chain.Multicall(ctx, assetCalls)
+	assetResults, err := r.checkedMulticall(ctx, "asset", assetCalls)
 	if err != nil {
 		return nil, err
 	}
-	if len(assetResults) != len(assetCalls) {
-		return nil, errors.Errorf(
-			"liquidlane: asset multicall: got %d results, want %d",
-			len(assetResults),
-			len(assetCalls),
-		)
-	}
 
 	for i := range out {
-		if !assetResults[i].Success {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s vault %s asset: call failed",
-				out[i].Adapter.Hex(),
-				out[i].Vault.Hex(),
-			)
-		}
-		asset, unpackErr := erc4626b.UnpackAsset(assetResults[i].ReturnData)
+		asset, unpackErr := chain.Decode(assetResults[i], erc4626b.UnpackAsset)
 		if unpackErr != nil {
 			return nil, errors.Errorf(
 				"liquidlane: resolve adapter %s vault %s asset: %w",
@@ -204,26 +167,16 @@ func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) (
 	if len(tokenCalls) == 0 {
 		return nil, nil
 	}
-	res, err := r.chain.Multicall(ctx, tokenCalls)
+	res, err := r.checkedMulticall(ctx, "tokensToRedeem", tokenCalls)
 	if err != nil {
 		return nil, err
-	}
-	if len(res) != len(tokenCalls) {
-		return nil, errors.Errorf("liquidlane: tokensToRedeem multicall: got %d results, want %d", len(res), len(tokenCalls))
 	}
 
 	routes := make([]Route, 0, len(res))
 	for i, call := range res {
 		req := reqs[i]
 		resolvedAdapter := resolved[req.adapterIndex]
-		if !call.Success {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s tokensToRedeem[%d]: call failed",
-				resolvedAdapter.Adapter.Hex(),
-				req.tokenIndex,
-			)
-		}
-		tokenIn, unpackErr := llAdapter.UnpackTokensToRedeem(call.ReturnData)
+		tokenIn, unpackErr := chain.Decode(call, llAdapter.UnpackTokensToRedeem)
 		if unpackErr != nil {
 			return nil, errors.Errorf(
 				"liquidlane: resolve adapter %s tokensToRedeem[%d]: %w",
@@ -274,19 +227,13 @@ func (r *Reader) readPaused(ctx context.Context, adapters []common.Address) (map
 	for i, address := range adapters {
 		calls[i] = chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackPaused()}
 	}
-	results, err := r.chain.Multicall(ctx, calls)
+	results, err := r.checkedMulticall(ctx, "paused", calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(results) != len(calls) {
-		return nil, errors.Errorf("liquidlane: paused multicall: got %d results, want %d", len(results), len(calls))
-	}
 	out := make(map[common.Address]bool, len(adapters))
 	for i, result := range results {
-		if !result.Success {
-			continue
-		}
-		paused, unpackErr := llAdapter.UnpackPaused(result.ReturnData)
+		paused, unpackErr := chain.Decode(result, llAdapter.UnpackPaused)
 		if unpackErr == nil {
 			out[adapters[i]] = paused
 		}
@@ -299,49 +246,73 @@ func (r *Reader) ReadInventory(ctx context.Context, routes []Route) ([]Inventory
 }
 
 func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero bool) ([]Inventory, error) {
-	routes = compactRoutes(routes)
-	if len(routes) == 0 {
-		return nil, nil
-	}
-	calls := make([]chain.Call, 0, len(routes)*inventoryReadsPerRoute)
-	for _, route := range routes {
-		calls = append(calls,
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
-			r.maxAssetsCall(route.Adapter, route.TokenIn),
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxRate(route.TokenIn)},
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)},
-		)
-	}
-	res, err := r.chain.Multicall(ctx, calls)
+	rows, err := r.readLiquidity(ctx, compactRoutes(routes), nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("liquidlane: inventory multicall: got %d results, want %d", len(res), len(calls))
+	out := make([]Inventory, 0, len(rows))
+	for _, row := range rows {
+		if !keepZero && (row.capacity.Sign() <= 0 || row.price.Sign() <= 0) {
+			continue
+		}
+		out = append(out, Inventory{Route: row.route, MaxAssets: row.capacity, MaxRate: row.price, AdapterMinDiscount: row.discount})
 	}
-	out := make([]Inventory, 0, len(routes))
-	for i, route := range routes {
-		base := i * inventoryReadsPerRoute
-		paused, maxAssetsRes, maxRateRes, minDiscountRes := res[base], res[base+1], res[base+2], res[base+3]
-		if !unpaused(paused) {
+	return out, nil
+}
+
+type routeLiquidity struct {
+	route                     Route
+	capacity, discount, price *big.Int
+}
+
+// Inventory and execution use the same pause, capacity and discount observation.
+// Only the pricing call differs: a fixed rate for inventory, an amount-specific quote for execution.
+func (r *Reader) readLiquidity(ctx context.Context, routes []Route, amountIn *big.Int) ([]routeLiquidity, error) {
+	if len(routes) == 0 {
+		return nil, nil
+	}
+	const width = 4
+	calls := make([]chain.Call, 0, len(routes)*width)
+	for _, route := range routes {
+		pricing := llAdapter.PackGetMaxRate(route.TokenIn)
+		if amountIn != nil {
+			pricing = llAdapter.PackGetAmountOut(route.TokenIn, amountIn)
+		}
+		calls = append(calls,
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
+			r.maxAssetsCall(route.Adapter, route.TokenIn),
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: pricing},
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)})
+	}
+	results, err := r.checkedMulticall(ctx, "liquidity", calls)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]routeLiquidity, 0, len(routes))
+	for index, route := range routes {
+		row := results[index*width : (index+1)*width]
+		if !unpaused(row[0]) {
 			continue
 		}
-		if !maxAssetsRes.Success || !maxRateRes.Success || !minDiscountRes.Success {
+		capacity, capErr := chain.Decode(row[1], llAdapter.UnpackGetMaxAssets)
+		discount, discountErr := chain.Decode(row[3], llAdapter.UnpackMinDiscount)
+		if capErr != nil || discountErr != nil || capacity == nil || discount == nil ||
+			capacity.Sign() < 0 || discount.Sign() < 0 || discount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
 			continue
 		}
-		maxAssets, aerr := llAdapter.UnpackGetMaxAssets(maxAssetsRes.ReturnData)
-		maxRate, rerr := llAdapter.UnpackGetMaxRate(maxRateRes.ReturnData)
-		minDiscount, derr := llAdapter.UnpackMinDiscount(minDiscountRes.ReturnData)
-		if aerr != nil || rerr != nil || derr != nil || maxAssets == nil || maxRate == nil || minDiscount == nil ||
-			minDiscount.Sign() < 0 || minDiscount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
+		item := routeLiquidity{route: route, capacity: capacity, discount: discount}
+		var price *big.Int
+		var priceErr error
+		if amountIn == nil {
+			price, priceErr = chain.Decode(row[2], llAdapter.UnpackGetMaxRate)
+		} else {
+			price, priceErr = chain.Decode(row[2], llAdapter.UnpackGetAmountOut)
+		}
+		if priceErr != nil || price == nil || price.Sign() < 0 {
 			continue
 		}
-		if !keepZero && (maxAssets.Sign() <= 0 || maxRate.Sign() <= 0) {
-			continue
-		}
-		inventory := DirectInventory(route, maxAssets, maxRate)
-		inventory.AdapterMinDiscount = CloneBig(minDiscount)
-		out = append(out, inventory)
+		item.price = price
+		out = append(out, item)
 	}
 	return out, nil
 }
@@ -353,357 +324,225 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	if len(routes) == 0 {
 		return nil, nil
 	}
-	type adapterRoutes struct {
-		adapter common.Address
-		vault   common.Address
-		routes  []Route
-	}
-	byAdapter := make(map[common.Address]*adapterRoutes, len(routes))
-	ordered := make([]*adapterRoutes, 0, len(routes))
+	var adapters []Route
+	var vaults []common.Address
+	seenAdapters, seenVaults := make(map[common.Address]bool), make(map[common.Address]bool)
 	for _, route := range routes {
-		entry := byAdapter[route.Adapter]
-		if entry == nil {
-			entry = &adapterRoutes{adapter: route.Adapter, vault: route.Vault}
-			byAdapter[route.Adapter] = entry
-			ordered = append(ordered, entry)
+		if !seenAdapters[route.Adapter] {
+			adapters = append(adapters, route)
+			seenAdapters[route.Adapter] = true
 		}
-		entry.routes = append(entry.routes, route)
-	}
-
-	headCalls := make([]chain.Call, 0, len(ordered)*2)
-	for _, entry := range ordered {
-		headCalls = append(headCalls,
-			chain.Call{Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
-			chain.Call{Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
-		)
-	}
-	vaults := make([]common.Address, 0, len(ordered))
-	seenVaults := make(map[common.Address]bool, len(ordered))
-	for _, entry := range ordered {
-		if !seenVaults[entry.vault] {
-			seenVaults[entry.vault] = true
-			vaults = append(vaults, entry.vault)
+		if !seenVaults[route.Vault] {
+			vaults = append(vaults, route.Vault)
+			seenVaults[route.Vault] = true
 		}
+	}
+	calls := make([]chain.Call, 0, 2*(len(adapters)+len(vaults)))
+	for _, route := range adapters {
+		calls = append(calls,
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackOwner()},
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMarketMaker()})
 	}
 	for _, vault := range vaults {
-		headCalls = append(headCalls,
+		calls = append(calls,
 			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackFreeAssets()},
-			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackWithdrawable()},
-		)
+			chain.Call{Target: vault, AllowFailure: true, Data: vaultV2b.PackWithdrawable()})
 	}
-	headResults, err := r.chain.Multicall(ctx, headCalls)
+	results, err := r.checkedMulticall(ctx, "gas state head", calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(headResults) != len(headCalls) {
-		return nil, errors.Errorf("liquidlane: gas state head multicall: got %d results, want %d", len(headResults), len(headCalls))
-	}
-
-	states := make(map[common.Address]*gasAdapterState, len(ordered))
-	for i, entry := range ordered {
-		base := i * 2
-		ownerRes, makerRes := headResults[base], headResults[base+1]
-		if !ownerRes.Success || !makerRes.Success {
-			continue
-		}
-		owner, ownerErr := llAdapter.UnpackOwner(ownerRes.ReturnData)
-		marketMaker, makerErr := llAdapter.UnpackMarketMaker(makerRes.ReturnData)
+	out := &liquidlanegas.Snapshot{Adapters: make(map[common.Address]*liquidlanegas.AdapterState), Vaults: make(map[common.Address]*liquidlanegas.VaultState)}
+	holders := make(map[common.Address][]common.Address)
+	for index, route := range adapters {
+		ownerResult, makerResult := results[2*index], results[2*index+1]
+		owner, ownerErr := chain.Decode(ownerResult, llAdapter.UnpackOwner)
+		maker, makerErr := chain.Decode(makerResult, llAdapter.UnpackMarketMaker)
 		if ownerErr != nil || makerErr != nil {
 			continue
 		}
-		states[entry.adapter] = &gasAdapterState{
-			owner: owner, marketMaker: marketMaker,
-			state: &liquidlanegas.AdapterState{
-				Vault: entry.vault, Acquire: make(map[common.Address]*big.Int, len(entry.routes)),
-			},
+		holders[route.Adapter] = []common.Address{owner}
+		// The zero market-maker key is valid; deduplicate equality, never nonzero-ness.
+		if maker != owner {
+			holders[route.Adapter] = append(holders[route.Adapter], maker)
 		}
+		out.Adapters[route.Adapter] = &liquidlanegas.AdapterState{Vault: route.Vault, Acquire: make(map[common.Address]*big.Int)}
 	}
-	vaultStates := make(map[common.Address]*liquidlanegas.VaultState, len(vaults))
-	vaultBase := len(ordered) * 2
-	for i, vault := range vaults {
-		base := vaultBase + i*2
-		freeRes, withdrawableRes := headResults[base], headResults[base+1]
-		if !freeRes.Success || !withdrawableRes.Success {
+	for index, vault := range vaults {
+		base := 2 * (len(adapters) + index)
+		freeResult, withdrawResult := results[base], results[base+1]
+		free, freeErr := chain.Decode(freeResult, vaultV2b.UnpackFreeAssets)
+		withdrawable, withdrawErr := chain.Decode(withdrawResult, vaultV2b.UnpackWithdrawable)
+		if freeErr != nil || withdrawErr != nil || free == nil || withdrawable == nil {
 			continue
 		}
-		freeAssets, freeErr := vaultV2b.UnpackFreeAssets(freeRes.ReturnData)
-		withdrawable, withdrawableErr := vaultV2b.UnpackWithdrawable(withdrawableRes.ReturnData)
-		if freeErr != nil || withdrawableErr != nil || freeAssets == nil || withdrawable == nil {
-			continue
-		}
-		vaultStates[vault] = &liquidlanegas.VaultState{
-			FreeAssets: new(big.Int).Set(freeAssets), Withdrawable: new(big.Int).Set(withdrawable),
-		}
+		out.Vaults[vault] = &liquidlanegas.VaultState{FreeAssets: free, Withdrawable: withdrawable}
 	}
-
-	type acquireRead struct {
-		adapter common.Address
-		token   common.Address
-		holder  common.Address
-	}
-	acquireCalls := make([]chain.Call, 0, len(routes)*2)
-	reads := make([]acquireRead, 0, len(routes)*2)
-	for _, entry := range ordered {
-		state := states[entry.adapter]
-		if state == nil {
-			continue
-		}
-		for _, route := range entry.routes {
-			acquireCalls = append(acquireCalls, chain.Call{
-				Target: entry.adapter, AllowFailure: true, Data: llAdapter.PackAcquireBalance(route.TokenIn, state.owner),
-			})
-			reads = append(reads, acquireRead{adapter: entry.adapter, token: route.TokenIn, holder: state.owner})
-			if state.marketMaker != state.owner {
-				acquireCalls = append(acquireCalls, chain.Call{
-					Target: entry.adapter, AllowFailure: true,
-					Data: llAdapter.PackAcquireBalance(route.TokenIn, state.marketMaker),
-				})
-				reads = append(reads, acquireRead{
-					adapter: entry.adapter,
-					token:   route.TokenIn,
-					holder:  state.marketMaker,
-				})
-			}
+	calls = nil
+	var owners []Route
+	for _, route := range routes {
+		for _, holder := range holders[route.Adapter] {
+			calls = append(calls, chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackAcquireBalance(route.TokenIn, holder)})
+			owners = append(owners, route)
 		}
 	}
-	if len(acquireCalls) == 0 {
-		return gasSnapshot(states, vaultStates), nil
+	if len(calls) == 0 {
+		return out, nil
 	}
-	acquireResults, err := r.chain.Multicall(ctx, acquireCalls)
+	results, err = r.checkedMulticall(ctx, "gas state acquire", calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(acquireResults) != len(acquireCalls) {
-		return nil, errors.Errorf("liquidlane: gas state acquire multicall: got %d results, want %d", len(acquireResults), len(acquireCalls))
-	}
-	for i, read := range reads {
-		result := acquireResults[i]
-		if !result.Success {
+	for index, result := range results {
+		amount, err := chain.Decode(result, llAdapter.UnpackAcquireBalance)
+		if err != nil || amount == nil || amount.Sign() < 0 {
 			continue
 		}
-		amount, unpackErr := llAdapter.UnpackAcquireBalance(result.ReturnData)
-		if unpackErr != nil || amount == nil || amount.Sign() < 0 {
-			continue
+		route := owners[index]
+		balances := out.Adapters[route.Adapter].Acquire
+		if balances[route.TokenIn] == nil {
+			balances[route.TokenIn] = new(big.Int)
 		}
-		state := states[read.adapter]
-		if state == nil {
-			return nil, errors.Errorf("liquidlane: missing gas state for adapter %s", read.adapter.Hex())
-		}
-		if state.state.Acquire[read.token] == nil {
-			state.state.Acquire[read.token] = new(big.Int)
-		}
-		state.state.Acquire[read.token].Add(state.state.Acquire[read.token], amount)
+		balances[route.TokenIn].Add(balances[route.TokenIn], amount)
 	}
-	return gasSnapshot(states, vaultStates), nil
+	return out, nil
 }
 
-func gasSnapshot(
-	in map[common.Address]*gasAdapterState,
-	vaults map[common.Address]*liquidlanegas.VaultState,
-) *liquidlanegas.Snapshot {
-	adapters := make(map[common.Address]*liquidlanegas.AdapterState, len(in))
-	for adapter, state := range in {
-		adapters[adapter] = state.state
+func (r *Reader) checkedMulticall(ctx context.Context, operation string, calls []chain.Call) ([]chain.CallResult, error) {
+	results, err := r.chain.Multicall(ctx, calls)
+	if err != nil {
+		return nil, err
 	}
-	return &liquidlanegas.Snapshot{Adapters: adapters, Vaults: vaults}
+	if len(results) != len(calls) {
+		return nil, errors.Errorf("liquidlane: %s multicall: got %d results, want %d", operation, len(results), len(calls))
+	}
+	return results, nil
 }
 
 // ReadAdapterSnapshot reads one complete LiquidLane adapter view for solvers that consume all routes.
-func (r *Reader) ReadAdapterSnapshot(
-	ctx context.Context,
-	adapterAddress common.Address,
-	filler common.Address,
-) (AdapterSnapshot, error) {
-	routes, err := r.ResolveRoutes(ctx, []common.Address{adapterAddress})
+func (r *Reader) ReadAdapterSnapshot(ctx context.Context, address, filler common.Address) (AdapterSnapshot, error) {
+	addresses := []common.Address{address}
+	routes, err := r.ResolveRoutes(ctx, addresses)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
 	if len(routes) == 0 {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter has no resolved routes")
 	}
-	pausedByAdapter, err := r.readPaused(ctx, []common.Address{adapterAddress})
+	paused, err := r.readPaused(ctx, addresses)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
-	paused, pausedResolved := pausedByAdapter[adapterAddress]
-	if !pausedResolved {
+	isPaused, known := paused[address]
+	if !known {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter pause state unresolved")
 	}
-	auth, err := r.ReadAuth(ctx, []common.Address{adapterAddress}, filler)
+	auth, err := r.ReadAuth(ctx, addresses, filler)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
-	if len(auth) != 1 || auth[0].Adapter != adapterAddress {
+	if len(auth) != 1 || auth[0].Adapter != address {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter authorization unresolved")
 	}
-	gasState, err := r.ReadGasSnapshot(ctx, routes)
+	gas, err := r.ReadGasSnapshot(ctx, routes)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
-	adapterState := gasState.Adapters[adapterAddress]
-	vaultState := gasState.Vaults[routes[0].Vault]
-	if adapterState == nil || vaultState == nil {
+	adapter, vault := gas.Adapters[address], gas.Vaults[routes[0].Vault]
+	if adapter == nil || vault == nil {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter liquidity state unresolved")
 	}
-
-	inventoryByRoute := make(map[RouteID]Inventory, len(routes))
-	if paused {
-		for _, route := range routes {
-			inventoryByRoute[route.ID] = DirectInventory(route, new(big.Int), new(big.Int))
+	inventory := make(map[RouteID]Inventory)
+	if !isPaused {
+		items, err := r.readInventory(ctx, routes, true)
+		if err != nil {
+			return AdapterSnapshot{}, err
 		}
-	} else {
-		inventory, inventoryErr := r.readInventory(ctx, routes, true)
-		if inventoryErr != nil {
-			return AdapterSnapshot{}, inventoryErr
-		}
-		for _, item := range inventory {
-			inventoryByRoute[item.ID] = item
-		}
-		if len(inventoryByRoute) != len(routes) {
-			return AdapterSnapshot{}, errors.New("liquidlane: adapter inventory unresolved")
+		for _, item := range items {
+			inventory[item.ID] = item
 		}
 	}
-
 	first := routes[0]
-	out := AdapterSnapshot{
-		Adapter: Adapter{
-			Adapter: first.Adapter, Vault: first.Vault,
-			TokenOut: first.TokenOut, TokenOutDecimals: first.TokenOutDecimals,
-		},
-		Paused: paused, Authorized: auth[0].Authorized,
-		FreeAssets: CloneBig(vaultState.FreeAssets), Withdrawable: CloneBig(vaultState.Withdrawable),
-		Routes: make([]RouteSnapshot, 0, len(routes)),
+	snapshot := AdapterSnapshot{Adapter: Adapter{Adapter: first.Adapter, Vault: first.Vault, TokenOut: first.TokenOut, TokenOutDecimals: first.TokenOutDecimals},
+		Paused: isPaused, Authorized: auth[0].Authorized, FreeAssets: bigmath.Clone(vault.FreeAssets), Withdrawable: bigmath.Clone(vault.Withdrawable),
+		Routes: make([]RouteSnapshot, len(routes))}
+	for index, route := range routes {
+		row := RouteSnapshot{Route: route, AcquireBalance: bigmath.Clone(adapter.Acquire[route.TokenIn]), MaxAssets: new(big.Int), MaxRate: new(big.Int)}
+		if !isPaused {
+			item, present := inventory[route.ID]
+			if !present {
+				return AdapterSnapshot{}, errors.New("liquidlane: adapter inventory unresolved")
+			}
+			row.MaxAssets, row.MaxRate = bigmath.Clone(item.MaxAssets), bigmath.Clone(item.MaxRate)
+		}
+		snapshot.Routes[index] = row
 	}
-	for _, route := range routes {
-		item := inventoryByRoute[route.ID]
-		out.Routes = append(out.Routes, RouteSnapshot{
-			Route:     route,
-			MaxAssets: CloneBig(item.MaxAssets), MaxRate: CloneBig(item.MaxRate),
-			AcquireBalance: CloneBig(adapterState.Acquire[route.TokenIn]),
-		})
-	}
-	return out, nil
+	return snapshot, nil
 }
 
-func (r *Reader) ReadFillQuotes(
-	ctx context.Context,
-	routes []Route,
-	tokenIn common.Address,
-	amountIn *big.Int,
-) ([]FillQuote, error) {
+func (r *Reader) ReadFillQuotes(ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int) ([]FillQuote, error) {
 	if tokenIn == (common.Address{}) || amountIn == nil || amountIn.Sign() <= 0 {
 		return nil, nil
 	}
-	candidates := make([]Route, 0, len(routes))
+	var candidates []Route
 	for _, route := range compactRoutes(routes) {
 		if route.TokenIn == tokenIn {
 			candidates = append(candidates, route)
 		}
 	}
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	calls := make([]chain.Call, 0, len(candidates)*fillReadsPerRoute)
-	for _, route := range candidates {
-		calls = append(calls,
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
-			r.maxAssetsCall(route.Adapter, route.TokenIn),
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, amountIn)},
-			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)},
-		)
-	}
-	res, err := r.chain.Multicall(ctx, calls)
+	rows, err := r.readLiquidity(ctx, candidates, amountIn)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("liquidlane: fill multicall: got %d results, want %d", len(res), len(calls))
-	}
-	out := make([]FillQuote, 0, len(candidates))
-	for i, route := range candidates {
-		base := i * fillReadsPerRoute
-		paused, maxAssetsRes, amountOutRes, discountRes := res[base], res[base+1], res[base+2], res[base+3]
-		if !unpaused(paused) {
+	out := make([]FillQuote, 0, len(rows))
+	for _, row := range rows {
+		if row.capacity.Sign() <= 0 {
 			continue
 		}
-		if !maxAssetsRes.Success || !amountOutRes.Success || !discountRes.Success {
+		amountOut := AmountOutAfterDiscount(row.price, row.discount)
+		if amountOut.Sign() <= 0 {
 			continue
 		}
-		maxAssets, aerr := llAdapter.UnpackGetMaxAssets(maxAssetsRes.ReturnData)
-		grossAmountOut, oerr := llAdapter.UnpackGetAmountOut(amountOutRes.ReturnData)
-		discount, derr := llAdapter.UnpackMinDiscount(discountRes.ReturnData)
-		if aerr != nil || oerr != nil || derr != nil || maxAssets.Sign() <= 0 || grossAmountOut.Sign() <= 0 ||
-			discount.Sign() < 0 || discount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
-			continue
-		}
-		maxAmountOut := AmountOutAfterDiscount(grossAmountOut, discount)
-		if maxAmountOut.Sign() <= 0 {
-			continue
-		}
-		maxRate := RateForAmountOut(maxAmountOut, amountIn, route.TokenInDecimals, route.TokenOutDecimals)
-		inventory := DirectInventory(route, maxAssets, maxRate)
-		inventory.AdapterMinDiscount = CloneBig(discount)
-		out = append(out, FillQuote{
-			Inventory:      inventory,
-			AmountIn:       CloneBig(amountIn),
-			GrossAmountOut: CloneBig(grossAmountOut),
-			MaxAmountOut:   maxAmountOut,
-			MinDiscount:    CloneBig(discount),
-		})
+		rate := RateForAmountOut(amountOut, amountIn, row.route.TokenInDecimals, row.route.TokenOutDecimals)
+		inventory := Inventory{Route: row.route, MaxAssets: row.capacity, MaxRate: rate, AdapterMinDiscount: bigmath.Clone(row.discount)}
+		out = append(out, FillQuote{Inventory: inventory, AmountIn: bigmath.Clone(amountIn),
+			GrossAmountOut: row.price, MaxAmountOut: amountOut, MinDiscount: row.discount})
 	}
 	return out, nil
 }
 
-func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler common.Address) ([]Inventory, error) {
-	inv = compactInventory(inv)
-	if len(inv) == 0 {
-		return nil, nil
-	}
-	adapters := make([]common.Address, 0, len(inv))
-	for _, item := range inv {
-		adapters = append(adapters, item.Adapter)
-	}
-	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Inventory, 0, len(inv))
-	for _, item := range inv {
-		if authorized[item.Adapter] {
-			out = append(out, item)
-		}
-	}
-	return out, nil
+func (r *Reader) FilterAuthorized(ctx context.Context, inventory []Inventory, filler common.Address) ([]Inventory, error) {
+	return filterAuthorized(ctx, r, compactInventory(inventory), filler, func(item Inventory) common.Address { return item.Adapter })
 }
 
 // FilterAuthorizedRoutes filters by the adapter-wide marketMaker/owner/isFiller authorization and
 // preserves every non-zero-adapter input route. It intentionally accepts adapter-only projections so
 // startup validation does not depend on whether a solver has already resolved token-pair metadata.
 func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, filler common.Address) ([]Route, error) {
-	if len(routes) == 0 {
-		return nil, nil
-	}
-	adapters := make([]common.Address, 0, len(routes))
-	for _, route := range routes {
-		if route.Adapter != (common.Address{}) {
-			adapters = append(adapters, route.Adapter)
+	return filterAuthorized(ctx, r, routes, filler, func(route Route) common.Address { return route.Adapter })
+}
+
+func filterAuthorized[T any](ctx context.Context, reader *Reader, values []T, filler common.Address, adapterOf func(T) common.Address) ([]T, error) {
+	addresses := make([]common.Address, 0, len(values))
+	for _, value := range values {
+		if address := adapterOf(value); address != (common.Address{}) {
+			addresses = append(addresses, address)
 		}
 	}
-	if len(adapters) == 0 {
+	if len(addresses) == 0 {
 		return nil, nil
 	}
-	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
+	authorized, err := reader.authorizedAdapters(ctx, addresses, filler)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Route, 0, len(routes))
-	for _, route := range routes {
-		if route.Adapter != (common.Address{}) && authorized[route.Adapter] {
-			out = append(out, route)
+	selected := make([]T, 0, len(values))
+	for _, value := range values {
+		if authorized[adapterOf(value)] {
+			selected = append(selected, value)
 		}
 	}
-	return out, nil
+	return selected, nil
 }
 
 func (r *Reader) authorizedAdapters(
@@ -722,91 +561,57 @@ func (r *Reader) authorizedAdapters(
 	return authorized, nil
 }
 
-func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler common.Address) ([]Auth, error) {
-	adapters = dedupeAddresses(adapters)
-	if len(adapters) == 0 || filler == (common.Address{}) {
+func (r *Reader) ReadAuth(ctx context.Context, addresses []common.Address, filler common.Address) ([]Auth, error) {
+	addresses = dedupeAddresses(addresses)
+	if filler == (common.Address{}) || len(addresses) == 0 {
 		return nil, nil
 	}
-	calls := make([]chain.Call, 0, len(adapters)*2)
-	for _, adapterAddr := range adapters {
-		calls = append(calls,
-			chain.Call{Target: adapterAddr, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
-			chain.Call{Target: adapterAddr, AllowFailure: true, Data: llAdapter.PackOwner()},
-		)
+	calls := make([]chain.Call, 0, 2*len(addresses))
+	for _, address := range addresses {
+		calls = append(calls, chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackMarketMaker()},
+			chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackOwner()})
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	rows, err := r.checkedMulticall(ctx, "authorization", calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("liquidlane: authorization multicall: got %d results, want %d", len(res), len(calls))
-	}
-
-	auths := make([]Auth, len(adapters))
-	resolved := make([]bool, len(adapters))
-	var delegatedChecks []int
-	for i := range adapters {
-		mm, ow := res[i*2], res[i*2+1]
-		if !mm.Success || !ow.Success {
+	authorized := make([]Auth, 0, len(addresses))
+	var delegated []int
+	var checks []chain.Call
+	for index, address := range addresses {
+		makerResult, ownerResult := rows[2*index], rows[2*index+1]
+		maker, makerErr := chain.Decode(makerResult, llAdapter.UnpackMarketMaker)
+		owner, ownerErr := chain.Decode(ownerResult, llAdapter.UnpackOwner)
+		if makerErr != nil || ownerErr != nil {
 			continue
 		}
-		marketMaker, e1 := llAdapter.UnpackMarketMaker(mm.ReturnData)
-		owner, e2 := llAdapter.UnpackOwner(ow.ReturnData)
-		if e1 != nil || e2 != nil {
-			continue
+		entry := Auth{Adapter: address, MarketMaker: maker, Owner: owner, Authorized: filler == maker || filler == owner}
+		if !entry.Authorized {
+			delegated = append(delegated, len(authorized))
+			// Zero marketMaker remains a valid delegation key; never replace it with owner.
+			checks = append(checks, chain.Call{Target: address, AllowFailure: true, Data: llAdapter.PackIsFiller(maker, filler)})
 		}
-		auths[i] = Auth{Adapter: adapters[i], MarketMaker: marketMaker, Owner: owner}
-		resolved[i] = true
-		auths[i].Authorized = marketMaker == filler || owner == filler
-		if !auths[i].Authorized {
-			delegatedChecks = append(delegatedChecks, i)
+		authorized = append(authorized, entry)
+	}
+	if len(checks) == 0 {
+		return authorized, nil
+	}
+	rows, err = r.checkedMulticall(ctx, "filler authorization", checks)
+	if err != nil {
+		return nil, err
+	}
+	for index, row := range rows {
+		allowed, err := chain.Decode(row, llAdapter.UnpackIsFiller)
+		if err == nil {
+			entry := &authorized[delegated[index]]
+			entry.Authorized, entry.IsFiller = allowed, allowed
 		}
 	}
-
-	if len(delegatedChecks) > 0 {
-		delegationCalls := make([]chain.Call, len(delegatedChecks))
-		for j, i := range delegatedChecks {
-			// Delegation is keyed by the adapter's exact current marketMaker value; zero is valid.
-			delegationCalls[j] = chain.Call{
-				Target: adapters[i], AllowFailure: true,
-				Data: llAdapter.PackIsFiller(auths[i].MarketMaker, filler),
-			}
-		}
-		delegationResults, err := r.chain.Multicall(ctx, delegationCalls)
-		if err != nil {
-			return nil, err
-		}
-		if len(delegationResults) != len(delegationCalls) {
-			return nil, errors.Errorf(
-				"liquidlane: filler authorization multicall: got %d results, want %d",
-				len(delegationResults),
-				len(delegationCalls),
-			)
-		}
-		for j, i := range delegatedChecks {
-			if delegationResults[j].Success {
-				if ok, derr := llAdapter.UnpackIsFiller(delegationResults[j].ReturnData); derr == nil {
-					auths[i].IsFiller = ok
-					auths[i].Authorized = ok
-				}
-			}
-		}
-	}
-
-	out := make([]Auth, 0, len(auths))
-	for i, item := range auths {
-		if resolved[i] {
-			out = append(out, item)
-		}
-	}
-	return out, nil
+	return authorized, nil
 }
 
 func unpaused(result chain.CallResult) bool {
-	if !result.Success {
-		return false
-	}
-	paused, err := llAdapter.UnpackPaused(result.ReturnData)
+	paused, err := chain.Decode(result, llAdapter.UnpackPaused)
 	return err == nil && !paused
 }
 
@@ -815,22 +620,13 @@ func (r *Reader) readTokenCounts(ctx context.Context, adapters []Adapter) ([]int
 	for i, a := range adapters {
 		calls[i] = chain.Call{Target: a.Adapter, AllowFailure: true, Data: llAdapter.PackGetTokensToRedeemLength()}
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.checkedMulticall(ctx, "tokensToRedeem length", calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != len(calls) {
-		return nil, errors.Errorf("liquidlane: tokensToRedeem length multicall: got %d results, want %d", len(res), len(calls))
-	}
 	out := make([]int, len(adapters))
 	for i, call := range res {
-		if !call.Success {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s tokensToRedeem length: call failed",
-				adapters[i].Adapter.Hex(),
-			)
-		}
-		n, unpackErr := llAdapter.UnpackGetTokensToRedeemLength(call.ReturnData)
+		n, unpackErr := chain.Decode(call, llAdapter.UnpackGetTokensToRedeemLength)
 		if unpackErr != nil {
 			return nil, errors.Errorf(
 				"liquidlane: resolve adapter %s tokensToRedeem length: %w",
@@ -851,12 +647,12 @@ func (r *Reader) readTokenCounts(ctx context.Context, adapters []Adapter) ([]int
 				adapters[i].Adapter.Hex(),
 			)
 		}
-		if n.Cmp(big.NewInt(int64(r.maxTokensPerAdapter))) > 0 {
+		if n.Cmp(big.NewInt(int64(DefaultMaxTokensPerAdapter))) > 0 {
 			return nil, errors.Errorf(
 				"liquidlane: resolve adapter %s tokensToRedeem length %s exceeds cap %d",
 				adapters[i].Adapter.Hex(),
 				n,
-				r.maxTokensPerAdapter,
+				DefaultMaxTokensPerAdapter,
 			)
 		}
 		out[i] = int(n.Int64())

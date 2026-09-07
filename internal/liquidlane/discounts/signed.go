@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
@@ -38,6 +40,11 @@ func ValidateSigned(
 ) (*big.Int, error) {
 	if err := ValidateSelection(signed, selection, validAfter); err != nil {
 		return nil, err
+	}
+	if base.Adapter != selection.Adapter || base.TokenIn != selection.TokenIn ||
+		(selection.TokenOut != (common.Address{}) && base.TokenOut != selection.TokenOut) ||
+		(selection.AmountIn != nil && (base.AmountIn == nil || base.AmountIn.Cmp(selection.AmountIn) != 0)) {
+		return nil, errors.New("resolved discount current quote does not match selected route")
 	}
 	if base.GrossAmountOut == nil || base.GrossAmountOut.Sign() <= 0 ||
 		base.MinDiscount == nil || base.MinDiscount.Sign() < 0 {
@@ -77,24 +84,6 @@ func ValidateSelection(signed *Signed, selection Selection, validAfter time.Time
 	return nil
 }
 
-// ResolveAndValidate fetches fresh signed terms and binds them to a selected route and current quote.
-func ResolveAndValidate(
-	ctx context.Context,
-	provider Provider,
-	selection Selection,
-	base liquidlane.FillQuote,
-	validAfter time.Time,
-) (*Signed, error) {
-	if provider == nil {
-		return nil, errors.New("discount route cannot be resolved")
-	}
-	resolved, err := provider.Resolve(ctx, selection.DiscountID.Hex())
-	if err != nil {
-		return nil, err
-	}
-	return ParseAndValidate(resolved, selection, base, validAfter)
-}
-
 // ParseAndValidate parses a resolved backend payload and validates it against current route facts.
 func ParseAndValidate(
 	resolved *Resolved,
@@ -120,6 +109,9 @@ func ResolveSelected(
 	physical []liquidlane.FillQuote,
 	validAfter time.Time,
 ) (*Signed, error) {
+	if provider == nil {
+		return nil, errors.New("discount route cannot be resolved")
+	}
 	base, ok := FindFillQuote(
 		physical,
 		selection.Adapter,
@@ -130,59 +122,63 @@ func ResolveSelected(
 	if !ok {
 		return nil, errors.New("resolved discount has no current on-chain quote")
 	}
-	return ResolveAndValidate(ctx, provider, selection, base, validAfter)
+	resolved, err := provider.Resolve(ctx, selection.DiscountID.Hex())
+	if err != nil {
+		return nil, err
+	}
+	return ParseAndValidate(resolved, selection, base, validAfter)
 }
 
 // RefreshFillQuotes rebinds resolved discount candidates to a newer physical adapter snapshot.
-func RefreshFillQuotes(
-	candidates []liquidlane.FillQuote,
-	resolved map[common.Hash]*Signed,
-	physical []liquidlane.FillQuote,
-	now time.Time,
-) ([]liquidlane.FillQuote, []OfferIssue) {
-	baseByRoute := make(map[liquidlane.RouteID]liquidlane.FillQuote, len(physical))
-	for _, base := range physical {
-		baseByRoute[base.ID] = base
+func RefreshFillQuotes(candidates []liquidlane.FillQuote, resolved map[common.Hash]*Signed,
+	physical []liquidlane.FillQuote, now time.Time) ([]liquidlane.FillQuote, []OfferIssue) {
+	current := make(map[liquidlane.RouteID]liquidlane.FillQuote, len(physical))
+	for _, quote := range physical {
+		current[quote.ID] = quote
 	}
-	quotes := make([]liquidlane.FillQuote, 0, len(candidates))
+	refreshed := make([]liquidlane.FillQuote, 0, len(candidates))
 	issues := make([]OfferIssue, 0)
 	for _, candidate := range candidates {
 		if candidate.DiscountID == nil {
 			continue
 		}
 		signed := resolved[*candidate.DiscountID]
-		base, ok := baseByRoute[candidate.ID]
-		if signed == nil || !ok {
+		base, exists := current[candidate.ID]
+		if signed == nil || !exists {
 			continue
 		}
-		if candidate.MaxRate == nil || base.MaxRate == nil || candidate.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: candidate.DiscountID.Hex(),
-				Err:        errors.New("resolved discount rate exceeds refreshed adapter max rate"),
-			})
-			continue
-		}
-		candidate.MaxAssets = minPositive(candidate.MaxAssets, base.MaxAssets)
-		if candidate.MaxAssets.Sign() <= 0 {
-			continue
-		}
-		maxAmountOut, err := ValidateSigned(signed, Selection{
-			DiscountID: *candidate.DiscountID,
-			Adapter:    candidate.Adapter,
-			TokenIn:    candidate.TokenIn,
-		}, base, now)
+		quote, err := rebindFillQuote(candidate, signed, base, now)
 		if err != nil {
 			issues = append(issues, OfferIssue{DiscountID: candidate.DiscountID.Hex(), Err: err})
 			continue
 		}
-		candidate.AmountIn = liquidlane.CloneBig(base.AmountIn)
-		candidate.GrossAmountOut = liquidlane.CloneBig(base.GrossAmountOut)
-		candidate.MaxAmountOut = maxAmountOut
-		candidate.MinDiscount = liquidlane.CloneBig(base.MinDiscount)
-		candidate.ValidUntil = ValidUntil(signed)
-		quotes = append(quotes, candidate)
+		if quote != nil {
+			refreshed = append(refreshed, *quote)
+		}
 	}
-	return quotes, issues
+	return refreshed, issues
+}
+
+func rebindFillQuote(candidate liquidlane.FillQuote, signed *Signed, base liquidlane.FillQuote, now time.Time) (*liquidlane.FillQuote, error) {
+	if candidate.MaxRate == nil || base.MaxRate == nil || candidate.MaxRate.Cmp(base.MaxRate) > 0 {
+		return nil, errors.New("resolved discount rate exceeds refreshed adapter max rate")
+	}
+	capacity := minPositive(candidate.MaxAssets, base.MaxAssets)
+	if capacity.Sign() <= 0 {
+		return nil, nil
+	}
+	amount, err := ValidateSigned(signed, Selection{DiscountID: *candidate.DiscountID,
+		Adapter: candidate.Adapter, TokenIn: candidate.TokenIn, TokenOut: candidate.TokenOut}, base, now)
+	if err != nil {
+		return nil, err
+	}
+	// All physical observations come from this refresh. Only the offered capacity,
+	// selected rate and signed identity survive from the earlier candidate.
+	base.MaxAssets, base.MaxRate = capacity, bigmath.Clone(candidate.MaxRate)
+	base.DiscountID = liquidlane.CloneHash(candidate.DiscountID)
+	base.ValidUntil, base.MaxAmountOut = ValidUntil(signed), amount
+	base.AmountIn, base.GrossAmountOut, base.MinDiscount = bigmath.Clone(base.AmountIn), bigmath.Clone(base.GrossAmountOut), bigmath.Clone(base.MinDiscount)
+	return &base, nil
 }
 
 // FindFillQuote returns the current physical quote matching a selected route and exact amount.

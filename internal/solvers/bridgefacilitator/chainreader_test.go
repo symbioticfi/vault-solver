@@ -7,14 +7,16 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // TestCollectRequests covers best-effort request enumeration: every valid address is retained for safe
@@ -141,9 +143,7 @@ func abiEncodeAggregate3CallResults(t *testing.T, calls []chain.CallResult) []by
 		{Name: "success", Type: "bool"},
 		{Name: "returnData", Type: "bytes"},
 	})
-	if err != nil {
-		t.Fatalf("abi.NewType tuple[]: %v", err)
-	}
+	testcheck.NoError(t, err, "abi.NewType tuple[]: %v")
 	type result struct {
 		Success    bool
 		ReturnData []byte
@@ -153,9 +153,7 @@ func abiEncodeAggregate3CallResults(t *testing.T, calls []chain.CallResult) []by
 		results[i] = result{Success: call.Success, ReturnData: call.ReturnData}
 	}
 	encoded, err := abi.Arguments{{Type: resultTuple}}.Pack(results)
-	if err != nil {
-		t.Fatalf("abi args.Pack: %v", err)
-	}
+	testcheck.NoError(t, err, "abi args.Pack: %v")
 	return encoded
 }
 
@@ -174,39 +172,27 @@ func abiEncodeAggregate3Results(t *testing.T, inners ...[]byte) []byte {
 func abiEncodeAddress(t *testing.T, addr common.Address) []byte {
 	t.Helper()
 	addrType, err := abi.NewType("address", "", nil)
-	if err != nil {
-		t.Fatalf("abi.NewType address: %v", err)
-	}
+	testcheck.NoError(t, err, "abi.NewType address: %v")
 	enc, err := abi.Arguments{{Type: addrType}}.Pack(addr)
-	if err != nil {
-		t.Fatalf("abi address Pack: %v", err)
-	}
+	testcheck.NoError(t, err, "abi address Pack: %v")
 	return enc
 }
 
 func abiEncodeUint256(t *testing.T, value int64) []byte {
 	t.Helper()
 	uintType, err := abi.NewType("uint256", "", nil)
-	if err != nil {
-		t.Fatalf("abi.NewType uint256: %v", err)
-	}
+	testcheck.NoError(t, err, "abi.NewType uint256: %v")
 	enc, err := abi.Arguments{{Type: uintType}}.Pack(big.NewInt(value))
-	if err != nil {
-		t.Fatalf("abi uint256 Pack: %v", err)
-	}
+	testcheck.NoError(t, err, "abi uint256 Pack: %v")
 	return enc
 }
 
 func abiEncodeBool(t *testing.T, value bool) []byte {
 	t.Helper()
 	boolType, err := abi.NewType("bool", "", nil)
-	if err != nil {
-		t.Fatalf("abi.NewType bool: %v", err)
-	}
+	testcheck.NoError(t, err, "abi.NewType bool: %v")
 	enc, err := abi.Arguments{{Type: boolType}}.Pack(value)
-	if err != nil {
-		t.Fatalf("abi bool Pack: %v", err)
-	}
+	testcheck.NoError(t, err, "abi bool Pack: %v")
 	return enc
 }
 
@@ -215,109 +201,46 @@ func abiEncodeBool(t *testing.T, value bool) []byte {
 func abiEncodeBytes4(t *testing.T, b [4]byte) []byte {
 	t.Helper()
 	ty, err := abi.NewType("bytes4", "", nil)
-	if err != nil {
-		t.Fatalf("abi.NewType bytes4: %v", err)
-	}
+	testcheck.NoError(t, err, "abi.NewType bytes4: %v")
 	enc, err := abi.Arguments{{Type: ty}}.Pack(b)
-	if err != nil {
-		t.Fatalf("abi bytes4 Pack: %v", err)
-	}
+	testcheck.NoError(t, err, "abi bytes4 Pack: %v")
 	return enc
 }
 
-func TestFactoryAdapters_EmptyRegistry(t *testing.T) {
+func TestFactoryAdapters(t *testing.T) {
 	t.Parallel()
-
-	round := abiEncodeAggregate3Results(t, abiEncodeUint256(t, 0))
-	c, stop := newMulticallFakeClient(t, round)
-	defer stop()
-
-	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
-	if err != nil {
-		t.Fatalf("factoryAdapters: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("factory adapters = %v, want empty", got)
-	}
-}
-
-func TestFactoryAdapters_EnumeratesEntitiesInRegistryOrder(t *testing.T) {
-	t.Parallel()
-
-	want := []common.Address{
-		common.HexToAddress("0x00000000000000000000000000000000000000A0"),
-		common.HexToAddress("0x00000000000000000000000000000000000000A1"),
-		common.HexToAddress("0x00000000000000000000000000000000000000A2"),
-	}
-	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(len(want))))
-	entitiesRound := abiEncodeAggregate3Results(t,
-		abiEncodeAddress(t, want[0]), abiEncodeAddress(t, want[1]), abiEncodeAddress(t, want[2]),
-	)
-	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
-	defer stop()
-
-	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
-	if err != nil {
-		t.Fatalf("factoryAdapters: %v", err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("factory adapters = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
-		}
-	}
-}
-
-func TestFactoryAdapterLimitIsTwoThousand(t *testing.T) {
-	t.Parallel()
-
 	if maxFactoryEntities != 2_000 {
 		t.Fatalf("maxFactoryEntities = %d, want 2000", maxFactoryEntities)
 	}
-}
-
-func TestFactoryAdapters_AcceptsEntityCountAtLimit(t *testing.T) {
-	t.Parallel()
-
-	want := make([]common.Address, maxFactoryEntities)
-	encoded := make([][]byte, maxFactoryEntities)
-	for i := range want {
-		want[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
-		encoded[i] = abiEncodeAddress(t, want[i])
-	}
-	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, maxFactoryEntities))
-	entitiesRound := abiEncodeAggregate3Results(t, encoded...)
-	c, stop := newMulticallFakeClient(t, countRound, entitiesRound)
-	defer stop()
-
-	got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
-	if err != nil {
-		t.Fatalf("factoryAdapters: %v", err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("factory adapters length = %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("factory adapter %d = %s, want %s", i, got[i].Hex(), want[i].Hex())
-		}
-	}
-}
-
-func TestFactoryAdapters_RejectsEntityCountAboveLimit(t *testing.T) {
-	t.Parallel()
-
-	const totalEntities = 2_001
-	countRound := abiEncodeAggregate3Results(t, abiEncodeUint256(t, totalEntities))
-	c, stop := newMulticallFakeClient(t, countRound)
-	defer stop()
-
-	_, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0x00000000000000000000000000000000000000F0"))
-	want := "adapter factory entity count 2001 exceeds safety limit 2000"
-	if err == nil || err.Error() != want {
-		t.Fatalf("factoryAdapters error = %v, want %q", err, want)
+	for _, count := range []int{0, 3, 2_000, 2_001} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			t.Parallel()
+			rounds := [][]byte{abiEncodeAggregate3Results(t, abiEncodeUint256(t, int64(count)))}
+			var want []common.Address
+			if count > 0 && count <= 2_000 {
+				want = make([]common.Address, count)
+				encoded := make([][]byte, count)
+				for i := range want {
+					want[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
+					encoded[i] = abiEncodeAddress(t, want[i])
+				}
+				rounds = append(rounds, abiEncodeAggregate3Results(t, encoded...))
+			}
+			c, stop := newMulticallFakeClient(t, rounds...)
+			defer stop()
+			got, err := newReader(c, common.Address{}).factoryAdapters(t.Context(), common.HexToAddress("0xF0"))
+			if count > 2_000 {
+				const message = "adapter factory entity count 2001 exceeds safety limit 2000"
+				if err == nil || err.Error() != message {
+					t.Fatalf("factoryAdapters error = %v, want %q", err, message)
+				}
+				return
+			}
+			testcheck.NoError(t, err, "factoryAdapters: %v")
+			if !slices.Equal(got, want) {
+				t.Fatalf("factory adapters = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
@@ -353,9 +276,7 @@ func TestResolveAdapters(t *testing.T) {
 	defer stop()
 
 	got, err := newReader(c, common.Address{}).resolveAdapters(context.Background(), adapters, testProbe)
-	if err != nil {
-		t.Fatalf("resolveAdapters: %v", err)
-	}
+	testcheck.NoError(t, err, "resolveAdapters: %v")
 	want := []resolvedAdapter{
 		{vault: vault0, signer: signer0, collateral: asset0, authorized: true},
 		{vault: vault1, signer: signer1, collateral: asset1, authorized: true},
@@ -430,9 +351,7 @@ func TestResolveAdaptersDropsUnauthorized(t *testing.T) {
 	defer stop()
 
 	got, err := newReader(c, common.Address{}).resolveAdapters(context.Background(), adapters, testProbe)
-	if err != nil {
-		t.Fatalf("resolveAdapters: %v", err)
-	}
+	testcheck.NoError(t, err, "resolveAdapters: %v")
 	if got[0].err != nil || !got[0].authorized || got[0].collateral != asset0 {
 		t.Errorf("adapter 0 = {authorized:%v collateral:%s err:%v}, want authorized with collateral %s",
 			got[0].authorized, got[0].collateral.Hex(), got[0].err, asset0.Hex())

@@ -41,60 +41,46 @@ func (s *Solver) redeemAll(ctx context.Context) {
 		s.redeemReady(ctx, target, ready)
 	}
 	s.observeTargetDerivedState(threeFStateRedeemable, totalReady, complete)
-	outcome := observability.ExternalOperationSuccess
-	switch {
-	case len(s.targets) != 0 && successfulReads == 0:
-		outcome = observability.ExternalOperationError
-	case !s.targetsAuthoritative || !complete:
-		outcome = observability.ExternalOperationDegraded
-	}
-	observability.ObserveOperation(ctx, s.operations.redeemableRefresh, outcome, scanDuration)
+	observability.ObserveOperation(ctx, s.operations.redeemableRefresh,
+		s.snapshotOutcome(len(s.targets), successfulReads, complete), scanDuration)
 }
 
 // redeemReady finalizes one scan's ready Requests in a single bounded
 // adapter.multicall(finalizeRequest...) through the shared txmanager.
 func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.Address) {
-	if len(ready) == 0 {
+	count := min(len(ready), s.cfg.RedeemBatchSize)
+	if count == 0 {
 		return
 	}
-	// Bound the batch so the multicall calldata + gas stay predictable; the remainder is picked up on
-	// the next redeem-poll cycle (Requests stay active until finalized).
-	if len(ready) > s.cfg.RedeemBatchSize {
-		s.log.Info("capping redeem batch", "ready", len(ready), "limit", s.cfg.RedeemBatchSize)
-		ready = ready[:s.cfg.RedeemBatchSize]
+	log := s.log.WithValues("adapter", target.Adapter.Hex(), "requests", count)
+	if count < len(ready) {
+		log.Info("capping redeem batch", "ready", len(ready), "limit", count)
 	}
-
-	// finalizeRequest takes one request; batch them into the adapter's own multicall so all ready
-	// requests finalize in a single tx.
-	finalize := make([][]byte, len(ready))
-	for i, req := range ready {
-		finalize[i] = bfAdapter.PackFinalizeRequest(req)
+	// Requests remain active until finalized, so the next poll safely picks up
+	// the tail. Use the adapter's multicall to make each bounded batch atomic.
+	calls := make([][]byte, count)
+	for i, request := range ready[:count] {
+		calls[i] = bfAdapter.PackFinalizeRequest(request)
 	}
-	data := bfAdapter.PackMulticall(finalize)
-
-	res := s.txManager.Send(ctx, txmanager.Request{
-		Solver: Name,
-		To:     target.Adapter,
-		Data:   data,
-		Label:  "redeem",
+	result := s.txManager.Send(ctx, txmanager.Request{
+		Solver: Name, To: target.Adapter, Label: "redeem", Data: bfAdapter.PackMulticall(calls),
 	})
-	if !res.Outcome.Included() {
-		err := res.Err
+	if !result.Outcome.Included() {
+		err := result.Err
 		if err == nil {
-			err = errors.Errorf("unexpected tx outcome %q", res.Outcome)
+			err = errors.Errorf("unexpected tx outcome %q", result.Outcome)
 		}
-		s.log.Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
+		log.Error(err, "redeem: tx not included", "outcome", result.Outcome)
 		return
 	}
-	s.observeRedeemedRequests(len(ready))
-	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
-		if res.Err != nil {
-			s.log.Error(res.Err, "redeem included; confirmation tracking stopped",
-				"requests", len(ready), "tx", res.Hash.Hex())
-		} else {
-			s.log.Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
-		}
-		return
+	s.observeRedeemedRequests(count)
+	log = log.WithValues("tx", result.Hash.Hex())
+	switch {
+	case result.Outcome != txmanager.OutcomeIncludedUnconfirmed:
+		log.Info("finalized ready requests", "count", count)
+	case result.Err != nil:
+		log.Error(result.Err, "redeem included; confirmation tracking stopped")
+	default:
+		log.Info("redeem included without final confirmation")
 	}
-	s.log.Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
 }

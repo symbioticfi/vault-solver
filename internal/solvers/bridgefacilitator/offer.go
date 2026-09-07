@@ -15,33 +15,19 @@ import (
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, offer types.OfferExecution,
+	av auction, offer types.OfferExecution,
 ) (threef.CreateOfferDto, error) {
-	auction := av.dto
 	if offer.Principal == nil || offer.ExpectedReturn == nil {
-		return threef.CreateOfferDto{}, errors.Errorf("auction %v: strategy offer is missing amounts", auction.Id)
+		return threef.CreateOfferDto{}, errors.Errorf("auction %v: strategy offer is missing amounts", av.id)
 	}
 
-	domain, ok := auction.GetEip712DomainOk()
-	if !ok || domain == nil {
-		return threef.CreateOfferDto{}, errors.Errorf("auction %v: missing EIP-712 domain", auction.Id)
+	if offer.Request != av.request {
+		return threef.CreateOfferDto{}, errors.New("strategy request differs from auction request")
 	}
-	domainName, ok := domain.GetNameOk()
-	if !ok || domainName == nil {
-		return threef.CreateOfferDto{}, errors.Errorf("auction %v: missing EIP-712 domain name", auction.Id)
+	if av.domainName == "" || av.domainChain == nil {
+		return threef.CreateOfferDto{}, errors.Errorf("auction %d: missing EIP-712 domain name or chainId", av.id)
 	}
-	domainChainID, ok := domain.GetChainIdOk()
-	if !ok || domainChainID == nil {
-		return threef.CreateOfferDto{}, errors.Errorf("auction %v: missing EIP-712 domain chainId", auction.Id)
-	}
-	chainID := big.NewInt(int64(*domainChainID))
-	// The EIP-712 domain version comes from the auction; fall back to grunt's known default only when
-	// the API omits it (the field is nullable). Name and chainId are required above — no fallback.
-	domainVersion := OfferDomainVersion
-	if v, hasVersion := domain.GetVersionOk(); hasVersion && v != nil && *v != "" {
-		domainVersion = *v
-	}
-
+	chainID := av.domainChain
 	nonce := new(big.Int).SetUint64(s.nextNonce())
 	expiration := offerExpiration(av, s.cfg.OfferExpiryBuffer, time.Now())
 
@@ -53,14 +39,14 @@ func (s *Solver) buildSignedOffer(
 		Expiration:     expiration,
 		UseCallback:    true,
 	}
-	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
-	sig, err := s.deps.Signer.SignHash(digest)
+	digest := OfferDigest(signedOffer, av.domainName, av.domainVersion, chainID, offer.Request)
+	sig, err := s.offerSigner.SignHash(digest)
 	if err != nil {
 		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)
 	}
 
 	dto := threef.NewCreateOfferDto(
-		auction.Id,
+		float32(av.id),
 		lowerAddr(offer.Maker), // API rejects checksummed addresses (confirmed live)
 		offer.Principal.String(),
 		offer.ExpectedReturn.String(),
@@ -76,12 +62,9 @@ func (s *Solver) buildSignedOffer(
 // offerExpiration anchors a signed offer's expiration to the auction's solve_start_time plus buffer.
 // If the auction omits solve_start_time, the offer expires now+buffer.
 // The buffer is long enough to cover a full auction solve window plus slack.
-func offerExpiration(av auctionView, buffer time.Duration, now time.Time) *big.Int {
-	exp := now.Add(buffer)
-	if s, ok := av.dto.GetSolveStartTimeOk(); ok && s != nil && *s != "" {
-		if t, err := time.Parse(time.RFC3339, *s); err == nil {
-			exp = t.Add(buffer)
-		}
+func offerExpiration(av auction, buffer time.Duration, now time.Time) *big.Int {
+	if !av.solveStart.IsZero() {
+		now = av.solveStart
 	}
-	return big.NewInt(exp.Unix())
+	return big.NewInt(now.Add(buffer).Unix())
 }

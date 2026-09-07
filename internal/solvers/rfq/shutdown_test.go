@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -62,11 +62,7 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 		done <- s.Run(ctx)
 	}()
 
-	select {
-	case <-txm.started:
-	case <-time.After(time.Second):
-		t.Fatal("RFQ execution did not reach the accepted transaction")
-	}
+	testcheck.ReceiveWithin(t, txm.started, time.Second, "RFQ execution did not reach the accepted transaction")
 
 	cancel()
 	select {
@@ -77,88 +73,36 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 
 	wantHash := common.HexToHash("0xdead")
 	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Run() error = %v, want context cancellation", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Run did not return after the accepted transaction completed")
+	if err := testcheck.ReceiveWithin(t, done, time.Second, "Run did not return after the accepted transaction completed"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", err)
 	}
 
-	rec := st.order("o1")
+	rec := orderFixture(st)
 	if rec == nil || rec.Status != statusSubmitted || rec.TxHash != wantHash {
 		t.Fatalf("order after shutdown drain = %+v, want submitted with tx %s", rec, wantHash.Hex())
 	}
 }
 
-func TestRunReportsListenerFailureBeforeDrainingAcceptedExecution(t *testing.T) {
+// Listener binding is a startup precondition: an unavailable quote endpoint
+// must not race an order fill into the transaction manager.
+func TestRunListenerFailureDoesNotStartExecution(t *testing.T) {
 	st, backend := fillFixtures(t)
-	backend.order = nil
-	txm := &blockingAcceptedTxSender{
-		started: make(chan struct{}),
-		result:  make(chan txmanager.Result, 1),
-	}
+	txm := &blockingAcceptedTxSender{started: make(chan struct{}), result: make(chan txmanager.Result, 1)}
 	exec := newExec(t, st, backend, txm)
-
-	ctx, reportFatal := context.WithCancelCause(t.Context())
-	fatalReported := make(chan error, 1)
 	s := &Solver{
-		cfg: &Config{
-			ListenAddr:   "[::1", // malformed address: ListenAndServe fails before opening a socket
-			Executor:     exec.executor,
-			PollInterval: time.Hour,
-		},
-		server: &server{
-			sharedSecret: "test-secret",
-			quotes:       &quoteService{},
-			log:          logr.Discard(),
-		},
-		exec: exec,
-		log:  logr.Discard(),
-		reportFatal: func(err error) {
-			// A listener can fail before the execution goroutine is scheduled. Wait until Send has
-			// definitely reached its accepted, context-independent phase before simulating the
-			// process-wide fatal cancellation.
-			<-txm.started
-			reportFatal(err)
-			fatalReported <- err
-		},
+		cfg:    &Config{ListenAddr: "[::1", Executor: exec.executor, PollInterval: time.Hour},
+		server: &server{sharedSecret: "test-secret", quotes: &quoteService{}, log: logr.Discard()},
+		exec:   exec, log: logr.Discard(),
 	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.Run(ctx)
-	}()
-
-	var listenerErr error
-	select {
-	case listenerErr = <-fatalReported:
-	case <-time.After(time.Second):
-		t.Fatal("listener failure was not reported after execution reached Send")
-	}
-	if !errors.Is(context.Cause(ctx), listenerErr) {
-		t.Fatalf("fatal cancellation cause = %v, want reported listener error %v", context.Cause(ctx), listenerErr)
+	if err := s.Run(t.Context()); err == nil {
+		t.Fatal("expected listener failure")
 	}
 	select {
-	case err := <-done:
-		t.Fatalf("Run returned before draining accepted execution after listener failure: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-txm.started:
+		t.Fatal("execution started without a listener")
+	default:
 	}
-
-	wantHash := common.HexToHash("0xbeef")
-	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
-	select {
-	case err := <-done:
-		if !errors.Is(err, listenerErr) {
-			t.Fatalf("Run() error = %v, want original reported listener error %v", err, listenerErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Run did not return after accepted execution completed")
-	}
-
-	rec := st.order("o1")
-	if rec == nil || rec.Status != statusSubmitted || rec.TxHash != wantHash {
-		t.Fatalf("order after listener-failure drain = %+v, want submitted with tx %s", rec, wantHash.Hex())
+	if rec := orderFixture(st); rec != nil {
+		t.Fatalf("listener failure changed order: %+v", rec)
 	}
 }

@@ -1,66 +1,53 @@
 package liquidlane
 
-import "math/big"
+import (
+	"math/big"
 
-var rateScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+)
+
+// scaledRatio computes amount*multiplier/divisor with a decimal shift and one
+// final rounding decision. Canceling decimal powers first avoids constructing
+// both token scales for every pricing operation. All inputs remain unmodified.
+func scaledRatio(amount, multiplier, divisor *big.Int, shift int, roundUp bool) *big.Int {
+	for _, value := range []*big.Int{amount, multiplier, divisor} {
+		if value == nil || value.Sign() <= 0 {
+			return new(big.Int)
+		}
+	}
+	numerator, denominator := new(big.Int).Mul(amount, multiplier), divisor
+	if shift > 0 {
+		numerator.Mul(numerator, bigmath.Exp10(shift))
+	}
+	if shift < 0 {
+		denominator = new(big.Int).Mul(divisor, bigmath.Exp10(-shift))
+	}
+	if roundUp {
+		numerator.Add(numerator, denominator)
+		numerator.Sub(numerator, big.NewInt(1))
+	}
+	return numerator.Quo(numerator, denominator)
+}
 
 // MulDivUp returns ceil(left * right / denominator), or zero for invalid input.
 func MulDivUp(left, right, denominator *big.Int) *big.Int {
-	if left == nil || right == nil || denominator == nil ||
-		left.Sign() <= 0 || right.Sign() <= 0 || denominator.Sign() <= 0 {
-		return new(big.Int)
-	}
-	numerator := new(big.Int).Mul(left, right)
-	quotient, remainder := new(big.Int).QuoRem(numerator, denominator, new(big.Int))
-	if remainder.Sign() != 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	return quotient
+	return scaledRatio(left, right, denominator, 0, true)
 }
 
-func pow10(n int) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+func AmountOutForRate(amountIn, rate *big.Int, inDecimals, outDecimals int) *big.Int {
+	return scaledRatio(amountIn, rate, big.NewInt(1), outDecimals-inDecimals-18, false)
 }
 
-func AmountOutForRate(amountIn, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	if amountIn == nil || rate == nil || amountIn.Sign() <= 0 || rate.Sign() <= 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(amountIn, rate)
-	num.Mul(num, pow10(tokenOutDecimals))
-	den := new(big.Int).Mul(rateScale, pow10(tokenInDecimals))
-	return num.Div(num, den)
+func MaxAmountInForRate(maxAssets, rate *big.Int, inDecimals, outDecimals int) *big.Int {
+	return scaledRatio(maxAssets, big.NewInt(1), rate, 18+inDecimals-outDecimals, false)
 }
 
-func MaxAmountInForRate(maxAssets, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	if maxAssets == nil || rate == nil || maxAssets.Sign() <= 0 || rate.Sign() <= 0 {
-		return new(big.Int)
-	}
-	den := new(big.Int).Mul(rate, pow10(tokenOutDecimals))
-	num := new(big.Int).Mul(maxAssets, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
-	return num.Div(num, den)
+func MinAmountInForAmountOut(amountOut, rate *big.Int, inDecimals, outDecimals int) *big.Int {
+	return scaledRatio(amountOut, big.NewInt(1), rate, 18+inDecimals-outDecimals, true)
 }
 
-func MinAmountInForAmountOut(amountOut, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	if amountOut == nil || rate == nil || amountOut.Sign() <= 0 || rate.Sign() <= 0 {
-		return new(big.Int)
-	}
-	den := new(big.Int).Mul(rate, pow10(tokenOutDecimals))
-	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
-	num.Add(num, new(big.Int).Sub(den, big.NewInt(1)))
-	return num.Div(num, den)
-}
-
-func RateForAmountOut(amountOut, amountIn *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	if amountOut == nil || amountIn == nil || amountOut.Sign() <= 0 || amountIn.Sign() <= 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(amountOut, rateScale)
-	num.Mul(num, pow10(tokenInDecimals))
-	den := new(big.Int).Mul(amountIn, pow10(tokenOutDecimals))
-	return num.Div(num, den)
+func RateForAmountOut(amountOut, amountIn *big.Int, inDecimals, outDecimals int) *big.Int {
+	return scaledRatio(amountOut, big.NewInt(1), amountIn, 18+inDecimals-outDecimals, false)
 }
 
 // ConservativeAdvertisedRate re-derives a fixed rate for amountIn from an advertised rate — one the
@@ -77,22 +64,27 @@ func RateForAmountOut(amountOut, amountIn *big.Int, tokenInDecimals, tokenOutDec
 // RateForAmountOut floors; no other call site has to know about the shave.
 //
 // Returns zero when nothing positive survives the shave, which marks the leg as not quotable.
-func ConservativeAdvertisedRate(amountIn, advertisedRate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	amountOut := AmountOutForRate(amountIn, advertisedRate, tokenInDecimals, tokenOutDecimals)
-	amountOut.Sub(amountOut, big.NewInt(1))
-	if amountOut.Sign() <= 0 {
-		return new(big.Int)
-	}
-	return RateForAmountOut(amountOut, amountIn, tokenInDecimals, tokenOutDecimals)
+func ConservativeAdvertisedRate(amountIn, advertisedRate *big.Int, inDecimals, outDecimals int) *big.Int {
+	net := AmountOutForRate(amountIn, advertisedRate, inDecimals, outDecimals)
+	return RateForAmountOut(net.Sub(net, big.NewInt(1)), amountIn, inDecimals, outDecimals)
 }
 
 // AmountOutAfterDiscount applies a LiquidLane ppm discount, rounding down.
-func AmountOutAfterDiscount(grossAmountOut, discount *big.Int) *big.Int {
-	precision := big.NewInt(DiscountPrecision)
-	if grossAmountOut == nil || grossAmountOut.Sign() <= 0 || discount == nil || discount.Sign() < 0 ||
-		discount.Cmp(precision) > 0 {
+func AmountOutAfterDiscount(gross, discount *big.Int) *big.Int {
+	if discount == nil || discount.Sign() < 0 || discount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
 		return new(big.Int)
 	}
-	multiplier := new(big.Int).Sub(precision, discount)
-	return new(big.Int).Div(new(big.Int).Mul(grossAmountOut, multiplier), big.NewInt(DiscountPrecision))
+	return scaledRatio(gross, new(big.Int).Sub(big.NewInt(DiscountPrecision), discount), big.NewInt(DiscountPrecision), 0, false)
+}
+
+// MaxRateForAmountOut is the largest integer rate whose rounded output at
+// amountIn does not exceed amountOut. The first rate reaching amountOut+1 is an
+// exclusive upper bound, so ceil(bound)-1 also handles exact divisibility.
+func MaxRateForAmountOut(amountOut, amountIn *big.Int, inDecimals, outDecimals int) *big.Int {
+	if amountOut == nil || amountOut.Sign() < 0 || amountIn == nil || amountIn.Sign() <= 0 {
+		return new(big.Int)
+	}
+	nextOutput := new(big.Int).Add(amountOut, big.NewInt(1))
+	bound := scaledRatio(nextOutput, big.NewInt(1), amountIn, 18+inDecimals-outDecimals, true)
+	return bound.Sub(bound, big.NewInt(1))
 }

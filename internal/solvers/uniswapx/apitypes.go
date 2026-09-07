@@ -1,5 +1,12 @@
 package uniswapx
 
+import (
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/vault-solver/internal/parse"
+	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
+)
+
 type quoteRequest struct {
 	BlockUntilTimestamp *int64 `json:"blockUntilTimestamp,omitempty"`
 	RequestID           string `json:"requestId"`
@@ -68,4 +75,35 @@ type orderOutput struct {
 	StartAmount string `json:"startAmount"`
 	EndAmount   string `json:"endAmount"`
 	Recipient   string `json:"recipient"`
+}
+
+// strategyInput validates the public request before it can refer to a cached quote snapshot.
+func (q quoteRequest) strategyInput(chainID int64, policy tokenpolicy.Policy) (strategytypes.QuoteInput, quoteDeclineReason) {
+	input := strategytypes.QuoteInput{RequestID: q.RequestID, QuoteID: q.QuoteID}
+	if q.RequestID == "" || q.QuoteID == "" || q.NumOutputs < 1 || !supportedQuoteType(q.Type) || !supportedQuoteProtocol(q.Protocol) ||
+		q.TokenInChainID != chainID || q.TokenOutChainID != chainID || !common.IsHexAddress(q.Swapper) {
+		return input, quoteDeclineInvalidRequest
+	}
+	var err error
+	input.TokenIn, err = parse.Address(q.TokenIn, "tokenIn")
+	if err != nil {
+		return input, quoteDeclineInvalidRequest
+	}
+	input.TokenOut, err = parse.Address(q.TokenOut, "tokenOut")
+	if err != nil {
+		return input, quoteDeclineInvalidRequest
+	}
+	if input.TokenIn == input.TokenOut || input.TokenOut == (common.Address{}) || !policy.Allows(input.TokenIn) {
+		return input, quoteDeclinePairOutOfScope
+	}
+	amount, err := parse.Uint(q.Amount, "amount", 256)
+	if err != nil || amount.Sign() <= 0 {
+		return input, quoteDeclineInvalidAmount
+	}
+	if q.Type == quoteTypeExactInput {
+		input.AmountIn = amount
+	} else {
+		input.AmountOut = amount
+	}
+	return input, ""
 }

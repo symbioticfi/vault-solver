@@ -3,10 +3,10 @@ package defaultstrategy
 import (
 	"context"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/go-errors/errors"
 
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -17,15 +17,15 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if input.OutputAmount == nil || input.OutputAmount.Sign() <= 0 {
 		return nil, errors.New("outputAmount: must be positive")
 	}
-	if input.AmountIn.Cmp(s.minAmount) < 0 {
+	if input.AmountIn.Cmp(s.policy.MinAmount) < 0 {
 		input.Trace.Decline(
 			"fill", "amount-below-minimum",
 			"amountIn", input.AmountIn.String(),
-			"minAmount", s.minAmount.String(),
+			"minAmount", s.policy.MinAmount.String(),
 		)
 		return nil, nil
 	}
-	validAfter := input.ChainTime.Add(s.executionBuffer)
+	validAfter := input.ChainTime.Add(s.policy.ExecutionBuffer)
 	if input.Deadline != 0 && int64(input.Deadline) <= validAfter.Unix() {
 		input.Trace.Decline(
 			"fill", "deadline-too-close",
@@ -38,22 +38,22 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	gasPricing, err := liquidstrategies.NewGasPricing(
+	gasPricing, err := planning.NewGasPricing(
 		input.MaxFeePerGas,
 		input.TokenOut,
 		input.GasPrices,
 		input.GasSnapshot,
-		s.cfg.InventoryReserveBps,
+		s.policy.InventoryReserveBps,
 		types.LiquidLaneGasEnvelope(),
 	)
 	if err != nil {
 		return nil, err
 	}
-	allocation, err := liquidgreedy.SolveFill(liquidgreedy.FillTask{
+	allocation, err := planning.SolveFill(planning.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
-		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
-		InventoryReserveBps: s.cfg.InventoryReserveBps,
+		MaxRoutes: maxRoutes, PriceBufferBps: s.policy.PriceBufferBps,
+		InventoryReserveBps: s.policy.InventoryReserveBps,
 		GasPricing:          &gasPricing,
 		Trace:               input.Trace,
 	})

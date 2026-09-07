@@ -1,7 +1,6 @@
 package bridgefacilitator
 
 import (
-	"strconv"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -10,25 +9,19 @@ import (
 	"gopkg.in/yaml.v3"
 
 	cfgparse "github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solver"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
-	APIBaseURL        string            `yaml:"apiBaseUrl"`
-	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
-	Adapters          *[]string         `yaml:"adapters"`
-	AdapterFactory    string            `yaml:"adapterFactory"`
-	LiquidityLens     string            `yaml:"liquidityLens"`
-	HTTPTimeout       string            `yaml:"httpTimeout"`
-	OfferExpiryBuffer string            `yaml:"offerExpiryBuffer"`
-	Intervals         rawIntervals      `yaml:"intervals"`
-	Strategy          rawStrategyConfig `yaml:"strategy"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	APIBaseURL        string         `yaml:"apiBaseUrl"`
+	RedeemBatchSize   int            `yaml:"redeemBatchSize"`
+	Adapters          *[]string      `yaml:"adapters"`
+	AdapterFactory    string         `yaml:"adapterFactory"`
+	LiquidityLens     string         `yaml:"liquidityLens"`
+	HTTPTimeout       string         `yaml:"httpTimeout"`
+	OfferExpiryBuffer string         `yaml:"offerExpiryBuffer"`
+	Intervals         rawIntervals   `yaml:"intervals"`
+	Strategy          StrategyConfig `yaml:"strategy"`
 }
 
 type rawIntervals struct {
@@ -60,10 +53,7 @@ type Config struct {
 	Strategy      StrategyConfig
 }
 
-type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
-}
+type StrategyConfig = cfgparse.NamedConfig
 
 // Target is one adapter the bot facilitates. Only static adapter addresses are config: Vault
 // (adapter.vault()) and Collateral (vault.asset()) are resolved on-chain on every adapter refresh;
@@ -104,91 +94,62 @@ const defaultStrategyName = "default"
 // parseConfig decodes and validates the opaque solver config block.
 func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
-	if err := solver.DecodeStrict(node, &raw); err != nil {
+	if err := cfgparse.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
 	if raw.APIBaseURL == "" {
 		return nil, errors.New("apiBaseUrl is required")
 	}
 
-	redeemBatch := raw.RedeemBatchSize
-	if redeemBatch <= 0 {
-		redeemBatch = defaultRedeemBatchSize
+	cfg := &Config{
+		APIBaseURL:      raw.APIBaseURL,
+		RedeemBatchSize: cfgparse.OrDefault(raw.RedeemBatchSize, defaultRedeemBatchSize),
+		Strategy:        StrategyConfig{Name: cfgparse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config},
 	}
-
-	targets, err := parseTargets(raw)
-	if err != nil {
+	if cfg.RedeemBatchSize < 1 {
+		return nil, errors.New("redeemBatchSize must be positive")
+	}
+	var err error
+	if cfg.Targets, err = parseTargets(raw); err != nil {
 		return nil, err
 	}
-	var adapterFactory common.Address
-	if raw.AdapterFactory != "" {
-		adapterFactory, err = cfgparse.NonZeroAddress(raw.AdapterFactory, "adapterFactory")
-		if err != nil {
-			return nil, err
-		}
+	if cfg.AdapterFactory, err = cfgparse.OptionalAddress(raw.AdapterFactory, "adapterFactory"); err != nil {
+		return nil, err
 	}
-	if len(targets) == 0 && adapterFactory == (common.Address{}) {
+	if cfg.LiquidityLens, err = cfgparse.OptionalAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+		return nil, err
+	}
+	if len(cfg.Targets) == 0 && cfg.AdapterFactory == (common.Address{}) {
 		return nil, errors.New("at least one adapters entry or adapterFactory is required")
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		liquidityLens, err = cfgparse.NonZeroAddress(raw.LiquidityLens, "liquidityLens")
-		if err != nil {
+	for _, duration := range []struct {
+		field, raw string
+		fallback   time.Duration
+		out        *time.Duration
+	}{
+		{"intervals.discover", raw.Intervals.Discover, defaultDiscover, &cfg.Intervals.Discover},
+		{"intervals.redeemPoll", raw.Intervals.RedeemPoll, defaultRedeemPoll, &cfg.Intervals.RedeemPoll},
+		{"intervals.reconcile", raw.Intervals.Reconcile, defaultReconcile, &cfg.Intervals.Reconcile},
+		{"httpTimeout", raw.HTTPTimeout, defaultHTTPTimeout, &cfg.HTTPTimeout},
+		{"offerExpiryBuffer", raw.OfferExpiryBuffer, defaultOfferExpiryBuffer, &cfg.OfferExpiryBuffer},
+	} {
+		if *duration.out, err = cfgparse.Duration(duration.raw, duration.fallback, duration.field); err != nil {
 			return nil, err
 		}
 	}
-
-	discover, err := cfgparse.Duration(raw.Intervals.Discover, defaultDiscover, "intervals.discover")
-	if err != nil {
-		return nil, err
-	}
-	redeemPoll, err := cfgparse.Duration(raw.Intervals.RedeemPoll, defaultRedeemPoll, "intervals.redeemPoll")
-	if err != nil {
-		return nil, err
-	}
-	reconcile, err := cfgparse.Duration(raw.Intervals.Reconcile, defaultReconcile, "intervals.reconcile")
-	if err != nil {
-		return nil, err
-	}
-
-	httpTimeout, err := cfgparse.Duration(raw.HTTPTimeout, defaultHTTPTimeout, "httpTimeout")
-	if err != nil {
-		return nil, err
-	}
-
-	offerExpiryBuffer, err := cfgparse.Duration(raw.OfferExpiryBuffer, defaultOfferExpiryBuffer, "offerExpiryBuffer")
-	if err != nil {
-		return nil, err
-	}
-
-	strategy := StrategyConfig{Name: raw.Strategy.Name, Config: raw.Strategy.Config}
-	if strategy.Name == "" {
-		strategy.Name = defaultStrategyName
-	}
-
-	return &Config{
-		APIBaseURL:        raw.APIBaseURL,
-		RedeemBatchSize:   redeemBatch,
-		HTTPTimeout:       httpTimeout,
-		OfferExpiryBuffer: offerExpiryBuffer,
-		Targets:           targets,
-		AdapterFactory:    adapterFactory,
-		LiquidityLens:     liquidityLens,
-		Intervals:         Intervals{Discover: discover, RedeemPoll: redeemPoll, Reconcile: reconcile},
-		Strategy:          strategy,
-	}, nil
+	return cfg, nil
 }
 
 func parseTargets(raw rawConfig) ([]Target, error) {
 	if raw.Adapters == nil {
 		return nil, nil
 	}
-	targets := make([]Target, 0, len(*raw.Adapters))
-	for i, a := range *raw.Adapters {
-		adapter, err := cfgparse.NonZeroAddress(a, "adapters["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return nil, err
-		}
+	adapters, err := cfgparse.Addresses(*raw.Adapters, "adapters")
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]Target, 0, len(adapters))
+	for _, adapter := range adapters {
 		targets = append(targets, Target{Adapter: adapter})
 	}
 	return targets, nil

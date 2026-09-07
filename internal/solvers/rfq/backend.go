@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/httpclient"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
@@ -49,8 +50,9 @@ type backendOut struct {
 // backendClient is a thin adapter over the generated rfqbackend client for filler-facing orders plus
 // the shared private-discounts client. Used from the single execution goroutine.
 type backendClient struct {
-	api       *rfqbackend.APIClient
-	discounts *discounts.Client
+	*discounts.Client
+
+	api *rfqbackend.APIClient
 }
 
 // newBackendClient builds a backend client rooted at baseURL. The generated client carries the
@@ -63,55 +65,59 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg.HTTPClient = &http.Client{
 		Timeout: 10 * time.Second,
 	}
-	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClient(baseURL)}
+	return &backendClient{api: rfqbackend.NewAPIClient(cfg), Client: discounts.NewClient(baseURL)}
 }
 
-// closeResp drains and closes the HTTP response body. The generated client already reads the body
-// fully into memory and closes it before returning, so this is belt-and-suspenders: it satisfies the
-// "response body must be closed" contract and is a harmless no-op on the already-closed body.
-func closeResp(resp *http.Response) {
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-}
-
-// listOpenOrders lists open orders assigned to filler.
+// listOpenOrders retrieves the bounded working set assigned to this filler.
 func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error) {
-	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100.
-	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
-		Filler(filler).
-		OrderStatus(backendOrderStatusOpen).
-		Limit(int64(limit))
-	resp, httpResp, err := req.Execute()
-	closeResp(httpResp)
+	request := c.api.RFQAPI.ApiV1OrdersGet(ctx).Filler(filler).OrderStatus(backendOrderStatusOpen).Limit(int64(limit))
+	orders, err := c.fetch(request, "list open orders")
 	if err != nil {
-		return nil, errors.Errorf("backend: list open orders: %w", err)
+		return nil, err
 	}
-	return ordersFromResponse(resp), nil
+	if len(orders) > limit {
+		return nil, errors.Errorf("backend: list open orders: got %d orders, limit %d", len(orders), limit)
+	}
+	for index, order := range orders {
+		if strings.TrimSpace(order.OrderID) == "" || order.OrderStatus != backendOrderStatusOpen {
+			return nil, errors.Errorf("backend: list open orders: row %d has invalid identity or status %q", index, order.OrderStatus)
+		}
+	}
+	return orders, nil
 }
 
-// getExecutableOrder reads the canonical open executable view for one order, or nil if absent.
 func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error) {
-	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
-		OrderId(orderID).
-		Filler(filler).
-		OrderStatus(backendOrderStatusOpen)
-	resp, httpResp, err := req.Execute()
-	closeResp(httpResp)
-	if err != nil {
-		return nil, errors.Errorf("backend: get executable order: %w", err)
-	}
-	return first(ordersFromResponse(resp)), nil
+	request := c.api.RFQAPI.ApiV1OrdersGet(ctx).OrderId(orderID).Filler(filler).OrderStatus(backendOrderStatusOpen)
+	return c.lookup(request, orderID, "get executable order")
 }
 
-// getOrder reads the backend view of one order regardless of status, or nil if absent.
 func (c *backendClient) getOrder(ctx context.Context, orderID string) (*backendOrder, error) {
-	resp, httpResp, err := c.api.RFQAPI.ApiV1OrdersGet(ctx).OrderId(orderID).Execute()
-	closeResp(httpResp)
-	if err != nil {
-		return nil, errors.Errorf("backend: get order: %w", err)
+	return c.lookup(c.api.RFQAPI.ApiV1OrdersGet(ctx).OrderId(orderID), orderID, "get order")
+}
+
+// A canonical lookup must be unambiguous and bound to the requested identity.
+// An unrelated first row cannot resolve an outstanding order's lifecycle.
+func (c *backendClient) lookup(request rfqbackend.ApiApiV1OrdersGetRequest, id, operation string) (*backendOrder, error) {
+	orders, err := c.fetch(request, operation)
+	if err != nil || len(orders) == 0 {
+		return nil, err
 	}
-	return first(ordersFromResponse(resp)), nil
+	if len(orders) != 1 || orders[0].OrderID != id {
+		return nil, errors.Errorf("backend: %s: response does not identify exactly order %q", operation, id)
+	}
+	return &orders[0], nil
+}
+
+func (c *backendClient) fetch(request rfqbackend.ApiApiV1OrdersGetRequest, operation string) ([]backendOrder, error) {
+	response, err := httpclient.Execute("backend: "+operation, request.Execute)
+
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, errors.Errorf("backend: %s: empty response", operation)
+	}
+	return ordersFromResponse(response), nil
 }
 
 // ordersFromResponse projects the generated orders response into the internal order rows. A nil
@@ -129,75 +135,38 @@ func ordersFromResponse(resp *rfqbackend.OrdersResponse) []backendOrder {
 	return out
 }
 
-func orderFromModel(o *rfqbackend.OrdersResponseOrdersInner) backendOrder {
-	bo := backendOrder{
-		Type:        o.GetType(),
-		OrderID:     o.GetOrderId(),
-		OrderStatus: o.GetOrderStatus(),
-		QuoteID:     o.GetQuoteId(),
-		Swapper:     o.GetSwapper(),
-		Nonce:       o.GetNonce(),
-		Input: backendToken{
-			Token:  o.Input.GetToken(),
-			Amount: o.Input.GetAmount(),
-		},
+func orderFromModel(model *rfqbackend.OrdersResponseOrdersInner) backendOrder {
+	order := backendOrder{Type: model.GetType(), OrderID: model.GetOrderId(), OrderStatus: model.GetOrderStatus(),
+		QuoteID: model.GetQuoteId(), Swapper: model.GetSwapper(), Nonce: model.GetNonce(),
+		Input: backendToken{Token: model.Input.GetToken(), Amount: model.Input.GetAmount()}, Outputs: make([]backendOut, len(model.Outputs))}
+	for index := range model.Outputs {
+		output := &model.Outputs[index]
+		order.Outputs[index] = backendOut{Token: output.GetToken(), Amount: output.GetAmount(), Recipient: output.GetRecipient()}
 	}
-	// txHash is a nullable string in the schema; copy through whatever the backend reported (including
-	// an explicit null) so reconcileTerminalStatus can validate it.
-	if v, ok := o.GetTxHashOk(); ok {
-		bo.TxHash = v
+	// Optional pointers retain the generated model's presence information. Clone
+	// their values so a later response mutation cannot change an executable record.
+	for _, field := range []struct {
+		get func() (*string, bool)
+		to  **string
+	}{
+		{model.GetTxHashOk, &order.TxHash}, {model.GetEncodedOrderOk, &order.EncodedOrder},
+		{model.GetProtocolSignatureOk, &order.ProtocolSignature}, {model.GetFillerOk, &order.Filler},
+	} {
+		if value, present := field.get(); present && value != nil {
+			copied := *value
+			*field.to = &copied
+		}
 	}
-	outs := o.GetOutputs()
-	bo.Outputs = make([]backendOut, 0, len(outs))
-	for i := range outs {
-		bo.Outputs = append(bo.Outputs, backendOut{
-			Token:     outs[i].GetToken(),
-			Amount:    outs[i].GetAmount(),
-			Recipient: outs[i].GetRecipient(),
-		})
+	if deadline, present := model.GetDeadlineOk(); present && deadline != nil {
+		copied := *deadline
+		order.Deadline = &copied
 	}
-	// Executable-only optional fields: copy only when present so a non-executable row keeps them nil
-	// and executableFromBackend rejects it as incomplete.
-	if v, ok := o.GetEncodedOrderOk(); ok {
-		bo.EncodedOrder = v
-	}
-	if v, ok := o.GetProtocolSignatureOk(); ok {
-		bo.ProtocolSignature = v
-	}
-	if v, ok := o.GetDeadlineOk(); ok {
-		d := *v
-		bo.Deadline = &d
-	}
-	if v, ok := o.GetFillerOk(); ok {
-		bo.Filler = v
-	}
-	return bo
+	return order
 }
 
-func first(orders []backendOrder) *backendOrder {
-	if len(orders) == 0 {
-		return nil
-	}
-	return &orders[0]
-}
-
+// RFQ uses the common discount surface and preserves these aliases for its
+// existing order fixtures and internal transport vocabulary.
 type discountTerms = discounts.Terms
 type resolveDiscountResponse = discounts.Resolved
 type discountListItem = discounts.ListItem
 type discountsResponse = discounts.List
-
-// resolveDiscount fetches the fresh signed discount for a discountId (POST /discounts).
-//
-// The backend's ResolveDiscountResponse is an anyOf union of a single resolved discount (anyOf[0]) and
-// a batch (anyOf[1]). The filler resolves one discountId at a time, so it expects — and requires — the
-// single shape. If the backend returns the batch shape with exactly one entry, that lone entry is
-// accepted (it carries the same signed fields); anything else (neither shape, or a batch with ≠1
-// entries) is rejected so we never fill on an ambiguous resolution.
-func (c *backendClient) resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error) {
-	return c.discounts.Resolve(ctx, discountID)
-}
-
-// listDiscounts lists currently-offered discounts (GET /discounts).
-func (c *backendClient) listDiscounts(ctx context.Context) (*discountsResponse, error) {
-	return c.discounts.ListDiscounts(ctx)
-}

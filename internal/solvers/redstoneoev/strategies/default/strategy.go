@@ -3,14 +3,19 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+
+	"github.com/symbioticfi/vault-solver/internal/parse"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"gopkg.in/yaml.v3"
 )
@@ -18,10 +23,8 @@ import (
 const Name = "default"
 
 type monitorSource interface {
-	run(context.Context)
 	refresh(context.Context)
 	snapshot() *snapshot
-	candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem
 }
 
 type Strategy struct {
@@ -46,11 +49,11 @@ type decisionState struct {
 }
 
 type decisionStateCache struct {
-	v atomic.Value // stores *decisionState
+	v atomic.Pointer[decisionState]
 }
 
 func (c *decisionStateCache) store(st decisionState) {
-	st.CallbackNative = cloneBig(st.CallbackNative)
+	st.CallbackNative = bigmath.Clone(st.CallbackNative)
 	c.v.Store(&st)
 }
 
@@ -59,18 +62,13 @@ func (c *decisionStateCache) load() (decisionState, bool) {
 	if v == nil {
 		return decisionState{}, false
 	}
-	st := *(v.(*decisionState))
-	st.CallbackNative = cloneBig(st.CallbackNative)
+	st := *v
+	st.CallbackNative = bigmath.Clone(st.CallbackNative)
 	return st, true
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, strategies.Registration{Factory: NewFromConfig})
-}
-
-func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) {
-	testMonitor, err := testMonitorFromEnv()
+func NewFromConfig(raw yaml.Node, deps types.Dependencies) (types.Strategy, error) {
+	testMonitor, err := parse.Bool(os.Getenv(envTestMonitor), envTestMonitor)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +110,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		err error
 	)
 	if deps.TestMonitor {
-		mon, err = newTestMonitor(deps.Reader, deps.Log, cfg, deps.Callback, deps.LoadAdapterSnapshot)
+		mon, err = newTestMonitor(deps.Reader, deps.Log, deps.Callback, deps.LoadAdapterSnapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -131,67 +129,51 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		signer:        deps.Signer,
 		chainID:       big.NewInt(deps.ChainID),
 		mon:           mon,
-		engine:        newBundleEngine(cfg, deps.Log),
+		engine:        bundleEngine{cfg: cfg, log: deps.Log},
 		maxAge:        cfg.MaxStateAge,
 		log:           deps.Log,
 	}, nil
 }
 
+// Run owns both independent refresh loops; no snapshot source starts background work.
 func (s *Strategy) Run(ctx context.Context) {
-	s.refreshState(ctx)
-	s.mon.refresh(ctx)
-	var wg sync.WaitGroup
-	wg.Go(func() { s.stateLoop(ctx) })
-	wg.Go(func() { s.mon.run(ctx) })
-	wg.Wait()
-}
-
-func (s *Strategy) stateLoop(ctx context.Context) {
 	interval := s.cfg.MonitorPoll
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.refreshState(ctx)
-		}
+	var workers sync.WaitGroup
+	for _, refresh := range []func(context.Context){s.refreshState, s.mon.refresh} {
+		workers.Go(func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for ctx.Err() == nil {
+				refresh(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		})
 	}
+	workers.Wait()
 }
 
 func (s *Strategy) refreshState(ctx context.Context) {
 	if s.reader == nil {
 		return
 	}
-	prev, _ := s.state.load()
-	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
-	callbackUpdatedAt := time.Now()
+	balance, err := s.reader.ReadNativeBalance(ctx, s.callback)
 	if err != nil {
 		s.log.Error(err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
-		callbackNative = prev.CallbackNative
-		callbackUpdatedAt = prev.CallbackUpdatedAt
+		return
 	}
-	s.state.store(decisionState{
-		CallbackNative:    callbackNative,
-		CallbackUpdatedAt: callbackUpdatedAt,
-	})
+	s.state.store(decisionState{CallbackNative: balance, CallbackUpdatedAt: time.Now()})
 }
 
-func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
-	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
-		return skipBid(skipNoLegs), nil
-	}
-	if input.Context.Callback != s.callback {
-		return skipBid(skipNoLegs), nil
-	}
-	if !input.Adapter.Filler {
-		return skipBid(skipNoLegs), nil
-	}
-	if input.Adapter.Paused {
+func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
+	if (input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter) ||
+		input.Context.Callback != s.callback || !input.Adapter.Filler || input.Adapter.Paused {
 		return skipBid(skipNoLegs), nil
 	}
 	snap := s.mon.snapshot()
@@ -206,41 +188,17 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 		return skipBid(skip), nil
 	}
 	reserved := s.reservations.reconcile(input.PendingAuctions, input.Now, st.CallbackUpdatedAt)
-	scored := s.scoredLegs(input.Auction, input.Now, input.Adapter)
+	scored := s.scoredLegs(snap, input.Auction, input.Now, input.Adapter)
 	scored = filterReservedPositions(scored, reserved.positions)
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
-	laneState := liquidLaneStateFromAdapter(input.Adapter)
-	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
-	feedCount := auctionFeedCount(input.Auction)
-	var (
-		b      chosenBundle
-		priced pricedBundle
-		skip   string
-	)
-	if s.gasAccounting {
-		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
-		if rate == nil {
-			s.log.Info("bid skipped: loan/native gas rate unavailable",
-				"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
-			return skipBid(skipGasUnprofitable), nil
-		}
-		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
-			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
-				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
-		}
-	} else {
-		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
-		}
+	priced, reason := s.selectForBid(ctx, input, scored)
+	if err := ctx.Err(); err != nil {
+		return types.BidOutput{}, err
 	}
-	if skip != "" {
-		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
+	if reason != "" {
+		return skipBid(reason), nil
 	}
 	reservedAndCurrentGas := new(big.Int).Add(reserved.gasNative, priced.gasNative)
 	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, reservedAndCurrentGas) {
@@ -252,16 +210,19 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 			"minDepositWei", input.Context.ExecutorMinDeposit,
 			"gasUnits", priced.gas.Units,
 			"gasNative", priced.gasNative,
-			"gasPriceWei", gasPrice)
+			"gasPriceWei", input.Context.MaxTxGasPrice)
 		return skipBid(types.SkipReasonDepositLow), nil
 	}
-	availableCallback := new(big.Int).Sub(orZero(st.CallbackNative), reserved.bidNative)
+	availableCallback := new(big.Int).Sub(bigmath.OrZero(st.CallbackNative), reserved.bidNative)
 	if availableCallback.Cmp(priced.bidNative) < 0 {
 		s.log.Info("bid skipped: callback balance cannot cover bid",
 			"auction", input.Auction.ID, "callback", s.callback.Hex(),
 			"callbackWei", st.CallbackNative, "reservedBidWei", reserved.bidNative,
 			"availableWei", availableCallback, "requiredWei", priced.bidNative)
 		return skipBid(types.SkipReasonCallbackBalance), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return types.BidOutput{}, err
 	}
 	out, err := s.bidOutputFromBundle(input, priced)
 	if err != nil {
@@ -271,12 +232,39 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	return out, nil
 }
 
-func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {
+func (s *Strategy) selectForBid(ctx context.Context, input types.BidInput, scored []scoredLeg) (pricedBundle, string) {
+	lane := liquidLaneStateFromAdapter(input.Adapter)
+	gasPrice := bigmath.Clone(input.Context.MaxTxGasPrice)
+	count := auctionFeedCount(input.Auction)
+	if !s.gasAccounting {
+		bundle, reason := s.engine.selectBundleWithGas(ctx, scored, lane, input.Context.GasLimit, count)
+		if reason != "" {
+			return pricedBundle{}, reason
+		}
+		return s.engine.priceBundleWithoutGasAccounting(bundle, lane, gasPrice, count), ""
+	}
+	rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
+	if rate == nil {
+		s.log.Info("bid skipped: loan/native gas rate unavailable", "auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", count)
+		return pricedBundle{}, skipGasUnprofitable
+	}
+	bundle, reason := s.engine.selectNetBundle(ctx, scored, rate, lane, gasPrice, input.Context.GasLimit, count)
+	if reason != "" {
+		if reason == skipGasUnprofitable && len(bundle.legs) > 0 {
+			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
+				bundle, rate, lane, gasPrice, input.Context.GasLimit, count, len(scored))
+		}
+		return pricedBundle{}, reason
+	}
+	return s.engine.priceBundle(bundle, rate, lane, gasPrice, count), ""
+}
+
+func (s *Strategy) scoredLegs(snap *snapshot, a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {
 	nowTs := clampTsAt(a.Timestamp, now)
-	cands := s.mon.candidates(a, nowTs, adapter)
+	cands := candidatesFromAuctionWithAdapter(s.log, snap, a, nowTs, adapter)
 	out := make([]scoredLeg, 0, len(cands))
 	for _, it := range cands {
-		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
+		if sized, ok := sizeLeg(it.cand, it.price, it.quote, s.cfg.Sizing); ok {
 			out = append(out, scoredLeg{
 				bundleLeg: bundleLeg{
 					selectedLeg:     sized.leg,
@@ -285,8 +273,7 @@ func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter ty
 				},
 				profit:    sized.profit,
 				maxAssets: it.quote.MaxAssets,
-				source:    it,
-				replay:    true,
+				source:    &it,
 			})
 		}
 	}
@@ -304,50 +291,43 @@ func skipBid(reason string) types.BidOutput {
 	return types.BidOutput{Decision: types.DecisionSkip, Reason: reason}
 }
 
-func (s *Strategy) bidOutputFromBundle(input types.BidInput, priced pricedBundle) (types.BidOutput, error) {
+func (s *Strategy) bidOutputFromBundle(input types.BidInput, priced pricedBundle) (output types.BidOutput, err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Errorf("prepare callback authorization: %w", err)
+		}
+	}()
 	if s.signer == nil {
-		return types.BidOutput{}, errors.New("signer is required")
+		return output, errors.New("signer is required")
 	}
-	auth := operationAuth{
-		AuctionKey:      auctionKeyHash(input.Auction.ID),
-		BidAmount:       cloneBig(priced.bidNative),
-		MinBundleProfit: cloneBig(priced.minBundleProfitLoan),
-		Deadline:        callbackAuthDeadline(input.Now, s.cfg.CallbackAuthTTL),
-	}
-	chainID := cloneBig(input.Context.ChainID)
+	chainID := input.Context.ChainID
 	if chainID == nil {
-		chainID = cloneBig(s.chainID)
+		chainID = s.chainID
 	}
 	if chainID == nil || chainID.Sign() <= 0 {
-		return types.BidOutput{}, errors.New("chain id is required")
+		return output, errors.New("chain id is required")
 	}
-	authDigest, err := callbackAuthDigest(chainID, input.Context.Callback, input.Context.Executor, auth, priced.selectedLegs)
+	auth := operationAuth{AuctionKey: auctionKeyHash(input.Auction.ID), BidAmount: bigmath.Clone(priced.bidNative),
+		MinBundleProfit: bigmath.Clone(priced.minBundleProfitLoan), Deadline: callbackAuthDeadline(input.Now, s.cfg.CallbackAuthTTL)}
+	digest, err := callbackAuthDigest(chainID, input.Context.Callback, input.Context.Executor, auth, priced.selectedLegs)
 	if err != nil {
-		return types.BidOutput{}, err
+		return output, err
 	}
-	authSig, err := s.signer.SignHash(authDigest)
+	signature, err := s.signer.SignHash(digest)
 	if err != nil {
-		return types.BidOutput{}, errors.Errorf("sign callback auth: %w", err)
+		return output, errors.Errorf("sign callback auth: %w", err)
 	}
-	opData, err := encodeOperationData(auth, priced.selectedLegs, authSig)
+	data, err := encodeOperationData(auth, priced.selectedLegs, signature)
 	if err != nil {
-		return types.BidOutput{}, err
+		return output, err
 	}
-	return types.BidOutput{
-		Decision:      types.DecisionBid,
-		BidAmount:     cloneBig(priced.bidNative),
-		OperationData: opData,
-	}, nil
+	return types.BidOutput{Decision: types.DecisionBid, BidAmount: auth.BidAmount, OperationData: data}, nil
 }
 
-func legHints(in []bundleLeg) []legHint {
-	out := make([]legHint, len(in))
+func gasDemands(in []bundleLeg) []liquidlanegas.Demand {
+	out := make([]liquidlanegas.Demand, len(in))
 	for i, leg := range in {
-		out[i] = legHint{
-			selectedLeg:     leg.selectedLeg,
-			Collateral:      leg.collateral,
-			ExpectedLoanOut: cloneBig(leg.expectedLoanOut),
-		}
+		out[i] = liquidlanegas.Demand{Collateral: leg.collateral, AmountOut: leg.expectedLoanOut}
 	}
 	return out
 }
@@ -357,15 +337,15 @@ func liquidLaneStateFromAdapter(adapter types.AdapterSnapshot) *liquidLaneState 
 		return nil
 	}
 	st := &liquidLaneState{
-		FreeAssets:   cloneBig(adapter.FreeAssets),
-		Withdrawable: cloneBig(adapter.Withdrawable),
+		FreeAssets:   bigmath.Clone(adapter.FreeAssets),
+		Withdrawable: bigmath.Clone(adapter.Withdrawable),
 		Acquire:      make(map[common.Address]*big.Int, len(adapter.Redeemable)),
 	}
 	for _, r := range adapter.Redeemable {
 		if r.Asset == (common.Address{}) {
 			continue
 		}
-		st.Acquire[r.Asset] = cloneBig(r.AcquireBalance)
+		st.Acquire[r.Asset] = bigmath.Clone(r.AcquireBalance)
 	}
 	return st
 }
@@ -375,3 +355,6 @@ func freshAt(updatedAt, now time.Time, maxAge time.Duration) bool {
 }
 
 var _ types.Strategy = (*Strategy)(nil)
+
+// envTestMonitor is an explicit local harness flag; production leaves it unset.
+const envTestMonitor = "OEV_TEST_MONITOR"

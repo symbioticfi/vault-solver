@@ -5,28 +5,27 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
+	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 )
 
-var marketParamsArgs = abi.Arguments{{Type: mustTupleType([]abi.ArgumentMarshaling{
-	{Name: "loanToken", Type: "address"},
-	{Name: "collateralToken", Type: "address"},
-	{Name: "oracle", Type: "address"},
-	{Name: "irm", Type: "address"},
-	{Name: "lltv", Type: "uint256"},
-})}}
-
-func mustTupleType(components []abi.ArgumentMarshaling) abi.Type {
-	t, err := abi.NewType("tuple", "", components)
+// Morpho hashes the five static market-parameter words. Take their layout from
+// the vendored binding rather than maintaining a second tuple declaration.
+var marketParamsArgs = func() abi.Arguments {
+	contract, err := morphobinding.MorphoMetaData.ParseABI()
 	if err != nil {
-		panic("redstoneoev/defaultstrategy: market params tuple type: " + err.Error())
+		panic("morpho market params ABI: " + err.Error())
 	}
-	return t
-}
+	method, exists := contract.Methods["idToMarketParams"]
+	if !exists || len(method.Outputs) != 5 {
+		panic("morpho market params ABI has changed")
+	}
+	return method.Outputs
+}()
 
-func deriveMarketID(p MarketParams) (common.Hash, error) {
-	enc, err := marketParamsArgs.Pack(p)
+func deriveMarketID(params MarketParams) (common.Hash, error) {
+	data, err := marketParamsArgs.Pack(params.LoanToken, params.CollateralToken, params.Oracle, params.Irm, params.Lltv)
 	if err != nil {
 		return common.Hash{}, errors.Errorf("encode market params: %w", err)
 	}
-	return crypto.Keccak256Hash(enc), nil
+	return crypto.Keccak256Hash(data), nil
 }

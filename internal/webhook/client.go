@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,7 +44,7 @@ type rawConfig struct {
 	Headers          map[string]HeaderValue `yaml:"headers"`
 }
 
-// HeaderValue is either a non-secret literal or an environment variable name resolved by NewClient.
+// HeaderValue holds a literal or an environment variable name, resolved for each request.
 type HeaderValue struct {
 	Value string `yaml:"value"`
 	Env   string `yaml:"env"`
@@ -96,7 +98,7 @@ func parseSize(n int64, field string) (int64, error) {
 	if n == 0 {
 		return defaultWebhookMaxBodyBytes, nil
 	}
-	if n < 0 {
+	if n < 0 || n == math.MaxInt64 {
 		return 0, errors.Errorf("%s: invalid byte size %d", field, n)
 	}
 	return n, nil
@@ -116,19 +118,18 @@ func validateHeaders(raw map[string]HeaderValue) error {
 	return nil
 }
 
-func resolveHeaders(raw map[string]HeaderValue) (map[string]string, error) {
-	out := make(map[string]string, len(raw))
+func applyHeaders(destination http.Header, raw map[string]HeaderValue) error {
 	for name, h := range raw {
 		value := h.Value
 		if h.Env != "" {
 			value = os.Getenv(h.Env)
 			if value == "" {
-				return nil, errors.Errorf("headers.%s: env %q is empty", name, h.Env)
+				return errors.Errorf("headers.%s: env %q is empty", name, h.Env)
 			}
 		}
-		out[name] = value
+		destination.Set(name, value)
 	}
-	return out, nil
+	return nil
 }
 
 // Client sends strict JSON requests to an external HTTP endpoint.
@@ -137,7 +138,7 @@ type Client struct {
 	client           *http.Client
 	maxRequestBytes  int64
 	maxResponseBytes int64
-	headers          map[string]string
+	headers          map[string]HeaderValue
 }
 
 // HTTPStatusError reports a non-successful response from a webhook endpoint.
@@ -190,6 +191,16 @@ func normalizeConfig(cfg Config) (Config, error) {
 }
 
 // NewClient validates config, resolves env-backed headers, and builds a client.
+// NewFromConfig applies the same endpoint and timeout validation for each
+// integration's webhook adapter; integration-specific route names stay with it.
+func NewFromConfig(raw yaml.Node) (*Client, error) {
+	cfg, err := ParseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(cfg)
+}
+
 func NewClient(cfg Config) (*Client, error) {
 	cfg, err := normalizeConfig(cfg)
 	if err != nil {
@@ -199,8 +210,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, errors.Errorf("url: %w", err)
 	}
-	headers, err := resolveHeaders(cfg.Headers)
-	if err != nil {
+	if err := applyHeaders(make(http.Header), cfg.Headers); err != nil {
 		return nil, err
 	}
 	return &Client{
@@ -214,68 +224,75 @@ func NewClient(cfg Config) (*Client, error) {
 		},
 		maxRequestBytes:  cfg.MaxRequestBytes,
 		maxResponseBytes: cfg.MaxResponseBytes,
-		headers:          headers,
+		headers:          maps.Clone(cfg.Headers),
 	}, nil
 }
 
-// DoJSON sends an optional JSON request body and decodes a strict JSON response into resp.
+// DoJSON performs one bounded exchange. Redirects remain disabled so secret headers
+// cannot leave the configured endpoint's authority through a redirect response.
 func (c *Client) DoJSON(ctx context.Context, method, route string, req, resp any) error {
 	if resp == nil {
 		return errors.New("webhook: response target is nil")
 	}
-	var body io.Reader
-	if req != nil {
-		b, err := json.Marshal(req)
-		if err != nil {
-			return errors.Errorf("webhook: encode request: %w", err)
-		}
-		if int64(len(b)) > c.maxRequestBytes {
-			return errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
-		}
-		body = bytes.NewReader(b)
-	}
-	endpoint, err := c.endpoint(route)
+	request, err := c.request(ctx, method, route, req)
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, body)
-	if err != nil {
-		return errors.Errorf("webhook: build request: %w", err)
-	}
-	if req != nil {
-		httpReq.Header.Set("Content-Type", "application/json")
-	}
-	httpReq.Header.Set("Accept", "application/json")
-	for k, v := range c.headers {
-		httpReq.Header.Set(k, v)
-	}
-	httpResp, err := c.client.Do(httpReq)
+	response, err := c.client.Do(request)
 	if err != nil {
 		return errors.Errorf("webhook: %s: %w", method, err)
 	}
-	defer httpResp.Body.Close()
-
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1024))
-		return &HTTPStatusError{statusCode: httpResp.StatusCode, responseBody: string(b)}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1024))
+		statusErr := &HTTPStatusError{statusCode: response.StatusCode, responseBody: string(body)}
+		if readErr != nil {
+			return errors.Join(statusErr, errors.Errorf("webhook: read error response: %w", readErr))
+		}
+		return statusErr
 	}
-	b, err := readLimited(httpResp.Body, c.maxResponseBytes, "response body")
+	body, err := readLimited(response.Body, c.maxResponseBytes, "response body")
 	if err != nil {
 		return errors.Errorf("webhook: read response: %w", err)
 	}
-	if len(bytes.TrimSpace(b)) == 0 {
+	return decodeResponse(body, resp)
+}
+
+func (c *Client) request(ctx context.Context, method, route string, payload any) (*http.Request, error) {
+	endpoint, err := c.endpoint(route)
+	if err != nil {
+		return nil, err
+	}
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, errors.Errorf("webhook: encode request: %w", err)
+		}
+		if int64(len(encoded)) > c.maxRequestBytes {
+			return nil, errors.Errorf("webhook: request body exceeds %d bytes", c.maxRequestBytes)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, errors.Errorf("webhook: build request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if err := applyHeaders(request.Header, c.headers); err != nil {
+		return nil, err
+	}
+	return request, nil
+}
+
+func decodeResponse(body []byte, target any) error {
+	if len(bytes.TrimSpace(body)) == 0 {
 		return errors.New("webhook: empty response")
 	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(resp); err != nil {
-		return errors.Errorf("webhook: decode response: %w", err)
-	}
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("multiple JSON values")
-		}
+	if err := parse.JSON(bytes.NewReader(body), target); err != nil {
 		return errors.Errorf("webhook: decode response: %w", err)
 	}
 	return nil
@@ -321,4 +338,15 @@ func readLimited(r io.Reader, limit int64, label string) ([]byte, error) {
 		return nil, errors.Errorf("%s exceeds %d bytes", label, limit)
 	}
 	return b, nil
+}
+
+// Post preserves typed null responses and returns no partially decoded value on
+// failure. Callers validate the returned protocol decision before acting on it.
+func Post[T any](ctx context.Context, client *Client, path string, input any) (T, error) {
+	var output T
+	if err := client.DoJSON(ctx, http.MethodPost, path, input, &output); err != nil {
+		var zero T
+		return zero, err
+	}
+	return output, nil
 }

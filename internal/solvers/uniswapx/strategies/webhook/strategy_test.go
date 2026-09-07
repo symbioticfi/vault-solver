@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
@@ -78,8 +78,6 @@ func TestValidateQuotePreservesRequestedSide(t *testing.T) {
 func newWebhookTestStrategy(t *testing.T, url string) *Strategy {
 	t.Helper()
 	client, err := webhook.NewClient(webhook.Config{URL: url, Timeout: time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	return New(client)
 }

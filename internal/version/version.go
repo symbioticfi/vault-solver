@@ -17,11 +17,6 @@ var (
 	Date = "unknown"
 )
 
-// GoVersion returns the Go runtime version the binary was built with.
-func GoVersion() string {
-	return runtime.Version()
-}
-
 // String renders a single-line, human-readable version banner.
 func String() string {
 	return "vault-solver " + Version + " (commit " + Commit + ", built " + Date + ", " + runtime.Version() + ")"

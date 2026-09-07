@@ -10,8 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
@@ -33,7 +34,7 @@ func (r *quoteModeReader) latestBlockTime(context.Context) (time.Time, error) {
 	return r.now, nil
 }
 
-func (r *quoteModeReader) resolveRoutes(
+func (r *quoteModeReader) ResolveRoutes(
 	_ context.Context,
 	adapters []common.Address,
 ) ([]liquidlane.Route, error) {
@@ -44,11 +45,11 @@ func (r *quoteModeReader) resolveRoutes(
 	return append([]liquidlane.Route(nil), r.resolved...), r.resolveErr
 }
 
-func (r *quoteModeReader) validateGasTokens([]liquidlane.Route) error {
+func (r *quoteModeReader) ValidateGasTokens([]liquidlane.Route) error {
 	return r.gasErr
 }
 
-func (r *quoteModeReader) quoteSnapshot(
+func (r *quoteModeReader) Quote(
 	_ context.Context,
 	routes []liquidlane.Route,
 	_ common.Address,
@@ -90,10 +91,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		}
 		solver := quoteModeSolver(reader, provider)
 
-		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
-			t.Fatalf("refreshQuoteState: %v", err)
-		}
-		state := solver.quoteState.Load()
+		testcheck.NoError(t, solver.refreshQuoteState(t.Context(), nil), "refreshQuoteState: %v")
+		state := solver.quotes.current()
 		if state == nil || len(state.inventory) != 1 || state.inventory[0].DiscountID == nil ||
 			state.inventory[0].Adapter != advertised.Adapter {
 			t.Fatalf("discount-only quote state = %+v", state)
@@ -123,10 +122,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		solver := quoteModeSolver(reader, provider)
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
-		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
-			t.Fatalf("refreshQuoteState: %v", err)
-		}
-		state := solver.quoteState.Load()
+		testcheck.NoError(t, solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}), "refreshQuoteState: %v")
+		state := solver.quotes.current()
 		if state == nil || len(state.inventory) != 2 {
 			t.Fatalf("configured quote state = %+v", state)
 		}
@@ -152,10 +149,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		reader := &quoteModeReader{now: now, resolved: []liquidlane.Route{active}}
 		solver := quoteModeSolver(reader, provider)
 
-		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
-			t.Fatalf("refreshQuoteState: %v", err)
-		}
-		state := solver.quoteState.Load()
+		testcheck.NoError(t, solver.refreshQuoteState(t.Context(), nil), "refreshQuoteState: %v")
+		state := solver.quotes.current()
 		if state == nil || len(state.inventory) != 0 || len(reader.snapshotRoutes) != 0 {
 			t.Fatalf("inactive advertised token reached quote state: state=%+v routes=%+v", state, reader.snapshotRoutes)
 		}
@@ -179,10 +174,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		solver := quoteModeSolver(reader, provider)
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
-		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
-			t.Fatalf("refreshQuoteState: %v", err)
-		}
-		state := solver.quoteState.Load()
+		testcheck.NoError(t, solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}), "refreshQuoteState: %v")
+		state := solver.quotes.current()
 		if state == nil || len(state.inventory) != 2 || state.inventory[1].DiscountID == nil {
 			t.Fatalf("configured discount was lost after dynamic resolution failure: %+v", state)
 		}
@@ -203,10 +196,8 @@ func TestRefreshQuoteStateInternalDiscountFailureFallsBackToDirect(t *testing.T)
 	solver := quoteModeSolver(reader, provider)
 	solver.cfg.Adapters = []common.Address{route.Adapter}
 
-	if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{route}); err != nil {
-		t.Fatalf("refreshQuoteState: %v", err)
-	}
-	state := solver.quoteState.Load()
+	testcheck.NoError(t, solver.refreshQuoteState(t.Context(), []liquidlane.Route{route}), "refreshQuoteState: %v")
+	state := solver.quotes.current()
 	if state == nil || len(state.inventory) != 1 || state.inventory[0].DiscountID != nil {
 		t.Fatalf("direct fallback state = %+v", state)
 	}
@@ -250,10 +241,8 @@ func TestRefreshQuoteStateInternalWithoutRoutesPublishesEmptyUnreadyState(t *tes
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
 	solver.operations = metrics.operations
 
-	if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
-		t.Fatalf("refreshQuoteState: %v", err)
-	}
-	state := solver.quoteState.Load()
+	testcheck.NoError(t, solver.refreshQuoteState(t.Context(), nil), "refreshQuoteState: %v")
+	state := solver.quotes.current()
 	if state == nil || len(state.inventory) != 0 {
 		t.Fatalf("empty quote state = %+v", state)
 	}
@@ -276,10 +265,8 @@ func TestRefreshQuoteStateSkipsDynamicRouteWithoutGasFeed(t *testing.T) {
 	}
 	solver := quoteModeSolver(reader, provider)
 
-	if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
-		t.Fatalf("refreshQuoteState: %v", err)
-	}
-	state := solver.quoteState.Load()
+	testcheck.NoError(t, solver.refreshQuoteState(t.Context(), nil), "refreshQuoteState: %v")
+	state := solver.quotes.current()
 	if state == nil || len(state.inventory) != 0 || len(reader.snapshotRoutes) != 0 {
 		t.Fatalf("missing-feed quote state=%+v routes=%+v", state, reader.snapshotRoutes)
 	}
@@ -291,7 +278,7 @@ func TestPublishQuoteStateDoesNotRetainConcurrentlyInvalidatedState(t *testing.T
 	solver := &Solver{}
 	expiresAt := time.Now().Add(time.Minute)
 	for range iterations {
-		epoch := solver.quoteEpoch.Load()
+		epoch := solver.quotes.revision()
 		candidate := &quoteState{
 			inventory: []liquidlane.Inventory{{}},
 			expiresAt: expiresAt,
@@ -309,9 +296,8 @@ func TestPublishQuoteStateDoesNotRetainConcurrentlyInvalidatedState(t *testing.T
 		close(start)
 		wg.Wait()
 
-		currentEpoch := solver.quoteEpoch.Load()
-		if current := solver.quoteState.Load(); current != nil && current.epoch != currentEpoch {
-			t.Fatalf("published stale epoch %d while current epoch is %d", current.epoch, currentEpoch)
+		if current := solver.quotes.current(); current != nil {
+			t.Fatal("publication retained a snapshot after its concurrent invalidation")
 		}
 	}
 }
@@ -330,4 +316,10 @@ func quoteModeSolver(reader chainReader, provider liquiddiscounts.Provider) *Sol
 		discounts: provider,
 		log:       logr.Discard(),
 	}
+}
+
+func (q *quotePublication) setForTest(snapshot *quoteState) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.snapshot = snapshot
 }

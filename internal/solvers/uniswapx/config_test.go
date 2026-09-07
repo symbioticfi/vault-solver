@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,9 +37,7 @@ orderServer:
 
 func TestParseConfigDefaultsAndSources(t *testing.T) {
 	cfg, err := parseConfig(uniswapXConfigNode(t, validUniswapXConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if cfg.QuoteServer.ListenAddress != defaultListenAddress ||
 		cfg.QuoteServer.HTTPTimeout != defaultHTTPTimeout ||
 		cfg.QuoteServer.RefreshInterval != defaultRefreshInterval ||
@@ -64,9 +63,7 @@ func TestParseConfigDefaultsAndSources(t *testing.T) {
 func TestParseConfigAllowsMissingGas(t *testing.T) {
 	raw := strings.Replace(validUniswapXConfig, validUniswapXGasConfig, "", 1)
 	cfg, err := parseConfig(uniswapXConfigNode(t, raw))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if cfg.Gas != nil {
 		t.Fatalf("gas config = %#v, want nil", cfg.Gas)
 	}
@@ -163,9 +160,7 @@ func TestParseConfigSolverMode(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, err)
 			if cfg.SolverMode != test.wantMode || cfg.usesDiscounts() != test.wantDiscounts {
 				t.Fatalf(
 					"solverMode = %q, usesDiscounts = %t",
@@ -199,9 +194,7 @@ discounts:
   minimumValidity: 20s
 `
 	cfg, err := parseConfig(uniswapXConfigNode(t, raw))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if cfg.Discounts == nil || cfg.Discounts.HTTPTimeout != 3*time.Second ||
 		cfg.Discounts.MinimumValidity != 20*time.Second {
 		t.Fatalf("discount config = %+v", cfg.Discounts)
@@ -273,8 +266,6 @@ func TestParseConfigRejectsLegacyCosignerPin(t *testing.T) {
 func uniswapXConfigNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
 	var document yaml.Node
-	if err := yaml.Unmarshal([]byte(raw), &document); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(raw), &document))
 	return *document.Content[0]
 }

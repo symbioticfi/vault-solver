@@ -40,67 +40,61 @@ var (
 	authDomain = crypto.Keccak256Hash([]byte("SYMBIOTIC_OEV_AUTH_V1"))
 )
 
-func encodeOperationData(auth operationAuth, legs []selectedLeg, authSig []byte) ([]byte, error) {
+func encodeOperationData(auth operationAuth, legs []selectedLeg, signature []byte) ([]byte, error) {
 	if len(legs) == 0 {
 		return nil, errors.New("operationData: no legs")
 	}
-	if auth.BidAmount == nil || auth.BidAmount.Sign() <= 0 ||
-		auth.MinBundleProfit == nil || auth.MinBundleProfit.Sign() <= 0 ||
-		auth.Deadline == nil || auth.Deadline.Sign() <= 0 {
-		return nil, errors.New("operationData: invalid auth")
+	for _, amount := range []*big.Int{auth.BidAmount, auth.MinBundleProfit, auth.Deadline} {
+		if amount == nil || amount.Sign() <= 0 || amount.BitLen() > 256 {
+			return nil, errors.New("operationData: invalid auth")
+		}
 	}
 	if err := validateOperationLegs(legs); err != nil {
 		return nil, err
 	}
-	enc, err := operationDataArgs.Pack(operationData{Auth: auth, Legs: legs, AuthSig: authSig})
+	payload := operationData{Auth: auth, Legs: legs, AuthSig: signature}
+	encoded, err := operationDataArgs.Pack(payload)
 	if err != nil {
 		return nil, errors.Errorf("encode operationData: %w", err)
 	}
-	return enc, nil
+	return encoded, nil
 }
 
 func callbackAuthDigest(chainID *big.Int, callback, executor common.Address, auth operationAuth, legs []selectedLeg) (common.Hash, error) {
 	if err := validateOperationLegs(legs); err != nil {
 		return common.Hash{}, err
 	}
-	legsHash, err := encodedLegsHash(legs)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	enc, err := authDigestArgs.Pack(
-		authDomain, chainID, callback, executor, auth.AuctionKey, auth.BidAmount, auth.MinBundleProfit,
-		auth.Deadline, legsHash,
-	)
-	if err != nil {
-		return common.Hash{}, errors.Errorf("encode callback auth digest: %w", err)
-	}
-	return crypto.Keccak256Hash(enc), nil
-}
-
-func validateOperationLegs(legs []selectedLeg) error {
-	for i, leg := range legs {
-		if leg.MarketId == (common.Hash{}) {
-			return errors.Errorf("operationData: invalid leg %d marketId", i)
-		}
-		if leg.Borrower == (common.Address{}) {
-			return errors.Errorf("operationData: invalid leg %d borrower", i)
-		}
-		if leg.MaxSeizeAssets == nil || leg.MaxSeizeAssets.Sign() <= 0 {
-			return errors.Errorf("operationData: invalid leg %d maxSeizeAssets", i)
-		}
-		if leg.MinProfit == nil || leg.MinProfit.Sign() <= 0 {
-			return errors.Errorf("operationData: invalid leg %d minProfit", i)
-		}
-	}
-	return nil
-}
-
-func encodedLegsHash(legs []selectedLeg) (common.Hash, error) {
-	enc, err := callbackLegArrayArgs.Pack(legs)
+	encodedLegs, err := callbackLegArrayArgs.Pack(legs)
 	if err != nil {
 		return common.Hash{}, errors.Errorf("encode callback auth legs: %w", err)
 	}
-	return crypto.Keccak256Hash(enc), nil
+	fields := []any{authDomain, chainID, callback, executor, auth.AuctionKey, auth.BidAmount,
+		auth.MinBundleProfit, auth.Deadline, crypto.Keccak256Hash(encodedLegs)}
+	encoded, err := authDigestArgs.Pack(fields...)
+	if err != nil {
+		return common.Hash{}, errors.Errorf("encode callback auth digest: %w", err)
+	}
+	return crypto.Keccak256Hash(encoded), nil
+}
+
+func validateOperationLegs(legs []selectedLeg) error {
+	for index, leg := range legs {
+		invalid := ""
+		switch {
+		case leg.MarketId == (common.Hash{}):
+			invalid = "marketId"
+		case leg.Borrower == (common.Address{}):
+			invalid = "borrower"
+		case leg.MaxSeizeAssets == nil || leg.MaxSeizeAssets.Sign() <= 0 || leg.MaxSeizeAssets.BitLen() > 256:
+			invalid = "maxSeizeAssets"
+		case leg.MinProfit == nil || leg.MinProfit.Sign() <= 0 || leg.MinProfit.BitLen() > 256:
+			invalid = "minProfit"
+		}
+		if invalid != "" {
+			return errors.Errorf("operationData: invalid leg %d %s", index, invalid)
+		}
+	}
+	return nil
 }
 
 func auctionKeyHash(id string) common.Hash {

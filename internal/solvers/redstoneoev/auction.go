@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
-
-var weiPerEth = exp10(18)
 
 const (
 	auctionOutcomeContextCanceled = "context_canceled"
@@ -43,15 +44,15 @@ type bidDecision struct {
 }
 
 func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
-	op, err := opName(raw)
+	frame, err := decodeFrame(raw)
 	if err != nil {
 		s.log.V(1).Error(err, "drop unparseable frame")
 		return
 	}
-	switch op {
+	switch frame.Op {
 	case "auction":
 		start := time.Now()
-		if isFeedAuction(raw) {
+		if frame.feedAuction() {
 			s.metrics.auctionDecision(auctionOutcomeFeedIgnored, time.Since(start))
 			s.log.V(1).Info("ignoring feed auction")
 			return
@@ -60,7 +61,16 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 		if !ok {
 			return
 		}
-		go s.handleAuction(ctx, a, start)
+		// One decision owns the pending-auction snapshot. Do not queue unbounded
+		// goroutines behind a slow strategy while result frames need to keep flowing.
+		if !s.bidMu.TryLock() {
+			s.metrics.auctionDecision("bid_busy", time.Since(start))
+			return
+		}
+		s.bidWG.Go(func() {
+			defer s.bidMu.Unlock()
+			s.decideAuction(ctx, a, start)
+		})
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":
@@ -68,68 +78,72 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 	case "blacklisted":
 		s.handleBlacklisted(raw)
 	default:
-		s.log.V(1).Info("ignoring frame", "op", op)
+		s.log.V(1).Info("ignoring frame", "op", frame.Op)
 	}
 }
 
 func (s *Solver) handleAuctionResult(raw []byte) {
-	var r AuctionResult
-	if err := json.Unmarshal(raw, &r); err != nil {
-		s.log.V(1).Error(err, "drop malformed frame", "op", "auction-result")
+	result, ok := decodeResultFrame[AuctionResult](s.log, raw, "auction-result")
+	if !ok {
 		return
 	}
-	r.ID = normalizeAuctionID(r.ID)
-	liquidator := common.HexToAddress(r.Data.Liquidator)
-	won := liquidator == s.cfg.Callback
-	if won {
-		if bidWei, transitioned := s.markReservationWon(r.ID, time.Now()); transitioned {
-			s.metrics.won(bidWei)
-		}
+	result.ID = normalizeAuctionID(result.ID)
+	won := common.HexToAddress(result.Data.Liquidator) == s.cfg.Callback
+	if !won {
+		s.releaseReservationByAuction(result.ID)
 	} else {
-		s.releaseReservationByAuction(r.ID)
+		if amount, transitioned := s.markReservationWon(result.ID, time.Now()); transitioned {
+			s.metrics.won(amount)
+		}
 	}
-	s.log.Info("auction-result", "id", r.ID, "winner", r.Data.Liquidator, "bid", r.Data.Bid, "won", won)
+	s.log.Info("auction-result", "id", result.ID, "winner", result.Data.Liquidator, "bid", result.Data.Bid, "won", won)
 }
 
 func (s *Solver) handleLiquidationResult(raw []byte) {
-	var r LiquidationResult
-	if err := json.Unmarshal(raw, &r); err != nil {
-		s.log.V(1).Error(err, "drop malformed frame", "op", "liquidation-result")
+	result, ok := decodeResultFrame[LiquidationResult](s.log, raw, "liquidation-result")
+	if !ok {
 		return
 	}
-	r.ID = normalizeAuctionID(r.ID)
-	liquidator := common.HexToAddress(r.Data.Liquidator)
-	ours := liquidator == s.cfg.Callback
-	s.log.Info("liquidation-result", "id", r.ID, "success", r.Data.Success,
-		"txHash", r.Data.TxHash, "error", r.Data.Error, "ours", ours)
+	result.ID = normalizeAuctionID(result.ID)
+	ours := common.HexToAddress(result.Data.Liquidator) == s.cfg.Callback
+	s.log.Info("liquidation-result", "id", result.ID, "success", result.Data.Success,
+		"txHash", result.Data.TxHash, "error", result.Data.Error, "ours", ours)
 	if !ours {
 		return
 	}
 	s.requestStateRefresh()
-	lifecycleKey := r.ID
-	if lifecycleKey == "" {
-		lifecycleKey = liquidationResultIdentity(r)
+	identity := liquidationResultIdentity(result)
+	key := result.ID
+	if key == "" {
+		key = identity
 	}
-	transition := s.settleReservationByAuction(r.ID, lifecycleKey)
+	transition := s.settleReservationByAuction(result.ID, key)
 	if transition.won {
 		s.metrics.won(transition.bidWei)
 	}
 	if transition.settled {
-		s.metrics.settlement(r.Data.Success, transition.bidWei)
+		s.metrics.settlement(result.Data.Success, transition.bidWei)
 	}
-	if !r.Data.Success {
-		now := time.Now()
-		identity := liquidationResultIdentity(r)
-		recorded := true
-		if identity == "" {
-			s.breaker.recordFailure(now)
-		} else {
-			recorded = s.breaker.recordFailureOnce(identity, now)
-		}
-		if recorded {
-			s.metrics.breakerFailure()
-		}
+	if result.Data.Success {
+		return
 	}
+	if identity != "" {
+		if !s.breaker.recordFailureOnce(identity, time.Now()) {
+			return
+		}
+	} else {
+		s.breaker.recordFailure(time.Now())
+	}
+	s.metrics.breakerFailure()
+}
+
+func decodeResultFrame[T any](log logr.Logger, raw []byte, operation string) (T, bool) {
+	var result T
+	if err := json.Unmarshal(raw, &result); err != nil {
+		log.V(1).Error(err, "drop malformed frame", "op", operation)
+		return result, false
+	}
+	return result, true
 }
 
 func liquidationResultIdentity(result LiquidationResult) string {
@@ -180,13 +194,17 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 }
 
 func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time.Time) {
+	s.bidMu.Lock()
+	defer s.bidMu.Unlock()
+	s.decideAuction(ctx, a, start)
+}
+
+func (s *Solver) decideAuction(ctx context.Context, a AuctionMessage, start time.Time) {
 	outcome := auctionOutcomeContextCanceled
 	defer func() {
 		s.metrics.auctionDecision(outcome, time.Since(start))
 	}()
 
-	s.bidMu.Lock()
-	defer s.bidMu.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
@@ -196,7 +214,7 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	}
 	bidCtx, cancel := auctionBidContext(ctx, a, start)
 	defer cancel()
-	d := s.buildBidWithContext(bidCtx, a, time.Now)
+	d := s.buildBid(bidCtx, a, time.Now)
 
 	if d.skip != "" {
 		outcome = d.skip
@@ -214,8 +232,16 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 		outcome = auctionOutcomeTooLate
 		return
 	}
+	if ctx.Err() != nil {
+		outcome = auctionOutcomeContextCanceled
+		return
+	}
+	var sendDeadline time.Time
+	if a.TimeoutMs > 0 {
+		sendDeadline = auctionDeadline(a, start)
+	}
 	s.reserve(d.nonce, time.Now(), a.ID, d.bidWei)
-	if !s.ws.Send(marshal(d.solve)) {
+	if !s.ws.Send(ctx, marshal(d.solve), sendDeadline) {
 		outcome = auctionOutcomeSendDropped
 		s.releaseReservationByAuction(a.ID)
 		s.log.Info("bid NOT enqueued (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
@@ -257,24 +283,6 @@ func (s *Solver) bidExpired(a AuctionMessage, start time.Time) bool {
 	return true
 }
 
-// staleStateGate fails closed when the solver-owned Executor accounting is older than cfg.ExecutorStateMaxAge.
-func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
-	kv := make([]any, 0, 4)
-	if st, ok := s.state.load(); !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
-		var at time.Time
-		if ok {
-			at = st.UpdatedAt
-		}
-		kv = append(kv, "opsAge", cacheAge(at, now))
-	}
-	if len(kv) == 0 {
-		return ""
-	}
-	s.log.Error(errors.New("executor state stale"), "bid skipped: cache exceeds intervals.executorStateMaxAgeMs",
-		append(kv, "maxAge", s.cfg.ExecutorStateMaxAge, "auction", auctionID)...)
-	return skipExecutorStateStale
-}
-
 func cacheAge(at, now time.Time) string {
 	if at.IsZero() {
 		return "never"
@@ -282,100 +290,78 @@ func cacheAge(at, now time.Time) string {
 	return now.Sub(at).String()
 }
 
-func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
-	return s.buildBidWithContext(ctx, a, nowFn)
-}
-
-func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
+func (s *Solver) buildBid(ctx context.Context, auction AuctionMessage, nowFn func() time.Time) bidDecision {
 	now := nowFn()
-	if tripped, _ := s.breaker.tripped(now); tripped {
+	log := s.log.WithValues("auction", auction.ID)
+	if stopped, _ := s.breaker.tripped(now); stopped {
 		return bidDecision{skip: "breaker"}
 	}
-	if skip := s.staleStateGate(a.ID, now); skip != "" {
-		return bidDecision{skip: skip}
+	snapshot, known := s.state.load()
+	if !known || now.Sub(snapshot.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
+		log.Error(errors.New("executor state stale"), "bid skipped: cache exceeds intervals.executorStateMaxAgeMs",
+			"opsAge", cacheAge(snapshot.UpdatedAt, now), "maxAge", s.cfg.ExecutorStateMaxAge)
+		return bidDecision{skip: skipExecutorStateStale}
 	}
-	st, ok := s.state.load()
-	if !ok {
-		return bidDecision{skip: "state_unknown"}
-	}
-	if st.Exec.Locked {
+	if snapshot.Exec.Locked {
 		return bidDecision{skip: "signer_locked"}
 	}
-	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
-		return bidDecision{skip: depositSkip}
+	if bigmath.OrZero(snapshot.Exec.Deposit).Cmp(minDeposit) < 0 {
+		log.Info("bid skipped: executor deposit below minimum", "depositWei", snapshot.Exec.Deposit, "minDepositWei", minDeposit)
+		return bidDecision{skip: skipDepositLow}
 	}
-	inFlight := s.inFlightSnapshot()
-	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
-		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
+		log.Error(errors.New("strategy is not configured"), "bid skipped")
 		return bidDecision{skip: "strategy_error"}
 	}
-	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, inFlight, gasPrice))
+	gasPrice := bigmath.Clone(s.cfg.MaxTxGasPrice)
+	decision, err := s.strategy.DecideBid(ctx, s.bidInput(auction, now, snapshot, s.inFlightSnapshot(), gasPrice))
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctx.Err() != nil {
 			outcome := auctionOutcomeContextCanceled
-			if errors.Is(ctxErr, context.DeadlineExceeded) {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				outcome = auctionOutcomeTooLate
 			}
-			s.log.V(1).Info("strategy stopped with auction context", "auction", a.ID, "reason", outcome)
+			log.V(1).Info("strategy stopped with auction context", "reason", outcome)
 			return bidDecision{skip: outcome}
 		}
-		s.log.Error(err, "strategy failed", "auction", a.ID)
+		log.Error(err, "strategy failed")
 		return bidDecision{skip: "strategy_error"}
 	}
-	if err := checkExecutionEnvelope(out); err != nil {
-		s.log.Error(err, "execution envelope rejected", "auction", a.ID)
+	if err := checkExecutionEnvelope(decision); err != nil {
+		log.Error(err, "execution envelope rejected")
 		return bidDecision{skip: "strategy_invalid"}
 	}
-	if out.Decision == types.DecisionSkip {
-		return bidDecision{skip: types.BoundedSkipReason(out.Reason), skipDetail: out.Reason}
+	if decision.Decision == types.DecisionSkip {
+		return bidDecision{skip: types.BoundedSkipReason(decision.Reason), skipDetail: decision.Reason}
 	}
-	bidNative := cloneBig(out.BidAmount)
-	if s.bidCapExceeded(a, bidNative) {
+	if limit := s.cfg.MaxBidWei; limit != nil && decision.BidAmount.Cmp(limit) > 0 {
+		log.Info("bid skipped: strategy bid exceeds configured cap", "bidWei", decision.BidAmount, "maxBidWei", limit)
 		return bidDecision{skip: skipBidCap}
 	}
-	nonce := s.nonces.next(st.Exec.Nonce.Uint64())
-	callback := s.cfg.Callback
-	sig, err := SignBid(s.deps.Signer, s.chainID, callback, out.OperationData, bidNative, big.NewInt(int64(nonce)), gasPrice)
+	prepared, err := s.signDecision(auction.ID, snapshot.Exec, decision, gasPrice)
 	if err != nil {
-		s.log.Error(err, "sign bid failed", "auction", a.ID)
+		log.Error(err, "sign bid failed")
 		return bidDecision{skip: "sign_error"}
 	}
-
-	return bidDecision{
-		nonce:    nonce,
-		callback: callback,
-		bidWei:   bidNative,
-		solve: SolveMessage{
-			Op: "solve", ID: a.ID,
-			Data: SolveData{
-				Bid:               weiToEthString(bidNative),
-				Nonce:             new(big.Int).SetUint64(nonce).String(),
-				OperationCallback: callback.Hex(),
-				OperationData:     hexutil.Encode(out.OperationData),
-				LiquidationSig:    hexutil.Encode(sig),
-				MaxTxGasPrice:     gasPrice.String(),
-			},
-		},
-	}
+	return prepared
 }
 
-func (s *Solver) bidCapExceeded(a AuctionMessage, bidNative *big.Int) bool {
-	if s.cfg.MaxBidWei == nil || bidNative.Cmp(s.cfg.MaxBidWei) <= 0 {
-		return false
+func (s *Solver) signDecision(auctionID string, executor ExecutorState, output types.BidOutput, gasPrice *big.Int) (bidDecision, error) {
+	nonce, err := s.nonces.next(executor.Nonce.Uint64())
+	if err != nil {
+		return bidDecision{}, errors.Errorf("allocate bid nonce: %w", err)
 	}
-	s.log.Info("bid skipped: strategy bid exceeds configured cap",
-		"auction", a.ID, "bidWei", bidNative, "maxBidWei", s.cfg.MaxBidWei)
-	return true
-}
-
-func (s *Solver) depositSkip(a AuctionMessage, st cachedState) string {
-	if orZero(st.Exec.Deposit).Cmp(minDeposit) < 0 {
-		s.log.Info("bid skipped: executor deposit below minimum",
-			"auction", a.ID, "depositWei", st.Exec.Deposit, "minDepositWei", minDeposit)
-		return skipDepositLow
+	prepared := bidDecision{nonce: nonce, callback: s.cfg.Callback, bidWei: bigmath.Clone(output.BidAmount)}
+	nonceValue := new(big.Int).SetUint64(nonce)
+	signature, err := SignBid(s.deps.Signer, s.chainID, prepared.callback, output.OperationData, prepared.bidWei, nonceValue, gasPrice)
+	if err != nil {
+		return bidDecision{}, err
 	}
-	return ""
+	prepared.solve = SolveMessage{Op: "solve", ID: auctionID, Data: SolveData{
+		Bid: bigmath.Decimal(prepared.bidWei, 18), Nonce: nonceValue.String(), OperationCallback: prepared.callback.Hex(),
+		OperationData: hexutil.Encode(output.OperationData), LiquidationSig: hexutil.Encode(signature), MaxTxGasPrice: gasPrice.String(),
+	}}
+	return prepared, nil
 }
 
 func tooLate(emitMs int64, timeoutMs int, start, now time.Time) bool {
@@ -399,17 +385,4 @@ func sinceEmitMs(emitMs int64, now time.Time) int64 {
 		return 0
 	}
 	return now.UnixMilli() - emitMs
-}
-
-func weiToEthString(wei *big.Int) string {
-	q, r := new(big.Int).DivMod(wei, weiPerEth, new(big.Int))
-	if r.Sign() == 0 {
-		return q.String()
-	}
-	frac := r.String()
-	for len(frac) < 18 {
-		frac = "0" + frac
-	}
-	frac = strings.TrimRight(frac, "0")
-	return q.String() + "." + frac
 }

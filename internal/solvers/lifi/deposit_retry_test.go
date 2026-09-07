@@ -5,18 +5,15 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestOrderDepositRetryQueueIsBoundedAndCoalescesReplays(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	queue := newOrderDepositRetryQueue(1)
 	first := &submittedOrder{OrderID: "first"}
-	if err := queue.schedule(first, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := queue.schedule(&submittedOrder{OrderID: "first"}, now); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, queue.schedule(first, now))
+	testcheck.NoError(t, queue.schedule(&submittedOrder{OrderID: "first"}, now))
 	if queue.len() != 1 || len(queue.byKey) != 1 {
 		t.Fatalf("coalesced queue: ready=%d tracked=%d, want 1/1", queue.len(), len(queue.byKey))
 	}
@@ -36,12 +33,8 @@ func TestOrderDepositRetryQueueReturnsEarliestState(t *testing.T) {
 	queue := newOrderDepositRetryQueue(2)
 	later := &submittedOrder{OrderID: "later"}
 	earlier := &submittedOrder{OrderID: "earlier"}
-	if err := queue.schedule(later, now.Add(100*time.Millisecond)); err != nil {
-		t.Fatal(err)
-	}
-	if err := queue.schedule(earlier, now); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, queue.schedule(later, now.Add(100*time.Millisecond)))
+	testcheck.NoError(t, queue.schedule(earlier, now))
 
 	readyAt, ok := queue.nextReadyAt()
 	if !ok || !readyAt.Equal(now.Add(initialOrderDepositRetryBackoff)) {
@@ -65,17 +58,13 @@ func TestOrderDepositRetryQueueStopsAtOrderDeadline(t *testing.T) {
 	order.Order.Expires = uint32(now.Add(2 * time.Second).Unix())
 	queue := newOrderDepositRetryQueue(1)
 
-	if err := queue.schedule(order, now); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, queue.schedule(order, now))
 	for range 2 {
 		readyAt, ok := queue.nextReadyAt()
 		if !ok || popOrderDepositRetry(t, queue, readyAt) != order {
 			t.Fatal("scheduled retry was not ready")
 		}
-		if err := queue.schedule(order, readyAt); err != nil {
-			t.Fatalf("reschedule before deadline: %v", err)
-		}
+		testcheck.NoError(t, queue.schedule(order, readyAt), "reschedule before deadline: %v")
 	}
 	readyAt, ok := queue.nextReadyAt()
 	if !ok || popOrderDepositRetry(t, queue, readyAt) != order {
@@ -134,9 +123,7 @@ func TestOrderDepositRetryQueueRejectsLateDequeue(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	order := &submittedOrder{OrderID: "late"}
 	queue := newOrderDepositRetryQueue(1)
-	if err := queue.schedule(order, now); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, queue.schedule(order, now))
 
 	got, err := queue.popReady(now.Add(maximumOrderDepositRetryWindow))
 	if got != order {
@@ -157,8 +144,6 @@ func popOrderDepositRetry(
 ) *submittedOrder {
 	t.Helper()
 	order, err := queue.popReady(now)
-	if err != nil {
-		t.Fatalf("pop ready: %v", err)
-	}
+	testcheck.NoError(t, err, "pop ready: %v")
 	return order
 }

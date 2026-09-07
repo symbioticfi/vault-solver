@@ -14,9 +14,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestOrderClientSubmitQuotes(t *testing.T) {
@@ -27,9 +27,7 @@ func TestOrderClientSubmitQuotes(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		gotHeader = r.Header.Get("x-api-key")
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
+		testcheck.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody), "decode body: %v")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":2}`))
 	}))
@@ -37,9 +35,7 @@ func TestOrderClientSubmitQuotes(t *testing.T) {
 
 	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
 	err := client.submitQuotes(context.Background(), []types.Quote{submitQuotesTestQuote()})
-	if err != nil {
-		t.Fatalf("submitQuotes: %v", err)
-	}
+	testcheck.NoError(t, err, "submitQuotes: %v")
 	if gotHeader != "test-key" {
 		t.Fatalf("x-api-key = %q", gotHeader)
 	}
@@ -163,9 +159,7 @@ func TestOrderClientReplaceSupportedContracts(t *testing.T) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/solver/supported-contracts" {
 			t.Fatalf("%s %s", r.Method, r.URL.Path)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
+		testcheck.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody), "decode body: %v")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[],"outputSettler":[]}}`))
 	}))
@@ -183,9 +177,7 @@ func TestOrderClientReplaceSupportedContracts(t *testing.T) {
 			outputSettler,
 		),
 	)
-	if err != nil {
-		t.Fatalf("replaceSupportedContracts: %v", err)
-	}
+	testcheck.NoError(t, err, "replaceSupportedContracts: %v")
 	if len(gotBody.InputSettler) != 1 ||
 		gotBody.InputSettler[0].Chain != "eip155:11155111" ||
 		gotBody.InputSettler[0].Address != inputSettler.Hex() {
@@ -201,89 +193,72 @@ func TestOrderClientReplaceSupportedContracts(t *testing.T) {
 	}
 }
 
-func TestOrderClientEnsureSupportedContractsSkipsPutWhenPresent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/solver/supported-contracts" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:11155111","address":"0x1111111111111111111111111111111111111111"}],"outputSettler":[{"chain":"eip155:11155111","address":"0x2222222222222222222222222222222222222222"}]}}`))
-	}))
-	defer srv.Close()
-
-	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
-	err := client.ensureSupportedContracts(
-		context.Background(),
-		11155111,
-		common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		common.HexToAddress("0x2222222222222222222222222222222222222222"),
-	)
-	if err != nil {
-		t.Fatalf("ensureSupportedContracts: %v", err)
-	}
-}
-
-func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
-	var methods []string
-	var gotBody lifiorder.PutSupportedContractsDto
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/solver/supported-contracts" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		methods = append(methods, r.Method)
-		w.Header().Set("Content-Type", "application/json")
-		switch r.Method {
-		case http.MethodGet:
-			_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`))
-		case http.MethodPut:
-			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-				t.Fatalf("decode body: %v", err)
+// PUT replaces the whole set: preserve other chains and reject incomplete GET snapshots.
+func TestOrderClientEnsureSupportedContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantErr string
+		wantPut             bool
+	}{
+		{"present", `{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:11155111","address":"0x1111111111111111111111111111111111111111"}],"outputSettler":[{"chain":"eip155:11155111","address":"0x2222222222222222222222222222222222222222"}]}}`, "", false},
+		{"missing", `{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`, "", true},
+		{"no data", `{}`, "incomplete snapshot", false},
+		{"missing a kind", `{"data":{"inputSettler":[]}}`, "incomplete snapshot", false},
+		{"null kind", `{"data":{"inputSettler":[],"outputSettler":null}}`, "incomplete snapshot", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var methods []string
+			var gotBody lifiorder.PutSupportedContractsDto
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/solver/supported-contracts" {
+					t.Errorf("path = %s", r.URL.Path)
+				}
+				methods = append(methods, r.Method)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method {
+				case http.MethodGet:
+					_, _ = w.Write([]byte(tc.body))
+				case http.MethodPut:
+					if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+						t.Errorf("decode body: %v", err)
+					}
+					_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[],"outputSettler":[]}}`))
+				default:
+					t.Errorf("method = %s", r.Method)
+				}
+			}))
+			defer srv.Close()
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			err := client.ensureSupportedContracts(t.Context(), 11155111,
+				common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				common.HexToAddress("0x2222222222222222222222222222222222222222"))
+			if tc.wantErr == "" {
+				testcheck.NoError(t, err)
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
 			}
-			_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[],"outputSettler":[]}}`))
-		default:
-			t.Fatalf("method = %s", r.Method)
-		}
-	}))
-	defer srv.Close()
-
-	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
-	err := client.ensureSupportedContracts(
-		context.Background(),
-		11155111,
-		common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		common.HexToAddress("0x2222222222222222222222222222222222222222"),
-	)
-	if err != nil {
-		t.Fatalf("ensureSupportedContracts: %v", err)
-	}
-	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
-		t.Fatalf("methods = %v", methods)
-	}
-	inputSettlers := gotBody.InputSettler
-	if got := len(inputSettlers); got != 2 {
-		t.Fatalf("inputSettler count = %d", got)
-	}
-	if got := inputSettlers[0].Address; got != "0x4444444444444444444444444444444444444444" {
-		t.Fatalf("preserved inputSettler address = %v", got)
-	}
-	if got := inputSettlers[1].Address; got != "0x1111111111111111111111111111111111111111" {
-		t.Fatalf("configured inputSettler address = %v", got)
-	}
-	outputSettlers := gotBody.OutputSettler
-	if got := len(outputSettlers); got != 2 {
-		t.Fatalf("outputSettler count = %d", got)
-	}
-	if got := outputSettlers[0].Address; got != "0x5555555555555555555555555555555555555555" {
-		t.Fatalf("preserved outputSettler address = %v", got)
-	}
-	if got := outputSettlers[1].Address; got != "0x2222222222222222222222222222222222222222" {
-		t.Fatalf("configured outputSettler address = %v", got)
-	}
-	if gotBody.Oracle != nil {
-		t.Fatalf("oracles = %+v, want omitted deprecated field", gotBody.Oracle)
+			wantMethods := []string{http.MethodGet}
+			if tc.wantPut {
+				wantMethods = append(wantMethods, http.MethodPut)
+				for _, settlers := range []struct {
+					got             []lifiorder.PutSupportedContractsDtoOracleInner
+					old, configured string
+				}{
+					{gotBody.InputSettler, "0x4444444444444444444444444444444444444444", "0x1111111111111111111111111111111111111111"},
+					{gotBody.OutputSettler, "0x5555555555555555555555555555555555555555", "0x2222222222222222222222222222222222222222"},
+				} {
+					if len(settlers.got) != 2 || settlers.got[0].Address != settlers.old || settlers.got[1].Address != settlers.configured ||
+						settlers.got[0].Chain != "eip155:1" || settlers.got[1].Chain != "eip155:11155111" {
+						t.Fatalf("settlers = %+v, want preserved %s then configured %s", settlers.got, settlers.old, settlers.configured)
+					}
+				}
+				if gotBody.Oracle != nil {
+					t.Fatalf("oracles = %+v, want omitted deprecated field", gotBody.Oracle)
+				}
+			}
+			if !slices.Equal(methods, wantMethods) {
+				t.Fatalf("methods = %v, want %v", methods, wantMethods)
+			}
+		})
 	}
 }
 
@@ -335,9 +310,7 @@ func TestOrderClientListRecoverableOrdersPaginatesAndFilters(t *testing.T) {
 
 	client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
 	orders, err := client.listRecoverableOrders(t.Context(), cfg.Executor)
-	if err != nil {
-		t.Fatalf("listRecoverableOrders: %v", err)
-	}
+	testcheck.NoError(t, err, "listRecoverableOrders: %v")
 	if len(orders) != 102 {
 		t.Fatalf("orders = %d, want 102", len(orders))
 	}
@@ -413,45 +386,9 @@ func TestOrderClientListRecoverableOrdersPaginationLimit(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("listRecoverableOrdersByStatus: %v", err)
-			}
+			testcheck.NoError(t, err, "listRecoverableOrdersByStatus: %v")
 			if len(orders) != tc.wantOrders {
 				t.Fatalf("orders = %d, want %d", len(orders), tc.wantOrders)
-			}
-		})
-	}
-}
-
-// PUT replaces the whole registered set, so a snapshot missing a kind (the tolerant client
-// zero-values a dropped field) must not be merged and pushed back.
-func TestOrderClientEnsureSupportedContractsRejectsIncompleteSnapshot(t *testing.T) {
-	for name, body := range map[string]string{
-		"no data":        `{}`,
-		"missing a kind": `{"data":{"inputSettler":[]}}`,
-		"null kind":      `{"data":{"inputSettler":[],"outputSettler":null}}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			var methods []string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				methods = append(methods, r.Method)
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(body))
-			}))
-			defer srv.Close()
-
-			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
-			err := client.ensureSupportedContracts(
-				context.Background(),
-				11155111,
-				common.HexToAddress("0x1111111111111111111111111111111111111111"),
-				common.HexToAddress("0x2222222222222222222222222222222222222222"),
-			)
-			if err == nil || !strings.Contains(err.Error(), "incomplete snapshot") {
-				t.Fatalf("err = %v, want incomplete snapshot", err)
-			}
-			if len(methods) != 1 || methods[0] != http.MethodGet {
-				t.Fatalf("methods = %v, want only GET", methods)
 			}
 		})
 	}

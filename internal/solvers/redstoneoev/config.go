@@ -10,7 +10,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
-	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
+	remote "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/webhook"
 )
 
 // rawConfig mirrors the YAML shape; strings/ms are parsed into typed values in parseConfig.
@@ -21,7 +21,7 @@ type rawConfig struct {
 	Callback         string                   `yaml:"callback"`
 	LiquidityLens    string                   `yaml:"liquidityLens"`
 	Gas              *liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy         rawStrategyConfig        `yaml:"strategy"`
+	Strategy         StrategyConfig           `yaml:"strategy"`
 	MaxTxGasPriceWei string                   `yaml:"maxTxGasPriceWei"`
 	MaxBidWei        string                   `yaml:"maxBidWei"`
 	Breaker          rawBreaker               `yaml:"breaker"`
@@ -29,13 +29,9 @@ type rawConfig struct {
 }
 
 type rawWS struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv"`
-}
-
-type rawStrategyConfig struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
+	MaxMessageBytes *int64 `yaml:"maxMessageBytes"`
+	URL             string `yaml:"url"`
+	APIKeyEnv       string `yaml:"apiKeyEnv"`
 }
 
 type rawBreaker struct {
@@ -52,8 +48,9 @@ type rawIntervals struct {
 
 // Config is the validated, typed redstone-oev configuration.
 type Config struct {
-	WSURL     string
-	APIKeyEnv string
+	MaxMessageBytes int64
+	WSURL           string
+	APIKeyEnv       string
 
 	Executor common.Address
 	Adapter  common.Address
@@ -78,12 +75,10 @@ type Config struct {
 	ExecutorStateMaxAge time.Duration
 }
 
-type StrategyConfig struct {
-	Name   string
-	Config yaml.Node
-}
+type StrategyConfig = parse.NamedConfig
 
 const (
+	defaultMaxMessageBytes     = 1 << 20
 	defaultMaxTxGasPrice       = 60_000_000_000 // 60 gwei
 	defaultBreakerFails        = 3              // halt after 3 failed liquidations in the window
 	defaultBreakerWindow       = time.Hour
@@ -97,6 +92,13 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	var raw rawConfig
 	if err := parse.DecodeStrict(node, &raw); err != nil { // reject unknown keys → typos fail fast
 		return nil, err
+	}
+	maxMessageBytes := int64(defaultMaxMessageBytes)
+	if raw.WS.MaxMessageBytes != nil {
+		if *raw.WS.MaxMessageBytes <= 0 {
+			return nil, errors.New("ws.maxMessageBytes must be positive")
+		}
+		maxMessageBytes = *raw.WS.MaxMessageBytes
 	}
 	if raw.WS.URL == "" {
 		return nil, errors.New("ws.url is required")
@@ -116,11 +118,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
+	liquidityLens, err := parse.OptionalAddress(raw.LiquidityLens, "liquidityLens")
+	if err != nil {
+		return nil, err
 	}
 	var gas *liquidlanegas.OracleConfig
 	if raw.Gas != nil {
@@ -148,13 +148,14 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 
 	cfg := &Config{
-		WSURL:         raw.WS.URL,
-		APIKeyEnv:     raw.WS.APIKeyEnv,
-		Executor:      executor,
-		Adapter:       adapter,
-		Callback:      callback,
-		LiquidityLens: liquidityLens,
-		Gas:           gas,
+		MaxMessageBytes: maxMessageBytes,
+		WSURL:           raw.WS.URL,
+		APIKeyEnv:       raw.WS.APIKeyEnv,
+		Executor:        executor,
+		Adapter:         adapter,
+		Callback:        callback,
+		LiquidityLens:   liquidityLens,
+		Gas:             gas,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
@@ -164,21 +165,24 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		OpsPoll:             opsPoll,
 		ExecutorStateMaxAge: executorStateMaxAge,
 	}
-	if cfg.MaxTxGasPrice, err = parse.Big(parse.OrDefault(raw.MaxTxGasPriceWei, big.NewInt(defaultMaxTxGasPrice).String()), "maxTxGasPriceWei"); err != nil {
+	if cfg.BreakerMaxFailures < 1 {
+		return nil, errors.New("breaker.maxFailures must be positive")
+	}
+	if cfg.MaxTxGasPrice, err = parse.Uint(parse.OrDefault(raw.MaxTxGasPriceWei, big.NewInt(defaultMaxTxGasPrice).String()), "maxTxGasPriceWei", 256); err != nil {
 		return nil, err
 	}
 	if cfg.MaxTxGasPrice.Sign() <= 0 { // signed into the EXECUTOR_V6 bid as the tx.gasprice ceiling; the contract requires it > 0
 		return nil, errors.New("maxTxGasPriceWei must be > 0")
 	}
 	if raw.MaxBidWei != "" {
-		if cfg.MaxBidWei, err = parse.Big(raw.MaxBidWei, "maxBidWei"); err != nil {
+		if cfg.MaxBidWei, err = parse.Uint(raw.MaxBidWei, "maxBidWei", 256); err != nil {
 			return nil, err
 		}
 		if cfg.MaxBidWei.Sign() <= 0 {
 			return nil, errors.New("maxBidWei must be > 0")
 		}
 	}
-	if strategies.RequiresBidCap(cfg.Strategy.Name) && cfg.MaxBidWei == nil {
+	if cfg.Strategy.Name == remote.Name && cfg.MaxBidWei == nil {
 		return nil, errors.Errorf("maxBidWei is required for %s strategy", cfg.Strategy.Name)
 	}
 	return cfg, nil

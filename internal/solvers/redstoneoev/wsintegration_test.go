@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // wsintegration_test.go drives the REAL wsClient (connect → subscribe → read → reconnect-safe) end to
@@ -46,36 +49,22 @@ func TestWSConnectionMetricTracksFullySubscribedLifetime(t *testing.T) {
 	defer srv.Close()
 
 	m, err := newMetrics(prometheus.NewRegistry(), defaultStrategyName, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	client := newWSClient(wsConfig{
 		URL: "ws" + strings.TrimPrefix(srv.URL, "http"), APIKey: "k", Topics: topics,
 		PingInterval: time.Hour, MsgTimeout: time.Hour, RotateAfter: time.Hour,
 	}, logr.Discard(), func(context.Context, []byte) {}, m.setFeedConnected)
-	if got := testutil.ToFloat64(m.feedConnected); got != 0 {
-		t.Fatalf("feed connected before Run = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, m.feedConnected, 0)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- client.Run(ctx) }()
-	select {
-	case <-allSubscriptionsRead:
-	case <-time.After(time.Second):
-		t.Fatal("client did not send all subscriptions")
-	}
+	testcheck.ReceiveWithin(t, allSubscriptionsRead, time.Second, "client did not send all subscriptions")
 	waitForMetricValue(t, m.feedConnected, 1)
 
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("client did not stop after cancellation")
-	}
-	if got := testutil.ToFloat64(m.feedConnected); got != 0 {
-		t.Fatalf("feed connected after teardown = %v, want 0", got)
-	}
+	testcheck.ReceiveWithin(t, done, time.Second, "client did not stop after cancellation")
+	metricstest.RequireValue(t, m.feedConnected, 0)
 }
 
 func waitForMetricValue(t *testing.T, gauge prometheus.Gauge, want float64) {
@@ -118,7 +107,7 @@ func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 			if rerr != nil {
 				return
 			}
-			if op, _ := opName(data); op == "solve" {
+			if frame, _ := decodeFrame(data); frame.Op == "solve" {
 				gotSolve <- string(data)
 			}
 		}
@@ -130,7 +119,7 @@ func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 		Topics: []string{"t"}, BackoffInitial: 10 * time.Millisecond,
 	}, logr.Discard(), s.handleMessage, nil)
 	// Pre-load a solve into the send buffer as if a prior auction had queued it during the downtime.
-	s.ws.Send([]byte(`{"op":"solve","id":"stale","data":{}}`))
+	s.ws.Send(t.Context(), []byte(`{"op":"solve","id":"stale","data":{}}`), time.Time{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -142,5 +131,70 @@ func TestWSIntegrationDropsStaleSolveAcrossReconnect(t *testing.T) {
 		t.Fatalf("stale solve replayed across reconnect: %s", frame)
 	case <-time.After(500 * time.Millisecond):
 		// No solve written on the reconnect — flushSendQueue discarded the stale frame. ✓
+	}
+}
+
+func TestWSWriterSkipsSolveCanceledWhileQueued(t *testing.T) {
+	received := make(chan string, 1)
+	upgrade := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrade.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, data, err := conn.ReadMessage()
+		if err == nil {
+			received <- string(data)
+		}
+	}))
+	defer server.Close()
+	var client *wsClient
+	client = newWSClient(wsConfig{URL: "ws" + strings.TrimPrefix(server.URL, "http")}, logr.Discard(), func(context.Context, []byte) {}, func(connected bool) {
+		if !connected {
+			return
+		}
+		stale, cancel := context.WithCancel(t.Context())
+		if !client.Send(stale, []byte("stale"), time.Time{}) {
+			t.Error("stale frame was not initially accepted")
+		}
+		cancel()
+		if !client.Send(t.Context(), []byte("fresh"), time.Now().Add(time.Minute)) {
+			t.Error("fresh frame was not accepted")
+		}
+	})
+	_ = client.serveOnce(t.Context())
+	select {
+	case got := <-received:
+		if got != "fresh" {
+			t.Fatalf("first written frame = %q, want fresh", got)
+		}
+	default:
+		t.Fatal("writer did not deliver fresh frame")
+	}
+	if client.Send(t.Context(), []byte("expired"), time.Now().Add(-time.Second)) {
+		t.Fatal("expired solve was accepted")
+	}
+}
+
+func TestWSReadLimitRejectsOversizedFrame(t *testing.T) {
+	upgrade := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrade.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", 65)))
+	}))
+	defer server.Close()
+	var dispatched atomic.Int32
+	client := newWSClient(wsConfig{URL: "ws" + strings.TrimPrefix(server.URL, "http"), MaxMessageBytes: 64}, logr.Discard(), func(context.Context, []byte) { dispatched.Add(1) }, nil)
+	if err := client.serveOnce(t.Context()); err == nil {
+		t.Fatal("oversized frame did not terminate connection")
+	}
+	if dispatched.Load() != 0 {
+		t.Fatal("oversized frame reached solver")
 	}
 }

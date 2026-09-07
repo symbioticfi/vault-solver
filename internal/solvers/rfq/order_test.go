@@ -7,8 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // fillSignature is the canonical signature of the mixed fill overload; pinning its selector guards
@@ -50,9 +50,7 @@ func TestEncodeFill_SelectorMatchesMixedOverload(t *testing.T) {
 	}}}, tIn, common.HexToAddress("0x0000000000000000000000000000000000000010"))
 
 	data, err := encodeFill(sampleOrder(), []byte{0xaa, 0xbb}, swaps, nil, emptyExecutorData)
-	if err != nil {
-		t.Fatalf("encodeFill: %v", err)
-	}
+	testcheck.NoError(t, err, "encodeFill: %v")
 	if len(data) < 4 || !bytes.Equal(data[:4], want) {
 		t.Fatalf("selector = %x, want %x (wrong fill overload?)", data[:4], want)
 	}
@@ -62,13 +60,9 @@ func TestDecodeOrder_RoundTrip(t *testing.T) {
 	order := sampleOrder()
 	// Encode just the Order tuple (as the backend's encodedOrder is) using the same arg set.
 	encoded, err := orderTupleArgs.Pack(order)
-	if err != nil {
-		t.Fatalf("pack order: %v", err)
-	}
+	testcheck.NoError(t, err, "pack order: %v")
 	got, err := decodeOrder(encoded)
-	if err != nil {
-		t.Fatalf("decodeOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "decodeOrder: %v")
 	if got.Request.TokenIn != order.Request.TokenIn ||
 		got.Request.AmountIn.Cmp(order.Request.AmountIn) != 0 ||
 		got.Filler != order.Filler ||

@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestParseOffer(t *testing.T) {
@@ -18,9 +20,7 @@ func TestParseOffer(t *testing.T) {
 		MaxRate:            "1000000000000000000",
 		MaxAssets:          "5000",
 	})
-	if err != nil {
-		t.Fatalf("ParseOffer: %v", err)
-	}
+	testcheck.NoError(t, err, "ParseOffer: %v")
 	if offer.MaxAssets.String() != "5000" || offer.Discount.String() != "100000" || offer.CollateralDecimals != 6 {
 		t.Fatalf("offer = %+v", offer)
 	}
@@ -88,9 +88,7 @@ func TestParseSigned(t *testing.T) {
 		},
 		SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
 	})
-	if err != nil {
-		t.Fatalf("ParseSigned: %v", err)
-	}
+	testcheck.NoError(t, err, "ParseSigned: %v")
 	if parsed.Terms.Discount.String() != "123" || parsed.Terms.Nonce.String() != "2" {
 		t.Fatalf("parsed = %+v", parsed)
 	}

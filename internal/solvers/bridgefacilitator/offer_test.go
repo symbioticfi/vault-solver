@@ -5,23 +5,26 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestOfferExpiration(t *testing.T) {
 	buffer := 2 * time.Hour
 	now := time.Unix(1_700_000_000, 0).UTC()
 
-	withSolveStart := func(s string) auctionView {
+	withSolveStart := func(s string) auction {
 		dto := testAuctionDto(1, common.Address{0xaa}, "100")
 		if s != "" {
 			dto.SetSolveStartTime(s)
 		}
-		return auctionView{dto}
+		a, err := parseAuction(dto)
+		testcheck.NoError(t, err)
+		return a
 	}
 
 	tests := []struct {
 		name string
-		av   auctionView
+		av   auction
 		want int64
 	}{
 		{

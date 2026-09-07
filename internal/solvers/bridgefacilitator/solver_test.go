@@ -12,8 +12,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
@@ -69,7 +70,7 @@ func TestSubmitOfferRechecksLaneReadinessBeforeEveryAPICall(t *testing.T) {
 	var ready atomic.Bool
 	ready.Store(true)
 	s := &Solver{
-		api:       newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:       newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), time.Second),
 		laneReady: ready.Load,
 	}
 
@@ -111,9 +112,7 @@ func TestRefreshTargets_ExplicitAdaptersSkipFactoryDiscovery(t *testing.T) {
 		offers:     newOfferTracker(),
 	}
 	added, err := s.refreshTargets(t.Context())
-	if err != nil {
-		t.Fatalf("refreshTargets: %v", err)
-	}
+	testcheck.NoError(t, err, "refreshTargets: %v")
 	if len(added) != 1 || len(s.targets) != 1 || s.targets[0].Adapter != adapterAddr {
 		t.Fatalf("refresh added=%v targets=%v, want only configured adapter %s", added, s.targets, adapterAddr.Hex())
 	}
@@ -139,9 +138,7 @@ func TestRefreshTargets_RetainsLastKnownGoodOnWholeRefreshFailure(t *testing.T) 
 		offers:     newOfferTracker(),
 	}
 	added, err := s.refreshTargets(t.Context())
-	if err != nil {
-		t.Fatalf("first refresh: %v", err)
-	}
+	testcheck.NoError(t, err, "first refresh: %v")
 	if len(added) != 1 || len(s.targets) != 1 || s.targets[0].Adapter != adapterAddr {
 		t.Fatalf("first refresh added=%v targets=%v", added, s.targets)
 	}
@@ -154,7 +151,7 @@ func TestRefreshTargets_RetainsLastKnownGoodOnWholeRefreshFailure(t *testing.T) 
 	if len(s.targets) != 1 || s.targets[0].Adapter != adapterAddr {
 		t.Fatalf("targets after failed refresh = %v, want last-known-good adapter", s.targets)
 	}
-	if got := s.offers.liveCoverage(42, now); got.Cmp(big.NewInt(100)) != 0 {
+	if got := bigmath.OrZero(s.offers.snapshot(now).coverage[42]); got.Cmp(big.NewInt(100)) != 0 {
 		t.Fatalf("offer coverage after failed refresh = %s, want last-known-good 100", got)
 	}
 }
@@ -195,7 +192,7 @@ func TestRefreshTargets_RemovesAndReaddsWhenSignerEligibilityChanges(t *testing.
 	if err != nil || len(added) != 0 || len(s.targets) != 0 {
 		t.Fatalf("removal refresh added=%v targets=%v err=%v", added, s.targets, err)
 	}
-	if got := s.offers.liveCoverage(42, now); got.Sign() != 0 {
+	if got := bigmath.OrZero(s.offers.snapshot(now).coverage[42]); got.Sign() != 0 {
 		t.Fatalf("removed adapter still contributes live coverage: %s", got)
 	}
 	added, err = s.refreshTargets(t.Context())
@@ -316,7 +313,7 @@ func TestRefreshTargetsAndHydrate_HydratesOnlyNewlyUsableAdapters(t *testing.T) 
 	s := &Solver{
 		cfg:        &Config{Targets: []Target{{Adapter: adapterAddr}}},
 		reader:     newReader(c, common.Address{}),
-		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
@@ -360,20 +357,16 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 	s := &Solver{
 		cfg:        &Config{AdapterFactory: factoryAddr},
 		reader:     newReader(c, common.Address{}),
-		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second, logr.Discard()),
+		api:        newAPIClient(srv.URL, fakeSigner{addr: signer}, big.NewInt(11155111), time.Second),
 		log:        logr.Discard(),
 		signerAddr: signer,
 		offers:     newOfferTracker(),
 	}
-	if err := s.refreshTargetsAndHydrate(t.Context()); err != nil {
-		t.Fatalf("empty startup refresh: %v", err)
-	}
+	testcheck.NoError(t, s.refreshTargetsAndHydrate(t.Context()), "empty startup refresh: %v")
 	if len(s.targets) != 0 || listCalls.Load() != 0 {
 		t.Fatalf("empty startup targets=%v listOffers calls=%d", s.targets, listCalls.Load())
 	}
-	if err := s.refreshTargetsAndHydrate(t.Context()); err != nil {
-		t.Fatalf("discovery refresh: %v", err)
-	}
+	testcheck.NoError(t, s.refreshTargetsAndHydrate(t.Context()), "discovery refresh: %v")
 	if len(s.targets) != 1 || s.targets[0].Adapter != adapterAddr {
 		t.Fatalf("discovery targets=%v, want %s", s.targets, adapterAddr.Hex())
 	}

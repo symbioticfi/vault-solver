@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestOrderClientReadsSingleOpenOrderSnapshot(t *testing.T) {
@@ -41,9 +42,7 @@ func TestOrderClientReadsSingleOpenOrderSnapshot(t *testing.T) {
 	}, "secret")
 	client.requestGap = 0
 	orders, err := client.openOrders(context.Background(), 1, &filler)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if requests != 1 || len(orders) != 1 || orders[0].OrderHash != firstHash {
 		t.Fatalf("requests/orders = %d/%+v", requests, orders)
 	}
@@ -51,9 +50,7 @@ func TestOrderClientReadsSingleOpenOrderSnapshot(t *testing.T) {
 
 func TestOrderClientDecodesCurrentDutchV2Response(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/orders-v2-current.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture)
@@ -63,9 +60,7 @@ func TestOrderClientDecodesCurrentDutchV2Response(t *testing.T) {
 	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
 	client.requestGap = 0
 	orders, err := client.openOrders(t.Context(), 1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if len(orders) != 1 {
 		t.Fatalf("orders = %d, want 1", len(orders))
 	}
@@ -128,9 +123,7 @@ func TestOrderClientOrdersByHashBatches(t *testing.T) {
 	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
 	client.requestGap = 0
 	terminals, err := client.ordersByHash(t.Context(), 1, hashes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if requests != 2 || len(terminals) != len(hashes) {
 		t.Fatalf("requests/terminals = %d/%d, want 2/%d", requests, len(terminals), len(hashes))
 	}
@@ -238,9 +231,7 @@ func TestOrderClientReadsRecentFillerHistoryAcrossStatuses(t *testing.T) {
 	client := newOrderClient(OrderServerConfig{BaseURL: server.URL, HTTPTimeout: time.Second}, "secret")
 	client.requestGap = 0
 	orders, err := client.recentOrders(t.Context(), 1, filler, time.Unix(900, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if len(orders) != 1 || orders[0].CreatedAt != 901 {
 		t.Fatalf("history = %+v, want only the newer order", orders)
 	}
@@ -271,7 +262,7 @@ func TestOrderClientRateLimitsSnapshot(t *testing.T) {
 }
 
 func TestOrderResponseLimitReturnsError(t *testing.T) {
-	reader := &errorLimitReader{reader: strings.NewReader("abc"), remaining: 2}
+	reader := &limitedResponseBody{ReadCloser: io.NopCloser(strings.NewReader("abc")), remaining: 2}
 	if _, err := io.ReadAll(reader); err == nil || !strings.Contains(err.Error(), "exceeds size limit") {
 		t.Fatalf("err = %v", err)
 	}

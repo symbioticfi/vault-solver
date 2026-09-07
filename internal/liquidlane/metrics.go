@@ -46,21 +46,23 @@ func NewFillMetrics(workflow *observability.WorkflowMetrics) *FillMetrics {
 	return &FillMetrics{workflow: workflow, now: time.Now}
 }
 
-func (m *FillMetrics) Observe(
-	receipt *types.Receipt,
-	tokenIn common.Address,
-	amountIn *big.Int,
-	tokenOut common.Address,
-	amountOut *big.Int,
-	plannedSurplus *big.Int,
-) {
+func (m *FillMetrics) Observe(receipt *types.Receipt, tokenIn common.Address, amountIn *big.Int,
+	tokenOut common.Address, amountOut, surplus *big.Int) {
 	if m == nil || receipt == nil || receipt.Status != types.ReceiptStatusSuccessful {
 		return
 	}
 	m.ObserveOutcome(FillOutcomeSuccess)
-	m.add(tokenIn, FillAmountInput, amountIn)
-	m.add(tokenOut, FillAmountOutput, amountOut)
-	m.add(tokenOut, FillAmountPlannedSurplus, plannedSurplus)
+	for _, entry := range []struct {
+		token  common.Address
+		kind   string
+		amount *big.Int
+	}{
+		{tokenIn, FillAmountInput, amountIn}, {tokenOut, FillAmountOutput, amountOut}, {tokenOut, FillAmountPlannedSurplus, surplus},
+	} {
+		if entry.token != (common.Address{}) {
+			m.workflow.AddAmount(fillWorkflowEvent, entry.token.Hex(), entry.kind, entry.amount)
+		}
+	}
 }
 
 // ObserveOutcome records one bounded fill outcome without adding successful receipt amounts.
@@ -70,16 +72,14 @@ func (m *FillMetrics) ObserveOutcome(outcome string) {
 	}
 }
 
-func (m *FillMetrics) add(token common.Address, kind string, amount *big.Int) {
-	if token != (common.Address{}) {
-		m.workflow.AddAmount(fillWorkflowEvent, token.Hex(), kind, amount)
-	}
-}
-
 // PlannedSurplus returns the positive difference between planned routed and required output.
 func PlannedSurplus(routed, required *big.Int) *big.Int {
-	if routed == nil || required == nil || routed.Cmp(required) <= 0 {
-		return new(big.Int)
+	surplus := new(big.Int)
+	if routed != nil && required != nil {
+		surplus.Sub(routed, required)
 	}
-	return new(big.Int).Sub(routed, required)
+	if surplus.Sign() < 0 {
+		surplus.SetInt64(0)
+	}
+	return surplus
 }

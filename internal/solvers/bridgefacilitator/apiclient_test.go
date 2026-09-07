@@ -12,7 +12,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/go-logr/logr"
 )
 
 // fakeSigner is a minimal signer.Signer test double that signs nothing meaningful (65 zero bytes).
@@ -44,7 +43,7 @@ func TestAPIClient_ListOffers_SignedPerAdapter(t *testing.T) {
 	defer srv.Close()
 
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000042")
-	ac := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), 5*time.Second, logr.Discard())
+	ac := newAPIClient(srv.URL, fakeSigner{}, big.NewInt(11155111), 5*time.Second)
 	if _, err := ac.listOffers(context.Background(), adapter); err != nil {
 		t.Fatalf("listOffers: %v", err)
 	}

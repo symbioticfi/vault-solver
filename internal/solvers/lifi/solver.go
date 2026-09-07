@@ -30,11 +30,6 @@ const (
 	lifiOrderStatusRefunded
 )
 
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
-
 type Solver struct {
 	cfg          *Config
 	chainID      int64
@@ -56,16 +51,16 @@ type Solver struct {
 }
 
 type chainReader interface {
-	resolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error)
+	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]route, error)
 	validateExecutor(
 		ctx context.Context,
 		executor, inputSettler, outputSettler, caller common.Address,
 	) error
 	validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []route) error
-	validateGasTokens(routes []route) error
-	quoteSnapshots(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
-	fillSnapshots(
+	ValidateGasTokens(routes []route) error
+	Quote(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
+	Fill(
 		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
 	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
@@ -83,7 +78,7 @@ type transactionLaneState interface {
 	SubscribeLaneState() (<-chan struct{}, func())
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func New(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -103,7 +98,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey, log)
+	feed := newOrderFeed(cfg.OrderServer, apiKey, log)
 	var metrics *lifiMetrics
 	if deps.Metrics != nil {
 		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
@@ -140,7 +135,7 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
-	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
+	routes, err := s.reader.ResolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
 		s.log.Error(startupErr, "adapter resolution failed",
@@ -153,7 +148,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
-	if err := s.reader.validateGasTokens(routes); err != nil {
+	if err := s.reader.ValidateGasTokens(routes); err != nil {
 		startupErr := errors.Errorf("lifi: validate gas oracles: %w", err)
 		s.log.Error(startupErr, "gas oracle validation failed",
 			"routes", len(routes), "gasAccounting", s.cfg.Gas != nil)
@@ -223,29 +218,30 @@ func (s *Solver) Run(ctx context.Context) error {
 }
 
 func (s *Solver) runLoops(ctx context.Context, routes []route) error {
-	feedConnections := make(chan context.Context)
 	feedCtx, stopFeed := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopFeed()
 	quoteCtx, stopQuotes := context.WithCancel(ctx)
 	defer stopQuotes()
-
-	feedDone := make(chan error, 1)
-	quoteDone := make(chan error, 1)
-	go func() { feedDone <- s.runOrderFeed(feedCtx, routes, feedConnections) }()
-	go func() { quoteDone <- s.quoteLoop(quoteCtx, routes, s.quoteRefresh, feedConnections) }()
-
-	select {
-	case quoteErr := <-quoteDone:
-		// Keep consuming matched orders until active quotes are expired or the bounded
-		// shutdown attempt finishes, then stop intake and await accepted fills until the
-		// shared tx manager completes or reaches its finite hard stop.
-		stopFeed()
-		return preferLifecycleError(quoteErr, <-feedDone)
-	case feedErr := <-feedDone:
-		// A failed feed cannot consume matches, so stop quote renewal and expire known curves.
-		stopQuotes()
-		return preferLifecycleError(feedErr, <-quoteDone)
+	connections := make(chan context.Context)
+	type completion struct {
+		quotes bool
+		err    error
 	}
+	done := make(chan completion, 2)
+	go func() { done <- completion{err: s.runOrderFeed(feedCtx, routes, connections)} }()
+	go func() {
+		done <- completion{quotes: true, err: s.quoteLoop(quoteCtx, routes, s.quoteRefresh, connections)}
+	}()
+	first := <-done
+	if first.quotes {
+		// Quote shutdown expires advertised curves before stopping match intake.
+		// Accepted fills remain owned by the feed until the transaction manager drains.
+		stopFeed()
+	} else {
+		// A failed feed cannot consume matches: expire quotes and await that cleanup.
+		stopQuotes()
+	}
+	return preferLifecycleError(first.err, (<-done).err)
 }
 
 func preferLifecycleError(primary, secondary error) error {

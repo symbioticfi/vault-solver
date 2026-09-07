@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
@@ -25,20 +26,14 @@ type exampleConfigFile struct {
 // parseConfig, so the example can't drift out of sync with the parser/validation.
 func TestExampleConfigParses(t *testing.T) {
 	data, err := os.ReadFile("../../../config/redstone-oev.example.yaml")
-	if err != nil {
-		t.Fatalf("read example config: %v", err)
-	}
+	testcheck.NoError(t, err, "read example config: %v")
 	var top exampleConfigFile
-	if err := yaml.Unmarshal(data, &top); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal(data, &top))
 	if len(top.Solvers) != 1 || top.Solvers[0].Name != Name {
 		t.Fatalf("example must define exactly the %q solver, got %+v", Name, top.Solvers)
 	}
 	cfg, err := parseConfig(top.Solvers[0].Config)
-	if err != nil {
-		t.Fatalf("example config failed to parse: %v", err)
-	}
+	testcheck.NoError(t, err, "example config failed to parse: %v")
 	// Full liquidation is the production default; disabling it is the explicit fallback if settlement
 	// routing ever has issues with full-collateral/bad-debt cases.
 	strategyCfg := parseDefaultStrategyConfigForTest(t, cfg)
@@ -53,9 +48,7 @@ func TestExampleConfigParses(t *testing.T) {
 func decodeCfg(t *testing.T, y string) (*Config, error) {
 	t.Helper()
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(y), &node); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(y), &node))
 	// The framework hands the solver the `config:` sub-node; here y is that node's content.
 	return parseConfig(node)
 }
@@ -71,9 +64,7 @@ func strategyConfigBlock(body string) string {
 func parseDefaultStrategyConfigForTest(t *testing.T, c *Config) defaultstrategy.Config {
 	t.Helper()
 	cfg, err := defaultstrategy.ParseConfig(c.Strategy.Config)
-	if err != nil {
-		t.Fatalf("parse default strategy config: %v", err)
-	}
+	testcheck.NoError(t, err, "parse default strategy config: %v")
 	return cfg
 }
 
@@ -144,9 +135,7 @@ func TestConfigProfiles(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := decodeCfg(t, tc.yaml)
-			if err != nil {
-				t.Fatalf("profile failed to parse: %v", err)
-			}
+			testcheck.NoError(t, err, "profile failed to parse: %v")
 			tc.check(t, cfg)
 		})
 	}
@@ -184,9 +173,7 @@ maxBidWei: "1000000000000000"
 
 func TestParseConfigValid(t *testing.T) {
 	cfg, err := decodeCfg(t, validCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	strategyCfg := parseDefaultStrategyConfigForTest(t, cfg)
 	if strategyCfg.BidWei.String() != "500000000000000" { // 0.0005 ETH
 		t.Fatalf("bidWei = %s", strategyCfg.BidWei)
@@ -229,9 +216,7 @@ strategy:
     morphoApiUrl: https://api.morpho.org/graphql
     bid: {bidEth: "0.0001"}
 `)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	strategyCfg := parseDefaultStrategyConfigForTest(t, cfg)
 	if !strategyCfg.Sizing.AllowFullLiquidation {
 		t.Fatalf("defaults not applied: allowFullLiquidation=%v", strategyCfg.Sizing.AllowFullLiquidation)
@@ -273,9 +258,7 @@ strategy:
 
 func TestParseConfigBidAuthTTL(t *testing.T) {
 	cfg, err := decodeCfg(t, wsline+addrs+strategyConfigBlock("    morphoApiUrl: https://api.morpho.org/graphql\n    bid: {bidEth: \"0.0005\", authTtlMs: 120000}\n")+feedLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got := parseDefaultStrategyConfigForTest(t, cfg).CallbackAuthTTL; got != 2*time.Minute {
 		t.Fatalf("callback auth TTL = %v, want 2m", got)
 	}
@@ -293,9 +276,7 @@ func TestParseConfigBidAuthTTL(t *testing.T) {
 func TestParseConfigMaxTrackedPositions(t *testing.T) {
 	t.Run("explicit positive honored", func(t *testing.T) {
 		cfg, err := decodeCfg(t, wsline+addrs+strategyBlock("    maxTrackedPositions: 50\n")+feedLine)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testcheck.NoError(t, err)
 		if got := parseDefaultStrategyConfigForTest(t, cfg).MaxTrackedPositions; got != 50 {
 			t.Fatalf("maxTrackedPositions = %d, want 50", got)
 		}
@@ -317,17 +298,13 @@ func TestParseConfigMaxTrackedPositions(t *testing.T) {
 // extra haircut) must survive parsing, not be silently replaced by the 2% default.
 func TestParseConfigSwapHaircutZeroRespected(t *testing.T) {
 	cfg, err := decodeCfg(t, wsline+addrs+strategyBlock("    sizing: {swapHaircutBps: 0}\n")+feedLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got := parseDefaultStrategyConfigForTest(t, cfg).Sizing.SwapHaircutBps; got != 0 {
 		t.Fatalf("explicit swapHaircutBps:0 should be respected, got %d", got)
 	}
 	// And unset still defaults to 2%.
 	cfg2, err := decodeCfg(t, wsline+addrs+api+feedLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got := parseDefaultStrategyConfigForTest(t, cfg2).Sizing.SwapHaircutBps; got != 200 {
 		t.Fatalf("unset swapHaircutBps should default to %d, got %d", 200, got)
 	}
@@ -409,3 +386,25 @@ const (
 )
 
 var adapterAddr = common.HexToAddress("0xB5951fecFc34f56a6Ffbd62A2c61cE328E9De70b")
+
+func TestWSMessageLimit(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		want    int64
+		invalid bool
+	}{
+		{"", defaultMaxMessageBytes, false}, {"  maxMessageBytes: 4096\n", 4096, false},
+		{"  maxMessageBytes: 0\n", 0, true}, {"  maxMessageBytes: -1\n", 0, true},
+	} {
+		cfg, err := decodeCfg(t, strings.Replace(validCfg, "ws:\n", "ws:\n"+tc.value, 1))
+		if tc.invalid {
+			if err == nil {
+				t.Fatalf("invalid limit accepted: %q", tc.value)
+			}
+			continue
+		}
+		if err != nil || cfg.MaxMessageBytes != tc.want {
+			t.Fatalf("limit %q: config=%+v err=%v", tc.value, cfg, err)
+		}
+	}
+}

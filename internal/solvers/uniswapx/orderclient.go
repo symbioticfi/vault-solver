@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/uniswapxservice"
+	"github.com/symbioticfi/vault-solver/internal/httpclient"
 )
 
 const (
@@ -54,38 +56,32 @@ func (c *orderClient) openOrders(ctx context.Context, chainID int64, filler *com
 	return c.orders(ctx, chainID, filler, orderStatusOpen)
 }
 
-func (c *orderClient) recentOrders(
-	ctx context.Context,
-	chainID int64,
-	filler common.Address,
-	createdAfter time.Time,
-) ([]orderEntry, error) {
-	if filler == (common.Address{}) {
-		return nil, errors.New("GET /orders history: zero filler")
+func (c *orderClient) recentOrders(ctx context.Context, chainID int64, filler common.Address, createdAfter time.Time) ([]orderEntry, error) {
+	if filler == (common.Address{}) || createdAfter.IsZero() {
+		return nil, errors.New("GET /orders history: filler and created-after time are required")
 	}
-	if createdAfter.IsZero() {
-		return nil, errors.New("GET /orders history: zero created-after time")
-	}
-	orders, snapshotErr := c.orders(ctx, chainID, &filler, "")
-	filtered := make([]orderEntry, 0, len(orders))
-	previousCreatedAt := int64(^uint64(0) >> 1)
-	for i, order := range orders {
-		if order.CreatedAt <= 0 {
-			return filtered, errors.Join(snapshotErr, errors.Errorf("GET /orders history: order %d has no valid createdAt", i))
+	snapshot, fetchErr := c.orders(ctx, chainID, &filler, "")
+	selected := make([]orderEntry, 0, len(snapshot))
+	covered := false
+	for index, entry := range snapshot {
+		if entry.CreatedAt <= 0 {
+			return selected, errors.Join(fetchErr, errors.Errorf("GET /orders history: order %d has no valid createdAt", index))
 		}
-		if order.CreatedAt > previousCreatedAt {
-			return filtered, errors.Join(snapshotErr, errors.New("GET /orders history: response is not newest-first"))
+		if index > 0 && entry.CreatedAt > snapshot[index-1].CreatedAt {
+			return selected, errors.Join(fetchErr, errors.New("GET /orders history: response is not newest-first"))
 		}
-		previousCreatedAt = order.CreatedAt
-		if order.CreatedAt > createdAfter.Unix() {
-			filtered = append(filtered, order)
+		if entry.CreatedAt <= createdAfter.Unix() {
+			covered = true
+		} else {
+			selected = append(selected, entry)
 		}
 	}
-	if errors.Is(snapshotErr, errOrderSnapshotTruncated) &&
-		len(orders) > 0 && orders[len(orders)-1].CreatedAt <= createdAfter.Unix() {
-		return filtered, nil
+	// A truncated suffix is harmless only after validating the whole returned page
+	// and proving it reaches beyond the requested history window.
+	if covered && errors.Is(fetchErr, errOrderSnapshotTruncated) {
+		fetchErr = nil
 	}
-	return filtered, snapshotErr
+	return selected, fetchErr
 }
 
 func (c *orderClient) orders(
@@ -94,15 +90,9 @@ func (c *orderClient) orders(
 	filler *common.Address,
 	status string,
 ) ([]orderEntry, error) {
-	if err := c.waitForRequestSlot(ctx); err != nil {
-		return nil, errors.Errorf("wait for orders rate limit: %w", err)
-	}
 	response, err := c.executeOrderRequest(ctx, chainID, filler, status)
 	if err != nil {
 		return nil, err
-	}
-	if response == nil {
-		return nil, errors.New("GET /orders: empty response")
 	}
 	if len(response.Orders) > orderPageLimit {
 		return nil, errors.Errorf(
@@ -149,15 +139,9 @@ func (c *orderClient) ordersByHash(
 	}
 
 	terminals := make(map[common.Hash]orderTerminal, len(hashes))
-	for start := 0; start < len(hashes); start += maxOrderHashBatch {
-		end := min(start+maxOrderHashBatch, len(hashes))
-		if err := c.fetchOrderHashBatch(ctx, chainID, hashes[start:end], terminals); err != nil {
+	for batch := range slices.Chunk(hashes, maxOrderHashBatch) {
+		if err := c.fetchOrderHashBatch(ctx, chainID, batch, terminals); err != nil {
 			return nil, err
-		}
-	}
-	for hash := range requested {
-		if _, ok := terminals[hash]; !ok {
-			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
 		}
 	}
 	return terminals, nil
@@ -169,9 +153,6 @@ func (c *orderClient) fetchOrderHashBatch(
 	hashes []common.Hash,
 	terminals map[common.Hash]orderTerminal,
 ) error {
-	if err := c.waitForRequestSlot(ctx); err != nil {
-		return errors.Errorf("wait for orders rate limit: %w", err)
-	}
 	hashValues := make([]string, len(hashes))
 	batch := make(map[common.Hash]struct{}, len(hashes))
 	for i, hash := range hashes {
@@ -183,15 +164,9 @@ func (c *orderClient) fetchOrderHashBatch(
 		Limit(float32(len(hashes))).
 		OrderHashes(strings.Join(hashValues, ",")).
 		OrderType(uniswapxservice.DUTCH_V2)
-	response, httpResponse, err := request.Execute()
-	if httpResponse != nil && httpResponse.Body != nil {
-		defer httpResponse.Body.Close()
-	}
+	response, err := c.execute(ctx, request, "GET /orders by hash")
 	if err != nil {
-		return apiErr("GET /orders by hash", httpResponse, err)
-	}
-	if response == nil {
-		return errors.New("GET /orders by hash: empty response")
+		return err
 	}
 	if response.GetCursor() != "" {
 		return errors.New("GET /orders by hash: unexpected paginated response")
@@ -237,70 +212,57 @@ func (c *orderClient) executeOrderRequest(
 	if filler != nil {
 		request = request.Filler(filler.Hex())
 	}
-	response, httpResponse, err := request.Execute()
-	if httpResponse != nil && httpResponse.Body != nil {
-		defer httpResponse.Body.Close()
+	return c.execute(ctx, request, "GET /orders")
+}
+
+// Every request, including status reconciliation, passes the same rate and response boundary.
+func (c *orderClient) execute(ctx context.Context, request uniswapxservice.ApiOrdersGetRequest, operation string) (*uniswapxservice.GetOrdersResponse, error) {
+	if err := c.waitForRequestSlot(ctx); err != nil {
+		return nil, errors.Errorf("wait for orders rate limit: %w", err)
 	}
+	response, err := httpclient.Execute(operation, request.Execute)
+
 	if err != nil {
-		return nil, apiErr("GET /orders", httpResponse, err)
+		return nil, err
+	}
+	if response == nil {
+		return nil, errors.Errorf("%s: empty response", operation)
 	}
 	return response, nil
 }
 
-// apiErr reports the status line and response body: the generated client formats the error
-// model's pointer fields with %s, which renders as %!s(*string=0x...) instead of the detail.
-func apiErr(what string, resp *http.Response, err error) error {
-	var genErr *uniswapxservice.GenericOpenAPIError
-	if resp != nil && errors.As(err, &genErr) {
-		if body := strings.TrimSpace(string(genErr.Body())); body != "" {
-			return errors.Errorf("%s: %s: %s", what, resp.Status, body)
-		}
+func orderTerminalFromAPI(order *uniswapxservice.DutchV2OrderEntity, chainID int64) (hash common.Hash, terminal orderTerminal, err error) {
+	// A status response must bind the same protocol and chain before it can retire local work.
+	if order == nil {
+		return hash, terminal, errors.New("order is missing")
 	}
-	return errors.Errorf("%s: %w", what, err)
-}
-
-func orderTerminalFromAPI(
-	order *uniswapxservice.DutchV2OrderEntity,
-	chainID int64,
-) (common.Hash, orderTerminal, error) {
-	if order.Type != orderTypeDutchV2 {
-		return common.Hash{}, orderTerminal{}, errors.Errorf("unexpected order type %q", order.Type)
+	switch {
+	case order.Type != orderTypeDutchV2:
+		return hash, terminal, errors.Errorf("unexpected order type %q", order.Type)
+	case int64(order.ChainId) != chainID:
+		return hash, terminal, errors.Errorf("order chain id %d does not match %d", int64(order.ChainId), chainID)
+	case !order.OrderStatus.IsValid():
+		return hash, terminal, errors.Errorf("invalid order status %q", order.OrderStatus)
 	}
-	if int64(order.ChainId) != chainID {
-		return common.Hash{}, orderTerminal{}, errors.Errorf(
-			"order chain id %d does not match %d",
-			int64(order.ChainId),
-			chainID,
-		)
-	}
-	orderHash, err := decodeHash(order.OrderHash)
-	if err != nil || orderHash == (common.Hash{}) {
+	hash, err = decodeHash(order.OrderHash)
+	if err != nil || hash == (common.Hash{}) {
 		return common.Hash{}, orderTerminal{}, errors.Errorf("invalid order hash %q", order.OrderHash)
 	}
-	if !order.OrderStatus.IsValid() {
-		return common.Hash{}, orderTerminal{}, errors.Errorf("invalid order status %q", order.OrderStatus)
-	}
-
-	terminal := orderTerminal{Status: string(order.OrderStatus)}
-	txHashValue, hasTxHash := order.GetTxHashOk()
-	if hasTxHash {
-		txHash, decodeErr := decodeHash(*txHashValue)
-		if decodeErr != nil || txHash == (common.Hash{}) {
-			return common.Hash{}, orderTerminal{}, errors.Errorf("invalid transaction hash %q", *txHashValue)
+	terminal.Status = string(order.OrderStatus)
+	transaction, present := order.GetTxHashOk()
+	if present {
+		terminal.TxHash, err = decodeHash(*transaction)
+		if err != nil || terminal.TxHash == (common.Hash{}) {
+			return common.Hash{}, orderTerminal{}, errors.Errorf("invalid transaction hash %q", *transaction)
 		}
-		terminal.TxHash = txHash
 	}
-	if terminal.Status == orderStatusFilled {
-		if !hasTxHash {
+	if present != (terminal.Status == orderStatusFilled) {
+		if !present {
 			return common.Hash{}, orderTerminal{}, errors.New("filled order has no transaction hash")
 		}
-	} else if hasTxHash {
-		return common.Hash{}, orderTerminal{}, errors.Errorf(
-			"status %q unexpectedly has transaction hash",
-			terminal.Status,
-		)
+		return common.Hash{}, orderTerminal{}, errors.Errorf("status %q unexpectedly has transaction hash", terminal.Status)
 	}
-	return orderHash, terminal, nil
+	return hash, terminal, nil
 }
 
 func decodeHash(value string) (common.Hash, error) {
@@ -350,27 +312,21 @@ func (t responseLimitTransport) RoundTrip(request *http.Request) (*http.Response
 	if err != nil || response == nil || response.Body == nil {
 		return response, err
 	}
-	response.Body = &limitedResponseBody{
-		Reader: &errorLimitReader{reader: response.Body, remaining: t.limit},
-		Closer: response.Body,
-	}
+	response.Body = &limitedResponseBody{ReadCloser: response.Body, remaining: t.limit}
 	return response, nil
 }
 
+// The body owns both its byte budget and underlying Close operation.
 type limitedResponseBody struct {
-	io.Reader
-	io.Closer
-}
+	io.ReadCloser
 
-type errorLimitReader struct {
-	reader    io.Reader
 	remaining int64
 }
 
-func (r *errorLimitReader) Read(data []byte) (int, error) {
+func (r *limitedResponseBody) Read(data []byte) (int, error) {
 	if r.remaining <= 0 {
 		var probe [1]byte
-		n, err := r.reader.Read(probe[:])
+		n, err := r.ReadCloser.Read(probe[:])
 		if n > 0 {
 			return 0, errors.New("order response exceeds size limit")
 		}
@@ -379,27 +335,31 @@ func (r *errorLimitReader) Read(data []byte) (int, error) {
 	if int64(len(data)) > r.remaining {
 		data = data[:r.remaining]
 	}
-	n, err := r.reader.Read(data)
+	n, err := r.ReadCloser.Read(data)
 	r.remaining -= int64(n)
 	return n, err
 }
 
 func (c *orderClient) waitForRequestSlot(ctx context.Context) error {
-	c.requestMu.Lock()
-	defer c.requestMu.Unlock()
-	if c.requestGap <= 0 {
-		return nil
-	}
-	delay := time.Until(c.lastRequest.Add(c.requestGap))
-	if delay > 0 {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.requestMu.Lock()
+		delay := time.Until(c.lastRequest.Add(c.requestGap))
+		if delay <= 0 || c.requestGap <= 0 {
+			c.lastRequest = time.Now()
+			c.requestMu.Unlock()
+			return nil
+		}
+		c.requestMu.Unlock()
+		// Waiting callers hold no mutex, so each can cancel independently.
 		timer := time.NewTimer(delay)
-		defer timer.Stop()
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
 	}
-	c.lastRequest = time.Now()
-	return nil
 }

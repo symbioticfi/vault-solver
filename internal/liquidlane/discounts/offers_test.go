@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -184,7 +186,7 @@ func testPhysicalInventory() liquidlane.Inventory {
 }
 
 func testInventoryWithMinDiscount(inventory liquidlane.Inventory, minDiscount *big.Int) liquidlane.Inventory {
-	inventory.AdapterMinDiscount = liquidlane.CloneBig(minDiscount)
+	inventory.AdapterMinDiscount = bigmath.Clone(minDiscount)
 	return inventory
 }
 

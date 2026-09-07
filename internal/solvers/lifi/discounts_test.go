@@ -8,9 +8,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 const testDiscountID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -56,6 +56,12 @@ func TestFillDiscountQuotesUsesFreshSignedTerms(t *testing.T) {
 	if resolved[id] == nil || fake.listCalls != 1 || fake.resolveCalls != 1 {
 		t.Fatalf("resolved = %+v calls=%d/%d", resolved, fake.listCalls, fake.resolveCalls)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	quotes, resolved = s.fillDiscountQuotes(ctx, []liquidlane.FillQuote{direct}, now)
+	if len(quotes) != 0 || len(resolved) != 0 || fake.resolveCalls != 1 {
+		t.Fatal("canceled resolution started new work")
+	}
 }
 
 func TestFillDiscountQuotesRejectsResolvedTermsBelowAdapterMinimum(t *testing.T) {
@@ -98,9 +104,7 @@ func TestRefreshResolvedDiscountQuotesUsesFreshAdapterState(t *testing.T) {
 	}
 	fresh.MaxAssets = big.NewInt(700)
 	signed, err := discounts.ParseSigned(testResolvedDiscount(direct, 100_000, now.Add(time.Minute)))
-	if err != nil {
-		t.Fatalf("ParseSigned: %v", err)
-	}
+	testcheck.NoError(t, err, "ParseSigned: %v")
 
 	got, issues := discounts.RefreshFillQuotes(
 		[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},
@@ -132,9 +136,7 @@ func TestRefreshResolvedDiscountQuotesRejectsRateAboveFreshAdapterLimit(t *testi
 	fresh.Inventory = direct
 	fresh.MaxRate = big.NewInt(800_000_000_000_000_000)
 	signed, err := discounts.ParseSigned(testResolvedDiscount(direct, 100_000, now.Add(time.Minute)))
-	if err != nil {
-		t.Fatalf("ParseSigned: %v", err)
-	}
+	testcheck.NoError(t, err, "ParseSigned: %v")
 
 	got, _ := discounts.RefreshFillQuotes(
 		[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},

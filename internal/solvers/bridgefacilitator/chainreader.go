@@ -90,52 +90,39 @@ func newReader(c *chain.Client, lens common.Address) *reader {
 // factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
 // append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
 func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})
-	if err != nil {
-		return nil, err
-	}
-	if len(res) != 1 || !res[0].Success {
-		return nil, errors.New("adapter factory totalEntities() reverted")
-	}
-	total, err := factoryB.UnpackTotalEntities(res[0].ReturnData)
+	total, err := chain.ReadOne(ctx, r.chain, chain.Call{Target: factory, Data: factoryB.PackTotalEntities()}, factoryB.UnpackTotalEntities)
 	if err != nil {
 		return nil, errors.Errorf("adapter factory totalEntities(): %w", err)
 	}
-	if total.Cmp(big.NewInt(maxFactoryEntities)) > 0 {
-		return nil, errors.Errorf("adapter factory entity count %s exceeds safety limit %d", total.String(), maxFactoryEntities)
+	if total == nil || total.Sign() < 0 || !total.IsInt64() || total.Int64() > maxFactoryEntities {
+		return nil, errors.Errorf("adapter factory entity count %v exceeds safety limit %d", total, maxFactoryEntities)
 	}
-	count := int(total.Int64())
-	if count == 0 {
+	if total.Sign() == 0 {
 		return nil, nil
 	}
-
-	calls := make([]chain.Call, count)
-	for i := range calls {
-		calls[i] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(i)))}
+	calls := make([]chain.Call, int(total.Int64()))
+	for index := range calls {
+		calls[index] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(index)))}
 	}
-	res, err = r.chain.Multicall(ctx, calls)
+	results, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != count {
-		return nil, errors.Errorf("adapter factory returned %d entities, want %d", len(res), count)
+	if len(results) != len(calls) {
+		return nil, errors.Errorf("adapter factory returned %d entities, want %d", len(results), len(calls))
 	}
-
-	adapters := make([]common.Address, count)
-	for i := range res {
-		if !res[i].Success {
-			return nil, errors.Errorf("adapter factory entity(%d) reverted", i)
+	addresses := make([]common.Address, len(results))
+	for index, result := range results {
+		address, err := chain.Decode(result, factoryB.UnpackEntity)
+		if err != nil {
+			return nil, errors.Errorf("adapter factory entity(%d): %w", index, err)
 		}
-		adapterAddr, unpackErr := factoryB.UnpackEntity(res[i].ReturnData)
-		if unpackErr != nil {
-			return nil, errors.Errorf("adapter factory entity(%d): %w", i, unpackErr)
+		if address == (common.Address{}) {
+			return nil, errors.Errorf("adapter factory entity(%d) is zero", index)
 		}
-		if adapterAddr == (common.Address{}) {
-			return nil, errors.Errorf("adapter factory entity(%d) is zero", i)
-		}
-		adapters[i] = adapterAddr
+		addresses[index] = address
 	}
-	return adapters, nil
+	return addresses, nil
 }
 
 // resolvedAdapter is one adapter's refresh resolution: its vault, that vault's collateral (the
@@ -153,14 +140,8 @@ type resolvedAdapter struct {
 // authorizedByProbe reports whether the adapter's ERC-1271 isValidSignature accepted the probe
 // signature. A revert or any non-magic return means not authorized (drop the adapter), not a hard error.
 func authorizedByProbe(res chain.CallResult) bool {
-	if !res.Success {
-		return false
-	}
-	magic, err := bfAdapter.UnpackIsValidSignature(res.ReturnData)
-	if err != nil {
-		return false
-	}
-	return magic == erc1271MagicValue
+	magic, err := chain.Decode(res, bfAdapter.UnpackIsValidSignature)
+	return err == nil && magic == erc1271MagicValue
 }
 
 // errAdapterUnconfigured marks an adapter whose on-chain wiring is incomplete (a zero offerSigner,
@@ -171,10 +152,7 @@ var errAdapterUnconfigured = errors.New("adapter not configured")
 // decodeAddr returns the non-zero address a Multicall sub-call returned, or an error tagged with
 // `what` if it reverted, failed to decode, or returned zero.
 func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error), what string) (common.Address, error) {
-	if !res.Success {
-		return common.Address{}, errors.Errorf("%s reverted", what)
-	}
-	addr, err := unpack(res.ReturnData)
+	addr, err := chain.Decode(res, unpack)
 	if err != nil {
 		return common.Address{}, errors.Errorf("decode %s: %w", what, err)
 	}
@@ -191,6 +169,9 @@ func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error
 // adapter to its own err; a returned error is a whole-batch RPC failure. The probe is reusable — the same
 // call drives startup validation and periodic re-validation.
 func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address, probe signerProbe) ([]resolvedAdapter, error) {
+	if len(adapters) == 0 {
+		return nil, nil
+	}
 	out := make([]resolvedAdapter, len(adapters))
 
 	calls := make([]chain.Call, 0, 3*len(adapters))
@@ -209,47 +190,43 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 		return nil, errors.Errorf("adapter resolution returned %d results, want %d", len(res), len(calls))
 	}
 
-	// Decode round 1; queue an asset() call for each adapter that resolved and is an authorized signer.
+	// Resolve each distinct backing vault once; several adapters may share it.
 	assetCalls := make([]chain.Call, 0, len(adapters))
-	assetIdx := make([]int, 0, len(adapters)) // assetIdx[k] = out index of assetCalls[k]
-	for i := range adapters {
-		base := 3 * i
-		vault, derr := decodeAddr(res[base], bfAdapter.UnpackVault, "adapter.vault()")
-		if derr != nil {
-			out[i].err = derr
+	assetIndex := make(map[common.Address]int)
+	for i := range out {
+		row := &out[i]
+		row.vault, row.err = decodeAddr(res[3*i], bfAdapter.UnpackVault, "adapter.vault()")
+		if row.err != nil {
 			continue
 		}
-		offerSigner, derr := decodeAddr(res[base+1], bfAdapter.UnpackOfferSigner, "adapter.offerSigner()")
-		if derr != nil {
-			out[i].err = derr
+		row.signer, row.err = decodeAddr(res[3*i+1], bfAdapter.UnpackOfferSigner, "adapter.offerSigner()")
+		if row.err != nil {
 			continue
 		}
-		out[i].vault, out[i].signer = vault, offerSigner
-		out[i].authorized = authorizedByProbe(res[base+2])
-		if !out[i].authorized {
-			continue // not an authorized offer signer; the caller drops it (no collateral read needed)
+		row.authorized = authorizedByProbe(res[3*i+2])
+		if !row.authorized {
+			continue
 		}
-		assetCalls = append(assetCalls, chain.Call{Target: vault, Data: erc4626b.PackAsset(), AllowFailure: true})
-		assetIdx = append(assetIdx, i)
+		if _, exists := assetIndex[row.vault]; !exists {
+			assetIndex[row.vault] = len(assetCalls)
+			assetCalls = append(assetCalls, chain.Call{Target: row.vault, Data: erc4626b.PackAsset(), AllowFailure: true})
+		}
 	}
 	if len(assetCalls) == 0 {
 		return out, nil
 	}
-
-	ares, err := r.chain.Multicall(ctx, assetCalls)
+	assets, err := r.chain.Multicall(ctx, assetCalls)
 	if err != nil {
 		return nil, err
 	}
-	if len(ares) != len(assetCalls) {
-		return nil, errors.Errorf("asset resolution returned %d results, want %d", len(ares), len(assetCalls))
+	if len(assets) != len(assetCalls) {
+		return nil, errors.Errorf("asset resolution returned %d results, want %d", len(assets), len(assetCalls))
 	}
-	for k, idx := range assetIdx {
-		collateral, derr := decodeAddr(ares[k], erc4626b.UnpackAsset, "vault.asset()")
-		if derr != nil {
-			out[idx].err = derr
-			continue
+	for i := range out {
+		row := &out[i]
+		if row.err == nil && row.authorized {
+			row.collateral, row.err = decodeAddr(assets[assetIndex[row.vault]], erc4626b.UnpackAsset, "vault.asset()")
 		}
-		out[idx].collateral = collateral
 	}
 	return out, nil
 }
@@ -270,66 +247,51 @@ type exposureState struct {
 // the bot can't sign an offer the JIT pull at consume time can't satisfy. openCount is the adapter's own
 // requestsLength() (a single read) feeding the concurrency pre-screen.
 func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Address) (exposureState, error) {
-	// getMaxAssets headroom comes from the lens when configured (it models the delegator's cross-adapter
-	// deallocation cascade, which the adapter's own getter overstates); otherwise from the adapter itself.
-	maxAssetsCall := chain.Call{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()}
+	var state exposureState
+	var count *big.Int
+	// Keep the requested getter, decoder and destination together. This prevents
+	// positional drift when adapter limits change.
+	reads := []struct {
+		call        chain.Call
+		decode      func([]byte) (*big.Int, error)
+		destination **big.Int
+	}{
+		{chain.Call{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()}, bfAdapter.UnpackGetMaxAssets, &state.fundable},
+		{chain.Call{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest()}, bfAdapter.UnpackMinYieldPerRequest, &state.minYieldPpm},
+		{chain.Call{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest()}, bfAdapter.UnpackMinAssetsPerRequest, &state.minAssets},
+		{chain.Call{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()}, bfAdapter.UnpackMaxAssetsPerRequest, &state.maxAssets},
+		{chain.Call{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}, bfAdapter.UnpackRequestsLength, &count},
+	}
 	if r.lens != (common.Address{}) {
-		maxAssetsCall = chain.Call{Target: r.lens, Data: lensB.PackGetMaxAssets(adapterAddr)}
+		reads[0].call = chain.Call{Target: r.lens, Data: lensB.PackGetMaxAssets(adapterAddr)}
+		reads[0].decode = lensB.UnpackGetMaxAssets
 	}
-	calls := []chain.Call{
-		maxAssetsCall,
-		{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()},
+	calls := make([]chain.Call, len(reads))
+	for i, read := range reads {
+		calls[i] = read.call
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	results, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return exposureState{}, err
 	}
-	if len(res) != len(calls) {
-		return exposureState{}, errors.Errorf("multicall returned %d results, want %d", len(res), len(calls))
+	if len(results) != len(reads) {
+		return exposureState{}, errors.Errorf("multicall returned %d results, want %d", len(results), len(reads))
 	}
-	for i, rr := range res {
-		if !rr.Success {
-			return exposureState{}, errors.Errorf("liquidity multicall: sub-call %d reverted", i)
+	for i, result := range results {
+		value, err := chain.Decode(result, reads[i].decode)
+		if err != nil {
+			return exposureState{}, errors.Errorf("liquidity multicall: decode sub-call %d: %w", i, err)
 		}
+		*reads[i].destination = value
 	}
-
-	fundable, err := bfAdapter.UnpackGetMaxAssets(res[0].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-	minYield, err := bfAdapter.UnpackMinYieldPerRequest(res[1].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-	minAssets, err := bfAdapter.UnpackMinAssetsPerRequest(res[2].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-	maxAssets, err := bfAdapter.UnpackMaxAssetsPerRequest(res[3].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-	openCount, err := bfAdapter.UnpackRequestsLength(res[4].ReturnData)
-	if err != nil {
-		return exposureState{}, err
-	}
-
-	return exposureState{
-		fundable:    fundable,
-		openCount:   clampCount(openCount),
-		maxAssets:   maxAssets,
-		minAssets:   minAssets,
-		minYieldPpm: minYield,
-	}, nil
+	state.openCount = clampCount(count)
+	return state, nil
 }
 
 // clampCount converts the on-chain requestsLength (uint256, bounded by MAX_REQUESTS) to an int. A value
 // that doesn't fit is clamped to maxRequests so the concurrency pre-screen fails closed.
 func clampCount(n *big.Int) int {
-	if n.IsInt64() {
+	if n != nil && n.IsInt64() {
 		if v := n.Int64(); v >= 0 && v <= int64(maxRequests) {
 			return int(v)
 		}
@@ -358,11 +320,7 @@ func collectRequests(res []chain.CallResult, expected int) ([]common.Address, bo
 	}
 	out := make([]common.Address, 0, len(res))
 	for _, rr := range res {
-		if !rr.Success {
-			complete = false
-			continue
-		}
-		addr, err := bfAdapter.UnpackRequests(rr.ReturnData)
+		addr, err := chain.Decode(rr, bfAdapter.UnpackRequests)
 		if err != nil || addr == (common.Address{}) {
 			complete = false
 			continue
@@ -376,61 +334,47 @@ func collectRequests(res []chain.CallResult, expected int) ([]common.Address, bo
 // requestsLength(), enumerates exactly that many requests(i), then batches every canWithdraw() into a
 // single multicall. The boolean reports whether every requested slot and canWithdraw result was present
 // and decodable; valid results are returned even when the snapshot is incomplete.
-func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, bool, error) {
-	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
-	if err != nil {
-		return nil, false, err
-	}
-	if len(lres) != 1 || !lres[0].Success {
-		return nil, false, errors.New("adapter.requestsLength() reverted")
-	}
-	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
+func (r *reader) readyToRedeem(ctx context.Context, address common.Address) ([]common.Address, bool, error) {
+	count, err := chain.ReadOne(ctx, r.chain, chain.Call{Target: address, Data: bfAdapter.PackRequestsLength()}, bfAdapter.UnpackRequestsLength)
 	if err != nil {
 		return nil, false, errors.Errorf("adapter.requestsLength(): %w", err)
 	}
-	complete := n.IsInt64() && n.Sign() >= 0 && n.Int64() <= int64(maxRequests)
-	count := clampCount(n)
-	if count == 0 {
+	if count == nil {
+		return nil, false, errors.New("adapter.requestsLength(): nil count")
+	}
+	complete := count.Sign() >= 0 && count.IsInt64() && count.Int64() <= maxRequests
+	bounded := clampCount(count)
+	if bounded == 0 {
 		return nil, complete, nil
 	}
-
-	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
+	slots, err := r.chain.Multicall(ctx, requestSlotCalls(address, bounded))
 	if err != nil {
 		return nil, false, err
 	}
-	reqs, slotsComplete := collectRequests(res, count)
-	complete = complete && slotsComplete
-	if len(reqs) == 0 {
+	requests, allSlots := collectRequests(slots, bounded)
+	complete = complete && allSlots
+	if len(requests) == 0 {
 		return nil, complete, nil
 	}
-
-	calls := make([]chain.Call, len(reqs))
-	for i, req := range reqs {
-		// AllowFailure: a single malformed Request must not break the whole batch.
-		calls[i] = chain.Call{Target: req, AllowFailure: true, Data: vc.PackCanWithdraw()}
+	calls := make([]chain.Call, len(requests))
+	for index, request := range requests {
+		calls[index] = chain.Call{Target: request, Data: vc.PackCanWithdraw(), AllowFailure: true}
 	}
-	res, err = r.chain.Multicall(ctx, calls)
+	results, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
 		return nil, false, err
 	}
-
-	ready := make([]common.Address, 0, len(reqs))
-	if len(res) != len(reqs) {
-		complete = false
-	}
-	resultCount := min(len(res), len(reqs))
-	for i, rr := range res[:resultCount] {
-		if !rr.Success {
+	complete = complete && len(results) == len(requests)
+	var ready []common.Address
+	for index := range min(len(requests), len(results)) {
+		result := results[index]
+		withdrawable, err := chain.Decode(result, vc.UnpackCanWithdraw)
+		if err != nil {
 			complete = false
 			continue
 		}
-		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)
-		if derr != nil {
-			complete = false
-			continue
-		}
-		if ok {
-			ready = append(ready, reqs[i])
+		if withdrawable {
+			ready = append(ready, requests[index])
 		}
 	}
 	return ready, complete, nil

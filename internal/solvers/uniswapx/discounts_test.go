@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -233,6 +235,6 @@ func testInventoryWithMinDiscount(
 	maxAssets, maxRate, minDiscount *big.Int,
 ) liquidlane.Inventory {
 	inventory := liquidlane.DirectInventory(route, maxAssets, maxRate)
-	inventory.AdapterMinDiscount = liquidlane.CloneBig(minDiscount)
+	inventory.AdapterMinDiscount = bigmath.Clone(minDiscount)
 	return inventory
 }

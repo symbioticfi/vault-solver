@@ -180,9 +180,9 @@ adapter is OEV-local because it parses directly into the OEV monitor snapshot.
 
 | File | Responsibility |
 |---|---|
-| `solver.go` | `Register`, factory, `Run` (loops + join), `handleAuction` → `buildBid`, ops loop, the head-stable Executor cache (`cachedState`/`stateCache`), Executor deposit floor, and outer EXECUTOR_V6 signing |
+| `solver.go` | `New` construction and `Run` ownership; `auction.go` handles auction decisions, `runtime.go` refreshes Executor state, and `reservations.go` owns bid lifecycle records |
 | `strategy.go` | OEV strategy factory/construction, lean `BidInput` construction (including solver-owned callback + adapter snapshot), and generic `BidOutput` validation |
-| `strategies/registry.go` | OEV-local strategy registry/factory; built-ins self-register with policy metadata (for example, whether a solver bid cap is required), and custom strategies can register by name |
+| `strategy.go` | Explicit default/webhook construction and policy selection; custom built-ins are added here |
 | `strategies/types/` | OEV strategy input/output/interface and webhook JSON wire encoding (lower-camel, decimal strings, strict output decode) |
 | `strategies/default/strategy.go` | Default Morpho strategy runtime: owns Morpho monitor lifecycle, snapshot staleness, candidate scoring, bundle pricing, callback auth signing, operationData encoding, and bid/skip output |
 | `strategies/webhook/` | OEV webhook strategy adapter over the shared `internal/webhook` JSON client |
@@ -400,7 +400,10 @@ adapter liquidity (several same-collateral legs would otherwise revert `Insuffic
 Multiple borrowers from the same Morpho market are allowed only through sequential local replay:
 after each candidate leg, the selector applies Morpho's seize-driven `liquidate` accounting to the simulated
 market and re-sizes the next same-market candidate against that post-state. Independent precomputed same-market
-legs must never be copied directly into `operationData`.
+legs must never be copied directly into `operationData`. Branches borrow immutable candidate and replay
+state until a selected leg changes a market or collateral budget; changed state and returned leg amounts
+are owned by the branch/result. Sizing reads the candidate's accrued market totals directly, keeping one
+source of truth for both the initial leg and subsequent replay.
 The mode is configuration-driven in both live and dry-run operation. `maxTxGasPriceWei` remains the hard
 ceiling for the `tx.gasprice` signed into EXECUTOR_V6 and the native gas-reservation assumption.
 
@@ -641,11 +644,12 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | Field | Meaning |
 |---|---|
 | `ws.url` / `ws.apiKeyEnv` | RedStone WSS endpoint; `x-api-key` read from the named env var |
+| `ws.maxMessageBytes` | Maximum inbound WebSocket frame size; defaults to 1 MiB, must be positive |
 | `executor` | Executor proxy |
 | `adapter` | solver-owned single LiquidLane adapter |
 | `callback` | solver-owned callback passed to RedStone Executor and into strategy input |
 | `strategy.name` | `default` for the built-in strategy backed by Morpho state, or `webhook` for an external decider |
-| `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve only while constructing the HTTP client; OEV route is `POST /decide-bid` |
+| `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve on every request after startup validation; OEV route is `POST /decide-bid` |
 | `strategy.config.morphoApiUrl` / `discoveryMaxHealthFactor` | default-strategy production Morpho snapshot endpoint and API health-factor band |
 | `strategy.config.maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
 | `gas.{nativeUsdFeed,nativeMaxAge,tokenUsdFeeds[]}` | optional shared token/native gas conversion; the token entry must cover the adapter loan asset |
@@ -720,3 +724,31 @@ conservative fallback because no cached route state means the solver cannot pric
   adapter rate and relies on the per-leg profit floor. Solver-side, keep the cached per-collateral
   `getMaxAssets` budget clamp as the `InsufficientAllocate` defense with an over-reserve buffer for rate
   rises.
+
+### Runtime and decision ownership
+
+The WebSocket reader dispatches result frames immediately. One bounded bid worker owns strategy
+decisions; a competing auction records `bid_busy`. Outbound solves retain the originating context
+and deadline and are discarded if either expires before writing. Shutdown joins the active decision.
+One bid record holds lifecycle and economic metadata. Inactive history is capped at 1024 entries;
+active obligations are retained until resolved.
+
+The default bundle search keeps at most 64 frontier states throughout expansion and observes auction
+cancellation. Branches share immutable market and position snapshots and replace only affected state.
+Cached Morpho markets must match the current adapter loan token. API position limits count upstream
+rows, including malformed entries, to bound work during a refresh.
+
+Bid nonce allocation fails when the uint64 range is exhausted. Breaker history stores each counted
+failure once, with an auction identity for deduplicated settlement events. Default-strategy
+selection returns a priced bundle before checking callback and Executor reservation headroom.
+
+Both Morpho sources publish through `marketMonitor`: a failed or empty read retains the previous snapshot and its timestamp. API refresh selects one latest market block; the harness brackets all reads with matching heads. Strategy reservations transition from proposed to pending to awaiting a fresh balance, preserving headroom after settlement.
+
+The bid preconditions and strategy input use one solver accounting snapshot. Executor V6 signing
+rejects integers outside uint256 before ABI encoding. Morpho market IDs use the parameter layout
+from the vendored Morpho binding. Generated GraphQL responses are projected directly into local
+snapshots; paginated position selection retains only the globally highest-risk configured count.
+
+The parent cache owns copies of Executor nonce/deposit and all mutable adapter amounts on both
+publication and reads. Immutable gas-price snapshots can be shared. Websocket dispatch reads the
+operation envelope without imposing the auction payload schema on result or control frames.

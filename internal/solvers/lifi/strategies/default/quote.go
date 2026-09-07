@@ -4,12 +4,13 @@ import (
 	"context"
 	"sort"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
@@ -29,7 +30,7 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		validAfter = input.ServerTime
 	}
 	groups := make(map[strategyPairKey][]liquidlane.Inventory)
-	for _, item := range liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)) {
+	for _, item := range planning.FilterLiveInventory(input.Inventory, validAfter.Add(s.policy.ExecutionBuffer)) {
 		key := strategyPairKey{
 			tokenIn: item.TokenIn, tokenOut: item.TokenOut,
 			inputDecimals: item.TokenInDecimals, outputDecimals: item.TokenOutDecimals,
@@ -44,23 +45,14 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 	sort.Slice(keys, func(i, j int) bool { return pairLess(keys[i], keys[j]) })
 	out := types.QuoteOutput{Quotes: make([]types.Quote, 0, len(keys))}
 	for _, key := range keys {
-		inventory := liquidgreedy.AllocateInventoryCapacity(
+		inventory := planning.AllocateInventoryCapacity(
 			groups[key],
 			input.Reservations,
-			s.cfg.InventoryReserveBps,
+			s.policy.InventoryReserveBps,
 		)
-		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
-		for _, item := range inventory {
-			candidate := liquidgreedy.NewQuoteCandidate(
-				item,
-				liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
-			)
-			if candidate != nil {
-				candidates = append(candidates, *candidate)
-			}
-		}
-		pricing, err := liquidstrategies.NewGasPricing(
-			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.cfg.InventoryReserveBps,
+		candidates := planning.NormalizeFixedInventory(inventory, s.policy.PriceBufferBps)
+		pricing, err := planning.NewGasPricing(
+			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.policy.InventoryReserveBps,
 			types.LiquidLaneGasEnvelope(),
 		)
 		if err != nil {
@@ -77,7 +69,7 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		if len(ranges) == 0 {
 			continue
 		}
-		expiry := quoteExpiry(input.QuoteExpiresAt, s.executionBuffer, used)
+		expiry := quoteExpiry(input.QuoteExpiresAt, s.policy.ExecutionBuffer, used)
 		if expiry <= input.ServerTime.Unix() {
 			continue
 		}

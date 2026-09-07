@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
 )
 
-func TestParseConfigValid(t *testing.T) {
-	cfg := parseConfigYAML(t, `
+const validConfigYAML = `
 orderServer:
   baseUrl: https://order.example
   wsUrl: wss://order.example
@@ -22,7 +23,10 @@ outputSettler: "0x3333333333333333333333333333333333333333"
 executor: "0x4444444444444444444444444444444444444444"
 adapters:
   - "0x5555555555555555555555555555555555555555"
-tokensToQuote: permissioned
+`
+
+func TestParseConfigValid(t *testing.T) {
+	cfg := parseConfigYAML(t, validConfigYAML+`tokensToQuote: permissioned
 permissionedTokens:
   - "0x6666666666666666666666666666666666666666"
 gas:
@@ -87,17 +91,7 @@ func TestParseConfigRejectsLegacySolverAddress(t *testing.T) {
 }
 
 func TestParseConfigTokenScope(t *testing.T) {
-	const base = `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-permissionedTokens:
+	const base = validConfigYAML + `permissionedTokens:
   - "0x6666666666666666666666666666666666666666"
 gas:
   nativeUsdFeed: "0x7777777777777777777777777777777777777777"
@@ -123,17 +117,7 @@ gas:
 }
 
 func TestParseConfigEnablesPrivateDiscountsOnlyInInternalMode(t *testing.T) {
-	base := `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-gas:
+	base := validConfigYAML + `gas:
   nativeUsdFeed: "0x7777777777777777777777777777777777777777"
   nativeMaxAge: 30m
   tokenUsdFeeds:
@@ -198,34 +182,14 @@ adapters:
 }
 
 func TestParseConfigAllowsMissingGas(t *testing.T) {
-	cfg := parseConfigYAML(t, `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-`)
+	cfg := parseConfigYAML(t, validConfigYAML)
 	if cfg.Gas != nil {
 		t.Fatalf("gas oracle config = %+v, want nil", cfg.Gas)
 	}
 }
 
 func TestParseConfigRejectsMalformedGas(t *testing.T) {
-	_, err := parseConfig(parseYAMLNode(t, `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-gas: {}
+	_, err := parseConfig(parseYAMLNode(t, validConfigYAML+`gas: {}
 `))
 	if err == nil || !strings.Contains(err.Error(), "gas.nativeUsdFeed") {
 		t.Fatalf("err = %v", err)
@@ -267,17 +231,7 @@ func TestParseGasConfigRequiresPerFeedMaxAge(t *testing.T) {
 }
 
 func TestParseConfigDefaultsToBlockPollingAndShortTTL(t *testing.T) {
-	cfg := parseConfigYAML(t, `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-gas:
+	cfg := parseConfigYAML(t, validConfigYAML+`gas:
   nativeUsdFeed: "0x7777777777777777777777777777777777777777"
   nativeMaxAge: 30m
   tokenUsdFeeds:
@@ -297,17 +251,7 @@ gas:
 }
 
 func TestParseConfigRejectsQuoteTTLBelowTwiceRefreshInterval(t *testing.T) {
-	_, err := parseConfig(parseYAMLNode(t, `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-quoteIntervalMs: 30000
+	_, err := parseConfig(parseYAMLNode(t, validConfigYAML+`quoteIntervalMs: 30000
 quoteTtl: 30s
 `))
 	if err == nil || !strings.Contains(err.Error(), "quoteTtl must be at least twice quote interval") {
@@ -316,35 +260,15 @@ quoteTtl: 30s
 }
 
 func TestParseConfigRejectsDuplicateAdapters(t *testing.T) {
-	_, err := parseConfig(parseYAMLNode(t, `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-  - "0x5555555555555555555555555555555555555555"
+	_, err := parseConfig(parseYAMLNode(t, validConfigYAML+`  - "0x5555555555555555555555555555555555555555"
 `))
-	if err == nil || !strings.Contains(err.Error(), "duplicate adapter") {
+	if err == nil || !strings.Contains(err.Error(), "duplicate address") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestParseConfigRejectsInvalidPermissionedTokens(t *testing.T) {
-	base := `
-orderServer:
-  baseUrl: https://order.example
-  wsUrl: wss://order.example
-  apiKeyEnv: LIFI_SOLVER_API_KEY
-inputSettler: "0x2222222222222222222222222222222222222222"
-outputSettler: "0x3333333333333333333333333333333333333333"
-executor: "0x4444444444444444444444444444444444444444"
-adapters:
-  - "0x5555555555555555555555555555555555555555"
-permissionedTokens:
+	base := validConfigYAML + `permissionedTokens:
 `
 	for _, entries := range []string{
 		`  - "0x0000000000000000000000000000000000000000"`,
@@ -360,18 +284,14 @@ permissionedTokens:
 func parseConfigYAML(t *testing.T, raw string) *Config {
 	t.Helper()
 	cfg, err := parseConfig(parseYAMLNode(t, raw))
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "parseConfig: %v")
 	return cfg
 }
 
 func parseYAMLNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
-		t.Fatalf("yaml: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(raw), &node), "yaml: %v")
 	if len(node.Content) != 1 {
 		t.Fatalf("unexpected yaml document content len %d", len(node.Content))
 	}
@@ -381,8 +301,12 @@ func parseYAMLNode(t *testing.T, raw string) yaml.Node {
 func testTokenPolicy(t *testing.T, scope tokenpolicy.Scope, tokens ...common.Address) tokenpolicy.Policy {
 	t.Helper()
 	policy, err := tokenpolicy.New(scope, tokens)
-	if err != nil {
-		t.Fatalf("tokenpolicy.New: %v", err)
-	}
+	testcheck.NoError(t, err, "tokenpolicy.New: %v")
 	return policy
+}
+
+func TestQuoteIntervalRejectsOverflow(t *testing.T) {
+	if _, err := parseQuoteInterval(int(^uint(0)>>1), quoteRefreshModeBlock); err == nil {
+		t.Fatal("expected interval overflow rejection")
+	}
 }

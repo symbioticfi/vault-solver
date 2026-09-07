@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
@@ -37,9 +38,7 @@ func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
 					request.CancelAt = time.Now().Add(50 * time.Millisecond)
 				}
 				pending, err := manager.broadcast(t.Context(), request)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testcheck.NoError(t, err)
 				manager.trackUnminedTransaction(pending)
 				backend.blockNextFeeRead = true
 				ctx, cancel := context.WithCancel(t.Context())
@@ -90,9 +89,7 @@ func TestReceiptReadTimeoutDoesNotCancelFill(t *testing.T) {
 			To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "rfq-fill",
 			CancelAt: time.Now().Add(time.Minute),
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testcheck.NoError(t, err)
 		manager.trackUnminedTransaction(pending)
 		result := manager.waitForPendingTransaction(t.Context(), pending)
 		if result.Outcome != OutcomeConfirmed || result.Err != nil || result.Hash != pending.originalHash {
@@ -109,9 +106,7 @@ func assertCancellationLog(t *testing.T, logs []string, hash common.Hash, deadli
 	count := 0
 	for _, entry := range logs {
 		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(entry), &fields); err != nil {
-			t.Fatal(err)
-		}
+		testcheck.NoError(t, json.Unmarshal([]byte(entry), &fields))
 		if string(fields["msg"]) != `"pending transaction cancellation requested"` {
 			continue
 		}

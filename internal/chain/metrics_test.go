@@ -10,8 +10,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestRPCMetricsClassifyFallbackAndRPCError(t *testing.T) {
@@ -39,9 +39,7 @@ func TestRPCMetricsClassifyFallbackAndRPCError(t *testing.T) {
 	defer fallback.Close()
 
 	metrics, err := NewRPCMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	endpoints := mustEndpoints(t, primary.URL, fallback.URL)
 	metrics.bindTransport(rpcRoleRead, len(endpoints))
 	transport := &fallbackTransport{
@@ -53,13 +51,9 @@ func TestRPCMetricsClassifyFallbackAndRPCError(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"eth_getTransactionReceipt","params":[]}`,
 	} {
 		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, primary.URL, strings.NewReader(payload))
-		if reqErr != nil {
-			t.Fatal(reqErr)
-		}
+		testcheck.NoError(t, reqErr)
 		resp, roundTripErr := transport.RoundTrip(req)
-		if roundTripErr != nil {
-			t.Fatalf("round trip: %v", roundTripErr)
-		}
+		testcheck.NoError(t, roundTripErr, "round trip: %v")
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}
@@ -97,7 +91,7 @@ func TestBoundedRPCMethod(t *testing.T) {
 		{`[{"jsonrpc":"2.0","method":"eth_call"}]`, "batch"},
 		{`not-json`, "unknown"},
 	} {
-		if got := boundedRPCMethod([]byte(test.body)); got != test.want {
+		if got := inspectRPCRequest([]byte(test.body)).boundedMethod; got != test.want {
 			t.Errorf("boundedRPCMethod(%q) = %q, want %q", test.body, got, test.want)
 		}
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 )
 
 // maxRequestBytes caps an inbound request body. The only caller is the trusted backend peer and
@@ -27,9 +26,8 @@ func requestID(ctx context.Context) string {
 	return id
 }
 
-// logRequests assigns (or propagates) a request id — exposed on the response header and the request
-// context so handlers can correlate — and logs method/route/status/duration for every request.
-func logRequests(next http.Handler, log logr.Logger) http.Handler {
+// observeHTTP owns one response recorder for access logs, metrics and recovery.
+func (s *server) observeHTTP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(requestIDHeader)
 		if id == "" {
@@ -37,30 +35,50 @@ func logRequests(next http.Handler, log logr.Logger) http.Handler {
 		}
 		w.Header().Set(requestIDHeader, id)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey, id))
-
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		// Recovery records the same final status that the client actually receives.
+		defer func() {
+			if value := recover(); value != nil {
+				s.log.Error(errors.Errorf("panic: %v", value), "recovered panic in quote server",
+					"method", r.Method, "path", r.URL.Path, "requestId", id)
+				rec.WriteHeader(http.StatusInternalServerError)
+			}
+			duration := time.Since(start)
+			s.metrics.observeHTTP(r.Method, r.URL.Path, rec.status, duration)
+			s.log.Info("request", "method", r.Method, "route", routeLabel(r.URL.Path),
+				"status", rec.status, "durationMs", duration.Milliseconds(), "requestId", id)
+		}()
 		next.ServeHTTP(rec, r)
-		log.Info("request",
-			"method", r.Method, "route", routeLabel(r.URL.Path), "status", rec.status,
-			"durationMs", time.Since(start).Milliseconds(), "requestId", id)
 	})
 }
 
-// recoverPanics turns a handler panic into a 500 plus an Error log (which also reaches the Sentry
-// sink) instead of tearing down the connection.
-func recoverPanics(next http.Handler, log logr.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		//nolint:contextcheck // recovery closure only logs + writes a status; no context-aware calls.
-		defer func() {
-			if v := recover(); v != nil {
-				log.Error(errors.Errorf("panic: %v", v), "recovered panic in quote server",
-					"method", r.Method, "path", r.URL.Path, "requestId", requestID(r.Context()))
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+// statusRecorder records implicit writes and forwards informational responses
+// without committing the final status. Repeated final headers are ignored.
+type statusRecorder struct {
+	http.ResponseWriter
+
+	status      int
+	wroteHeader bool
+}
+
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.wroteHeader {
+		return
+	}
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		s.status, s.wroteHeader = code, true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(body []byte) (int, error) {
+	if !s.wroteHeader {
+		s.WriteHeader(http.StatusOK)
+	}
+	return s.ResponseWriter.Write(body)
 }
 
 func newRequestID() string {

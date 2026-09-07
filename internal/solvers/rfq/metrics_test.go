@@ -15,16 +15,15 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m, err := newRFQMetrics(reg, newStore(time.Now), "")
-	if err != nil {
-		t.Fatalf("newRFQMetrics: %v", err)
-	}
+	testcheck.NoError(t, err, "newRFQMetrics: %v")
 
-	h := m.instrument(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := (&server{metrics: m, log: logr.Discard()}).observeHTTP(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
@@ -88,9 +87,7 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			reg := prometheus.NewRegistry()
 			metrics, err := newRFQMetrics(reg, newStore(time.Now), "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, err)
 			metrics.now = func() time.Time { return time.Unix(123, 0) }
 			srv := testServer()
 			srv.metrics = metrics
@@ -127,9 +124,7 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 func TestQuoteDecisionMetricsClassifyBadRequestSeparately(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := newRFQMetrics(reg, newStore(time.Now), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	metrics.now = func() time.Time { return time.Unix(123, 0) }
 	srv := testServer()
 	srv.metrics = metrics
@@ -147,9 +142,7 @@ func TestQuoteDecisionMetricsClassifyBadRequestSeparately(t *testing.T) {
 func TestQuoteDecisionMetricsIgnoreUnauthenticatedRequests(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	metrics, err := newRFQMetrics(reg, newStore(time.Now), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	srv := testServer()
 	srv.metrics = metrics
 
@@ -212,9 +205,7 @@ func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 	st := newStore(func() time.Time { return now })
 	reg := prometheus.NewRegistry()
 	metrics, err := newRFQMetrics(reg, st, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	metrics.now = func() time.Time { return now }
 	exec := &executionService{
 		executor:          common.HexToAddress("0x0000000000000000000000000000000000000010"),
@@ -226,12 +217,8 @@ func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 		now:               func() time.Time { return now },
 	}
 
-	if err := exec.pollOpenOrders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.pollOpenOrders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, exec.pollOpenOrders(context.Background()))
+	testcheck.NoError(t, exec.pollOpenOrders(context.Background()))
 	now = now.Add(10 * time.Second)
 
 	metricstest.RequireWorkflowEvent(t, reg, Name, "order", "won", 1, 1_000)
@@ -246,9 +233,7 @@ func TestRFQMetricsFailedPollKeepsLastSuccess(t *testing.T) {
 	st := newStore(func() time.Time { return now })
 	reg := prometheus.NewRegistry()
 	metrics, err := newRFQMetrics(reg, st, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	backend := &fakeBackend{}
 	exec := &executionService{
 		executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
@@ -258,9 +243,7 @@ func TestRFQMetricsFailedPollKeepsLastSuccess(t *testing.T) {
 		log:      logr.Discard(),
 		now:      func() time.Time { return now },
 	}
-	if err := exec.pollOpenOrders(t.Context()); err != nil {
-		t.Fatalf("successful poll: %v", err)
-	}
+	testcheck.NoError(t, exec.pollOpenOrders(t.Context()), "successful poll: %v")
 
 	now = now.Add(time.Minute)
 	backend.orderListErr = errors.New("backend unavailable")

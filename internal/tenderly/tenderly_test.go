@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestSimulatorURL(t *testing.T) {
@@ -23,13 +24,9 @@ func TestSimulatorURL(t *testing.T) {
 	}
 
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(url, prefix))
-	if err != nil {
-		t.Fatalf("draft is not base64url: %v", err)
-	}
+	testcheck.NoError(t, err, "draft is not base64url: %v")
 	var got draft
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("draft is not JSON: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(raw, &got), "draft is not JSON: %v")
 
 	want := draft{
 		V:       1,
@@ -50,13 +47,9 @@ func TestSimulatorURL(t *testing.T) {
 func TestSimulatorURL_NilValueDefaultsToZero(t *testing.T) {
 	url := SimulatorURL(big.NewInt(11155111), common.Address{0x01}, common.Address{0x02}, nil, nil)
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(url, "https://dashboard.tenderly.co/simulator/new?draft="))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	testcheck.NoError(t, err, "decode: %v")
 	var got draft
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(raw, &got), "unmarshal: %v")
 	if got.Row.Value != "0" {
 		t.Fatalf("value = %q, want 0 for nil value", got.Row.Value)
 	}

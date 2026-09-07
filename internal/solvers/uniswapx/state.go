@@ -2,6 +2,7 @@ package uniswapx
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -34,6 +35,7 @@ type exclusiveObligation struct {
 }
 
 type trackedExclusive struct {
+	resolvedAt       time.Time
 	deadline         time.Time
 	recoveredAtStart bool
 	liveObserved     bool
@@ -124,7 +126,7 @@ func (s *Solver) recordFillSuccess() {
 	}
 }
 
-func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) bool {
+func (s *Solver) trackExclusive(order *resolvedOrder) bool {
 	if order.Source != orderSourceExclusiveV2 || order.ExclusiveUntil == 0 {
 		return false
 	}
@@ -135,22 +137,19 @@ func (s *Solver) trackExclusive(order *resolvedOrder, now time.Time) bool {
 			liveObserved: true,
 		},
 		order.QuoteID,
-		now,
 	)
 }
 
-func (s *Solver) trackExclusiveObligation(
-	obligation exclusiveObligation,
-	quoteID string,
-	now time.Time,
-) bool {
+func (s *Solver) trackExclusiveObligation(obligation exclusiveObligation, quoteID string) bool {
 	s.stateMu.Lock()
-	s.cleanupExclusiveLocked(now)
-	if _, terminal := s.exclusiveTerminal[obligation.hash]; terminal {
+	if s.obligations == nil {
+		s.obligations = make(map[common.Hash]trackedExclusive)
+	}
+	if !s.obligations[obligation.hash].resolvedAt.IsZero() {
 		s.stateMu.Unlock()
 		return false
 	}
-	current, exists := s.exclusiveUntil[obligation.hash]
+	current, exists := s.obligations[obligation.hash]
 	newLive := obligation.liveObserved && (!exists || !current.liveObserved)
 	updated := !exists || obligation.deadline.Before(current.deadline)
 	if updated {
@@ -163,7 +162,7 @@ func (s *Solver) trackExclusiveObligation(
 		current.recoveredAtStart = false
 	}
 	current.liveObserved = current.liveObserved || obligation.liveObserved
-	s.exclusiveUntil[obligation.hash] = current
+	s.obligations[obligation.hash] = current
 	s.stateMu.Unlock()
 	if updated {
 		s.log.V(1).Info(
@@ -176,30 +175,22 @@ func (s *Solver) trackExclusiveObligation(
 	return newLive
 }
 
+// sweepExclusive commits an observation only after every expired obligation has a
+// conclusive status. A partial backend response cannot clear quote-admission uncertainty.
 func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	s.stateMu.Lock()
-	s.cleanupExclusiveLocked(now)
-	expired := make([]exclusiveObligation, 0, len(s.exclusiveUntil))
-	for hash, tracked := range s.exclusiveUntil {
-		if now.After(tracked.deadline) {
-			expired = append(expired, exclusiveObligation{
-				hash:             hash,
-				deadline:         tracked.deadline,
-				recoveredAtStart: tracked.recoveredAtStart,
-				liveObserved:     tracked.liveObserved,
-			})
+	var expired []exclusiveObligation
+	for hash, tracked := range s.obligations {
+		if tracked.resolvedAt.IsZero() && now.After(tracked.deadline) {
+			expired = append(expired, exclusiveObligation{hash: hash, deadline: tracked.deadline,
+				recoveredAtStart: tracked.recoveredAtStart, liveObserved: tracked.liveObserved})
 		}
 	}
 	s.stateMu.Unlock()
 	if len(expired) == 0 {
 		return nil
 	}
-	s.log.V(1).Info(
-		"exclusive obligations reconciliation started",
-		"obligations", len(expired),
-		"chainTime", now.Unix(),
-	)
-
+	slices.SortFunc(expired, func(a, b exclusiveObligation) int { return a.hash.Cmp(b.hash) })
 	hashes := make([]common.Hash, len(expired))
 	for i := range expired {
 		hashes[i] = expired[i].hash
@@ -208,109 +199,75 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return errors.Errorf("lookup expired obligations: %w", err)
 	}
-	decisions := make([]exclusiveDecision, 0, len(expired))
-	for _, obligation := range expired {
-		terminal, ok := terminals[obligation.hash]
-		if !ok {
+	decisions := make([]exclusiveDecision, len(expired))
+	for index, obligation := range expired {
+		terminal, exists := terminals[obligation.hash]
+		if !exists {
 			return errors.Errorf("lookup expired obligation %s: missing result", obligation.hash.Hex())
 		}
-		decision := exclusiveDecision{
-			exclusiveObligation: obligation,
-			txHash:              terminal.TxHash,
-			status:              terminal.Status,
+		decision, err := s.resolveExclusive(ctx, obligation, terminal)
+		if err != nil {
+			return errors.Errorf("lookup expired obligation %s: %w", obligation.hash.Hex(), err)
 		}
-		switch terminal.Status {
-		case orderStatusFilled:
-			if terminal.TxHash == (common.Hash{}) {
-				return errors.Errorf("lookup expired obligation %s: filled order has no transaction", obligation.hash.Hex())
-			}
-			filledAt, readErr := s.reader.transactionBlockTimeConfirmed(
-				ctx,
-				terminal.TxHash,
-				s.confirmations,
-			)
-			if readErr != nil {
-				return errors.Errorf("lookup expired obligation %s fill time: %w", obligation.hash.Hex(), readErr)
-			}
-			decision.filledAt = filledAt
-			// Uniswap counts the original quoter as faded whenever exclusivity expires
-			// unfilled, even if our executor later wins the public Dutch auction.
-			decision.settledInTime = !filledAt.After(obligation.deadline)
-		case orderStatusOpen:
-			return errors.Errorf(
-				"lookup expired obligation %s: order is still open",
-				obligation.hash.Hex(),
-			)
-		case orderStatusExpired, orderStatusError, orderStatusCancelled, orderStatusInsufficientFunds:
-			// Only a successful on-chain fill before exclusivity ends discharges the obligation.
-			// Every other known lifecycle state means the awarded fill was not delivered in time.
-			if terminal.TxHash != (common.Hash{}) {
-				return errors.Errorf(
-					"lookup expired obligation %s: status %q unexpectedly has transaction %s",
-					obligation.hash.Hex(),
-					terminal.Status,
-					terminal.TxHash.Hex(),
-				)
-			}
-		default:
-			return errors.Errorf(
-				"lookup expired obligation %s: unknown status %q",
-				obligation.hash.Hex(),
-				terminal.Status,
-			)
-		}
-		decisions = append(decisions, decision)
+		decisions[index] = decision
 	}
-
-	var missed, historicalMissed []exclusiveDecision
-	var settled []exclusiveDecision
+	accepted := decisions[:0]
 	s.stateMu.Lock()
-	s.cleanupExclusiveLocked(now)
 	for _, decision := range decisions {
-		tracked, ok := s.exclusiveUntil[decision.hash]
-		if !ok || !tracked.deadline.Equal(decision.deadline) {
+		tracked, exists := s.obligations[decision.hash]
+		if !exists || !tracked.resolvedAt.IsZero() || !tracked.deadline.Equal(decision.deadline) {
 			continue
 		}
-		decision.recoveredAtStart = tracked.recoveredAtStart
-		decision.liveObserved = tracked.liveObserved
-		delete(s.exclusiveUntil, decision.hash)
-		s.exclusiveTerminal[decision.hash] = now
-		if decision.settledInTime {
-			settled = append(settled, decision)
-		} else if decision.recoveredAtStart {
-			historicalMissed = append(historicalMissed, decision)
-		} else {
+		decision.recoveredAtStart, decision.liveObserved = tracked.recoveredAtStart, tracked.liveObserved
+		tracked.resolvedAt = now
+		s.obligations[decision.hash] = tracked
+		accepted = append(accepted, decision)
+	}
+	s.stateMu.Unlock()
+	var missed []exclusiveDecision
+	for _, decision := range accepted {
+		switch {
+		case decision.settledInTime:
+			if !decision.recoveredAtStart {
+				s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)
+			}
+			s.log.Info("exclusive order settled before exclusivity ended", "orderHash", decision.hash.Hex(),
+				"tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix(), "exclusiveUntil", decision.deadline.Unix())
+		case decision.recoveredAtStart:
+			s.log.Info("historical exclusive obligation missed", "orderHash", decision.hash.Hex(),
+				"status", decision.status, "exclusiveUntil", decision.deadline.Unix(), "origin", "startup-recovery",
+				"tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix())
+		default:
 			missed = append(missed, decision)
 		}
 	}
-	s.stateMu.Unlock()
-
-	for _, decision := range settled {
-		if !decision.recoveredAtStart {
-			s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)
-		}
-		s.log.Info(
-			"exclusive order settled before exclusivity ended",
-			"orderHash", decision.hash.Hex(),
-			"tx", decision.txHash.Hex(),
-			"filledAt", decision.filledAt.Unix(),
-			"exclusiveUntil", decision.deadline.Unix(),
-		)
-	}
-	for _, decision := range historicalMissed {
-		fields := []any{
-			"orderHash", decision.hash.Hex(),
-			"status", decision.status,
-			"exclusiveUntil", decision.deadline.Unix(),
-			"origin", "startup-recovery",
-		}
-		if decision.txHash != (common.Hash{}) {
-			fields = append(fields, "tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix())
-		}
-		s.log.Info("historical exclusive obligation missed", fields...)
-	}
 	s.openExclusiveBreaker(missed, now)
 	return nil
+}
+
+func (s *Solver) resolveExclusive(ctx context.Context, obligation exclusiveObligation, terminal orderTerminal) (exclusiveDecision, error) {
+	decision := exclusiveDecision{exclusiveObligation: obligation, txHash: terminal.TxHash, status: terminal.Status}
+	switch terminal.Status {
+	case orderStatusFilled:
+		if terminal.TxHash == (common.Hash{}) {
+			return decision, errors.New("filled order has no transaction")
+		}
+		when, err := s.reader.transactionBlockTimeConfirmed(ctx, terminal.TxHash, s.confirmations)
+		if err != nil {
+			return decision, errors.Errorf("fill time: %w", err)
+		}
+		decision.filledAt, decision.settledInTime = when, !when.After(obligation.deadline)
+	case orderStatusOpen:
+		return decision, errors.New("order is still open")
+	case orderStatusExpired, orderStatusError, orderStatusCancelled, orderStatusInsufficientFunds:
+		if terminal.TxHash != (common.Hash{}) {
+			return decision, errors.Errorf("status %q unexpectedly has transaction %s", terminal.Status, terminal.TxHash.Hex())
+		}
+	default:
+		return decision, errors.Errorf("unknown status %q", terminal.Status)
+	}
+	// A later public Dutch fill does not discharge a missed exclusive commitment.
+	return decision, nil
 }
 
 func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time) {
@@ -342,9 +299,13 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 func (s *Solver) exclusiveObligationMetrics() (int, int64) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
-	outstanding := len(s.exclusiveUntil)
+	outstanding := 0
 	var nearest time.Time
-	for _, tracked := range s.exclusiveUntil {
+	for _, tracked := range s.obligations {
+		if !tracked.resolvedAt.IsZero() {
+			continue
+		}
+		outstanding++
 		if nearest.IsZero() || tracked.deadline.Before(nearest) {
 			nearest = tracked.deadline
 		}
@@ -355,36 +316,11 @@ func (s *Solver) exclusiveObligationMetrics() (int, int64) {
 	return outstanding, nearest.Unix()
 }
 
-func (s *Solver) cleanupExclusiveLocked(now time.Time) {
-	if s.exclusiveUntil == nil {
-		s.exclusiveUntil = make(map[common.Hash]trackedExclusive)
-	}
-	if s.exclusiveTerminal == nil {
-		s.exclusiveTerminal = make(map[common.Hash]time.Time)
-	}
-	for hash, terminalAt := range s.exclusiveTerminal {
-		if now.Sub(terminalAt) > s.exclusiveRecoveryLookback() {
-			delete(s.exclusiveTerminal, hash)
-		}
-	}
-}
+func (s *Solver) invalidateQuotes() { s.quotes.changePlanning(0) }
 
-func (s *Solver) invalidateQuotes() {
-	s.quoteEpoch.Add(1)
-	s.quoteState.Store(nil)
-}
-
-func (s *Solver) beginFillPlanning() {
-	s.planningFills.Add(1)
-	s.quoteEpoch.Add(1)
-	s.quoteState.Store(nil)
-}
+func (s *Solver) beginFillPlanning() { s.quotes.changePlanning(1) }
 
 func (s *Solver) endFillPlanning() {
-	remaining := s.planningFills.Add(-1)
-	s.quoteEpoch.Add(1)
-	if remaining < 0 {
-		panic("uniswapx: negative planning fill count")
-	}
+	s.quotes.changePlanning(-1)
 	s.requestQuoteRefresh()
 }

@@ -16,7 +16,6 @@ const yieldPpmScale = 1_000_000
 // Read-only big.Int constants for the yield math, hoisted out of the per-offer hot path.
 var (
 	bigYieldPpmScale = big.NewInt(yieldPpmScale)
-	bigCeilBias      = big.NewInt(yieldPpmScale - 1) // for ceil(x/1e6) = (x + 1e6-1) / 1e6
 )
 
 // ValidateYield checks that expectedReturn on principal is acceptable to BOTH the adapter's on-chain
@@ -26,20 +25,15 @@ var (
 // to the exact integer comparisons below. A zero/absent floor or maxRate skips that bound; nil or
 // non-positive amounts are rejected.
 func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps float64) error {
-	// Reject a non-positive return: a 0 yield (what the pricing helpers produce when floor and maxRate are
-	// both 0, or on dust principals) is never a real offer, so the pair is skipped rather than offered.
-	if principal == nil || principal.Sign() <= 0 || expectedReturn == nil || expectedReturn.Sign() <= 0 {
+	if expectedReturn == nil || principal == nil || expectedReturn.Sign() <= 0 || principal.Sign() <= 0 {
 		return errors.Errorf("invalid offer amounts (must be positive): principal=%v expectedReturn=%v", principal, expectedReturn)
 	}
 	if !MeetsMinYield(expectedReturn, principal, minYieldPpm) {
 		return errors.Errorf("yield below minYieldPerRequest floor %s ppm", minYieldPpm)
 	}
-	// maxRate has tenths-of-a-bps precision, so maxRateBps*100 is a whole ppm value; round off float noise.
-	if maxRatePpm := int64(math.Round(maxRateBps * PpmPerBps)); maxRatePpm > 0 {
-		scaled := new(big.Int).Mul(expectedReturn, bigYieldPpmScale)
-		if scaled.Cmp(new(big.Int).Mul(principal, big.NewInt(maxRatePpm))) > 0 {
-			return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
-		}
+	// maxRate carries tenths of a basis point: rounding removes API float noise before integer math.
+	if math.Round(maxRateBps*PpmPerBps) > 0 && expectedReturn.Cmp(ExpectedReturn(principal, maxRateBps)) > 0 {
+		return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
 	}
 	return nil
 }
@@ -48,12 +42,7 @@ func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps f
 // precision so rateBps*100 is whole ppm; the math is exact integer floor(principal*ppm/1e6) — a big.Float
 // path drifts by 1 wei for principals above ~2^64.
 func ExpectedReturn(principal *big.Int, rateBps float64) *big.Int {
-	ratePpm := int64(math.Round(rateBps * PpmPerBps))
-	if principal == nil || principal.Sign() <= 0 || ratePpm <= 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(principal, big.NewInt(ratePpm))
-	return num.Quo(num, bigYieldPpmScale)
+	return yieldAmount(principal, big.NewInt(int64(math.Round(rateBps*PpmPerBps))), false)
 }
 
 // MinYieldReturn is the smallest expectedReturn on principal that clears the adapter's
@@ -61,12 +50,20 @@ func ExpectedReturn(principal *big.Int, rateBps float64) *big.Int {
 // competitive rate the adapter allows, rounded up so the realised yield is never a hair below the floor
 // (which would revert the fill). Returns 0 when there is no floor (minYieldPpm <= 0).
 func MinYieldReturn(principal, minYieldPpm *big.Int) *big.Int {
-	if principal == nil || principal.Sign() <= 0 || minYieldPpm == nil || minYieldPpm.Sign() <= 0 {
-		return new(big.Int)
+	return yieldAmount(principal, minYieldPpm, true)
+}
+
+func yieldAmount(principal, ppm *big.Int, ceil bool) *big.Int {
+	result := new(big.Int)
+	if principal == nil || ppm == nil || principal.Sign() <= 0 || ppm.Sign() <= 0 {
+		return result
 	}
-	num := new(big.Int).Mul(principal, minYieldPpm)
-	num.Add(num, bigCeilBias)
-	return num.Quo(num, bigYieldPpmScale)
+	remainder := new(big.Int)
+	result.QuoRem(result.Mul(principal, ppm), bigYieldPpmScale, remainder)
+	if ceil && remainder.Sign() != 0 {
+		result.Add(result, big.NewInt(1))
+	}
+	return result
 }
 
 // MeetsMinYield reports whether expectedReturn on principal clears the adapter's on-chain
@@ -77,9 +74,7 @@ func MeetsMinYield(expectedReturn, principal, minYieldPpm *big.Int) bool {
 	if minYieldPpm == nil || minYieldPpm.Sign() <= 0 {
 		return true
 	}
-	lhs := new(big.Int).Mul(expectedReturn, bigYieldPpmScale)
-	rhs := new(big.Int).Mul(principal, minYieldPpm)
-	return lhs.Cmp(rhs) >= 0
+	return expectedReturn != nil && principal != nil && expectedReturn.Cmp(MinYieldReturn(principal, minYieldPpm)) >= 0
 }
 
 // bigTwo is the minimum partial-consumption pricing margin (see PartialSafeMinYieldReturn).
@@ -101,14 +96,13 @@ var bigTwo = big.NewInt(2)
 // The rate cost is ~1 ppm (two base units on dust principals). Returns 0 when there is no floor, like
 // MinYieldReturn.
 func PartialSafeMinYieldReturn(principal, minYieldPpm *big.Int) *big.Int {
-	ret := MinYieldReturn(principal, minYieldPpm)
-	if ret.Sign() <= 0 {
-		return ret
+	result := MinYieldReturn(principal, minYieldPpm)
+	if result.Sign() == 0 {
+		return result
 	}
-	margin := new(big.Int).Add(principal, bigCeilBias)
-	margin.Quo(margin, bigYieldPpmScale)
+	margin := yieldAmount(principal, big.NewInt(1), true)
 	if margin.Cmp(bigTwo) < 0 {
 		margin.Set(bigTwo)
 	}
-	return ret.Add(ret, margin)
+	return result.Add(result, margin)
 }

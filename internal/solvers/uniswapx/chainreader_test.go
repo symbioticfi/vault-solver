@@ -6,17 +6,15 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestRequireConfirmationDepth(t *testing.T) {
 	if err := requireConfirmationDepth(big.NewInt(100), big.NewInt(101), 2); err == nil {
 		t.Fatal("unconfirmed receipt was accepted")
 	}
-	if err := requireConfirmationDepth(big.NewInt(100), big.NewInt(102), 2); err != nil {
-		t.Fatalf("confirmed receipt rejected: %v", err)
-	}
+	testcheck.NoError(t, requireConfirmationDepth(big.NewInt(100), big.NewInt(102), 2), "confirmed receipt rejected: %v")
 }
 
 func TestRequireExecutorCode(t *testing.T) {
@@ -34,9 +32,7 @@ func TestRequireExecutorCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := requireExecutorCode(executor, tc.code)
 			if tc.wantError == "" {
-				if err != nil {
-					t.Fatalf("requireExecutorCode() error = %v", err)
-				}
+				testcheck.NoError(t, err, "requireExecutorCode() error = %v")
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
@@ -90,9 +86,7 @@ func TestRequireExecutorCaller(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := requireExecutorCaller(caller, tc.results)
 			if tc.wantError == "" {
-				if err != nil {
-					t.Fatalf("requireExecutorCaller() error = %v", err)
-				}
+				testcheck.NoError(t, err, "requireExecutorCaller() error = %v")
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {

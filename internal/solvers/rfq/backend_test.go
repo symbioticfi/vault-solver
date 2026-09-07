@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // The generated rfqbackend client carries the spec's `/api/v1` prefix, so the backend client rooted at
@@ -32,9 +34,7 @@ func TestBackendClient_ListOpenOrders(t *testing.T) {
 
 	orders, err := newBackendClient(srv.URL).
 		listOpenOrders(context.Background(), "0x0000000000000000000000000000000000000f11", 20)
-	if err != nil {
-		t.Fatalf("listOpenOrders: %v", err)
-	}
+	testcheck.NoError(t, err, "listOpenOrders: %v")
 	if gotPath != "/api/v1/orders" || gotStatus != "open" ||
 		gotFiller != "0x0000000000000000000000000000000000000f11" || gotLimit != "20" {
 		t.Fatalf("request = path %q status %q filler %q limit %q", gotPath, gotStatus, gotFiller, gotLimit)
@@ -82,10 +82,8 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 	defer srv.Close()
 
 	id := "0x" + hash64
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), id)
-	if err != nil {
-		t.Fatalf("resolveDiscount: %v", err)
-	}
+	res, err := newBackendClient(srv.URL).Resolve(context.Background(), id)
+	testcheck.NoError(t, err, "resolveDiscount: %v")
 	if gotPath != "/api-internal/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
 	}
@@ -112,10 +110,8 @@ func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64)
-	if err != nil {
-		t.Fatalf("resolveDiscount (batch): %v", err)
-	}
+	res, err := newBackendClient(srv.URL).Resolve(context.Background(), "0x"+hash64)
+	testcheck.NoError(t, err, "resolveDiscount (batch): %v")
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
 	}
@@ -135,7 +131,7 @@ func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := newBackendClient(srv.URL).resolveDiscount(context.Background(), "0x"+hash64); err == nil {
+	if _, err := newBackendClient(srv.URL).Resolve(context.Background(), "0x"+hash64); err == nil {
 		t.Fatalf("expected an error when the backend resolves more than one discount")
 	}
 }
@@ -155,10 +151,8 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := newBackendClient(srv.URL).listDiscounts(context.Background())
-	if err != nil {
-		t.Fatalf("listDiscounts: %v", err)
-	}
+	resp, err := newBackendClient(srv.URL).ListDiscounts(context.Background())
+	testcheck.NoError(t, err, "listDiscounts: %v")
 	if gotPath != "/api-internal/v1/discounts" {
 		t.Fatalf("path = %q", gotPath)
 	}
@@ -170,3 +164,37 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 
 // hash64 is the 64-hex-char body of a 0x-prefixed discountId used across the backend client tests.
 const hash64 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestBackendLookupRejectsAmbiguousIdentity(t *testing.T) {
+	for _, rows := range []string{
+		`[{"orderId":"other"}]`,
+		`[{"orderId":"wanted"},{"orderId":"wanted"}]`,
+	} {
+		t.Run(rows, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"orders":`+rows+`}`)
+			}))
+			defer server.Close()
+			client := newBackendClient(server.URL)
+			if order, err := client.getOrder(t.Context(), "wanted"); err == nil || order != nil {
+				t.Fatalf("getOrder = %+v, %v; expected identity rejection", order, err)
+			}
+		})
+	}
+}
+
+func TestOpenOrderListingRejectsMissingIdentityOrWrongStatus(t *testing.T) {
+	for _, row := range []string{`{"orderStatus":"open"}`, `{"orderId":"order","orderStatus":"filled"}`, `{"orderId":"order"}`} {
+		t.Run(row, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"orders":[` + row + `]}`))
+			}))
+			defer server.Close()
+			if orders, err := newBackendClient(server.URL).listOpenOrders(t.Context(), "filler", 10); err == nil || orders != nil {
+				t.Fatalf("orders=%v error=%v", orders, err)
+			}
+		})
+	}
+}

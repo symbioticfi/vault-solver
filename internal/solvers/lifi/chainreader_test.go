@@ -11,8 +11,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestValidateZeroGovernanceFee(t *testing.T) {
@@ -30,9 +30,7 @@ func TestValidateZeroGovernanceFee(t *testing.T) {
 			defer server.Close()
 
 			client, err := chain.Dial(t.Context(), []string{server.URL}, "", common.Address{}.Hex(), logr.Discard())
-			if err != nil {
-				t.Fatalf("chain.Dial: %v", err)
-			}
+			testcheck.NoError(t, err, "chain.Dial: %v")
 			defer client.Close()
 
 			err = (&reader{chain: client}).validateZeroGovernanceFee(

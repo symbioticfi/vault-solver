@@ -78,30 +78,22 @@ func (s *Solver) routesWithDiscounts(
 	}, nil
 }
 
-func (s *Solver) resolveAdvertisedRoutes(
-	ctx context.Context,
-	listed *liquiddiscounts.List,
-	configured []liquidlane.Route,
-	now time.Time,
-	filter advertisedRouteFilter,
+func (s *Solver) resolveAdvertisedRoutes(ctx context.Context, listed *liquiddiscounts.List,
+	configured []liquidlane.Route, now time.Time, filter advertisedRouteFilter,
 ) ([]liquidlane.Route, bool) {
-	offers, issues := liquiddiscounts.LiveOffers(listed, now)
 	type routeKey struct {
-		adapter  common.Address
-		tokenIn  common.Address
-		tokenOut common.Address
-		decimals int
+		adapter, tokenIn, tokenOut common.Address
+		decimals                   int
 	}
-	expected := make(map[routeKey]bool, len(offers))
-	known := make(map[routeKey]bool, len(configured))
+	// true means already covered; false means advertised and still awaiting a verified read.
+	covered := make(map[routeKey]bool, len(configured))
 	for _, route := range configured {
-		known[routeKey{
-			adapter: route.Adapter, tokenIn: route.TokenIn,
-			tokenOut: route.TokenOut, decimals: route.TokenOutDecimals,
-		}] = true
+		covered[routeKey{route.Adapter, route.TokenIn, route.TokenOut, route.TokenOutDecimals}] = true
 	}
+	offers, issues := liquiddiscounts.LiveOffers(listed, now)
+	s.logDiscountIssues(issues)
 	adapters := make(map[common.Address]bool)
-	skipped := 0
+	missing, skipped := 0, 0
 	for _, offer := range offers {
 		if !s.cfg.TokenPolicy.Allows(offer.TokenToRedeem) ||
 			filter.adapters != nil && !filter.adapters[offer.Adapter] ||
@@ -109,71 +101,51 @@ func (s *Solver) resolveAdvertisedRoutes(
 			filter.tokenOut != (common.Address{}) && offer.Collateral != filter.tokenOut {
 			continue
 		}
-		key := routeKey{
-			adapter: offer.Adapter, tokenIn: offer.TokenToRedeem,
-			tokenOut: offer.Collateral, decimals: offer.CollateralDecimals,
-		}
-		if known[key] || expected[key] {
+		key := routeKey{offer.Adapter, offer.TokenToRedeem, offer.Collateral, offer.CollateralDecimals}
+		if _, exists := covered[key]; exists {
 			continue
 		}
-		if len(expected) == maxAdvertisedDiscountRoutes {
+		if missing == maxAdvertisedDiscountRoutes {
 			skipped++
 			continue
 		}
-		expected[key] = true
-	}
-	for key := range expected {
-		adapters[key.adapter] = true
+		covered[key] = false
+		missing++
+		adapters[offer.Adapter] = true
 	}
 	if skipped > 0 {
-		s.log.V(1).Info(
-			"ignore advertised discount routes above safety cap",
-			"cap", maxAdvertisedDiscountRoutes,
-			"skipped", skipped,
-		)
+		s.log.V(1).Info("ignore advertised discount routes above safety cap", "cap", maxAdvertisedDiscountRoutes, "skipped", skipped)
 	}
-	orderedAdapters := make([]common.Address, 0, len(adapters))
+	ordered := make([]common.Address, 0, len(adapters))
 	for adapter := range adapters {
-		orderedAdapters = append(orderedAdapters, adapter)
+		ordered = append(ordered, adapter)
 	}
-	if len(orderedAdapters) == 0 {
-		return nil, len(issues) == 0 && skipped == 0
+	slices.SortFunc(ordered, func(a, b common.Address) int { return a.Cmp(b) })
+	var resolved []liquidlane.Route
+	if len(ordered) != 0 {
+		for _, route := range s.resolveAdvertisedAdapters(ctx, ordered) {
+			key := routeKey{route.Adapter, route.TokenIn, route.TokenOut, route.TokenOutDecimals}
+			ready, wanted := covered[key]
+			if !wanted || ready {
+				continue
+			}
+			if err := s.reader.ValidateGasTokens([]liquidlane.Route{route}); err != nil {
+				s.log.V(1).Info("skip advertised discount route", "adapter", route.Adapter.Hex(), "tokenOut", route.TokenOut.Hex(), "error", err.Error())
+				continue
+			}
+			covered[key] = true
+			missing--
+			resolved = append(resolved, route)
+		}
 	}
-	slices.SortFunc(orderedAdapters, func(a, b common.Address) int { return a.Cmp(b) })
-
-	routes := s.resolveAdvertisedAdapters(ctx, orderedAdapters)
-	resolved := make([]liquidlane.Route, 0, len(expected))
-	resolvedKeys := make(map[routeKey]bool, len(expected))
-	for _, route := range routes {
-		key := routeKey{
-			adapter: route.Adapter, tokenIn: route.TokenIn,
-			tokenOut: route.TokenOut, decimals: route.TokenOutDecimals,
-		}
-		if !expected[key] {
-			continue
-		}
-		if err := s.reader.validateGasTokens([]liquidlane.Route{route}); err != nil {
-			s.log.V(1).Info(
-				"skip advertised discount route",
-				"adapter", route.Adapter.Hex(),
-				"tokenIn", route.TokenIn.Hex(),
-				"tokenOut", route.TokenOut.Hex(),
-				"error", err.Error(),
-			)
-			continue
-		}
-		resolved = append(resolved, route)
-		resolvedKeys[key] = true
-	}
-	complete := len(issues) == 0 && skipped == 0 && len(resolvedKeys) == len(expected)
-	return resolved, complete
+	return resolved, len(issues) == 0 && skipped == 0 && missing == 0
 }
 
 func (s *Solver) resolveAdvertisedAdapters(
 	ctx context.Context,
 	adapters []common.Address,
 ) []liquidlane.Route {
-	routes, err := s.reader.resolveRoutes(ctx, adapters)
+	routes, err := s.reader.ResolveRoutes(ctx, adapters)
 	if err == nil {
 		return routes
 	}
@@ -185,7 +157,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 
 	var resolved []liquidlane.Route
 	for _, adapter := range adapters {
-		adapterRoutes, err := s.reader.resolveRoutes(ctx, []common.Address{adapter})
+		adapterRoutes, err := s.reader.ResolveRoutes(ctx, []common.Address{adapter})
 		if err != nil {
 			s.log.Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
 			continue

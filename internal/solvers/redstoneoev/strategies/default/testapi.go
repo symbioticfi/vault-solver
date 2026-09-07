@@ -29,7 +29,7 @@ func NewWithSnapshotForTest(
 	log logr.Logger,
 	signer signer,
 ) *Strategy {
-	mon := &apiMonitor{log: log}
+	mon := &apiMonitor{marketMonitor: marketMonitor{log: log}}
 	mon.snap.Store(snapshotFromSeed(seed))
 	return &Strategy{
 		cfg:           cfg,
@@ -38,7 +38,7 @@ func NewWithSnapshotForTest(
 		gasAccounting: gasAccounting,
 		signer:        signer,
 		mon:           mon,
-		engine:        newBundleEngine(cfg, log),
+		engine:        bundleEngine{cfg: cfg, log: log},
 		maxAge:        cfg.MaxStateAge,
 		log:           log,
 	}

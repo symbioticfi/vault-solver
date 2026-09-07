@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 type rpcOutcome string
@@ -48,53 +49,18 @@ func NewRPCMetrics(reg prometheus.Registerer) (*RPCMetrics, error) {
 	if reg == nil {
 		return nil, errors.New("chain: RPC metrics registerer is required")
 	}
+	group := observability.NewMetricGroup("solver_bot_rpc_")
 	m := &RPCMetrics{
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "requests_total",
-			Help:      "Logical HTTP JSON-RPC requests by endpoint role, bounded method, and outcome.",
-		}, []string{"role", "method", "outcome"}),
-		attempts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "attempts_total",
-			Help:      "HTTP JSON-RPC endpoint attempts; endpoint is a role-local ordinal, never a URL.",
-		}, []string{"role", "endpoint", "method", "outcome"}),
-		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "inflight",
-			Help:      "Logical HTTP JSON-RPC requests whose response body has not completed.",
-		}, []string{"role"}),
-		requestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "request_duration_seconds",
-			Help:      "Logical HTTP JSON-RPC duration through response-body consumption.",
-			Buckets:   []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60},
-		}, []string{"role", "method", "outcome"}),
-		lastSuccessfulRequest: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "last_successful_request_timestamp",
-			Help:      "Unix timestamp of the last successful logical HTTP JSON-RPC request by role.",
-		}, []string{"role"}),
-		lastSuccessfulAttempt: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "solver_bot",
-			Subsystem: "rpc",
-			Name:      "last_successful_attempt_timestamp",
-			Help:      "Unix timestamp of the last successful HTTP JSON-RPC attempt by role and endpoint ordinal.",
-		}, []string{"role", "endpoint"}),
-		now: time.Now,
+		requests:              group.Counter("requests_total", "Logical HTTP JSON-RPC requests by endpoint role, bounded method, and outcome.", "role", "method", "outcome"),
+		attempts:              group.Counter("attempts_total", "HTTP JSON-RPC endpoint attempts; endpoint is a role-local ordinal, never a URL.", "role", "endpoint", "method", "outcome"),
+		inflight:              group.Gauge("inflight", "Logical HTTP JSON-RPC requests whose response body has not completed.", "role"),
+		requestDuration:       group.Histogram("request_duration_seconds", "Logical HTTP JSON-RPC duration through response-body consumption.", []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}, "role", "method", "outcome"),
+		lastSuccessfulRequest: group.Gauge("last_successful_request_timestamp", "Unix timestamp of the last successful logical HTTP JSON-RPC request by role.", "role"),
+		lastSuccessfulAttempt: group.Gauge("last_successful_attempt_timestamp", "Unix timestamp of the last successful HTTP JSON-RPC attempt by role and endpoint ordinal.", "role", "endpoint"),
+		now:                   time.Now,
 	}
-	for _, collector := range []prometheus.Collector{
-		m.requests, m.attempts, m.inflight, m.requestDuration,
-		m.lastSuccessfulRequest, m.lastSuccessfulAttempt,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("chain: register RPC metric: %w", err)
-		}
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
@@ -112,12 +78,27 @@ func (m *RPCMetrics) bindTransport(role string, endpointCount int) {
 	}
 }
 
-func (m *RPCMetrics) beginRequest(role, method string) *rpcRequestObservation {
+// The transport receives only a completion function; metrics retain no request
+// object and a body-close/read/error race can finish the sample exactly once.
+func (m *RPCMetrics) beginRequest(role, method string) func(rpcOutcome) {
 	if m == nil {
-		return nil
+		return func(rpcOutcome) {}
 	}
-	m.inflight.WithLabelValues(role).Inc()
-	return &rpcRequestObservation{metrics: m, role: role, method: method, started: m.now()}
+	started := m.now()
+	inflight := m.inflight.WithLabelValues(role)
+	inflight.Inc()
+	var once sync.Once
+	return func(outcome rpcOutcome) {
+		once.Do(func() {
+			at := m.now()
+			m.requests.WithLabelValues(role, method, string(outcome)).Inc()
+			m.requestDuration.WithLabelValues(role, method, string(outcome)).Observe(at.Sub(started).Seconds())
+			if outcome == rpcOutcomeSuccess {
+				m.lastSuccessfulRequest.WithLabelValues(role).Set(float64(at.Unix()))
+			}
+			inflight.Dec()
+		})
+	}
 }
 
 func (m *RPCMetrics) observeAttempt(role, endpoint, method string, outcome rpcOutcome) {
@@ -128,27 +109,4 @@ func (m *RPCMetrics) observeAttempt(role, endpoint, method string, outcome rpcOu
 	if outcome == rpcOutcomeSuccess {
 		m.lastSuccessfulAttempt.WithLabelValues(role, endpoint).Set(float64(m.now().Unix()))
 	}
-}
-
-type rpcRequestObservation struct {
-	metrics *RPCMetrics
-	role    string
-	method  string
-	started time.Time
-	once    sync.Once
-}
-
-func (o *rpcRequestObservation) finish(outcome rpcOutcome) {
-	if o == nil {
-		return
-	}
-	o.once.Do(func() {
-		now := o.metrics.now()
-		o.metrics.requests.WithLabelValues(o.role, o.method, string(outcome)).Inc()
-		o.metrics.inflight.WithLabelValues(o.role).Dec()
-		o.metrics.requestDuration.WithLabelValues(o.role, o.method, string(outcome)).Observe(now.Sub(o.started).Seconds())
-		if outcome == rpcOutcomeSuccess {
-			o.metrics.lastSuccessfulRequest.WithLabelValues(o.role).Set(float64(now.Unix()))
-		}
-	})
 }

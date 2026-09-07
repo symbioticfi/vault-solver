@@ -25,3 +25,23 @@ func TestCapacityLedgerAggregatesAndReleasesClonedReservations(t *testing.T) {
 		t.Fatalf("snapshot after release = %v, len = %d", ledger.Snapshot(), ledger.Len())
 	}
 }
+
+func TestCapacityLedgerReplacementAndSnapshotIsolation(t *testing.T) {
+	var ledger CapacityLedger
+	ledger.Set("a", CapacityReservations{"x": big.NewInt(4), "y": big.NewInt(2)})
+	ledger.Set("b", CapacityReservations{"x": big.NewInt(3)})
+	ledger.Set("a", CapacityReservations{"x": big.NewInt(8)})
+	got := ledger.Snapshot()
+	if len(got) != 1 || got["x"].Int64() != 11 {
+		t.Fatalf("replacement totals: %v", got)
+	}
+	got["x"].SetInt64(999)
+	if excluded := ledger.SnapshotExcluding("a"); excluded["x"].Int64() != 3 {
+		t.Fatalf("exclusion: %v", excluded)
+	}
+	ledger.Delete("a")
+	ledger.Delete("b")
+	if remaining := ledger.Snapshot(); len(remaining) != 0 {
+		t.Fatalf("released totals: %v", remaining)
+	}
+}

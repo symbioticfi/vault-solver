@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -56,129 +58,98 @@ type AdapterDemand struct {
 	Vault   common.Address
 }
 
-// PredictRoutes estimates the adapter route for each demand in order.
-func PredictRoutes(demands []Demand, st *State) []Route {
-	if len(demands) == 0 {
-		return nil
-	}
-	routes := make([]Route, 0, len(demands))
-	if st == nil || st.FreeAssets == nil || st.Withdrawable == nil {
-		for range demands {
-			routes = append(routes, RouteUnknown)
-		}
-		return routes
-	}
-	acquire := make(map[common.Address]*big.Int, len(st.Acquire))
-	for k, v := range st.Acquire {
-		acquire[k] = cloneBig(v)
-	}
-	free := cloneBig(st.FreeAssets)
-	withdrawable := cloneBig(st.Withdrawable)
-	for _, demand := range demands {
-		routes = append(routes, predictRoute(demand.AmountOut, demand.Collateral, acquire, free, withdrawable))
-	}
-	return routes
-}
-
 // PredictAdapters predicts swap routes for a multi-adapter transaction. Acquire balances are consumed
 // per adapter while free and withdrawable liquidity is consumed once across adapters sharing a vault.
 func PredictAdapters(demands []AdapterDemand, snapshot *Snapshot) Prediction {
 	if len(demands) == 0 {
 		return Prediction{}
 	}
-	adapters, vaults := cloneSnapshot(snapshot)
-	seen := make(map[common.Address]bool, len(adapters))
-	routes := make([]Route, 0, len(demands))
-	var units uint64
+	out := Prediction{Routes: make([]Route, 0, len(demands))}
+	adapters := make(map[common.Address]*AdapterState)
+	vaults := make(map[common.Address]*VaultState)
+	seen := make(map[common.Address]bool)
 	for _, demand := range demands {
+		if snapshot != nil {
+			if _, loaded := adapters[demand.Adapter]; !loaded {
+				adapters[demand.Adapter] = cloneAdapter(snapshot.Adapters[demand.Adapter], 0)
+			}
+			if _, loaded := vaults[demand.Vault]; !loaded {
+				vaults[demand.Vault] = cloneVault(snapshot.Vaults[demand.Vault], 0)
+			}
+		}
 		route := RouteUnknown
-		adapterState := adapters[demand.Adapter]
-		vaultState := vaults[demand.Vault]
-		if adapterState != nil && adapterState.Vault == demand.Vault && vaultState != nil {
-			route = predictRoute(
-				demand.AmountOut,
-				demand.Collateral,
-				adapterState.Acquire,
-				vaultState.FreeAssets,
-				vaultState.Withdrawable,
-			)
+		adapter, vault := adapters[demand.Adapter], vaults[demand.Vault]
+		if adapter != nil && adapter.Vault == demand.Vault && vault != nil {
+			route = predictRoute(demand.AmountOut, demand.Collateral, adapter.Acquire, vault.FreeAssets, vault.Withdrawable)
 		}
-		routes = append(routes, route)
-		first := !seen[demand.Adapter]
+		out.Routes = append(out.Routes, route)
+		out.Units = bigmath.SaturatingAdd(out.Units, UnitsForRouteAt(route, !seen[demand.Adapter]))
 		seen[demand.Adapter] = true
-		units = saturatingAddUint64(units, UnitsForRouteAt(route, first))
 	}
-	return Prediction{Units: units, Routes: routes}
+	return out
 }
 
-// WithReserveBps returns a conservative copy of snapshot with every mutable liquidity budget reduced.
+// WithReserveBps owns one copy of each budget, applying the reserve while copying.
 func WithReserveBps(snapshot *Snapshot, reserveBps int) *Snapshot {
-	adapters, vaults := cloneSnapshot(snapshot)
-	if reserveBps <= 0 {
-		return &Snapshot{Adapters: adapters, Vaults: vaults}
-	}
-	if reserveBps > 10_000 {
-		reserveBps = 10_000
-	}
-	remainingBps := int64(10_000 - reserveBps)
-	for _, state := range adapters {
-		for token, amount := range state.Acquire {
-			state.Acquire[token] = applyBpsDown(amount, remainingBps)
-		}
-	}
-	for _, state := range vaults {
-		state.FreeAssets = applyBpsDown(state.FreeAssets, remainingBps)
-		state.Withdrawable = applyBpsDown(state.Withdrawable, remainingBps)
-	}
-	return &Snapshot{Adapters: adapters, Vaults: vaults}
-}
-
-func cloneSnapshot(snapshot *Snapshot) (map[common.Address]*AdapterState, map[common.Address]*VaultState) {
+	out := &Snapshot{}
 	if snapshot == nil {
-		return nil, nil
+		return out
 	}
-	adapters := make(map[common.Address]*AdapterState, len(snapshot.Adapters))
+	out.Adapters = make(map[common.Address]*AdapterState, len(snapshot.Adapters))
+	out.Vaults = make(map[common.Address]*VaultState, len(snapshot.Vaults))
 	for address, state := range snapshot.Adapters {
-		if state == nil {
-			continue
+		if cloned := cloneAdapter(state, reserveBps); cloned != nil {
+			out.Adapters[address] = cloned
 		}
-		acquire := make(map[common.Address]*big.Int, len(state.Acquire))
-		for token, amount := range state.Acquire {
-			acquire[token] = cloneBig(amount)
-		}
-		adapters[address] = &AdapterState{Vault: state.Vault, Acquire: acquire}
 	}
-	vaults := make(map[common.Address]*VaultState, len(snapshot.Vaults))
 	for address, state := range snapshot.Vaults {
-		if state == nil || state.FreeAssets == nil || state.Withdrawable == nil {
-			continue
-		}
-		vaults[address] = &VaultState{
-			FreeAssets: cloneBig(state.FreeAssets), Withdrawable: cloneBig(state.Withdrawable),
+		if cloned := cloneVault(state, reserveBps); cloned != nil {
+			out.Vaults[address] = cloned
 		}
 	}
-	return adapters, vaults
+	return out
 }
 
-func applyBpsDown(amount *big.Int, bps int64) *big.Int {
-	if amount == nil || amount.Sign() <= 0 || bps <= 0 {
+func cloneAdapter(state *AdapterState, reserveBps int) *AdapterState {
+	if state == nil {
+		return nil
+	}
+	out := &AdapterState{Vault: state.Vault, Acquire: make(map[common.Address]*big.Int, len(state.Acquire))}
+	for token, amount := range state.Acquire {
+		out.Acquire[token] = reservedBalance(amount, reserveBps)
+	}
+	return out
+}
+
+func cloneVault(state *VaultState, reserveBps int) *VaultState {
+	if state == nil || state.FreeAssets == nil || state.Withdrawable == nil {
+		return nil
+	}
+	return &VaultState{FreeAssets: reservedBalance(state.FreeAssets, reserveBps), Withdrawable: reservedBalance(state.Withdrawable, reserveBps)}
+}
+
+func reservedBalance(amount *big.Int, reserveBps int) *big.Int {
+	if reserveBps <= 0 {
+		return bigmath.Clone(amount)
+	}
+	if amount == nil || amount.Sign() <= 0 || reserveBps >= 10_000 {
 		return new(big.Int)
 	}
-	return new(big.Int).Div(new(big.Int).Mul(amount, big.NewInt(bps)), big.NewInt(10_000))
+	return new(big.Int).Div(new(big.Int).Mul(amount, big.NewInt(int64(10_000-reserveBps))), big.NewInt(10_000))
 }
 
 func predictRoute(amountOut *big.Int, collateral common.Address, acquire map[common.Address]*big.Int, free, withdrawable *big.Int) Route {
 	if amountOut == nil || amountOut.Sign() <= 0 || free == nil || withdrawable == nil {
 		return RouteUnknown
 	}
-	remaining := new(big.Int).Set(amountOut)
+	remaining := amountOut
 	if a := acquire[collateral]; a != nil && a.Sign() > 0 {
-		used := minBig(remaining, a)
-		remaining.Sub(remaining, used)
-		a.Sub(a, used)
-	}
-	if remaining.Sign() == 0 {
-		return RouteAcquire
+		if a.Cmp(remaining) >= 0 {
+			a.Sub(a, remaining)
+			return RouteAcquire
+		}
+		remaining = new(big.Int).Sub(remaining, a)
+		a.SetInt64(0)
 	}
 	if free.Cmp(remaining) >= 0 {
 		free.Sub(free, remaining)
@@ -197,33 +168,11 @@ func predictRoute(amountOut *big.Int, collateral common.Address, acquire map[com
 	return RouteUnknown
 }
 
-func cloneBig(v *big.Int) *big.Int {
-	if v == nil {
-		return nil
-	}
-	return new(big.Int).Set(v)
-}
-
-func minBig(a, b *big.Int) *big.Int {
-	if a.Cmp(b) <= 0 {
-		return new(big.Int).Set(a)
-	}
-	return new(big.Int).Set(b)
-}
-
 func (r Route) String() string {
-	switch r {
-	case RouteAcquire:
-		return "acquire"
-	case RouteAllocate:
-		return "allocate"
-	case RouteDeallocate:
-		return "deallocate"
-	case RouteUnknown:
-		return "unknown"
-	default:
-		return "unknown"
+	if int(r) >= len(routeCosts) {
+		return routeCosts[RouteUnknown].name
 	}
+	return routeCosts[r].name
 }
 
 func RoutesString(routes []Route) string {

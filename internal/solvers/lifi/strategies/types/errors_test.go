@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/go-errors/errors"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func TestPermanentFillDecisionError(t *testing.T) {
@@ -19,7 +20,5 @@ func TestPermanentFillDecisionError(t *testing.T) {
 	if got := MarkPermanentFillDecisionError(marked); !IsPermanentFillDecisionError(got) || !errors.Is(got, cause) {
 		t.Fatal("marking a permanent error twice lost its classification or cause")
 	}
-	if got := MarkPermanentFillDecisionError(nil); got != nil {
-		t.Fatalf("MarkPermanentFillDecisionError(nil) = %v", got)
-	}
+	testcheck.NoError(t, MarkPermanentFillDecisionError(nil), "MarkPermanentFillDecisionError(nil) = %v")
 }

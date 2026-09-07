@@ -9,12 +9,12 @@ func (s *Solver) exclusiveDeliveryHealthy() bool {
 	if s.exclusiveStateUnknown.Load() {
 		return false
 	}
-	last := s.lastExclusivePoll.Load()
-	if last == 0 {
+	observed := s.lastExclusivePoll.Load()
+	if observed == 0 {
 		return true
 	}
-	maxAge := max(3*s.cfg.OrderServer.PollInterval, 5*time.Second)
-	return time.Since(time.Unix(last, 0)) <= maxAge
+	expiry := time.Unix(observed, 0).Add(max(3*s.cfg.OrderServer.PollInterval, 5*time.Second))
+	return !time.Now().After(expiry)
 }
 
 func (s *Solver) markExclusiveStateUnknown() {
@@ -23,14 +23,16 @@ func (s *Solver) markExclusiveStateUnknown() {
 }
 
 func (s *Solver) ready() bool {
-	now := time.Now()
-	lastPoll := s.lastExclusivePoll.Load()
-	epoch := s.quoteEpoch.Load()
-	state := s.quoteState.Load()
-	return lastPoll > 0 && !s.quoteBlocked(now.Unix()) &&
-		state != nil && len(state.inventory) > 0 &&
-		state.epoch == epoch && state.expiresAt.After(now) &&
-		s.quoteEpoch.Load() == epoch && s.quoteState.Load() == state
+	now := s.quoteClock()
+	if s.lastExclusivePoll.Load() <= 0 || s.quoteBlocked(now.Unix()) {
+		return false
+	}
+	snapshot := s.quotes.current()
+	return s.currentQuoteSnapshot(snapshot, now) && len(snapshot.inventory) > 0
+}
+
+func (s *Solver) currentQuoteSnapshot(snapshot *quoteState, now time.Time) bool {
+	return snapshot != nil && snapshot.expiresAt.After(now) && snapshot == s.quotes.current()
 }
 
 func (s *Solver) readyHandler(w http.ResponseWriter, _ *http.Request) {

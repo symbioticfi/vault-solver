@@ -62,13 +62,20 @@ func (r *reader) ReadExecutorState(ctx context.Context, executorAddr, signer com
 	if !allSuccess(res, 3) {
 		return ExecutorState{}, errors.New("executor state read reverted")
 	}
-	nonce, nonceErr := executorB.UnpackNonces(res[0].ReturnData)
-	deposit, depositErr := executorB.UnpackDeposits(res[1].ReturnData)
-	locked, lockedErr := executorB.UnpackLocked(res[2].ReturnData)
-	if nonceErr != nil || depositErr != nil || lockedErr != nil {
-		return ExecutorState{}, errors.New("executor state decode failed")
+	var state ExecutorState
+	if state.Nonce, err = executorB.UnpackNonces(res[0].ReturnData); err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor nonce: %w", err)
 	}
-	return ExecutorState{Nonce: nonce, Deposit: deposit, Locked: locked}, nil
+	if state.Deposit, err = executorB.UnpackDeposits(res[1].ReturnData); err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor deposit: %w", err)
+	}
+	if state.Locked, err = executorB.UnpackLocked(res[2].ReturnData); err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor lock: %w", err)
+	}
+	if state.Nonce == nil || !state.Nonce.IsUint64() || state.Deposit == nil || state.Deposit.Sign() < 0 {
+		return ExecutorState{}, errors.New("executor state contains invalid accounting values")
+	}
+	return state, nil
 }
 
 // ReadAdapterSnapshot maps the shared LiquidLane snapshot to the stable OEV strategy contract.
@@ -81,19 +88,20 @@ func (r *reader) ReadAdapterSnapshot(
 	if err != nil {
 		return types.AdapterSnapshot{}, err
 	}
-	redeemable := make([]types.RedeemableSnapshot, 0, len(snapshot.Routes))
-	for _, route := range snapshot.Routes {
-		redeemable = append(redeemable, types.RedeemableSnapshot{
+	// The shared reader returns owned decoded values; transfer them into the
+	// strategy shape before publishing the new snapshot.
+	redeemable := make([]types.RedeemableSnapshot, len(snapshot.Routes))
+	for i, route := range snapshot.Routes {
+		redeemable[i] = types.RedeemableSnapshot{
 			Asset: route.TokenIn, Decimals: route.TokenInDecimals,
-			MaxRate: liquidlane.CloneBig(route.MaxRate), MaxAssets: liquidlane.CloneBig(route.MaxAssets),
-			AcquireBalance: liquidlane.CloneBig(route.AcquireBalance),
-		})
+			MaxRate: route.MaxRate, MaxAssets: route.MaxAssets, AcquireBalance: route.AcquireBalance,
+		}
 	}
 	return types.AdapterSnapshot{
 		Address: snapshot.Adapter.Adapter, Vault: snapshot.Vault,
 		Loan: snapshot.TokenOut, LoanDecimals: snapshot.TokenOutDecimals,
 		Paused:     snapshot.Paused,
-		FreeAssets: liquidlane.CloneBig(snapshot.FreeAssets), Withdrawable: liquidlane.CloneBig(snapshot.Withdrawable),
+		FreeAssets: snapshot.FreeAssets, Withdrawable: snapshot.Withdrawable,
 		Redeemable: redeemable, Filler: snapshot.Authorized,
 	}, nil
 }

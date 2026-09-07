@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
@@ -38,45 +40,29 @@ func nativeToLoan(native, rate *big.Int) *big.Int {
 }
 
 func executorDepositRequired(minDeposit, gasNative *big.Int) *big.Int {
-	return new(big.Int).Add(orZero(minDeposit), orZero(gasNative))
+	return new(big.Int).Add(bigmath.OrZero(minDeposit), bigmath.OrZero(gasNative))
 }
 
-func depositCoversSettlementGas(deposit, minDeposit, gasNative *big.Int) bool {
-	return orZero(deposit).Cmp(executorDepositRequired(minDeposit, gasNative)) >= 0
+func depositCoversSettlementGas(deposit, minimum, gasCost *big.Int) bool {
+	available := new(big.Int).Sub(bigmath.OrZero(deposit), bigmath.OrZero(minimum))
+	return available.Cmp(bigmath.OrZero(gasCost)) >= 0
 }
 
 func clampTsAt(auctionMs int64, now time.Time) uint64 {
-	nowSec := now.Unix()
-	if auctionMs <= 0 {
-		return uint64(nowSec)
+	timestamp, current := auctionMs/1000, now.Unix()
+	if auctionMs > 0 && timestamp >= current-600 && timestamp <= current {
+		return uint64(max(timestamp, 0))
 	}
-	ts := auctionMs / 1000
-	const skew = 600
-	if ts < nowSec-skew || ts > nowSec {
-		return uint64(nowSec)
-	}
-	return uint64(ts)
+	return uint64(max(current, 0))
 }
 
-func legsWithProfitFloors(legs []selectedLeg, gas gasPrediction, gasPrice, rate *big.Int) []selectedLeg {
-	out := make([]selectedLeg, len(legs))
-	copy(out, legs)
-	for i := range out {
+func (b chosenBundle) legsWithProfitFloors(prediction gasPrediction, gasPrice, rate *big.Int) []selectedLeg {
+	return b.selectedLegs(func(index int) *big.Int {
 		route := liquidlanegas.RouteUnknown
-		if i < len(gas.Routes) {
-			route = gas.Routes[i]
+		if index < len(prediction.Routes) {
+			route = prediction.Routes[index]
 		}
-		units := liquidlanegas.UnitsForRouteAt(route, i == 0)
-		out[i].MinProfit = nativeToLoan(gasCostNative(units, gasPrice), rate)
-	}
-	return out
-}
-
-func legsWithMinimumProfit(legs []selectedLeg, floor *big.Int) []selectedLeg {
-	out := make([]selectedLeg, len(legs))
-	copy(out, legs)
-	for i := range out {
-		out[i].MinProfit = cloneBig(floor)
-	}
-	return out
+		nativeCost := gasCostNative(liquidlanegas.UnitsForRouteAt(route, index == 0), gasPrice)
+		return nativeToLoan(nativeCost, rate)
+	})
 }

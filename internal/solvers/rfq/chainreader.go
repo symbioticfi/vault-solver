@@ -6,13 +6,14 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
 // reader is the RFQ adapter over the shared LiquidLane read surface.
@@ -28,11 +29,7 @@ func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
-	header, err := r.chain.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return time.Time{}, errors.Errorf("latest block header: %w", err)
-	}
-	return time.Unix(int64(header.Time), 0), nil
+	return r.chain.BlockTime(ctx)
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
@@ -86,8 +83,7 @@ func (r *reader) readQuoteCandidates(
 			metadata[adapter.Adapter] = adapter
 		}
 	}
-	matching, err := applyResolvedQuoteAdapters(r.chainID, matching, metadata)
-	if err != nil {
+	if err := bindQuoteAdapters(r.chainID, matching, metadata); err != nil {
 		return nil, err
 	}
 	inputDecimals, err := r.ll.TokenDecimals(ctx, tokenIn)
@@ -97,7 +93,7 @@ func (r *reader) readQuoteCandidates(
 	for index := range matching {
 		matching[index].TokenInDecimals = inputDecimals
 	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	allocated := planning.AllocateInventoryCapacity(matching, nil, 0)
 	if len(allocated) == 0 {
 		return nil, nil
 	}
@@ -113,7 +109,7 @@ func (r *reader) readQuoteCandidates(
 	if err != nil {
 		return nil, err
 	}
-	return liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), nil
+	return planning.NormalizeOracleInventory(amountIn, allocated, quotes), nil
 }
 
 func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
@@ -147,34 +143,24 @@ func resolvedQuoteAdapters(resolved []recoveryVault) map[common.Address]recovery
 	return out
 }
 
-func applyResolvedQuoteAdapters(
-	chainID int64,
-	inventory []solverInventory,
-	byAdapter map[common.Address]recoveryVault,
-) ([]solverInventory, error) {
-	out := make([]solverInventory, len(inventory))
-	for index, item := range inventory {
+// bindQuoteAdapters binds a request-owned inventory slice to canonical metadata.
+// The caller filtered into a fresh slice, so binding needs no second inventory copy.
+func bindQuoteAdapters(chainID int64, inventory []solverInventory, byAdapter map[common.Address]recoveryVault) error {
+	for index := range inventory {
+		item := &inventory[index]
 		adapter, ok := byAdapter[item.Adapter]
-		if !ok {
-			return nil, errors.Errorf("resolve quote adapter %s: metadata unavailable", item.Adapter.Hex())
-		}
-		if adapter.TokenOut != item.TokenOut {
-			return nil, errors.Errorf(
-				"resolve quote adapter %s: backend asset %s does not match on-chain asset %s",
-				item.Adapter.Hex(), item.TokenOut.Hex(), adapter.TokenOut.Hex(),
-			)
-		}
-		if adapter.TokenOutDecimals != item.TokenOutDecimals {
-			return nil, errors.Errorf(
-				"resolve quote adapter %s: backend asset decimals %d do not match on-chain decimals %d",
-				item.Adapter.Hex(), item.TokenOutDecimals, adapter.TokenOutDecimals,
-			)
+		switch {
+		case !ok:
+			return errors.Errorf("resolve quote adapter %s: metadata unavailable", item.Adapter.Hex())
+		case adapter.TokenOut != item.TokenOut:
+			return errors.Errorf("resolve quote adapter %s: backend asset %s does not match on-chain asset %s", item.Adapter.Hex(), item.TokenOut.Hex(), adapter.TokenOut.Hex())
+		case adapter.TokenOutDecimals != item.TokenOutDecimals:
+			return errors.Errorf("resolve quote adapter %s: backend asset decimals %d do not match on-chain decimals %d", item.Adapter.Hex(), item.TokenOutDecimals, adapter.TokenOutDecimals)
 		}
 		item.Vault = adapter.Vault
 		item.CapacityID = liquidlane.NewCapacityID(chainID, adapter.Vault, item.TokenOut)
-		out[index] = item
 	}
-	return out, nil
+	return nil
 }
 
 // resolveVaults returns a copy of the configured entries with each Vault (adapter.vault()) and Asset

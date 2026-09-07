@@ -11,6 +11,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
@@ -39,20 +40,8 @@ func newOEVTestMetrics(
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	metrics, err := newMetrics(reg, defaultStrategyName, wonMetrics)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	return metrics, reg
-}
-
-func requireOEVEvent(
-	t *testing.T,
-	reg *prometheus.Registry,
-	event, outcome string,
-	count, timestamp float64,
-) {
-	t.Helper()
-	metricstest.RequireWorkflowEvent(t, reg, Name, event, outcome, count, timestamp)
 }
 
 func oevEventTimestamp(t *testing.T, reg *prometheus.Registry, event, outcome string) float64 {
@@ -60,16 +49,6 @@ func oevEventTimestamp(t *testing.T, reg *prometheus.Registry, event, outcome st
 	return metricstest.FamilyValue(t, reg, "solver_bot_workflow_last_event_timestamp", map[string]string{
 		"solver": Name, "event": event, "outcome": outcome,
 	})
-}
-
-func requireOEVBidAmount(
-	t *testing.T,
-	reg *prometheus.Registry,
-	stage string,
-	want float64,
-) {
-	t.Helper()
-	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", stage, want)
 }
 
 func TestStateRefreshFreshnessAdvancesOnlyAfterSnapshotInstallation(t *testing.T) {
@@ -101,9 +80,7 @@ func TestStateRefreshFreshnessAdvancesOnlyAfterSnapshotInstallation(t *testing.T
 		Exec:    ExecutorState{Nonce: big.NewInt(8), Deposit: big.NewInt(20_000_000_000_000), Locked: false},
 		Adapter: seedAdapterSnapshot(), GasLimit: 3_000_000, UpdatedAt: installedAt,
 	}
-	if err := s.refreshState(t.Context()); err != nil {
-		t.Fatalf("successful state refresh: %v", err)
-	}
+	testcheck.NoError(t, s.refreshState(t.Context()), "successful state refresh: %v")
 	freshness := oevEventTimestamp(t, reg, "state_refresh", "success")
 	if freshness <= 123 {
 		t.Fatalf("freshness after successful refresh = %v, want advanced timestamp", freshness)
@@ -112,9 +89,7 @@ func TestStateRefreshFreshnessAdvancesOnlyAfterSnapshotInstallation(t *testing.T
 	if !ok || !installed.UpdatedAt.Equal(installedAt) {
 		t.Fatal("successful refresh did not install its complete snapshot")
 	}
-	if got := testutil.ToFloat64(m.deposit); got != 20_000_000_000_000 {
-		t.Fatalf("deposit after successful refresh = %v, want applied snapshot value", got)
-	}
+	metricstest.RequireValue(t, m.deposit, 20_000_000_000_000)
 
 	source.err = errors.New("second rpc failure")
 	source.snapshot.UpdatedAt = installedAt.Add(time.Minute)
@@ -142,9 +117,7 @@ func TestStateRefreshExternalOperationOutcomes(t *testing.T) {
 	source := &stubStateSnapshotSource{snapshot: snapshot}
 	s.stateSource = source
 
-	if err := s.refreshState(t.Context()); err != nil {
-		t.Fatalf("successful refresh: %v", err)
-	}
+	testcheck.NoError(t, s.refreshState(t.Context()), "successful refresh: %v")
 	source.err = errStateRefreshBlockBoundary
 	if err := s.refreshState(t.Context()); !errors.Is(err, errStateRefreshBlockBoundary) {
 		t.Fatalf("block-boundary refresh error = %v", err)
@@ -194,16 +167,16 @@ func TestStateRefreshBoundaryRetryIsBounded(t *testing.T) {
 func TestOEVBoundedLifecycleSeriesArePreinitialized(t *testing.T) {
 	_, reg := newOEVTestMetrics(t, nil)
 	for _, outcome := range auctionDecisionOutcomes {
-		requireOEVEvent(t, reg, "auction", outcome, 0, 0)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "auction", outcome, 0, 0)
 	}
 	for _, outcome := range append(bidLifecycleStages[:], oevBidUnresolved) {
-		requireOEVEvent(t, reg, "bid", outcome, 0, 0)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "bid", outcome, 0, 0)
 	}
 	for _, stage := range bidLifecycleStages {
-		requireOEVBidAmount(t, reg, stage, 0)
+		metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", stage, 0)
 	}
-	requireOEVEvent(t, reg, "breaker", "failure", 0, 0)
-	requireOEVEvent(t, reg, "state_refresh", "success", 0, 0)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "breaker", "failure", 0, 0)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "state_refresh", "success", 0, 0)
 }
 
 func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
@@ -213,8 +186,8 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	m.now = func() time.Time { return time.Unix(123, 0) }
 	bidWei := big.NewInt(123)
 	m.enqueuedBid(bidWei)
-	requireOEVEvent(t, reg, "bid", oevBidEnqueued, 1, 123)
-	requireOEVBidAmount(t, reg, oevBidEnqueued, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidEnqueued, 1, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidEnqueued, 123)
 	s.reserve(8, time.Now(), "auction", bidWei)
 
 	won := marshal(AuctionResult{
@@ -223,8 +196,8 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	})
 	s.handleMessage(t.Context(), won)
 	s.handleMessage(t.Context(), won)
-	requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
-	requireOEVBidAmount(t, reg, oevBidWon, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 1, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidWon, 123)
 	metricstest.RequireValue(t, m.wonInflight, 1)
 
 	settled := marshal(LiquidationResult{
@@ -233,8 +206,8 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 	})
 	s.handleMessage(t.Context(), settled)
 	s.handleMessage(t.Context(), settled)
-	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
-	requireOEVBidAmount(t, reg, oevBidSettledSuccess, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledSuccess, 1, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidSettledSuccess, 123)
 	metricstest.RequireValue(t, m.wonInflight, 0)
 
 	failedBidWei := big.NewInt(456)
@@ -244,10 +217,10 @@ func TestLifecycleMetricsCountTransitionsOnce(t *testing.T) {
 		Data: LiquidationResultData{Success: false, Liquidator: seedCallback.Hex()},
 	})
 	s.handleMessage(t.Context(), failed)
-	requireOEVEvent(t, reg, "bid", oevBidWon, 2, 123)
-	requireOEVEvent(t, reg, "bid", oevBidSettledFailed, 1, 123)
-	requireOEVBidAmount(t, reg, oevBidSettledFailed, 456)
-	requireOEVEvent(t, reg, "breaker", "failure", 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 2, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledFailed, 1, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidSettledFailed, 456)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "breaker", "failure", 1, 123)
 }
 
 func TestLifecycleMetricsRequireStableResultIdentity(t *testing.T) {
@@ -263,8 +236,8 @@ func TestLifecycleMetricsRequireStableResultIdentity(t *testing.T) {
 	s.handleMessage(t.Context(), result)
 	s.handleMessage(t.Context(), result)
 
-	requireOEVEvent(t, reg, "bid", oevBidWon, 0, 0)
-	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 0, 0)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 0, 0)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledSuccess, 0, 0)
 
 	identified := marshal(LiquidationResult{
 		Op: "liquidation-result",
@@ -274,8 +247,8 @@ func TestLifecycleMetricsRequireStableResultIdentity(t *testing.T) {
 	})
 	s.handleMessage(t.Context(), identified)
 	s.handleMessage(t.Context(), identified)
-	requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
-	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledSuccess, 1, 123)
 }
 
 func TestLifecycleMetricsNormalizeAuctionIDs(t *testing.T) {
@@ -295,10 +268,10 @@ func TestLifecycleMetricsNormalizeAuctionIDs(t *testing.T) {
 		Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
 	}))
 
-	requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
-	requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
-	requireOEVBidAmount(t, reg, oevBidWon, 123)
-	requireOEVBidAmount(t, reg, oevBidSettledSuccess, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 1, 123)
+	metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledSuccess, 1, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidWon, 123)
+	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidSettledSuccess, 123)
 }
 
 func TestLifecycleEvictionDoesNotReplayInflightWin(t *testing.T) {
@@ -316,8 +289,8 @@ func TestLifecycleEvictionDoesNotReplayInflightWin(t *testing.T) {
 	if transition.won || !transition.settled || transition.bidWei == nil || transition.bidWei.Cmp(big.NewInt(123)) != 0 {
 		t.Fatalf("settlement transition = %+v, want settled-only with original bid", transition)
 	}
-	if got := len(s.bidLifecycle); got != maxSeenAuctions {
-		t.Fatalf("lifecycle records = %d, want bounded %d", got, maxSeenAuctions)
+	if got, pending := len(s.bids), len(s.inFlightSnapshot()); got > pending+maxSeenAuctions {
+		t.Fatalf("lifecycle records = %d, exceeds active %d plus history %d", got, pending, maxSeenAuctions)
 	}
 	replay := s.settleReservationByAuction("oldest", "oldest")
 	if replay.won || replay.settled {
@@ -344,10 +317,10 @@ func TestLifecycleMetricsSurviveNoncePruneAndRestart(t *testing.T) {
 			Data: LiquidationResultData{Success: true, Liquidator: seedCallback.Hex()},
 		}))
 
-		requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
-		requireOEVEvent(t, reg, "bid", oevBidSettledSuccess, 1, 123)
-		requireOEVBidAmount(t, reg, oevBidWon, 321)
-		requireOEVBidAmount(t, reg, oevBidSettledSuccess, 321)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 1, 123)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledSuccess, 1, 123)
+		metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidWon, 321)
+		metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidSettledSuccess, 321)
 	})
 
 	t.Run("post-restart result still counts lifecycle", func(t *testing.T) {
@@ -362,10 +335,10 @@ func TestLifecycleMetricsSurviveNoncePruneAndRestart(t *testing.T) {
 		s.handleMessage(t.Context(), result)
 		s.handleMessage(t.Context(), result)
 
-		requireOEVEvent(t, reg, "bid", oevBidWon, 1, 123)
-		requireOEVEvent(t, reg, "bid", oevBidSettledFailed, 1, 123)
-		requireOEVBidAmount(t, reg, oevBidWon, 0)
-		requireOEVBidAmount(t, reg, oevBidSettledFailed, 0)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidWon, 1, 123)
+		metricstest.RequireWorkflowEvent(t, reg, Name, "bid", oevBidSettledFailed, 1, 123)
+		metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidWon, 0)
+		metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", oevBidSettledFailed, 0)
 	})
 }
 
@@ -388,9 +361,7 @@ func TestOldestWonInflightAgeTracksFirstObservedWin(t *testing.T) {
 	m, err := newMetrics(reg, "webhook", func() (int, time.Duration) {
 		return s.wonReservationMetricsAt(now)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	metricstest.RequireValue(t, m.oldestWonInflight, 0)
 	s.reserve(7, now, "future-win", nil)
 	if _, transitioned := s.markReservationWon("future-win", now.Add(time.Second)); !transitioned {
@@ -418,9 +389,7 @@ func TestOldestWonInflightAgeTracksFirstObservedWin(t *testing.T) {
 	metricstest.RequireValue(t, m.oldestWonInflight, 30)
 
 	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("gather metrics: %v", err)
-	}
+	testcheck.NoError(t, err, "gather metrics: %v")
 	var strategy string
 	for _, family := range families {
 		if family.GetName() != "oev_oldest_won_inflight_age_seconds" {
@@ -449,9 +418,7 @@ func TestWonInflightMetricsAreRaceSafeDuringLifecycleUpdates(t *testing.T) {
 	m, err := newMetrics(prometheus.NewRegistry(), defaultStrategyName, func() (int, time.Duration) {
 		return s.wonReservationMetricsAt(now)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -546,9 +513,7 @@ func TestAuctionDecisionCountsEveryParsedTerminalPathOnce(t *testing.T) {
 	}
 
 	metric := &dto.Metric{}
-	if err := m.hotPath.Write(metric); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, m.hotPath.Write(metric))
 	const hotPathOutcomes = 2 // context_canceled and too_late reached the serialized bid decision path.
 	if got := metric.GetHistogram().GetSampleCount(); got != hotPathOutcomes {
 		t.Fatalf("hot-path samples = %d, want %d", got, hotPathOutcomes)
@@ -573,7 +538,7 @@ func TestBuildBidClassifiesCancellationDuringStrategy(t *testing.T) {
 		case <-t.Context().Done():
 		}
 	}()
-	if decision := s.buildBidWithContext(ctx, auction, time.Now); decision.skip != auctionOutcomeContextCanceled {
+	if decision := s.buildBid(ctx, auction, time.Now); decision.skip != auctionOutcomeContextCanceled {
 		t.Fatalf("decision = %q, want %q", decision.skip, auctionOutcomeContextCanceled)
 	}
 }

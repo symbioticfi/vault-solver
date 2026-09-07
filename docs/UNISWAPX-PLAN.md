@@ -75,13 +75,13 @@ architecture** (see `docs/strategy-plan.md`) and the shared LiquidLane read/type
 
 ### 2.1 Solver-local strategy, shared LiquidLane primitives
 
-UniswapX owns its strategy contract and registry under `internal/solvers/uniswapx/strategies/`:
+UniswapX owns its strategy contract and explicit selection under `internal/solvers/uniswapx/strategies/`:
 
 ```
 internal/solvers/uniswapx/
   strategy.go
   strategies/
-    registry.go
+    selection.go
     types/types.go       # DecideQuote / DecideFill
     default/
     webhook/
@@ -97,9 +97,8 @@ may carry a `DiscountID`; offer discovery and fill-time resolution of signed ter
 Only proven neutral packages are shared: `internal/liquidlane` for route/inventory types, capacity IDs,
 fixed-point math, readers, and signed-discount client/types; `internal/liquidlane/snapshot` for the
 common direct/physical inventory, amount-specific fill, and optional gas snapshot read path;
-`internal/liquidlane/strategies/greedy` for normalized `QuoteTask`/`FillTask` solving, capacity accounting,
-minimum-output distribution, and gas conversion; `internal/liquidlane/strategies` for canonical fill
-routes, pending-capacity reservations, gas pricing, and webhook-plan validation; and
+`internal/liquidlane/planning` for normalized `QuoteTask`/`FillTask` solving, capacity accounting,
+minimum-output distribution, gas conversion, canonical fill routes and webhook-plan validation; and
 `internal/webhook` for bounded remote-decision transport. The RFQ solver normalizes its protocol facts
 to shared `QuoteCandidate`s; UniswapX and LI.FI strategies start from shared `Inventory`. Their default
 strategies feed the same quote engine. RFQ, LI.FI, and UniswapX pass fresh amount-specific fill
@@ -215,11 +214,11 @@ assertion because the PR19 ABI has no getter.
 | `solver.go` | factory, dependency wiring, startup validation, and `Run` lifecycle | mirror `rfq` |
 | `config.go` | typed config: addresses, servers, optional gas feeds, breaker, adapters/token policy, strategy | mirror `rfq` |
 | `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/healthz`, `/ready`; source-IP auth stays at ingress | net-new |
-| `quote_refresh.go` | background inventory and optional gas snapshots, epoch binding, and atomic publication | net-new |
+| `quote_refresh.go` | background inventory and optional gas snapshots; one lock guards publication, epoch and planning count | net-new |
 | `polling.go` | exclusive and public V2 polling; dedup/retry admission and exclusive reconciliation | net-new |
 | `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
 | `chainreader.go` | config-independent executor/route checks plus refreshed inventory/rate and optional gas snapshots | reader port |
-| `strategies/` | UniswapX-local contract, registry, `default`, and `webhook` decisions (§2.1) | net-new |
+| `strategies/` | UniswapX-local contract, selection, `default`, and `webhook` decisions (§2.1) | net-new |
 | `order.go` | V2 Dutch codec, hashes, signature/exclusivity validation | net-new |
 | `orderclient.go` | generated-client adapter, authenticated polling, one ≤6 RPS limiter, pagination/body bounds | net-new |
 | `state.go` / `health.go` / `metrics.go` | reservations, quote epochs, exclusive obligations, dedup/backoff/breakers, readiness and metrics | net-new |
@@ -314,7 +313,7 @@ RFQ and UniswapX code on 2026-07-20.)
   `webhook` strategy).
 - A thin UniswapX reader composes those shared readers for startup route resolution, authorization,
   inventory/rate snapshots, optional gas snapshots, and fill-time quotes (§2.1).
-- Solver scaffolding patterns: `init()` registration + factory, solver-local strategy selection through
+- Solver composition: an explicit constructor in the application constructor selection, solver-local strategy selection through
   `strategy: {name, config}`, bounded quote server, poll loop, and calldata-only submission through the
   shared `txmanager`.
 
@@ -571,7 +570,7 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    direction (§1: `tokenIn` must be redeemable on an in-scope direct or signed-discount route *and*
    `tokenOut` that adapter's vault asset; native-ETH `tokenOut` is declined in v1 —
    this rule also auto-declines the opposing probe), or no viable inventory.
-2. Read the atomically published direct LiquidLane inventory/rate snapshot, its optional gas snapshot, and its valid advertised
+2. Read the immutable direct LiquidLane inventory/rate snapshot, its optional gas snapshot, and its valid advertised
    signed-discount candidates. Filter inventory to the requested token pair before allocating shared capacity, so unrelated
    input-token routes backed by the same vault do not receive static shares. Matching routes and direct/private alternatives
    still share `CapacityID`, including reservations from accepted fills.
@@ -756,8 +755,8 @@ in the owning repository and the integration harness pins the resulting revision
 
 - [x] **P0 — Scaffold + codegen.** Vendor UniswapX V2 reactor + Permit2 ABIs → `api/bindings/uniswapx/`;
   vendor `uniswapx-service/swagger.json` spec version 2.0.0 → generated typed poll client; scaffold the
-  `uniswapx` package + `init()` register + blank-import from `main`. CGO-free build holds.
-- [x] **P1 — UniswapX-local strategy layer.** Local contract + registry + `default`/`webhook`, background
+  `uniswapx` package + explicit `internal/app.newSolver` case. CGO-free build holds.
+- [x] **P1 — UniswapX-local strategy layer.** Local contract + explicit `default`/`webhook` selection, background
   chain and optional gas snapshot, request-scoped exact-input/output pricing, and independent fill decision tests are present. `DiscountID` flows
   through strategy plans and the solver resolves fresh signed terms before execution. RFQ and UniswapX
   default quoting reuse `QuoteTask`; RFQ, LI.FI, and UniswapX default filling reuse `FillTask` while
@@ -904,7 +903,7 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 
 ### Internal repositories
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
-- Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
+- Strategy architecture (solver-local `strategies/` selector (package `strategies`, `selection.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
   LiquidLane allocator + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - The RFQ contracts repository owns on-chain adapters and the UniswapX executor. `rfq-integration` pins the
@@ -923,3 +922,25 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
   route **and** `tokenOut` is that adapter's ERC-20 vault asset. Native-ETH output is currently declined and
   remains an optional post-v1 extension (§7); the universe remains narrow by construction until the
   secondary-DEX hop.
+
+### Runtime ownership
+
+Order execution uses one retry/claimed/filled record per hash. Exclusive obligations similarly keep
+active and resolved state in one record; active obligations are never evicted by history retention.
+Reconciliation first obtains every terminal status and any confirmed fill timestamps, then commits
+the complete observation. A partial response leaves obligations and quote-admission uncertainty
+intact. Startup recovery remains distinct from newly observed misses for breaker metrics.
+
+Quote state is loaded separately from publication. Its TTL starts before the first RPC; publication
+rejects expired state and checks the fill epoch while holding the publication lock. Fill preparation
+produces one exact transaction request with its capacity reservations and surplus before admission.
+
+Quote publication, invalidation and the planning count share one mutex-protected record. RPC and
+strategy work run outside that lock. Publication checks epoch, planning and expiry before installing
+the pointer; invalidation advances the epoch and clears it in the same critical section. This removes
+the former publish/recheck/rollback race protocol across separate atomic fields.
+
+The publication record alone owns the epoch; immutable inventory snapshots do not duplicate it.
+The poll worker cleans execution and exclusive-obligation history once per batch after reading chain
+time. Claimed executions and unresolved obligations survive cleanup; terminal execution history keeps
+the existing one-hour grace and resolved obligations keep the recovery lookback.

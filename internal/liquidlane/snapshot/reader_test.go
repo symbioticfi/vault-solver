@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
 
@@ -102,21 +103,17 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 		gas: &liquidlanegas.Snapshot{},
 	}
 	gas := &fakeGasReader{prices: &liquidlanegas.PriceSnapshot{}}
-	reader := newReader(liquid, gas)
+	reader := (&Reader{liquidReader: liquid, gas: gas})
 
 	quote, err := reader.Quote(t.Context(), liquid.routes, common.Address{}, time.Now())
-	if err != nil {
-		t.Fatalf("quote: %v", err)
-	}
+	testcheck.NoError(t, err, "quote: %v")
 	if len(quote.Direct) != 1 || quote.Direct[0].ID != routeB.ID || len(quote.Physical) != 2 ||
 		quote.GasSnapshot != liquid.gas || quote.GasPrices != gas.prices {
 		t.Fatalf("quote snapshot = %#v", quote)
 	}
 
 	fill, err := reader.Fill(t.Context(), liquid.routes, common.Address{}, common.Address{}, big.NewInt(1), time.Now())
-	if err != nil {
-		t.Fatalf("fill: %v", err)
-	}
+	testcheck.NoError(t, err, "fill: %v")
 	if len(fill.Direct) != 1 || fill.Direct[0].ID != routeB.ID || len(fill.Physical) != 2 {
 		t.Fatalf("fill snapshot = %#v", fill)
 	}
@@ -124,14 +121,10 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 		t.Fatalf("gas tokens = %#v", gas.tokens)
 	}
 
-	withoutGas := newReader(liquid, nil)
-	if err := withoutGas.ValidateGasTokens(liquid.routes); err != nil {
-		t.Fatalf("validate gas tokens: %v", err)
-	}
+	withoutGas := (&Reader{liquidReader: liquid})
+	testcheck.NoError(t, withoutGas.ValidateGasTokens(liquid.routes), "validate gas tokens: %v")
 	quote, err = withoutGas.Quote(t.Context(), liquid.routes, common.Address{}, time.Now())
-	if err != nil {
-		t.Fatalf("quote without gas: %v", err)
-	}
+	testcheck.NoError(t, err, "quote without gas: %v")
 	fill, err = withoutGas.Fill(
 		t.Context(),
 		liquid.routes,
@@ -140,9 +133,7 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 		big.NewInt(1),
 		time.Now(),
 	)
-	if err != nil {
-		t.Fatalf("fill without gas: %v", err)
-	}
+	testcheck.NoError(t, err, "fill without gas: %v")
 	if quote.GasSnapshot != nil || quote.GasPrices != nil || fill.GasSnapshot != nil || fill.GasPrices != nil {
 		t.Fatalf("gas data populated while disabled: quote=%#v fill=%#v", quote, fill)
 	}

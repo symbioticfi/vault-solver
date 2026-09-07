@@ -10,10 +10,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
+
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -37,9 +38,7 @@ func baseQuoteInput(t *testing.T) types.QuoteInput {
 
 func TestDefaultStrategyDecideQuote(t *testing.T) {
 	out, err := defaultstrategy.New().DecideQuote(t.Context(), baseQuoteInput(t))
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuote: %v")
 	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" {
 		t.Fatalf("unexpected output: %+v", out)
 	}
@@ -48,17 +47,20 @@ func TestDefaultStrategyDecideQuote(t *testing.T) {
 	}
 }
 
-func TestNewStrategyUsesRegistry(t *testing.T) {
+func TestNewStrategySelectsBuiltIns(t *testing.T) {
 	got, err := newStrategy(StrategyConfig{Name: "default"})
-	if err != nil {
-		t.Fatalf("newStrategy default: %v", err)
-	}
+	testcheck.NoError(t, err, "newStrategy default: %v")
 	if got == nil {
 		t.Fatal("newStrategy default returned nil")
 	}
-	names := strategies.Registered()
-	if len(names) < 2 || names[0] != "default" || names[1] != "webhook" {
-		t.Fatalf("registered strategies = %v, want default and webhook", names)
+	for _, name := range []string{"webhook", "missing"} {
+		_, err := newStrategy(StrategyConfig{Name: name})
+		if err == nil {
+			t.Fatalf("%s accepted missing configuration", name)
+		}
+		if strings.Contains(err.Error(), "unknown") != (name == "missing") {
+			t.Fatalf("%s selection: %v", name, err)
+		}
 	}
 }
 
@@ -86,9 +88,7 @@ func TestDefaultStrategyBuildFillPlanUsesCurrentCandidates(t *testing.T) {
 		}},
 		Now: input.Now,
 	})
-	if err != nil {
-		t.Fatalf("BuildFillPlan: %v", err)
-	}
+	testcheck.NoError(t, err, "BuildFillPlan: %v")
 	if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != fillAdapter {
 		t.Fatalf("fill plan = %+v, want current adapter %s", plan, fillAdapter)
 	}
@@ -97,9 +97,7 @@ func TestDefaultStrategyBuildFillPlanUsesCurrentCandidates(t *testing.T) {
 func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read request: %v", err)
-		}
+		testcheck.NoError(t, err, "read request: %v")
 		if !strings.Contains(string(body), `"amountIn":"1000000000000000000"`) ||
 			strings.Contains(string(body), `"AmountIn"`) {
 			t.Fatalf("request body does not use decimal-string lower-camel JSON: %s", string(body))
@@ -112,13 +110,9 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, err := webhook.NewClient(webhook.Config{URL: srv.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	out, err := webhookstrategy.New(client).DecideQuote(t.Context(), baseQuoteInput(t))
-	if err != nil {
-		t.Fatalf("DecideQuote: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideQuote: %v")
 	if out.Decision != types.DecisionQuote || out.QuotedAmountOut.String() != "1000000" ||
 		len(out.Legs) != 1 || out.Legs[0].CandidateID != "c0" {
 		t.Fatalf("unexpected webhook output: %+v", out)
@@ -128,9 +122,7 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read request: %v", err)
-		}
+		testcheck.NoError(t, err, "read request: %v")
 		if !strings.Contains(string(body), `"requireSingleRoute":true`) {
 			t.Fatalf("webhook request missing single-route constraint: %s", body)
 		}
@@ -145,9 +137,7 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, err := webhook.NewClient(webhook.Config{URL: srv.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	quoteServer := testServer()
 	quoteServer.quotes.tokenPolicy = testPermissionedPolicy(t, tIn)
 	quoteServer.quotes.strategy = webhookstrategy.New(client)

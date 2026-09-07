@@ -1,13 +1,14 @@
 package defaultstrategy
 
 import (
-	"math/big"
+	"math"
 	"net/url"
 	"time"
 
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -57,9 +58,6 @@ func ParseConfig(node yaml.Node) (Config, error) {
 	}
 	cfg := Config{
 		BidWei:                   bidWei,
-		CallbackAuthTTL:          defaultCallbackAuthTTL,
-		MonitorPoll:              defaultMonitorPoll,
-		MaxStateAge:              defaultMaxStateAge,
 		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
 		MaxTrackedPositions:      defaultMaxTrackedPositions,
 		Sizing: SizingParams{
@@ -67,15 +65,19 @@ func ParseConfig(node yaml.Node) (Config, error) {
 			SwapHaircutBps:       defaultSwapHaircut,
 		},
 	}
-	if raw.Bid.AuthTtlMs != nil {
-		authTTL, err := parse.MsDuration(raw.Bid.AuthTtlMs, cfg.CallbackAuthTTL, "strategy.config.bid.authTtlMs")
-		if err != nil {
+	for _, duration := range []struct {
+		field    string
+		raw      *int
+		fallback time.Duration
+		out      *time.Duration
+	}{
+		{"strategy.config.bid.authTtlMs", raw.Bid.AuthTtlMs, defaultCallbackAuthTTL, &cfg.CallbackAuthTTL},
+		{"strategy.config.monitorPollMs", raw.MonitorPollMs, defaultMonitorPoll, &cfg.MonitorPoll},
+		{"strategy.config.maxStateAgeMs", raw.MaxStateAgeMs, defaultMaxStateAge, &cfg.MaxStateAge},
+	} {
+		if *duration.out, err = parse.MsDuration(duration.raw, duration.fallback, duration.field); err != nil {
 			return Config{}, err
 		}
-		cfg.CallbackAuthTTL = authTTL
-	}
-	if cfg.CallbackAuthTTL <= 0 {
-		return Config{}, errors.New("strategy.config.bid.authTtlMs must be > 0")
 	}
 	if raw.Bid.MinBundleProfitBidBps != nil {
 		if *raw.Bid.MinBundleProfitBidBps < 0 {
@@ -106,7 +108,7 @@ func ParseConfig(node yaml.Node) (Config, error) {
 		cfg.MorphoAPIURL = raw.MorphoAPIURL
 	}
 	if raw.DiscoveryMaxHF != nil {
-		if *raw.DiscoveryMaxHF <= 0 {
+		if *raw.DiscoveryMaxHF <= 0 || math.IsNaN(*raw.DiscoveryMaxHF) || math.IsInf(*raw.DiscoveryMaxHF, 0) {
 			return Config{}, errors.Errorf("strategy.config.discoveryMaxHealthFactor must be > 0, got %v", *raw.DiscoveryMaxHF)
 		}
 		cfg.DiscoveryMaxHealthFactor = *raw.DiscoveryMaxHF
@@ -117,67 +119,19 @@ func ParseConfig(node yaml.Node) (Config, error) {
 		}
 		cfg.MaxTrackedPositions = *raw.MaxTrackedPositions
 	}
-	if raw.MonitorPollMs != nil {
-		poll, err := parse.MsDuration(raw.MonitorPollMs, cfg.MonitorPoll, "strategy.config.monitorPollMs")
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.MonitorPoll = poll
-	}
-	if raw.MaxStateAgeMs != nil {
-		maxAge, err := parse.MsDuration(raw.MaxStateAgeMs, cfg.MaxStateAge, "strategy.config.maxStateAgeMs")
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.MaxStateAge = maxAge
-	}
 	if cfg.MonitorPoll >= cfg.MaxStateAge {
 		return Config{}, errors.Errorf("strategy.config.monitorPollMs (%s) must be < strategy.config.maxStateAgeMs (%s)", cfg.MonitorPoll, cfg.MaxStateAge)
 	}
 	return cfg, nil
 }
 
-func ConfigForTest(overrides Config) Config {
-	cfg := Config{
-		DiscoveryMaxHealthFactor: defaultDiscoveryMaxHF,
-		MaxTrackedPositions:      defaultMaxTrackedPositions,
-		CallbackAuthTTL:          defaultCallbackAuthTTL,
-		MonitorPoll:              defaultMonitorPoll,
-		MaxStateAge:              defaultMaxStateAge,
-		Sizing: SizingParams{
-			AllowFullLiquidation: defaultAllowFullLiquidation,
-			SwapHaircutBps:       defaultSwapHaircut,
-		},
-	}
-	if overrides.MorphoAPIURL != "" {
-		cfg.MorphoAPIURL = overrides.MorphoAPIURL
-	}
-	if overrides.DiscoveryMaxHealthFactor != 0 {
-		cfg.DiscoveryMaxHealthFactor = overrides.DiscoveryMaxHealthFactor
-	}
-	if overrides.MaxTrackedPositions != 0 {
-		cfg.MaxTrackedPositions = overrides.MaxTrackedPositions
-	}
-	if overrides.BidWei != nil {
-		cfg.BidWei = new(big.Int).Set(overrides.BidWei)
-	}
-	if overrides.MinBundleProfitBidBps != 0 {
-		cfg.MinBundleProfitBidBps = overrides.MinBundleProfitBidBps
-	}
-	if overrides.TotalBundleProfitBps != 0 {
-		cfg.TotalBundleProfitBps = overrides.TotalBundleProfitBps
-	}
-	if overrides.Sizing != (SizingParams{}) {
-		cfg.Sizing = overrides.Sizing
-	}
-	if overrides.CallbackAuthTTL != 0 {
-		cfg.CallbackAuthTTL = overrides.CallbackAuthTTL
-	}
-	if overrides.MonitorPoll != 0 {
-		cfg.MonitorPoll = overrides.MonitorPoll
-	}
-	if overrides.MaxStateAge != 0 {
-		cfg.MaxStateAge = overrides.MaxStateAge
-	}
+func ConfigForTest(cfg Config) Config {
+	cfg.BidWei = bigmath.Clone(cfg.BidWei)
+	cfg.DiscoveryMaxHealthFactor = parse.OrDefault(cfg.DiscoveryMaxHealthFactor, defaultDiscoveryMaxHF)
+	cfg.MaxTrackedPositions = parse.OrDefault(cfg.MaxTrackedPositions, defaultMaxTrackedPositions)
+	cfg.CallbackAuthTTL = parse.OrDefault(cfg.CallbackAuthTTL, defaultCallbackAuthTTL)
+	cfg.MonitorPoll = parse.OrDefault(cfg.MonitorPoll, defaultMonitorPoll)
+	cfg.MaxStateAge = parse.OrDefault(cfg.MaxStateAge, defaultMaxStateAge)
+	cfg.Sizing = parse.OrDefault(cfg.Sizing, SizingParams{AllowFullLiquidation: defaultAllowFullLiquidation, SwapHaircutBps: defaultSwapHaircut})
 	return cfg
 }

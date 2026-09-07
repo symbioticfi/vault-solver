@@ -61,6 +61,22 @@ func TestValidateSignedChecksSelectionDeadlinesAndOutput(t *testing.T) {
 	if _, err := ValidateSigned(signed, selection, base, now.Add(time.Minute)); err == nil {
 		t.Fatal("expected deadline rejection")
 	}
+	selection.TokenOut = base.TokenOut
+	selection.AmountIn = base.AmountIn
+	for name, mutate := range map[string]func(*liquidlane.FillQuote){
+		"adapter":      func(q *liquidlane.FillQuote) { q.Adapter = common.Address{19: 99} },
+		"input token":  func(q *liquidlane.FillQuote) { q.TokenIn = common.Address{19: 99} },
+		"output token": func(q *liquidlane.FillQuote) { q.TokenOut = common.Address{19: 99} },
+		"amount":       func(q *liquidlane.FillQuote) { q.AmountIn = big.NewInt(999) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			other := base
+			mutate(&other)
+			if _, err := ValidateSigned(signed, selection, other, now); err == nil {
+				t.Fatal("unrelated current quote accepted")
+			}
+		})
+	}
 }
 
 func TestFindFillQuoteRequiresExactRouteAndAmount(t *testing.T) {

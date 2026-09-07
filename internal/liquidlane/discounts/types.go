@@ -3,11 +3,14 @@ package discounts
 import (
 	"math/big"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 const maxUint48 = int64(1<<48 - 1)
@@ -47,166 +50,125 @@ type SignedTerms struct {
 	Deadline      *big.Int
 }
 
+// offerDecoder accumulates independent field errors while constructing an owned
+// domain value. The value is returned only after every required field is valid.
+type offerDecoder struct{ errors []error }
+
+func (d *offerDecoder) address(raw, name string) common.Address {
+	address, err := parse.NonZeroAddress(raw, name)
+	if err != nil {
+		d.errors = append(d.errors, err)
+	}
+	return address
+}
+
+func (d *offerDecoder) integer(raw, name string, positive bool) *big.Int {
+	value, err := parseNonNegativeDecimal(raw, name)
+	if err == nil && positive && value.Sign() == 0 {
+		err = errors.Errorf("%s: must be positive", name)
+	}
+	if err != nil {
+		d.errors = append(d.errors, err)
+	}
+	return value
+}
+
+func (d *offerDecoder) signature(raw, name string) []byte {
+	signature, err := hexutil.Decode(raw)
+	if err == nil && len(signature) == 0 {
+		err = errors.New("discount signatures must not be empty")
+	}
+	if err != nil {
+		d.errors = append(d.errors, errors.Errorf("%s: %w", name, err))
+	}
+	return signature
+}
+
+func (d *offerDecoder) discount(raw string) *big.Int {
+	value := d.integer(raw, "discount", false)
+	if value != nil && value.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
+		d.errors = append(d.errors, errors.Errorf("discount: must be <= %d", liquidlane.DiscountPrecision))
+	}
+	return value
+}
+
 func ParseOffer(item ListItem) (*Offer, error) {
+	d := new(offerDecoder)
 	id, err := parseHash(item.DiscountID, "discountId")
 	if err != nil {
-		return nil, err
+		d.errors = append(d.errors, err)
 	}
-	adapter, err := parseAddress(item.Adapter, "adapter")
-	if err != nil {
-		return nil, err
-	}
-	tokenToRedeem, err := parseAddress(item.TokenToRedeem, "tokenToRedeem")
-	if err != nil {
-		return nil, err
-	}
-	collateral, err := parseAddress(item.Collateral, "collateral")
-	if err != nil {
-		return nil, err
-	}
-	discount, err := parseNonNegativeDecimal(item.Discount, "discount")
-	if err != nil {
-		return nil, err
-	}
-	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
-		return nil, errors.Errorf("discount: must be <= %d", liquidlane.DiscountPrecision)
-	}
-	maxRate, err := parsePositiveDecimal(item.MaxRate, "maxRate")
-	if err != nil {
-		return nil, err
-	}
-	maxAssets, err := parsePositiveDecimal(item.MaxAssets, "maxAssets")
-	if err != nil {
-		return nil, err
+	offer := &Offer{
+		DiscountID: id, Adapter: d.address(item.Adapter, "adapter"),
+		TokenToRedeem: d.address(item.TokenToRedeem, "tokenToRedeem"), Collateral: d.address(item.Collateral, "collateral"),
+		Discount: d.discount(item.Discount), MaxRate: d.integer(item.MaxRate, "maxRate", true),
+		MaxAssets: d.integer(item.MaxAssets, "maxAssets", true), CollateralDecimals: item.CollateralDecimals, Deadline: item.Deadline,
 	}
 	if item.CollateralDecimals < 0 || item.CollateralDecimals > 255 {
-		return nil, errors.Errorf("collateralDecimals: must be in [0,255], got %d", item.CollateralDecimals)
+		d.errors = append(d.errors, errors.Errorf("collateralDecimals: must be in [0,255], got %d", item.CollateralDecimals))
 	}
 	if item.Deadline <= 0 {
-		return nil, errors.New("deadline: must be positive")
+		d.errors = append(d.errors, errors.New("deadline: must be positive"))
 	}
-	return &Offer{
-		DiscountID: id, Adapter: adapter, TokenToRedeem: tokenToRedeem,
-		Collateral: collateral, CollateralDecimals: item.CollateralDecimals,
-		Discount: discount, Deadline: item.Deadline,
-		MaxRate: maxRate, MaxAssets: maxAssets,
-	}, nil
+	if err := errors.Join(d.errors...); err != nil {
+		return nil, err
+	}
+	return offer, nil
 }
 
 func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if resolved == nil {
 		return nil, errors.New("resolved discount is nil")
 	}
-	id, err := parseHash(resolved.DiscountID, "discountId")
-	if err != nil {
-		return nil, err
-	}
-	adapter, err := parseAddress(resolved.Discount.Adapter, "adapter")
-	if err != nil {
-		return nil, err
-	}
-	tokenToRedeem, err := parseAddress(resolved.Discount.TokenToRedeem, "tokenToRedeem")
-	if err != nil {
-		return nil, err
-	}
-	discount, err := parseNonNegativeDecimal(resolved.Discount.Discount, "discount")
-	if err != nil {
-		return nil, err
-	}
-	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
-		return nil, errors.Errorf("discount: must be <= %d", liquidlane.DiscountPrecision)
-	}
-	signer, err := parseAddress(resolved.Discount.Signer, "signer")
-	if err != nil {
-		return nil, err
-	}
-	protocol, err := parseAddress(resolved.Discount.Protocol, "protocol")
-	if err != nil {
-		return nil, err
-	}
-	nonce, err := parseUint256Decimal(resolved.Discount.Nonce, "nonce")
-	if err != nil {
-		return nil, err
-	}
-	signerSignature, err := hexutil.Decode(resolved.SignerSignature)
-	if err != nil {
-		return nil, errors.Errorf("signerSignature: %w", err)
-	}
-	protocolSignature, err := hexutil.Decode(resolved.ProtocolSignature)
-	if err != nil {
-		return nil, errors.Errorf("protocolSignature: %w", err)
-	}
-	if len(signerSignature) == 0 || len(protocolSignature) == 0 {
-		return nil, errors.New("discount signatures must not be empty")
-	}
-	if resolved.Discount.Deadline <= 0 || resolved.ProtocolDeadline <= 0 {
-		return nil, errors.New("discount deadlines must be positive")
-	}
-	if resolved.Discount.Deadline > maxUint48 || resolved.ProtocolDeadline > maxUint48 {
-		return nil, errors.New("discount deadlines exceed uint48")
-	}
-	return &Signed{
-		DiscountID: id, Adapter: adapter,
+	d := new(offerDecoder)
+	id, idErr := parseHash(resolved.DiscountID, "discountId")
+	nonce, nonceErr := parseUint256Decimal(resolved.Discount.Nonce, "nonce")
+	signed := &Signed{
+		DiscountID: id, Adapter: d.address(resolved.Discount.Adapter, "adapter"),
 		Terms: SignedTerms{
-			TokenToRedeem: tokenToRedeem, Discount: discount, Signer: signer, Protocol: protocol,
-			Nonce: nonce, Deadline: big.NewInt(resolved.Discount.Deadline),
+			TokenToRedeem: d.address(resolved.Discount.TokenToRedeem, "tokenToRedeem"),
+			Discount:      d.discount(resolved.Discount.Discount), Signer: d.address(resolved.Discount.Signer, "signer"),
+			Protocol: d.address(resolved.Discount.Protocol, "protocol"), Nonce: nonce, Deadline: big.NewInt(resolved.Discount.Deadline),
 		},
-		SignerSignature: signerSignature, ProtocolDeadline: big.NewInt(resolved.ProtocolDeadline),
-		ProtocolSignature: protocolSignature,
-	}, nil
-}
-
-func parseAddress(raw, field string) (common.Address, error) {
-	if !common.IsHexAddress(raw) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, raw)
+		SignerSignature:   d.signature(resolved.SignerSignature, "signerSignature"),
+		ProtocolSignature: d.signature(resolved.ProtocolSignature, "protocolSignature"),
+		ProtocolDeadline:  big.NewInt(resolved.ProtocolDeadline),
 	}
-	address := common.HexToAddress(raw)
-	if address == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address", field)
+	switch {
+	case resolved.Discount.Deadline <= 0 || resolved.ProtocolDeadline <= 0:
+		d.errors = append(d.errors, errors.New("discount deadlines must be positive"))
+	case resolved.Discount.Deadline > maxUint48 || resolved.ProtocolDeadline > maxUint48:
+		d.errors = append(d.errors, errors.New("discount deadlines exceed uint48"))
 	}
-	return address, nil
+	if err := errors.Join(append(d.errors, idErr, nonceErr)...); err != nil {
+		return nil, err
+	}
+	return signed, nil
 }
 
 func parseHash(raw, field string) (common.Hash, error) {
-	decoded, err := hexutil.Decode(raw)
-	if err != nil || len(decoded) != common.HashLength {
-		return common.Hash{}, errors.Errorf("%s: invalid bytes32 %q", field, raw)
+	hash, err := parse.Hash(raw, field)
+	if err != nil {
+		return common.Hash{}, err
 	}
-	hash := common.BytesToHash(decoded)
 	if hash == (common.Hash{}) {
 		return common.Hash{}, errors.Errorf("%s: zero bytes32", field)
 	}
 	return hash, nil
 }
 
-func parsePositiveDecimal(raw, field string) (*big.Int, error) {
-	out, ok := new(big.Int).SetString(raw, 10)
-	if !ok || out.Sign() <= 0 {
-		return nil, errors.Errorf("%s: invalid positive decimal %q", field, raw)
-	}
-	return out, nil
-}
-
 func parseNonNegativeDecimal(raw, field string) (*big.Int, error) {
-	out, ok := new(big.Int).SetString(raw, 10)
-	if !ok || out.Sign() < 0 {
+	value, err := parse.Big(raw, field)
+	if err != nil || value.Sign() < 0 {
 		return nil, errors.Errorf("%s: invalid non-negative decimal %q", field, raw)
 	}
-	return out, nil
+	return value, nil
 }
 
-func parseUint256Decimal(raw, field string) (*big.Int, error) {
-	if raw == "" {
-		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
-	}
-	for _, digit := range raw {
-		if digit < '0' || digit > '9' {
-			return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
-		}
-	}
-	out, ok := new(big.Int).SetString(raw, 10)
-	if !ok || out.BitLen() > 256 {
-		return nil, errors.Errorf("%s: invalid uint256 decimal %q", field, raw)
-	}
-	return out, nil
+func parseUint256Decimal(raw, field string) (*big.Int, error) { return parse.Uint(raw, field, 256) }
+
+// Clone gives generated calldata a private copy of the mutable signed amounts.
+func (terms SignedTerms) Clone() SignedTerms {
+	terms.Discount, terms.Nonce, terms.Deadline = bigmath.Clone(terms.Discount), bigmath.Clone(terms.Nonce), bigmath.Clone(terms.Deadline)
+	return terms
 }

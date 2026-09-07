@@ -3,11 +3,11 @@ package types
 import (
 	"bytes"
 	"encoding/json"
-	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
 // 3F webhook JSON wire contract: big integers are decimal strings, and strategy responses reject
@@ -71,11 +71,11 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 	for _, a := range in.Adapters {
 		adapters = append(adapters, adapterSnapshotJSON{
 			ID: a.ID, Adapter: a.Adapter, Vault: a.Vault, Collateral: a.Collateral,
-			Fundable:      bigString(a.Fundable),
+			Fundable:      parse.DecimalText(a.Fundable, ""),
 			OpenCount:     a.OpenCount,
-			MaxAssets:     bigString(a.MaxAssets),
-			MinAssets:     bigString(a.MinAssets),
-			MinYieldPpm:   bigString(a.MinYieldPpm),
+			MaxAssets:     parse.DecimalText(a.MaxAssets, ""),
+			MinAssets:     parse.DecimalText(a.MinAssets, ""),
+			MinYieldPpm:   parse.DecimalText(a.MinYieldPpm, ""),
 			MaxConcurrent: a.MaxConcurrent,
 		})
 	}
@@ -84,8 +84,8 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 		auctions = append(auctions, auctionSnapshotJSON{
 			ID: a.ID, AuctionID: a.AuctionID, OriginalIndex: a.OriginalIndex,
 			Request: a.Request, Status: a.Status, DepositAsset: a.DepositAsset,
-			AmountRequested: bigString(a.AmountRequested),
-			RemainingAmount: bigString(a.RemainingAmount),
+			AmountRequested: parse.DecimalText(a.AmountRequested, ""),
+			RemainingAmount: parse.DecimalText(a.RemainingAmount, ""),
 			MaxRateBps:      a.MaxRateBps,
 		})
 	}
@@ -98,50 +98,21 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (out *OfferOutput) UnmarshalJSON(b []byte) error {
-	var raw offerOutputJSON
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&raw); err != nil {
+func (out *OfferOutput) UnmarshalJSON(data []byte) error {
+	var wire offerOutputJSON
+	if err := parse.JSON(bytes.NewReader(data), &wire); err != nil {
 		return err
 	}
-	offers := make([]OfferExecution, 0, len(raw.Offers))
-	for i, o := range raw.Offers {
-		principal, err := parseBigString(o.Principal, "offers.principal")
-		if err != nil {
-			return errors.Errorf("offer %d: %w", i, err)
+	next := OfferOutput{Offers: make([]OfferExecution, len(wire.Offers))}
+	for index, offer := range wire.Offers {
+		principal, principalErr := parse.NonnegativeDecimal(offer.Principal, "principal", true)
+		expectedReturn, returnErr := parse.NonnegativeDecimal(offer.ExpectedReturn, "expectedReturn", true)
+		if err := errors.Join(principalErr, returnErr); err != nil {
+			return errors.Errorf("offers[%d]: %w", index, err)
 		}
-		expectedReturn, err := parseBigString(o.ExpectedReturn, "offers.expectedReturn")
-		if err != nil {
-			return errors.Errorf("offer %d: %w", i, err)
-		}
-		offers = append(offers, OfferExecution{
-			AuctionID:      o.AuctionID,
-			Request:        o.Request,
-			Maker:          o.Maker,
-			Principal:      principal,
-			ExpectedReturn: expectedReturn,
-			Reason:         o.Reason,
-		})
+		next.Offers[index] = OfferExecution{AuctionID: offer.AuctionID, Request: offer.Request, Maker: offer.Maker,
+			Principal: principal, ExpectedReturn: expectedReturn, Reason: offer.Reason}
 	}
-	*out = OfferOutput{Offers: offers}
+	*out = next
 	return nil
-}
-
-func bigString(n *big.Int) string {
-	if n == nil {
-		return ""
-	}
-	return n.String()
-}
-
-func parseBigString(s, field string) (*big.Int, error) {
-	if s == "" {
-		return nil, nil
-	}
-	n, ok := new(big.Int).SetString(s, 10)
-	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid decimal string %q", field, s)
-	}
-	return n, nil
 }

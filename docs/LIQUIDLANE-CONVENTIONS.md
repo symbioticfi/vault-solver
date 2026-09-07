@@ -9,8 +9,8 @@ RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAd
 |---|---|
 | `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
 | `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and optional gas snapshot composition |
-| `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
-| `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
+| `internal/liquidlane/planning` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
+| `internal/liquidlane/planning` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
 | `internal/liquidlane/gas` | shared optional Chainlink token/native facts plus neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault state |
 | `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
@@ -155,7 +155,7 @@ only when that deployment deliberately accepts different freshness and availabil
 ## Discounts and capacity
 
 Direct and signed-discount inventory for the same route are alternative ways to use the same capacity.
-Never sum them. `internal/liquidlane/strategies/greedy` encodes the one-candidate-per-route rule for quote and fill
+Never sum them. `internal/liquidlane/planning` encodes the one-candidate-per-route rule for quote and fill
 tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `CapacityID`.
 Concrete RFQ and UniswapX requests allocate capacity after filtering to their pair. LI.FI does the same for
 each standing pair curve, so multiple curves may advertise the same unreserved vault capacity; accepted-fill
@@ -206,3 +206,5 @@ protocol dependency, not by making every solver look identical.
 
 The shared package provides current LiquidLane facts. Solvers decide when those facts are sufficient and
 contracts enforce the final executable truth.
+
+Pricing uses one scaled-ratio primitive with a final rounding decision after canceling decimal powers. Fill validation reconstructs route identity from current candidates and checks combined capacity domains. LI.FI range safety precomputes the guaranteed rate and maximum loss before searching its lower bound.

@@ -1,17 +1,14 @@
-// Package config loads and validates the vault-solver YAML configuration.
-//
-// Decoding is two-stage: the generic layer parses everything except the solver-specific block,
-// which it keeps as a raw yaml.Node under Solver.Config. The selected solver decodes that node
-// into its own typed struct, so solver config stays fully encapsulated in the solver package.
+// Package config owns the process YAML contract. Solver configuration remains an opaque node.
 package config
 
 import (
 	"bytes"
 	"math"
 	"os"
+	"time"
 
 	"github.com/go-errors/errors"
-
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"gopkg.in/yaml.v3"
 )
 
@@ -106,27 +103,17 @@ const DefaultObservabilityAddr = ":9090"
 // including Ethereum mainnet and Sepolia). Used when Chain.MulticallAddress is unset.
 const DefaultMulticallAddress = "0xcA11bde05977b3631167028862bE2a173976CA11"
 
-// Load reads, parses, defaults, and validates the config at path.
+// Load validates a single YAML document after expanding deployment values. Secret values belong
+// behind *Env references; their environment variables are read only by the component using them.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Errorf("read config %q: %w", path, err)
 	}
-
-	// Expand ${VAR}/$VAR from the environment so non-secret, deploy-injected fields (e.g. rpcUrl)
-	// can come from the environment. Secrets must NOT use this: they belong in the *Env name fields
-	// (keyEnv, passphraseEnv, backendSharedSecretEnv, …), which os.Getenv at point of use and never place the secret
-	// into this Config struct (so dumping/logging the config can't leak it). An undefined var
-	// expands to "", which surfaces via Validate for required fields.
-	raw = []byte(os.ExpandEnv(string(raw)))
-
 	var cfg Config
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true) // reject unknown keys to catch typos early
-	if err := dec.Decode(&cfg); err != nil {
+	if err := parse.YAML(bytes.NewBufferString(os.ExpandEnv(string(data))), &cfg); err != nil {
 		return nil, errors.Errorf("parse config %q: %w", path, err)
 	}
-
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, errors.Errorf("invalid config %q: %w", path, err)
@@ -135,112 +122,94 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.TxManager.Confirmations == 0 {
-		c.TxManager.Confirmations = DefaultConfirmations
-	}
-	if c.TxManager.BroadcastTimeoutMs == 0 {
-		c.TxManager.BroadcastTimeoutMs = DefaultBroadcastTimeoutMs
-	}
-	if c.TxManager.AccountPollIntervalMs == 0 {
-		c.TxManager.AccountPollIntervalMs = DefaultAccountPollIntervalMs
-	}
-	if c.TxManager.ReplacementIntervalMs == 0 {
-		c.TxManager.ReplacementIntervalMs = DefaultReplacementIntervalMs
-	}
-	if c.TxManager.PendingTimeoutMs == 0 {
-		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
-	}
-	if c.TxManager.ShutdownTimeoutMs == 0 {
-		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
-	}
-	if c.Observability.Addr == "" {
-		c.Observability.Addr = DefaultObservabilityAddr
-	}
-	if c.Chain.MulticallAddress == "" {
-		c.Chain.MulticallAddress = DefaultMulticallAddress
-	}
+	tx := &c.TxManager
+	tx.Confirmations = parse.OrDefault(tx.Confirmations, DefaultConfirmations)
+	tx.BroadcastTimeoutMs = parse.OrDefault(tx.BroadcastTimeoutMs, DefaultBroadcastTimeoutMs)
+	tx.AccountPollIntervalMs = parse.OrDefault(tx.AccountPollIntervalMs, DefaultAccountPollIntervalMs)
+	tx.ReplacementIntervalMs = parse.OrDefault(tx.ReplacementIntervalMs, DefaultReplacementIntervalMs)
+	tx.PendingTimeoutMs = parse.OrDefault(tx.PendingTimeoutMs, DefaultPendingTimeoutMs)
+	tx.ShutdownTimeoutMs = parse.OrDefault(tx.ShutdownTimeoutMs, DefaultShutdownTimeoutMs)
+	c.Observability.Addr = parse.OrDefault(c.Observability.Addr, DefaultObservabilityAddr)
+	c.Chain.MulticallAddress = parse.OrDefault(c.Chain.MulticallAddress, DefaultMulticallAddress)
 }
 
-// Validate checks required fields and mutually-exclusive options.
 func (c *Config) Validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("chain.rpcUrl is required")
 	}
-	for i, u := range c.Chain.RPCFallbackURLs {
-		if u == "" {
-			return errors.Errorf("chain.rpcFallbackUrls[%d] is empty", i)
-		}
-	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("chain.chainId is required")
 	}
-	if err := c.TxManager.validate(false); err != nil {
-		return err
+	for i, url := range c.Chain.RPCFallbackURLs {
+		if url == "" {
+			return errors.Errorf("chain.rpcFallbackUrls[%d] is empty", i)
+		}
 	}
 	if err := c.Signer.validate(); err != nil {
+		return err
+	}
+	if err := c.TxManager.validate(false); err != nil {
 		return err
 	}
 	if len(c.Solvers) == 0 {
 		return errors.New("at least one solver is required (set `solvers`)")
 	}
 	seen := make(map[string]bool, len(c.Solvers))
-	for i, s := range c.Solvers {
-		if s.Name == "" {
+	for i, spec := range c.Solvers {
+		if spec.Name == "" {
 			return errors.Errorf("solvers[%d].name is required", i)
 		}
-		if seen[s.Name] {
-			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", s.Name)
+		if seen[spec.Name] {
+			return errors.Errorf("duplicate solver %q: only one entry per solver type is allowed", spec.Name)
 		}
-		seen[s.Name] = true
+		seen[spec.Name] = true
 	}
 	return nil
 }
 
-// ValidateTxManager checks fields required only when at least one solver sends transactions.
-func (c *Config) ValidateTxManager() error {
-	return c.TxManager.validate(true)
-}
+func (c *Config) ValidateTxManager() error { return c.TxManager.validate(true) }
 
 func (c TxManagerConfig) validate(required bool) error {
-	if c.MaxFeeGwei < 0 || required && c.MaxFeeGwei == 0 ||
-		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
+	if math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) || c.MaxFeeGwei < 0 || (required && c.MaxFeeGwei == 0) {
 		return errors.New("txManager.maxFeeGwei must be finite and positive")
 	}
-	if c.TipGwei < 0 || math.IsNaN(c.TipGwei) || math.IsInf(c.TipGwei, 0) {
+	if math.IsNaN(c.TipGwei) || math.IsInf(c.TipGwei, 0) || c.TipGwei < 0 {
 		return errors.New("txManager.tipGwei must be finite and non-negative")
 	}
-	if c.BroadcastTimeoutMs <= 0 {
-		return errors.New("txManager.broadcastTimeoutMs must be positive")
-	}
-	if c.AccountPollIntervalMs <= 0 {
-		return errors.New("txManager.accountPollIntervalMs must be positive")
-	}
-	if c.ReplacementIntervalMs <= 0 {
-		return errors.New("txManager.replacementIntervalMs must be positive")
+	for _, interval := range []struct {
+		name string
+		ms   int
+	}{
+		{"broadcastTimeoutMs", c.BroadcastTimeoutMs},
+		{"accountPollIntervalMs", c.AccountPollIntervalMs},
+		{"replacementIntervalMs", c.ReplacementIntervalMs},
+		{"pendingTimeoutMs", c.PendingTimeoutMs},
+		{"shutdownTimeoutMs", c.ShutdownTimeoutMs},
+	} {
+		if interval.ms <= 0 {
+			return errors.Errorf("txManager.%s must be positive", interval.name)
+		}
+		if uint64(interval.ms) > uint64(math.MaxInt64/int64(time.Millisecond))/4 {
+			return errors.Errorf("txManager.%s exceeds the supported duration", interval.name)
+		}
 	}
 	if c.PendingTimeoutMs < c.ReplacementIntervalMs {
 		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
-	}
-	if c.ShutdownTimeoutMs <= 0 {
-		return errors.New("txManager.shutdownTimeoutMs must be positive")
 	}
 	return nil
 }
 
 func (s SignerConfig) validate() error {
-	hasEnv := s.KeyEnv != ""
-	hasKeystore := s.KeystorePath != ""
 	switch {
-	case hasEnv && hasKeystore:
+	case s.KeyEnv != "" && s.KeystorePath != "":
 		return errors.New("signer: set exactly one of keyEnv or keystorePath, not both")
-	case hasEnv:
+	case s.KeyEnv != "":
 		return nil
-	case hasKeystore:
-		if s.PassphraseEnv == "" {
-			return errors.New("signer: keystorePath requires passphraseEnv")
-		}
-		return nil
-	default:
+	case s.KeystorePath == "":
 		return errors.New("signer: one of keyEnv or keystorePath is required")
+	case s.PassphraseEnv == "":
+		return errors.New("signer: keystorePath requires passphraseEnv")
+	default:
+		return nil
 	}
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/parse"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,52 +21,20 @@ func (f fakeSolver) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func TestRegisterAndNew(t *testing.T) {
-	Register("test-fake", func(yaml.Node, Deps) (Solver, error) {
-		return fakeSolver{name: "test-fake"}, nil
-	})
-
-	s, err := New("test-fake", yaml.Node{}, Deps{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if s.Name() != "test-fake" {
-		t.Fatalf("expected name test-fake, got %q", s.Name())
-	}
-
-	if _, err := New("does-not-exist", yaml.Node{}, Deps{}); err == nil {
-		t.Fatal("expected unknown-solver error")
-	}
-}
-
-func TestRegisterDuplicatePanics(t *testing.T) {
-	Register("dup", func(yaml.Node, Deps) (Solver, error) { return fakeSolver{name: "dup"}, nil })
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on duplicate registration")
-		}
-	}()
-	Register("dup", func(yaml.Node, Deps) (Solver, error) { return fakeSolver{name: "dup"}, nil })
-}
-
 func TestDecodeStrict(t *testing.T) {
 	type cfg struct {
 		Known string `yaml:"known"`
 	}
 	parse := func(body string) (cfg, error) {
 		var doc yaml.Node
-		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
+		testcheck.NoError(t, yaml.Unmarshal([]byte(body), &doc), "unmarshal: %v")
 		var out cfg
-		err := DecodeStrict(*doc.Content[0], &out)
+		err := parse.DecodeStrict(*doc.Content[0], &out)
 		return out, err
 	}
 
 	out, err := parse("known: ok\n")
-	if err != nil {
-		t.Fatalf("valid config: %v", err)
-	}
+	testcheck.NoError(t, err, "valid config: %v")
 	if out.Known != "ok" {
 		t.Fatalf("expected known=ok, got %q", out.Known)
 	}
@@ -90,9 +60,7 @@ func TestRequiresTxManagerDefaultsToSafe(t *testing.T) {
 func TestRunTreatsCancellationAsClean(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Run(ctx, fakeSolver{name: "x"}, logr.Discard()); err != nil {
-		t.Fatalf("expected nil on cancellation, got %v", err)
-	}
+	testcheck.NoError(t, Run(ctx, fakeSolver{name: "x"}, logr.Discard()), "expected nil on cancellation, got %v")
 }
 
 type failingSolver struct {

@@ -9,15 +9,14 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
 func testYAMLNode(t *testing.T, raw string) yaml.Node {
 	t.Helper()
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(raw), &node); err != nil {
-		t.Fatalf("unmarshal yaml: %v", err)
-	}
+	testcheck.NoError(t, yaml.Unmarshal([]byte(raw), &node), "unmarshal yaml: %v")
 	if len(node.Content) == 0 {
 		return yaml.Node{}
 	}
@@ -36,9 +35,7 @@ headers:
   authorization:
     env: STRATEGY_AUTH_HEADER
 `))
-	if err != nil {
-		t.Fatalf("ParseConfig: %v", err)
-	}
+	testcheck.NoError(t, err, "ParseConfig: %v")
 	if cfg.URL != "https://strategy.example" || cfg.Timeout != 250*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
@@ -121,14 +118,12 @@ func TestNewClientConfig(t *testing.T) {
 			"authorization": {Env: "STRATEGY_AUTH_HEADER"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	if client.client.Timeout != 250*time.Millisecond || client.maxRequestBytes != 2048 || client.maxResponseBytes != 4096 {
 		t.Fatalf("unexpected client config: timeout=%v request=%d response=%d",
 			client.client.Timeout, client.maxRequestBytes, client.maxResponseBytes)
 	}
-	if client.headers["x-client"] != "vault-solver" || client.headers["authorization"] != "Bearer test" {
+	if client.headers["x-client"].Value != "vault-solver" || client.headers["authorization"].Env != "STRATEGY_AUTH_HEADER" {
 		t.Fatalf("unexpected headers: %+v", client.headers)
 	}
 }
@@ -188,9 +183,7 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 		var req struct {
 			ID string `json:"id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+		testcheck.NoError(t, json.NewDecoder(r.Body).Decode(&req), "decode request: %v")
 		if req.ID != "q1" {
 			t.Fatalf("request id = %q, want q1", req.ID)
 		}
@@ -205,17 +198,13 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 			"x-client": {Value: "vault-solver"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	var resp struct {
 		Decision string `json:"decision"`
 	}
-	if err := client.DoJSON(t.Context(), http.MethodPost, "/quote", struct {
+	testcheck.NoError(t, client.DoJSON(t.Context(), http.MethodPost, "/quote", struct {
 		ID string `json:"id"`
-	}{ID: "q1"}, &resp); err != nil {
-		t.Fatalf("DoJSON: %v", err)
-	}
+	}{ID: "q1"}, &resp), "DoJSON: %v")
 	if resp.Decision != "quote" {
 		t.Fatalf("decision = %q, want quote", resp.Decision)
 	}
@@ -240,15 +229,11 @@ func TestWebhookClientGetJSON(t *testing.T) {
 	defer srv.Close()
 
 	client, err := NewClient(Config{URL: srv.URL + "/strategy", Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	var resp struct {
 		Status string `json:"status"`
 	}
-	if err := client.GetJSON(t.Context(), "callbacks", &resp); err != nil {
-		t.Fatalf("GetJSON: %v", err)
-	}
+	testcheck.NoError(t, client.GetJSON(t.Context(), "callbacks", &resp), "GetJSON: %v")
 	if resp.Status != "ok" {
 		t.Fatalf("status = %q, want ok", resp.Status)
 	}
@@ -256,9 +241,7 @@ func TestWebhookClientGetJSON(t *testing.T) {
 
 func TestWebhookClientRejectsAbsoluteRoute(t *testing.T) {
 	client, err := NewClient(Config{URL: "https://strategy.example/base", Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	var resp struct{}
 	err = client.GetJSON(t.Context(), "https://other.example/callbacks", &resp)
 	if err == nil || !strings.Contains(err.Error(), "route must be relative") {
@@ -290,9 +273,7 @@ func TestWebhookClientPostJSONFailures(t *testing.T) {
 			}))
 			defer srv.Close()
 			client, err := NewClient(Config{URL: srv.URL, Timeout: time.Second})
-			if err != nil {
-				t.Fatalf("NewClient: %v", err)
-			}
+			testcheck.NoError(t, err, "NewClient: %v")
 			var resp struct {
 				Decision string `json:"decision"`
 			}
@@ -310,9 +291,7 @@ func TestWebhookClientReturnsTypedHTTPStatusError(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, err := NewClient(Config{URL: srv.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	var resp struct{}
 	err = client.PostJSON(t.Context(), struct{}{}, &resp)
 	if err == nil {
@@ -346,9 +325,7 @@ func TestWebhookClientRejectsOversizedRequest(t *testing.T) {
 		Timeout:         time.Second,
 		MaxRequestBytes: 8,
 	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	var resp struct {
 		Decision string `json:"decision"`
 	}
@@ -365,11 +342,31 @@ func TestWebhookClientRejectsOversizedRequest(t *testing.T) {
 
 func TestWebhookClientRejectsNilResponseTarget(t *testing.T) {
 	client, err := NewClient(Config{URL: "https://strategy.example", Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	err = client.GetJSON(t.Context(), "", nil)
 	if err == nil || !strings.Contains(err.Error(), "response target is nil") {
 		t.Fatalf("GetJSON error = %v, want response target is nil", err)
+	}
+}
+
+func TestWebhookResolvesRotatedSecretForEachRequest(t *testing.T) {
+	t.Setenv("WEBHOOK_ROTATING_AUTH", "first")
+	var received string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{URL: server.URL, Headers: map[string]HeaderValue{"Authorization": {Env: "WEBHOOK_ROTATING_AUTH"}}})
+	testcheck.NoError(t, err)
+	t.Setenv("WEBHOOK_ROTATING_AUTH", "second")
+	var result struct{}
+	testcheck.NoError(t, client.GetJSON(t.Context(), "", &result))
+	if received != "second" {
+		t.Fatalf("received %q", received)
+	}
+	t.Setenv("WEBHOOK_ROTATING_AUTH", "")
+	if err := client.GetJSON(t.Context(), "", &result); err == nil {
+		t.Fatal("missing secret accepted")
 	}
 }

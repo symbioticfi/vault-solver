@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
+	"github.com/symbioticfi/vault-solver/internal/httpclient"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
@@ -43,12 +44,12 @@ func (c *orderClient) withAuth(ctx context.Context) context.Context {
 }
 
 func (c *orderClient) validateExecutorRegistration(ctx context.Context, executor common.Address) error {
-	identities, httpResp, err := c.api.SolverAPIAPI.
+	identities, err := httpclient.Execute("lifi order server: get solver identities", c.api.SolverAPIAPI.
 		SolverApiV0ControllerGetSolverIdentities(c.withAuth(ctx)).
-		Execute()
-	closeResp(httpResp)
+		Execute)
+
 	if err != nil {
-		return apiErr("get solver identities", httpResp, err)
+		return err
 	}
 	if identities != nil {
 		for _, identity := range identities.Data {
@@ -63,27 +64,24 @@ func (c *orderClient) validateExecutorRegistration(ctx context.Context, executor
 func (c *orderClient) replaceSupportedContracts(
 	ctx context.Context, dto lifiorder.PutSupportedContractsDto,
 ) error {
-	_, httpResp, err := c.api.SolverAPIV1API.
+	_, err := httpclient.Execute("lifi order server: put supported contracts", c.api.SolverAPIV1API.
 		SupportedContractsControllerReplaceSupportedContracts(c.withAuth(ctx)).
 		PutSupportedContractsDto(dto).
-		Execute()
-	closeResp(httpResp)
-	if err != nil {
-		return apiErr("put supported contracts", httpResp, err)
-	}
-	return nil
+		Execute)
+
+	return err
 }
 
 func (c *orderClient) ensureSupportedContracts(
 	ctx context.Context, chainID int64, inputSettler, outputSettler common.Address,
 ) error {
 	chain := chainRef(chainID)
-	current, httpResp, err := c.api.SolverAPIV1API.
+	current, err := httpclient.Execute("lifi order server: get supported contracts", c.api.SolverAPIV1API.
 		SupportedContractsControllerGetSupportedContracts(c.withAuth(ctx)).
-		Execute()
-	closeResp(httpResp)
+		Execute)
+
 	if err != nil {
-		return apiErr("get supported contracts", httpResp, err)
+		return err
 	}
 	// The client tolerates a dropped field by zero-valuing it, and PUT replaces the whole registered
 	// set, so an incomplete snapshot must not be merged or the missing kinds would be deregistered.
@@ -181,7 +179,7 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 	for offset := int32(0); ; {
 		// exclusiveFor scopes quote ownership to this solver; it is independent from
 		// the output context's optional on-chain exclusivity window.
-		response, httpResp, err := c.api.BridgeAPIAPI.
+		response, err := httpclient.Execute("lifi order server: get "+status+" orders", c.api.BridgeAPIAPI.
 			OrdersControllerGetOrders(c.withAuth(ctx)).
 			Limit(orderRecoveryPageLimit).
 			Offset(offset).
@@ -189,10 +187,10 @@ func (c *orderClient) listRecoverableOrdersByStatus(
 			ExclusiveFor(executor.Hex()).
 			OriginChainId(c.chain).
 			DestinationChainId(c.chain).
-			Execute()
-		closeResp(httpResp)
+			Execute)
+
 		if err != nil {
-			return nil, apiErr("get "+status+" orders", httpResp, err)
+			return nil, err
 		}
 		if response == nil {
 			return nil, errors.Errorf("lifi order server: get %s orders: empty response", status)
@@ -255,13 +253,13 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 		expectedRanges += len(dto.Ranges)
 	}
 
-	response, httpResp, err := c.api.SolverAPIAPI.
+	response, err := httpclient.Execute("lifi order server: submit quotes", c.api.SolverAPIAPI.
 		QuoteSubmissionControllerSubmitQuotes(c.withAuth(ctx)).
 		SubmitQuotesDto(lifiorder.SubmitQuotesDto{Quotes: dtoQuotes}).
-		Execute()
-	closeResp(httpResp)
+		Execute)
+
 	if err != nil {
-		return apiErr("submit quotes", httpResp, err)
+		return err
 	}
 	if response == nil {
 		return errors.New("lifi order server: submit quotes: empty response")
@@ -276,65 +274,40 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 	return nil
 }
 
-func submitQuoteDTO(chain string, quote types.Quote, index int) (lifiorder.SubmitQuotesDtoQuotesInner, error) {
-	field := "quotes[" + strconv.Itoa(index) + "]"
-	expiry, err := int32Checked(quote.Expiry, field+".expiry")
-	if err != nil {
-		return lifiorder.SubmitQuotesDtoQuotesInner{}, err
-	}
-	fromDecimals, err := int32Checked(int64(quote.FromDecimals), field+".fromDecimals")
-	if err != nil {
-		return lifiorder.SubmitQuotesDtoQuotesInner{}, err
-	}
-	toDecimals, err := int32Checked(int64(quote.ToDecimals), field+".toDecimals")
-	if err != nil {
-		return lifiorder.SubmitQuotesDtoQuotesInner{}, err
-	}
-	ranges := make([]lifiorder.SubmitQuotesDtoQuotesInnerRangesInner, 0, len(quote.Ranges))
-	for i, quoteRange := range quote.Ranges {
-		if quoteRange.MinAmount == nil || quoteRange.MaxAmount == nil || quoteRange.Quote == "" {
-			return lifiorder.SubmitQuotesDtoQuotesInner{}, errors.Errorf("%s.ranges[%d]: incomplete range", field, i)
+func submitQuoteDTO(chain string, quote types.Quote, index int) (dto lifiorder.SubmitQuotesDtoQuotesInner, err error) {
+	label := "quotes[" + strconv.Itoa(index) + "]"
+	defer func() {
+		if err != nil {
+			dto = lifiorder.SubmitQuotesDtoQuotesInner{}
+			err = errors.Errorf("%s: %w", label, err)
 		}
-		ranges = append(ranges, lifiorder.SubmitQuotesDtoQuotesInnerRangesInner{
-			MinAmount: quoteRange.MinAmount.String(),
-			MaxAmount: quoteRange.MaxAmount.String(),
-			Quote:     quoteRange.Quote,
-		})
+	}()
+	dto.FromChain, dto.ToChain = chain, chain
+	dto.FromAsset, dto.ToAsset = quote.FromAsset.Hex(), quote.ToAsset.Hex()
+	for _, field := range []struct {
+		name  string
+		value int64
+		out   *int32
+	}{
+		{"expiry", quote.Expiry, &dto.Expiry}, {"fromDecimals", int64(quote.FromDecimals), &dto.FromDecimals},
+		{"toDecimals", int64(quote.ToDecimals), &dto.ToDecimals},
+	} {
+		if *field.out, err = int32Checked(field.value, field.name); err != nil {
+			return dto, err
+		}
 	}
-	dto := lifiorder.SubmitQuotesDtoQuotesInner{
-		FromChain: chain, ToChain: chain,
-		FromAsset: quote.FromAsset.Hex(), ToAsset: quote.ToAsset.Hex(),
-		FromDecimals: fromDecimals, ToDecimals: toDecimals,
-		Ranges: ranges, Expiry: expiry,
+	dto.Ranges = make([]lifiorder.SubmitQuotesDtoQuotesInnerRangesInner, len(quote.Ranges))
+	for index, segment := range quote.Ranges {
+		if segment.MinAmount == nil || segment.MaxAmount == nil || segment.Quote == "" {
+			return dto, errors.Errorf("ranges[%d]: incomplete range", index)
+		}
+		dto.Ranges[index] = lifiorder.SubmitQuotesDtoQuotesInnerRangesInner{MinAmount: segment.MinAmount.String(), MaxAmount: segment.MaxAmount.String(), Quote: segment.Quote}
 	}
 	if quote.ExclusiveFor != (common.Address{}) {
-		exclusiveFor := quote.ExclusiveFor.Hex()
-		dto.ExclusiveFor = &exclusiveFor
+		address := quote.ExclusiveFor.Hex()
+		dto.ExclusiveFor = &address
 	}
 	return dto, nil
-}
-
-func closeResp(resp *http.Response) {
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-}
-
-func apiErr(what string, resp *http.Response, err error) error {
-	var genErr *lifiorder.GenericOpenAPIError
-	if errors.As(err, &genErr) {
-		if body := strings.TrimSpace(string(genErr.Body())); body != "" {
-			return errors.Errorf("lifi order server: %s: %s: %s: %w", what, statusOf(resp), body, err)
-		}
-	}
-	return errors.Errorf("lifi order server: %s: %s: %w", what, statusOf(resp), err)
-}
-
-func statusOf(resp *http.Response) string {
-	if resp == nil {
-		return "no response"
-	}
-	return resp.Status
 }
 
 func int32Checked(v int64, field string) (int32, error) {

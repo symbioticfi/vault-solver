@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/go-logr/logr/funcr"
 )
 
@@ -12,7 +14,7 @@ func TestDecisionTraceRequiresDebugVerbosityAndKeepsOrderCorrelation(t *testing.
 	solver := &Solver{
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
-	if trace := solver.decisionTrace("orderId", "order-1"); trace != nil {
+	if trace := planning.NewDecisionTrace(solver.log, "orderId", "order-1"); trace != nil {
 		t.Fatal("decision trace enabled without debug verbosity")
 	}
 
@@ -20,7 +22,7 @@ func TestDecisionTraceRequiresDebugVerbosityAndKeepsOrderCorrelation(t *testing.
 		func(entry string) { logs = append(logs, entry) },
 		funcr.Options{Verbosity: 1},
 	)
-	trace := solver.decisionTrace(
+	trace := planning.NewDecisionTrace(solver.log,
 		"orderId", "order-1",
 		"onChainOrderId", "0x1234",
 		"quoteId", "quote-1",

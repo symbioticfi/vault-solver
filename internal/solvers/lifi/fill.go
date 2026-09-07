@@ -4,12 +4,13 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
@@ -22,17 +23,13 @@ type fillCalldata struct {
 	Deadline time.Time
 }
 
-func buildExecutorRoutes(
-	order submittedOrder,
-	plan *types.FillPlan,
-	resolvedDiscounts map[common.Hash]*discounts.Signed,
-) (
-	[]executor.ILiquidLaneLifiExecutorFillRoute,
-	[]executor.ILiquidLaneLifiExecutorDiscountRoute,
-	error,
-) {
+func buildFillCalldata(order submittedOrder, orderID common.Hash, plan *types.FillPlan,
+	resolvedDiscounts map[common.Hash]*discounts.Signed) (*fillCalldata, error) {
+	if order.AmountIn == nil || order.AmountIn.Sign() <= 0 {
+		return nil, errors.New("order input must be positive")
+	}
 	if plan == nil || len(plan.Routes) == 0 {
-		return nil, nil, errors.New("fill plan has no routes")
+		return nil, errors.New("fill plan has no routes")
 	}
 	directRoutes := make([]executor.ILiquidLaneLifiExecutorFillRoute, 0, len(plan.Routes))
 	discountRoutes := make([]executor.ILiquidLaneLifiExecutorDiscountRoute, 0, len(plan.Routes))
@@ -42,7 +39,7 @@ func buildExecutorRoutes(
 			route.ExpectedAmountOut == nil || route.ExpectedAmountOut.Sign() <= 0 ||
 			route.MinAmountOut == nil || route.MinAmountOut.Sign() <= 0 ||
 			route.MinAmountOut.Cmp(route.ExpectedAmountOut) > 0 {
-			return nil, nil, errors.Errorf("fill plan route %d is invalid", i)
+			return nil, errors.Errorf("fill plan route %d is invalid", i)
 		}
 		totalAmountIn.Add(totalAmountIn, route.AmountIn)
 		if route.DiscountID == nil {
@@ -53,14 +50,22 @@ func buildExecutorRoutes(
 		}
 		discountRoute, err := buildExecutorDiscountRoute(route, *route.DiscountID, order.TokenIn, resolvedDiscounts)
 		if err != nil {
-			return nil, nil, errors.Errorf("fill plan route %d discount: %w", i, err)
+			return nil, errors.Errorf("fill plan route %d discount: %w", i, err)
 		}
 		discountRoutes = append(discountRoutes, discountRoute)
 	}
 	if totalAmountIn.Cmp(order.AmountIn) != 0 {
-		return nil, nil, errors.Errorf("fill plan input sum %s does not match order input %s", totalAmountIn, order.AmountIn)
+		return nil, errors.Errorf("fill plan input sum %s does not match order input %s", totalAmountIn, order.AmountIn)
 	}
-	return directRoutes, discountRoutes, nil
+	deadline, err := lifiFillDeadline(order, plan, resolvedDiscounts)
+	if err != nil {
+		return nil, err
+	}
+	data, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp(toExecutorOrder(order.Order), directRoutes, discountRoutes)
+	if err != nil {
+		return nil, errors.Errorf("pack finaliseWithCurrentTimestamp: %w", err)
+	}
+	return &fillCalldata{OrderID: orderID, Finalise: data, Deadline: deadline}, nil
 }
 
 func buildExecutorDiscountRoute(
@@ -89,44 +94,12 @@ func buildExecutorDiscountRoute(
 		Adapter:  route.Adapter,
 		AmountIn: route.AmountIn,
 		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
-			Discount: executor.ILiquidLaneAdapterDiscount{
-				TokenToRedeem: resolved.Terms.TokenToRedeem,
-				Discount:      liquidlane.CloneBig(resolved.Terms.Discount),
-				Signer:        resolved.Terms.Signer,
-				Protocol:      resolved.Terms.Protocol,
-				Nonce:         liquidlane.CloneBig(resolved.Terms.Nonce),
-				Deadline:      liquidlane.CloneBig(resolved.Terms.Deadline),
-			},
+			Discount:         executor.ILiquidLaneAdapterDiscount(resolved.Terms.Clone()),
 			SignerSignature:  append([]byte(nil), resolved.SignerSignature...),
-			ProtocolDeadline: liquidlane.CloneBig(resolved.ProtocolDeadline),
+			ProtocolDeadline: bigmath.Clone(resolved.ProtocolDeadline),
 		},
 		ProtocolSignature: append([]byte(nil), resolved.ProtocolSignature...),
 	}, nil
-}
-
-func buildFillCalldata(
-	order submittedOrder,
-	orderID common.Hash,
-	plan *types.FillPlan,
-	resolvedDiscounts map[common.Hash]*discounts.Signed,
-) (*fillCalldata, error) {
-	directRoutes, discountRoutes, err := buildExecutorRoutes(order, plan, resolvedDiscounts)
-	if err != nil {
-		return nil, err
-	}
-	deadline, err := lifiFillDeadline(order, plan, resolvedDiscounts)
-	if err != nil {
-		return nil, err
-	}
-	finaliseCalldata, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp(
-		toExecutorOrder(order.Order),
-		directRoutes,
-		discountRoutes,
-	)
-	if err != nil {
-		return nil, errors.Errorf("pack finaliseWithCurrentTimestamp: %w", err)
-	}
-	return &fillCalldata{OrderID: orderID, Finalise: finaliseCalldata, Deadline: deadline}, nil
 }
 
 func lifiFillDeadline(
@@ -179,23 +152,10 @@ func earlierDeadline(left, right time.Time) time.Time {
 	return left
 }
 
-func toExecutorOutput(output inputsettler.MandateOutput) executor.MandateOutput {
-	return executor.MandateOutput{
-		Oracle:       output.Oracle,
-		Settler:      output.Settler,
-		ChainId:      output.ChainId,
-		Token:        output.Token,
-		Amount:       output.Amount,
-		Recipient:    output.Recipient,
-		CallbackData: output.CallbackData,
-		Context:      output.Context,
-	}
-}
-
 func toExecutorOrder(order inputsettler.StandardOrder) executor.IInputSettlerStandardOrder {
 	outputs := make([]executor.MandateOutput, 0, len(order.Outputs))
 	for _, out := range order.Outputs {
-		outputs = append(outputs, toExecutorOutput(out))
+		outputs = append(outputs, executor.MandateOutput(out))
 	}
 	return executor.IInputSettlerStandardOrder{
 		User:          order.User,

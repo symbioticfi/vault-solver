@@ -5,12 +5,12 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
-
-	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 )
 
 func mustBig(t *testing.T, s string) *big.Int {
@@ -52,7 +52,7 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 			matching = append(matching, item)
 		}
 	}
-	matching = liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	matching = planning.AllocateInventoryCapacity(matching, nil, 0)
 	routes := make([]liquidlane.Route, 0, len(matching))
 	for _, item := range matching {
 		routes = append(routes, item.Route)
@@ -66,13 +66,11 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 		}
 		quotes = append(quotes, liquidlane.FillQuote{
 			Inventory: liquidlane.Inventory{Route: route, MaxAssets: maxUint256()},
-			AmountIn:  liquidlane.CloneBig(amount), MaxAmountOut: liquidlane.CloneBig(amountOut),
+			AmountIn:  bigmath.Clone(amount), MaxAmountOut: bigmath.Clone(amountOut),
 		})
 	}
-	return liquidgreedy.NormalizeOracleInventory(amount, matching, quotes), nil
+	return planning.NormalizeOracleInventory(amount, matching, quotes), nil
 }
-
-func newDefaultTestStrategy() types.Strategy { return defaultstrategy.New() }
 
 func maxUint256() *big.Int {
 	return new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -81,4 +79,15 @@ func maxUint256() *big.Int {
 func testInventory(adapter, tokenIn, tokenOut common.Address, maxAssets, maxRate *big.Int) solverInventory {
 	route := liquidlane.NewRoute(1, adapter, common.Address{}, tokenIn, tokenOut, 18, 6)
 	return liquidlane.DirectInventory(route, maxAssets, maxRate)
+}
+
+// orderFixture snapshots the o1 record used by execution and shutdown fixtures.
+func orderFixture(s *store) *orderRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.orders["o1"]
+	if !ok {
+		return nil
+	}
+	return &rec
 }

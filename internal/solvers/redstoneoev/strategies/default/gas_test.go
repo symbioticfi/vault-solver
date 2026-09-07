@@ -33,13 +33,13 @@ func TestFitsRedStoneLimit(t *testing.T) {
 		Acquire:      map[common.Address]*big.Int{},
 	}
 
-	if !fitsGasLimit(gasLegsFor(coll, 1, 1), st, 2_000_000, 3) {
+	if predictGasForFeeds(gasLegsFor(coll, 1, 1), st, 3).Units > usableGasLimit(2_000_000) {
 		t.Fatal("two allocate legs should fit the observed RedStone settlement gas limit")
 	}
-	if !fitsGasLimit(gasLegsFor(coll, 1, 1, 1), st, 2_000_000, 3) {
+	if predictGasForFeeds(gasLegsFor(coll, 1, 1, 1), st, 3).Units > usableGasLimit(2_000_000) {
 		t.Fatal("three allocate legs should fit the observed RedStone settlement gas limit")
 	}
-	if fitsGasLimit(gasLegsFor(coll, 1, 1, 1, 1), st, 2_000_000, 3) {
+	if predictGasForFeeds(gasLegsFor(coll, 1, 1, 1, 1), st, 3).Units <= usableGasLimit(2_000_000) {
 		t.Fatal("four allocate legs must not fit the observed RedStone settlement gas limit")
 	}
 }
@@ -120,10 +120,10 @@ func TestGasPredictionTracksForkCalibratedSettlements(t *testing.T) {
 	}
 }
 
-func gasLegsFor(coll common.Address, outs ...int64) []legHint {
-	legs := make([]legHint, len(outs))
+func gasLegsFor(coll common.Address, outs ...int64) []liquidlanegas.Demand {
+	legs := make([]liquidlanegas.Demand, len(outs))
 	for i, out := range outs {
-		legs[i] = legHint{Collateral: coll, ExpectedLoanOut: big.NewInt(out)}
+		legs[i] = liquidlanegas.Demand{Collateral: coll, AmountOut: big.NewInt(out)}
 	}
 	return legs
 }

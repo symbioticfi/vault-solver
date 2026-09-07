@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/planning"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -12,7 +14,7 @@ import (
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -33,103 +35,116 @@ type uniswapFillCompletion struct {
 	result txmanager.Result
 }
 
-func (s *Solver) fillLoop(
-	ctx context.Context,
-	routes []liquidlane.Route,
-	orders <-chan *resolvedOrder,
-) error {
-	completions := make(chan uniswapFillCompletion, orderQueueCapacity)
-	pending := make(map[common.Hash]*pendingUniswapFill)
-	ctxDone := ctx.Done()
-	var shutdownErr error
-	for orders != nil || len(pending) > 0 {
+// Claims live in the solver's order table. This loop owns only the number of
+// accepted lifecycles; completion messages carry everything needed to settle one.
+func (s *Solver) fillLoop(ctx context.Context, routes []liquidlane.Route, orders <-chan *resolvedOrder) error {
+	results := make(chan uniswapFillCompletion, orderQueueCapacity)
+	pending := 0
+	done := ctx.Done()
+	for orders != nil || pending != 0 {
 		select {
-		case <-ctxDone:
-			shutdownErr = ctx.Err()
-			ctxDone = nil
-		case completion := <-completions:
-			delete(pending, completion.fill.order.Hash)
+		case <-done:
+			done = nil // Continue draining claims and accepted terminal results.
+		case completion := <-results:
+			pending--
 			s.completePendingFill(completion)
-		case order, ok := <-orders:
-			if !ok {
+		case order, open := <-orders:
+			if !open {
 				orders = nil
 				continue
 			}
-			if shutdownErr != nil || ctx.Err() != nil {
-				if shutdownErr == nil {
-					shutdownErr = ctx.Err()
-				}
-				ctxDone = nil
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				continue
+			fill := s.admitPolledOrder(ctx, routes, order)
+			if fill != nil {
+				pending++
+				go awaitUniswapFill(fill, results)
 			}
-			if !s.txm.Available() {
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				s.log.V(1).Info(
-					"order fill deferred while transaction nonce lane is paused",
-					"source", order.Source,
-					"orderHash", order.Hash.Hex(),
-					"quoteId", order.QuoteID,
-				)
-				continue
-			}
-			s.log.V(1).Info(
-				"order fill planning started",
-				"source", order.Source,
-				"orderHash", order.Hash.Hex(),
-				"quoteId", order.QuoteID,
-			)
-			chainObservedAt := time.Now()
-			now, err := s.reader.latestBlockTime(ctx)
-			if err != nil {
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
-				continue
-			}
-			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
-			s.endFillPlanning()
-			if err != nil {
-				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
-				if errors.Is(err, errFillPreflight) {
-					s.recordOrderFillFailure(order, now)
-				}
-				if errors.Is(err, errOrderNotFillable) {
-					s.log.V(1).Info("order not fillable yet", "source", order.Source,
-						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-					continue
-				}
-				s.log.Error(err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-				continue
-			}
-			pending[order.Hash] = fill
-			go awaitUniswapFill(fill, completions)
 		}
 	}
-	return shutdownErr
+	return ctx.Err()
 }
 
-// Once txmanager accepts a fill, shutdown may stop new admission but must not drop its terminal result.
-func awaitUniswapFill(
-	fill *pendingUniswapFill,
-	out chan<- uniswapFillCompletion,
-) {
-	result, ok := <-fill.result
-	if !ok {
-		result.Err = errors.New("transaction result channel closed without a result")
+func (s *Solver) admitPolledOrder(ctx context.Context, routes []liquidlane.Route, order *resolvedOrder) *pendingUniswapFill {
+	defer s.endFillPlanning()
+	log := s.log.WithValues("source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+	observed := time.Now()
+	if ctx.Err() != nil || !s.txm.Available() {
+		s.retry(order.Hash, observed, false)
+		log.V(1).Info("order fill deferred while admission is unavailable")
+		return nil
 	}
-	out <- uniswapFillCompletion{fill: fill, result: result}
+	chainTime, err := s.reader.latestBlockTime(ctx)
+	if err != nil {
+		s.retry(order.Hash, observed, false)
+		log.Error(err, "order fill: read current chain time")
+		return nil
+	}
+	fill, err := s.startFill(ctx, routes, order, chainTime, observed)
+	if err == nil {
+		return fill
+	}
+	failedPreflight := errors.Is(err, errFillPreflight)
+	s.retry(order.Hash, chainTime, failedPreflight)
+	if failedPreflight {
+		s.recordOrderFillFailure(order, chainTime)
+	}
+	if errors.Is(err, errOrderNotFillable) {
+		log.V(1).Info("order not fillable yet")
+	} else {
+		log.Error(err, "order fill preparation failed")
+	}
+	return nil
 }
 
-func (s *Solver) startFill(
+// Receipt delivery belongs to accepted work and is deliberately independent of
+// the intake context. A closed channel without a result is a terminal failure.
+func awaitUniswapFill(fill *pendingUniswapFill, out chan<- uniswapFillCompletion) {
+	completion := uniswapFillCompletion{fill: fill}
+	result, open := <-fill.result
+	if open {
+		completion.result = result
+	} else {
+		completion.result = txmanager.Result{Outcome: txmanager.OutcomeTrackingStopped,
+			Err: errors.New("transaction result channel closed without a result")}
+	}
+	out <- completion
+}
+
+// preparedFill contains all decisions made before admission. No capacity is held
+// until the transaction manager accepts this exact request.
+type preparedFill struct {
+	request      txmanager.Request
+	reservations liquidlane.CapacityReservations
+	surplus      *big.Int
+}
+
+func (s *Solver) startFill(ctx context.Context, routes []liquidlane.Route, order *resolvedOrder,
+	now, chainObservedAt time.Time) (*pendingUniswapFill, error) {
+	prepared, err := s.prepareFill(ctx, routes, order, now, chainObservedAt)
+	if err != nil {
+		return nil, err
+	}
+	result, accepted := s.txm.SendAsync(ctx, prepared.request)
+	if !accepted {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("transaction submission was not accepted")
+	}
+	s.setPendingReservations(order.Hash, prepared.reservations)
+	s.log.V(1).Info("order fill submitted", "source", order.Source,
+		"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+		"reservationDomains", len(prepared.reservations), "gasAccounting", s.cfg.Gas != nil)
+	return &pendingUniswapFill{order: order, plannedSurplus: prepared.surplus, result: result}, nil
+}
+
+func (s *Solver) prepareFill(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	order *resolvedOrder,
 	now time.Time,
 	chainObservedAt time.Time,
-) (*pendingUniswapFill, error) {
+) (*preparedFill, error) {
+	log := s.log.WithValues("source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
 	if order.TokenOut == (common.Address{}) {
 		return nil, errOrderNotFillable
 	}
@@ -144,9 +159,9 @@ func (s *Solver) startFill(
 		now,
 	)
 	if discountErr != nil {
-		s.log.Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
+		log.Error(discountErr, "refresh fill discount routes")
 	}
-	snapshot, err := s.reader.fillSnapshot(
+	snapshot, err := s.reader.Fill(
 		ctx,
 		decisionRoutes,
 		order.Executor,
@@ -163,11 +178,8 @@ func (s *Solver) startFill(
 			snapshot.Direct = append(snapshot.Direct, s.discountFillQuotes(listed, snapshot.Physical, now)...)
 		}
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"order fill snapshot loaded",
-		"source", order.Source,
-		"orderHash", order.Hash.Hex(),
-		"quoteId", order.QuoteID,
 		"routes", len(decisionRoutes),
 		"fillQuotes", len(snapshot.Direct),
 		"physicalQuotes", len(snapshot.Physical),
@@ -189,29 +201,22 @@ func (s *Solver) startFill(
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
 		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
-		Trace: s.decisionTrace(
-			"source", order.Source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-		),
+		Trace: planning.NewDecisionTrace(s.log, "source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID),
 	}
 	plan, err := s.strategy.DecideFill(ctx, fillInput)
 	if err != nil {
 		return nil, err
 	}
 	if plan == nil || len(plan.Routes) == 0 {
-		s.log.V(1).Info(
+		log.V(1).Info(
 			"order fill strategy declined",
-			"source", order.Source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
 			"fillQuotes", len(fillInput.Quotes),
 			"amountIn", order.AmountIn.String(),
 			"requiredAmountOut", order.AmountOut.String(),
 		)
 		return nil, errOrderNotFillable
 	}
-	validatedRoutes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{
+	validatedRoutes, err := planning.ValidateFillRoutes(planning.FillValidation{
 		TokenIn: fillInput.TokenIn, TokenOut: fillInput.TokenOut, AmountIn: fillInput.AmountIn,
 		RequiredAmountOut: fillInput.OutputAmount, RequireSingleRoute: fillInput.RequireSingleRoute,
 		MaxRoutes: strategytypes.MaxRoutes, Quotes: fillInput.Quotes, Reservations: fillInput.Reservations,
@@ -223,7 +228,7 @@ func (s *Solver) startFill(
 	}
 	plan.Routes = validatedRoutes
 	s.logFillPlan(order, plan)
-	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
+	reservations, ok := planning.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
 	}
@@ -239,11 +244,8 @@ func (s *Solver) startFill(
 	if !ok {
 		return nil, errOrderNotFillable
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"order fill preflight succeeded",
-		"source", order.Source,
-		"orderHash", order.Hash.Hex(),
-		"quoteId", order.QuoteID,
 		"executor", order.Executor.Hex(),
 		"caller", s.solverAddress.Hex(),
 		"calldataBytes", len(data),
@@ -253,30 +255,11 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"cancelAt", cancelAt.Unix(),
 	)
-	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		Solver: Name,
-		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
-		Label: "uniswapx-fill",
-	})
-	if !accepted {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, errors.New("transaction submission was not accepted")
-	}
-	s.setPendingReservations(order.Hash, reservations)
-	s.log.V(1).Info(
-		"order fill submitted",
-		"source", order.Source,
-		"orderHash", order.Hash.Hex(),
-		"quoteId", order.QuoteID,
-		"routes", len(plan.Routes),
-		"reservationDomains", len(reservations),
-		"gasAccounting", s.cfg.Gas != nil,
-		"pricingMaxFeePerGas", pricingMaxFee.String(),
-	)
-	return &pendingUniswapFill{
-		order: order, plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
+	return &preparedFill{
+		request: txmanager.Request{Solver: Name, To: order.Executor, Data: data,
+			MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt, Label: "uniswapx-fill"},
+		reservations: reservations,
+		surplus:      planning.PlannedSurplus(plan.Routes, order.AmountOut),
 	}, nil
 }
 
@@ -310,7 +293,7 @@ func (s *Solver) buildExecutorCalldata(
 			"adapter", route.Adapter.Hex(),
 			"amountIn", route.AmountIn.String(),
 		)
-		physicalQuotes, err := s.reader.physicalFillQuotes(
+		physicalQuotes, err := s.reader.ReadFillQuotes(
 			ctx,
 			[]liquidlane.Route{selectedRoute},
 			order.TokenIn,
@@ -345,14 +328,7 @@ func (s *Solver) buildExecutorCalldata(
 		discountRoutes = append(discountRoutes, uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute{
 			Adapter: route.Adapter, AmountIn: route.AmountIn,
 			DiscountSwap: uxexecutor.ILiquidLaneAdapterDiscountSwap{
-				Discount: uxexecutor.ILiquidLaneAdapterDiscount{
-					TokenToRedeem: signed.Terms.TokenToRedeem,
-					Discount:      signed.Terms.Discount,
-					Signer:        signed.Terms.Signer,
-					Protocol:      signed.Terms.Protocol,
-					Nonce:         signed.Terms.Nonce,
-					Deadline:      signed.Terms.Deadline,
-				},
+				Discount:        uxexecutor.ILiquidLaneAdapterDiscount(signed.Terms.Clone()),
 				SignerSignature: signed.SignerSignature, ProtocolDeadline: signed.ProtocolDeadline,
 			},
 			ProtocolSignature: signed.ProtocolSignature,
@@ -386,92 +362,55 @@ func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Rou
 }
 
 func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan) {
-	discountRoutes := 0
+	log := s.log.V(1).WithValues("source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+	private := 0
 	for index, route := range plan.Routes {
+		routeLog := log
 		if route.DiscountID != nil {
-			discountRoutes++
+			private++
+			routeLog = routeLog.WithValues("discountId", route.DiscountID.Hex())
 		}
-		fields := []any{
-			"source", order.Source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"route", index,
-			"routeId", route.RouteID,
-			"adapter", route.Adapter.Hex(),
-			"amountIn", route.AmountIn.String(),
-			"expectedAmountOut", route.ExpectedAmountOut.String(),
-			"minAmountOut", route.MinAmountOut.String(),
-			"reservedAmountOut", route.ReservedAmountOut.String(),
-			"capacityId", route.CapacityID,
-			"private", route.DiscountID != nil,
-		}
-		if route.DiscountID != nil {
-			fields = append(fields, "discountId", route.DiscountID.Hex())
-		}
-		s.log.V(1).Info("order fill route selected", fields...)
+		routeLog.Info("order fill route selected", "route", index, "routeId", route.RouteID,
+			"capacityId", route.CapacityID, "adapter", route.Adapter.Hex(), "private", route.DiscountID != nil,
+			"amountIn", route.AmountIn.String(), "expectedAmountOut", route.ExpectedAmountOut.String(),
+			"minAmountOut", route.MinAmountOut.String(), "reservedAmountOut", route.ReservedAmountOut.String())
 	}
-	s.log.V(1).Info(
-		"order fill plan selected",
-		"source", order.Source,
-		"orderHash", order.Hash.Hex(),
-		"quoteId", order.QuoteID,
-		"routes", len(plan.Routes),
-		"discountRoutes", discountRoutes,
-	)
+	log.Info("order fill plan selected", "routes", len(plan.Routes), "discountRoutes", private)
 }
 
 func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
-	order := completion.fill.order
-	now := time.Now()
+	fill, result := completion.fill, completion.result
+	order, now := fill.order, time.Now()
 	s.clearPendingReservations(order.Hash)
-	if completion.result.NotAdmitted {
+	log := s.log.WithValues("source", order.Source, "orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID, "tx", result.Hash.Hex())
+	switch {
+	case result.NotAdmitted:
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
-		s.log.V(1).Info(
-			"order fill was not admitted",
-			"source", order.Source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"error", completion.result.Err,
-		)
-		return
-	}
-	outcome := completion.result.Outcome
-	if !outcome.Included() {
-		err := completion.result.Err
-		if err == nil {
-			err = errors.Errorf("unknown transaction outcome %q", outcome)
+		log.V(1).Info("order fill was not admitted", "error", result.Err)
+	case result.Outcome.Included():
+		// Inclusion fulfills the order even when the stronger confirmation wait fails.
+		s.recordFillSuccess()
+		s.complete(order.Hash, now)
+		if s.metrics != nil {
+			s.metrics.fillAmounts.Observe(result.Receipt, order.TokenIn, order.AmountIn,
+				order.TokenOut, order.AmountOut, fill.plannedSurplus)
+		}
+		if result.Outcome == txmanager.OutcomeConfirmed {
+			log.Info("order filled", "executor", order.Executor.Hex())
+		} else {
+			log.Error(result.Err, "order fill included but confirmation wait failed", "executor", order.Executor.Hex())
+		}
+	default:
+		failure := result.Err
+		if failure == nil {
+			failure = errors.Errorf("unknown transaction outcome %q", result.Outcome)
 		}
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
-		s.log.Error(
-			err,
-			"order fill failed",
-			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
-			"tx", completion.result.Hash.Hex(),
-		)
-		return
-	}
-	if outcome == txmanager.OutcomeConfirmed {
-		s.log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
-	} else {
-		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
-			"source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
-	}
-	s.recordFillSuccess()
-	s.complete(order.Hash, now)
-	if s.metrics != nil {
-		s.metrics.fillAmounts.Observe(
-			completion.result.Receipt,
-			order.TokenIn,
-			order.AmountIn,
-			order.TokenOut,
-			order.AmountOut,
-			completion.fill.plannedSurplus,
-		)
+		log.Error(failure, "order fill failed")
 	}
 }
 

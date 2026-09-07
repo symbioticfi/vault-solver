@@ -20,7 +20,7 @@ func TestValidAuctionsDropsIncompleteEntries(t *testing.T) {
 		{Id: 9, Status: "open", RequestId: "not-an-address"},
 	}
 	kept := s.validAuctions(in)
-	if len(kept) != 1 || kept[0].Id != good.Id {
+	if len(kept) != 1 || kept[0].id != int64(good.Id) {
 		t.Fatalf("kept %+v, want only auction %v", kept, good.Id)
 	}
 }

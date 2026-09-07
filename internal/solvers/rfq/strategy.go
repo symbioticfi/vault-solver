@@ -4,15 +4,25 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
+	local "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	remote "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 func newStrategy(spec StrategyConfig) (types.Strategy, error) {
-	return strategies.New(spec.Name, spec.Config)
+	switch spec.Name {
+	case "", local.Name:
+		return local.NewFromConfig(spec.Config)
+	case remote.Name:
+		return remote.NewFromConfig(spec.Config)
+	default:
+		return nil, errors.Errorf("unknown RFQ strategy %q (available: default, webhook)", spec.Name)
+	}
 }
 
 // solverInventory is one LiquidLane candidate leg; RFQ maps backend adapter snapshots and fill-time
@@ -47,25 +57,14 @@ func newQuoteInput(
 		Executor:           executor,
 		TokenIn:            req.TokenIn,
 		TokenOut:           req.TokenOut,
-		AmountIn:           liquidlane.CloneBig(req.Amount),
-		RequiredAmountOut:  liquidlane.CloneBig(required),
+		AmountIn:           bigmath.Clone(req.Amount),
+		RequiredAmountOut:  bigmath.Clone(required),
 		RequireSingleRoute: requireSingleRoute,
 		Candidates:         candidates,
 		Now:                now,
 	}
 }
 
-func newFillInput(
-	chainID int64,
-	executor common.Address,
-	req strategyRequest,
-	candidates []liquidlane.QuoteCandidate,
-	required *big.Int,
-	requireSingleRoute bool,
-	now time.Time,
-) types.FillInput {
-	return newQuoteInput(chainID, executor, req, candidates, required, requireSingleRoute, now)
-}
 func validateSingleRoute(requireSingleRoute bool, legCount int) error {
 	if requireSingleRoute && legCount != 1 {
 		return errors.Errorf("single-route input requires exactly one leg, got %d", legCount)

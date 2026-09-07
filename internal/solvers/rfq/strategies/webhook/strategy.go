@@ -3,7 +3,6 @@ package webhookstrategy
 import (
 	"context"
 
-	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
@@ -16,17 +15,8 @@ type Strategy struct {
 	client *webhook.Client
 }
 
-//nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
-func init() {
-	strategies.Register(Name, NewFromConfig)
-}
-
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
-	cfg, err := webhook.ParseConfig(raw)
-	if err != nil {
-		return nil, err
-	}
-	client, err := webhook.NewClient(cfg)
+	client, err := webhook.NewFromConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -38,11 +28,7 @@ func New(client *webhook.Client) *Strategy {
 }
 
 func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
-	var out types.QuoteOutput
-	if err := s.client.PostJSON(ctx, input, &out); err != nil {
-		return types.QuoteOutput{}, err
-	}
-	return out, nil
+	return webhook.Post[types.QuoteOutput](ctx, s.client, "", input)
 }
 
 // BuildFillPlan delegates to the external decider against the current fill snapshot.
@@ -51,5 +37,5 @@ func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*t
 	if err != nil || out.Decision == types.DecisionDecline {
 		return nil, err
 	}
-	return strategies.FillPlanFromQuote(input, out)
+	return types.FillPlanFromQuote(input, out)
 }

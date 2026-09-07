@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
@@ -19,9 +20,7 @@ func TestParseSubmittedOrder(t *testing.T) {
 	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
 
 	order, err := parseSubmittedOrder(testOrderJSON(t, cfg, tokenIn, tokenOut), cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parseSubmittedOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseSubmittedOrder: %v")
 	if order.QuoteID != "quote-1" {
 		t.Fatalf("quote id = %q", order.QuoteID)
 	}
@@ -135,22 +134,14 @@ func TestOrderInboxKeyUsesOrderPayloadInsteadOfMetadata(t *testing.T) {
 	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
 	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
 	first, err := parseSubmittedOrder(testOrderJSON(t, cfg, tokenIn, tokenOut), cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parse first order: %v", err)
-	}
+	testcheck.NoError(t, err, "parse first order: %v")
 	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body); err != nil {
-		t.Fatalf("unmarshal second order: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body), "unmarshal second order: %v")
 	mapField(t, body, "order")["nonce"] = "8"
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal second order: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal second order: %v")
 	second, err := parseSubmittedOrder(raw, cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parse second order: %v", err)
-	}
+	testcheck.NoError(t, err, "parse second order: %v")
 
 	if first.OnChainOrderID != second.OnChainOrderID {
 		t.Fatal("test orders do not share metadata id")
@@ -162,13 +153,9 @@ func TestOrderInboxKeyUsesOrderPayloadInsteadOfMetadata(t *testing.T) {
 	mapField(t, body, "meta")["onChainOrderId"] =
 		"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	raw, err = json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal replay order: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal replay order: %v")
 	replay, err := parseSubmittedOrder(raw, cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parse replay order: %v", err)
-	}
+	testcheck.NoError(t, err, "parse replay order: %v")
 	if orderInboxKey(first) != orderInboxKey(replay) {
 		t.Fatal("same order payload received different keys after metadata changed")
 	}
@@ -176,21 +163,11 @@ func TestOrderInboxKeyUsesOrderPayloadInsteadOfMetadata(t *testing.T) {
 
 func TestParseSubmittedOrderRejectsNonStringInputTuple(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	inputs := sliceField(t, mapField(t, body, "order"), "inputs")
 	inputs[0].([]any)[1] = float64(1_000_000)
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	_, err = parseSubmittedOrder(raw, cfg, 11155111)
 	if err == nil || !strings.Contains(err.Error(), "expected decimal string") {
@@ -200,26 +177,14 @@ func TestParseSubmittedOrderRejectsNonStringInputTuple(t *testing.T) {
 
 func TestParseSubmittedOrderAllowsMissingQuoteID(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	delete(body, "quoteId")
 	mapField(t, body, "meta")["quoteId"] = nil
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	order, err := parseSubmittedOrder(raw, cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parseSubmittedOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseSubmittedOrder: %v")
 	if order.QuoteID != "" {
 		t.Fatalf("quote id = %q", order.QuoteID)
 	}
@@ -227,25 +192,13 @@ func TestParseSubmittedOrderAllowsMissingQuoteID(t *testing.T) {
 
 func TestParseSubmittedOrderInfersOnChainOrderWhenTypeMissing(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	delete(body, "orderType")
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	order, err := parseSubmittedOrder(raw, cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parseSubmittedOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseSubmittedOrder: %v")
 	if order.OnChainOrderID == "" {
 		t.Fatal("on-chain order id was not parsed")
 	}
@@ -253,22 +206,12 @@ func TestParseSubmittedOrderInfersOnChainOrderWhenTypeMissing(t *testing.T) {
 
 func TestParseSubmittedOrderRejectsMissingTypeWithoutOnChainMetadata(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	delete(body, "orderType")
 	meta := body["meta"].(map[string]any)
 	delete(meta, "onChainOrderId")
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	if _, err = parseSubmittedOrder(raw, cfg, 11155111); err == nil ||
 		!strings.Contains(err.Error(), "missing orderType requires onChainOrderId") {
@@ -278,27 +221,15 @@ func TestParseSubmittedOrderRejectsMissingTypeWithoutOnChainMetadata(t *testing.
 
 func TestParseSubmittedOrderPreservesOutputContext(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	outputs := sliceField(t, mapField(t, body, "order"), "outputs")
 	output := outputs[0].(map[string]any)
 	output["context"] = "0x01000000010000000200000000000000000000000000000000000000000000000000000000000003"
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	order, err := parseSubmittedOrder(raw, cfg, 11155111)
-	if err != nil {
-		t.Fatalf("parseSubmittedOrder: %v", err)
-	}
+	testcheck.NoError(t, err, "parseSubmittedOrder: %v")
 	if got := hexutil.Encode(order.Output.Context); got != output["context"] {
 		t.Fatalf("context = %s", got)
 	}
@@ -306,15 +237,7 @@ func TestParseSubmittedOrderPreservesOutputContext(t *testing.T) {
 
 func TestParseSubmittedOrderRejectsDirtyOutputIdentifier(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	outputs := sliceField(t, mapField(t, body, "order"), "outputs")
 	output, ok := outputs[0].(map[string]any)
 	if !ok {
@@ -324,9 +247,7 @@ func TestParseSubmittedOrderRejectsDirtyOutputIdentifier(t *testing.T) {
 	dirty[0] = 1
 	output["token"] = hexutil.Encode(dirty[:])
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	_, err = parseSubmittedOrder(raw, cfg, 11155111)
 	if err == nil || !strings.Contains(err.Error(), "clean address identifier") {
@@ -336,20 +257,10 @@ func TestParseSubmittedOrderRejectsDirtyOutputIdentifier(t *testing.T) {
 
 func TestParseSubmittedOrderRejectsNonOnChainOrderType(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	body["orderType"] = "GaslessCrosschainOrder"
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	_, err = parseSubmittedOrder(raw, cfg, 11155111)
 	if err == nil || !strings.Contains(err.Error(), "unsupported non-onchain order type") {
@@ -358,9 +269,7 @@ func TestParseSubmittedOrderRejectsNonOnChainOrderType(t *testing.T) {
 
 	body["orderType"] = "NonOnChainOrder"
 	raw, err = json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	_, err = parseSubmittedOrder(raw, cfg, 11155111)
 	if err == nil || !strings.Contains(err.Error(), "unsupported non-onchain order type") {
@@ -370,20 +279,10 @@ func TestParseSubmittedOrderRejectsNonOnChainOrderType(t *testing.T) {
 
 func TestParseSubmittedOrderAcceptsOIFUserOpenOrderType(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	body["orderType"] = "oif-user-open-v0"
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	if _, err = parseSubmittedOrder(raw, cfg, 11155111); err != nil {
 		t.Fatalf("parseSubmittedOrder: %v", err)
@@ -392,20 +291,10 @@ func TestParseSubmittedOrderAcceptsOIFUserOpenOrderType(t *testing.T) {
 
 func TestParseSubmittedOrderRejectsMissingOrderStatus(t *testing.T) {
 	cfg := testLifiConfig()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	delete(mapField(t, body, "meta"), "orderStatus")
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal: %v")
 
 	_, err = parseSubmittedOrder(raw, cfg, 11155111)
 	if err == nil || !strings.Contains(err.Error(), "unsupported order status") {
@@ -459,28 +348,16 @@ func testOrderJSON(t *testing.T, cfg *Config, tokenIn, tokenOut common.Address) 
 		},
 	}
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal order: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal order: %v")
 	return raw
 }
 
 func mutatedTestOrderJSON(t *testing.T, cfg *Config, mutate func(map[string]any)) []byte {
 	t.Helper()
-	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(
-		t,
-		cfg,
-		common.HexToAddress("0x6666666666666666666666666666666666666666"),
-		common.HexToAddress("0x7777777777777777777777777777777777777777"),
-	), &body); err != nil {
-		t.Fatalf("unmarshal order: %v", err)
-	}
+	body := testOrderBody(t, cfg)
 	mutate(body)
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal order: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal order: %v")
 	return raw
 }
 
@@ -492,9 +369,7 @@ func testListedOrderJSON(
 ) json.RawMessage {
 	t.Helper()
 	var body map[string]any
-	if err := json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body); err != nil {
-		t.Fatalf("unmarshal order: %v", err)
-	}
+	testcheck.NoError(t, json.Unmarshal(testOrderJSON(t, cfg, tokenIn, tokenOut), &body), "unmarshal order: %v")
 	delete(body, "orderType")
 	delete(body, "quoteId")
 	body["quote"] = nil
@@ -518,9 +393,7 @@ func testListedOrderJSON(
 		meta[field] = nil
 	}
 	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal listed order: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal listed order: %v")
 	return raw
 }
 
@@ -538,9 +411,7 @@ func testListedOrdersPageJSON(
 			"offset": offset,
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal listed orders page: %v", err)
-	}
+	testcheck.NoError(t, err, "marshal listed orders page: %v")
 	return raw
 }
 
@@ -590,4 +461,14 @@ func TestParseSubmittedOrderClassifiesForeignChainBeforeAddresses(t *testing.T) 
 			}
 		})
 	}
+}
+
+// Decode the wire fixture so mutations use the same map/slice shapes as the feed.
+func testOrderBody(t *testing.T, cfg *Config) map[string]any {
+	t.Helper()
+	var body map[string]any
+	testcheck.NoError(t, json.Unmarshal(testOrderJSON(t, cfg,
+		common.HexToAddress("0x6666666666666666666666666666666666666666"),
+		common.HexToAddress("0x7777777777777777777777777777777777777777")), &body))
+	return body
 }

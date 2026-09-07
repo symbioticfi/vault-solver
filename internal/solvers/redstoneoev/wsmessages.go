@@ -8,30 +8,27 @@ import (
 
 // Hand-written WS structs pinned to RedStone's zod schema and live auction frames; there is no upstream
 // OpenAPI to generate from.
-func opName(raw []byte) (string, error) {
-	var head struct {
-		Op string `json:"op"`
-	}
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return "", errors.Errorf("ws: decode op: %w", err)
-	}
-	return head.Op, nil
+type frameHeader struct {
+	Op      string          `json:"op"`
+	Payload json.RawMessage `json:"payload"`
 }
 
-func isFeedAuction(raw []byte) bool {
-	var frame struct {
-		Payload map[string]json.RawMessage `json:"payload"`
+func decodeFrame(raw []byte) (frameHeader, error) {
+	var header frameHeader
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return frameHeader{}, errors.Errorf("ws: decode frame: %w", err)
 	}
-	if err := json.Unmarshal(raw, &frame); err != nil || len(frame.Payload) == 0 {
+	return header, nil
+}
+
+func (frame frameHeader) feedAuction() bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(frame.Payload, &fields) != nil {
 		return false
 	}
-	if _, ok := frame.Payload["positions"]; ok {
-		return false
-	}
-	if _, ok := frame.Payload["prices"]; ok {
-		return false
-	}
-	return true
+	_, positions := fields["positions"]
+	_, prices := fields["prices"]
+	return len(fields) > 0 && !positions && !prices
 }
 
 type AuctionMessage struct {

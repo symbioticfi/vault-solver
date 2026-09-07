@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 // TestExecutorV6DigestGoldenVector pins the digest computation to the verified live vector
@@ -19,9 +20,7 @@ func TestExecutorV6DigestGoldenVector(t *testing.T) {
 	maxGas := big.NewInt(50000000000) // 50 gwei
 
 	got, err := ExecutorV6Digest(chainID, callback, opDataHash, bid, nonce, maxGas)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	want := common.HexToHash("0x78f6eb68948cfeb1e16a81b050c111bf099628ff9dc51debb55f0b4fff2c7e5a")
 	if got != want {
 		t.Fatalf("digest = %s, want %s", got.Hex(), want.Hex())
@@ -33,9 +32,7 @@ func TestExecutorV6DigestGoldenVector(t *testing.T) {
 // ECDSA.recover(toEthSignedMessageHash(digest)) does on-chain.
 func TestSignBidRecoversToSigner(t *testing.T) {
 	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	s := &testSigner{key: key, addr: crypto.PubkeyToAddress(key.PublicKey)}
 
 	chainID := big.NewInt(11155111)
@@ -46,9 +43,7 @@ func TestSignBidRecoversToSigner(t *testing.T) {
 	maxGas := big.NewInt(60000000000)
 
 	sig, err := SignBid(s, chainID, callback, opData, bid, nonce, maxGas)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if len(sig) != 65 {
 		t.Fatalf("sig length = %d, want 65", len(sig))
 	}
@@ -63,10 +58,20 @@ func TestSignBidRecoversToSigner(t *testing.T) {
 		rs[64] -= 27
 	}
 	pub, err := crypto.SigToPub(ethHash.Bytes(), rs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	if got := crypto.PubkeyToAddress(*pub); got != s.addr {
 		t.Fatalf("recovered %s, want %s", got.Hex(), s.addr.Hex())
+	}
+}
+
+func TestExecutorV6DigestRejectsNonUint256(t *testing.T) {
+	for _, value := range []*big.Int{nil, big.NewInt(-1), new(big.Int).Lsh(big.NewInt(1), 256)} {
+		for index := range 4 {
+			fields := []*big.Int{big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(1)}
+			fields[index] = value
+			if _, err := ExecutorV6Digest(fields[0], common.Address{}, common.Hash{}, fields[1], fields[2], fields[3]); err == nil {
+				t.Fatalf("field %d accepted %v", index, value)
+			}
+		}
 	}
 }

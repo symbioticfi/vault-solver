@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/bigmath"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -22,7 +24,7 @@ type decisionStateReader struct {
 }
 
 func (r decisionStateReader) ReadNativeBalance(context.Context, common.Address) (*big.Int, error) {
-	return cloneBig(r.balance), r.balanceErr
+	return bigmath.Clone(r.balance), r.balanceErr
 }
 
 func TestRefreshStateReadsCallbackBalance(t *testing.T) {

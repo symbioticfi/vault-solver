@@ -1,10 +1,11 @@
 // Package rfq implements the Symbiotic RFQ filler solver: it serves backend quote requests off the
 // on-chain per-vault LiquidLane adapters, and fills won orders via the Executor contract. It
-// self-registers with the solver framework via init(). See docs/RFQ-PLAN.md.
+// is constructed by the application catalog. See docs/RFQ-PLAN.md.
 package rfq
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -15,21 +16,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/default"
-	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/webhook"
 )
 
 const (
-	// Name is the registry key that selects this solver from config.
+	// Name is the configuration key that selects this solver from config.
 	Name                       = "rfq-filler"
 	quoteServerShutdownTimeout = 5 * time.Second
 	orderPollOperation         = "order_poll"
 )
-
-//nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
-func init() {
-	solver.Register(Name, factory)
-}
 
 // Solver is the RFQ filler strategy.
 type Solver struct {
@@ -40,7 +34,7 @@ type Solver struct {
 	reportFatal func(error)
 }
 
-func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+func New(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
@@ -49,42 +43,25 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if secret == "" {
 		return nil, errors.Errorf("%s: backend shared secret env %q is empty", Name, cfg.BackendSharedSecretEnv)
 	}
-
-	chainID := deps.Chain.ChainID().Int64()
-	log := deps.Log.WithName(Name)
-	st := newStore(time.Now)
-	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
-	quoteStrategy, err := newStrategy(cfg.Strategy)
+	strategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
 	}
-
-	var metrics *rfqMetrics
+	runtime := &Solver{cfg: cfg, log: deps.Log.WithName(Name), reportFatal: deps.ReportFatal}
+	orders := newStore(time.Now)
+	reader := newReader(deps.Chain, runtime.log, cfg.LiquidityLens)
+	quoting, execution := buildServices(cfg, deps.Chain.ChainID().Int64(), orders, reader,
+		deps.TxManager, deps.TxManager.LaneReady, strategy, runtime.log)
+	runtime.exec = execution
+	runtime.server = &server{sharedSecret: secret, quotes: quoting, log: runtime.log}
 	if deps.Metrics != nil {
-		if metrics, err = newRFQMetrics(deps.Metrics.Registerer(), st, cfg.Strategy.Name); err != nil {
+		metrics, err := newRFQMetrics(deps.Metrics.Registerer(), orders, cfg.Strategy.Name)
+		if err != nil {
 			return nil, err
 		}
+		runtime.server.metrics, execution.metrics, execution.orderPollObserver = metrics, metrics, metrics.orderPollObserver
 	}
-
-	quotes, exec := buildServices(
-		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.LaneReady, quoteStrategy, log,
-	)
-	exec.metrics = metrics
-	if metrics != nil {
-		exec.orderPollObserver = metrics.orderPollObserver
-	}
-	return &Solver{
-		cfg:  cfg,
-		exec: exec,
-		server: &server{
-			sharedSecret: secret,
-			quotes:       quotes,
-			metrics:      metrics,
-			log:          log,
-		},
-		log:         log,
-		reportFatal: deps.ReportFatal,
-	}, nil
+	return runtime, nil
 }
 
 // buildServices wires the quote and execution services from the parsed config and shared deps.
@@ -135,7 +112,6 @@ func buildServices(
 		txm:              txm,
 		log:              log,
 		now:              time.Now,
-		inflight:         make(map[string]bool),
 	}
 	return quotes, exec
 }
@@ -190,13 +166,13 @@ func (s *Solver) Run(ctx context.Context) error {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", s.cfg.ListenAddr)
+	if err != nil {
+		return errors.Errorf("rfq: listen for quotes: %w", err)
+	}
 	errCh := make(chan error, 1)
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-	s.log.Info("quote server listening", "addr", s.cfg.ListenAddr)
+	go func() { errCh <- httpSrv.Serve(listener) }()
+	s.log.Info("quote server listening", "addr", listener.Addr().String())
 
 	// Stop new polling on shutdown, but join the execution loop before returning. A txmanager Send
 	// that reached admission still waits for the manager's terminal or bounded-shutdown result after
@@ -213,6 +189,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		runErr = ctx.Err()
 	case err := <-errCh:
+		errCh = nil
 		runErr = errors.Errorf("rfq: quote server failed: %w", err)
 		if s.reportFatal != nil && ctx.Err() == nil {
 			s.reportFatal(runErr)
@@ -228,6 +205,9 @@ func (s *Solver) Run(ctx context.Context) error {
 		if closeErr := httpSrv.Close(); closeErr != nil {
 			s.log.Error(closeErr, "quote server forced shutdown failed")
 		}
+	}
+	if errCh != nil {
+		<-errCh
 	}
 	<-execDone
 	return runErr

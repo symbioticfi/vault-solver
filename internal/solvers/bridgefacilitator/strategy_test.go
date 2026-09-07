@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
+
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/webhook"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
@@ -33,7 +33,7 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 	return types.OfferInput{
 		Now: time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{{
-			ID:            adapterID(adapter),
+			ID:            lowerAddr(adapter),
 			Adapter:       adapter,
 			Vault:         common.HexToAddress("0x0000000000000000000000000000000000000002"),
 			Collateral:    common.HexToAddress("0x0000000000000000000000000000000000000003"),
@@ -56,17 +56,20 @@ func baseOfferInput(t *testing.T) types.OfferInput {
 	}
 }
 
-func TestStrategyRegistryUsesBuiltIns(t *testing.T) {
+func TestStrategySelectsBuiltIns(t *testing.T) {
 	got, err := newStrategy(StrategyConfig{Name: "default"})
-	if err != nil {
-		t.Fatalf("newStrategy default: %v", err)
-	}
+	testcheck.NoError(t, err, "newStrategy default: %v")
 	if got == nil {
 		t.Fatal("newStrategy default returned nil")
 	}
-	names := strategies.Registered()
-	if len(names) != 2 || names[0] != "default" || names[1] != "webhook" {
-		t.Fatalf("registered strategies = %v, want [default webhook]", names)
+	for _, name := range []string{"webhook", "missing"} {
+		_, err := newStrategy(StrategyConfig{Name: name})
+		if err == nil {
+			t.Fatalf("%s accepted missing configuration", name)
+		}
+		if strings.Contains(err.Error(), "unknown") != (name == "missing") {
+			t.Fatalf("%s selection: %v", name, err)
+		}
 	}
 }
 
@@ -78,8 +81,8 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
 	input := buildStrategyInput(
-		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
-		[]*adapterOffering{{
+		[]auction{mustAuction(t, testAuctionDto(10, collateral, "100"))},
+		[]adapterOffering{{
 			target: Target{
 				Adapter:    adapter,
 				Vault:      common.HexToAddress("0x0000000000000000000000000000000000000002"),
@@ -91,7 +94,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 				minAssets: new(big.Int),
 			},
 		}},
-		offers,
+		offers.snapshot(now),
 		now,
 	)
 
@@ -102,7 +105,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 		t.Fatalf("remaining = %s, want 0", input.Auctions[0].RemainingAmount)
 	}
 	if len(input.LiveOffers) != 1 ||
-		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
+		input.LiveOffers[0].AdapterID != lowerAddr(adapter) || input.LiveOffers[0].AuctionID != 10 {
 		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
 	}
 }
@@ -113,9 +116,7 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	maker := input.Adapters[0].Adapter
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read request: %v", err)
-		}
+		testcheck.NoError(t, err, "read request: %v")
 		if !strings.Contains(string(body), `"fundable":"1000"`) || strings.Contains(string(body), `"Fundable"`) {
 			t.Fatalf("request body does not use decimal-string lower-camel JSON: %s", string(body))
 		}
@@ -131,13 +132,9 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, err := webhook.NewClient(webhook.Config{URL: srv.URL, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	testcheck.NoError(t, err, "NewClient: %v")
 	out, err := webhookstrategy.New(client).DecideOffers(t.Context(), input)
-	if err != nil {
-		t.Fatalf("DecideOffers: %v", err)
-	}
+	testcheck.NoError(t, err, "DecideOffers: %v")
 	if len(out.Offers) != 1 || out.Offers[0].Principal.String() != "700" ||
 		out.Offers[0].ExpectedReturn.String() != "14" {
 		t.Fatalf("unexpected webhook output: %+v", out)
@@ -157,4 +154,11 @@ func testAuctionDto(id int64, depositAsset common.Address, amountRequested strin
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),
 		),
 	}
+}
+
+func mustAuction(t *testing.T, row threef.AuctionDto) auction {
+	t.Helper()
+	a, err := parseAuction(row)
+	testcheck.NoError(t, err)
+	return a
 }

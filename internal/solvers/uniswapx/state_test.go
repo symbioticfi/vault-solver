@@ -10,10 +10,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	testcheck "github.com/symbioticfi/vault-solver/internal/testutil"
 )
 
 func newUniswapXTestMetrics(t *testing.T, solver *Solver) *uniswapXMetrics {
@@ -29,9 +28,7 @@ func newUniswapXTestMetricsWithRegistry(
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	metrics, err := newUniswapXMetrics(reg, solver, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, err)
 	return metrics, reg
 }
 
@@ -89,13 +86,13 @@ func TestLocalBreakerInvalidatesQuotes(t *testing.T) {
 		cfg: &Config{Breaker: BreakerConfig{MaxFailures: 2, Window: time.Minute}},
 		log: logr.Discard(),
 	}
-	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
+	solver.quotes.setForTest(&quoteState{expiresAt: now.Add(time.Minute)})
 	solver.recordFillFailure(now)
-	if solver.localBlockUntil.Load() != 0 || solver.quoteState.Load() == nil {
+	if solver.localBlockUntil.Load() != 0 || solver.quotes.current() == nil {
 		t.Fatal("breaker opened before threshold")
 	}
 	solver.recordFillFailure(now.Add(time.Second))
-	if solver.localBlockUntil.Load() <= now.Unix() || solver.quoteState.Load() != nil {
+	if solver.localBlockUntil.Load() <= now.Unix() || solver.quotes.current() != nil {
 		t.Fatal("breaker did not open and invalidate quotes")
 	}
 }
@@ -111,30 +108,26 @@ func TestMissedExclusiveObligationOpensIndependentBreaker(t *testing.T) {
 	}
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
 	solver.metrics = metrics
-	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
+	solver.quotes.setForTest(&quoteState{expiresAt: now.Add(time.Minute)})
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(now.Add(time.Second).Unix()),
-	}, now)
-	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	})
+	testcheck.NoError(t, solver.sweepExclusive(t.Context(), now.Add(2*time.Second)))
 
 	if solver.exclusiveBlockUntil.Load() != now.Add(15*time.Minute+2*time.Second).Unix() {
 		t.Fatalf("exclusive block until = %d", solver.exclusiveBlockUntil.Load())
 	}
-	if solver.quoteState.Load() != nil {
+	if solver.quotes.current() != nil {
 		t.Fatal("missed exclusive obligation did not invalidate quotes")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if tracked, exists := solver.obligations[hash]; exists && tracked.resolvedAt.IsZero() {
 		t.Fatal("missed obligation remained pending")
 	}
-	if _, terminal := solver.exclusiveTerminal[hash]; !terminal {
+	if solver.obligations[hash].resolvedAt.IsZero() {
 		t.Fatal("missed obligation was not marked terminal")
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeMissed, 1)
-	if got := testutil.ToFloat64(solver.metrics.exclusiveOutstanding); got != 0 {
-		t.Fatalf("outstanding obligations = %v, want 0", got)
-	}
+	metricstest.RequireValue(t, solver.metrics.exclusiveOutstanding, 0)
 
 	// A later unrelated fill may reset the ordinary failure breaker, but never the fade breaker.
 	solver.recordFillSuccess()
@@ -156,23 +149,21 @@ func TestStartupRecoveredMissRemainsHistoricalAfterRetry(t *testing.T) {
 	}
 	solver.trackExclusiveObligation(exclusiveObligation{
 		hash: hash, deadline: now.Add(time.Second), recoveredAtStart: true,
-	}, "", now)
+	}, "")
 
 	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err == nil {
 		t.Fatal("temporary terminal lookup failure was accepted")
 	}
-	if tracked := solver.exclusiveUntil[hash]; !tracked.recoveredAtStart {
+	if tracked := solver.obligations[hash]; !tracked.recoveredAtStart {
 		t.Fatal("startup recovery marker was lost after failed reconciliation")
 	}
 
 	poller.err = nil
-	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, solver.sweepExclusive(t.Context(), now.Add(2*time.Second)))
 	if solver.exclusiveBlockUntil.Load() != 0 {
 		t.Fatal("retried startup history opened exclusive breaker")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if tracked, exists := solver.obligations[hash]; exists && tracked.resolvedAt.IsZero() {
 		t.Fatal("retried startup history remained pending")
 	}
 }
@@ -190,11 +181,9 @@ func TestRuntimeRecoveredMissRecordsMetricAndOpensBreaker(t *testing.T) {
 	solver.metrics = metrics
 	solver.trackExclusiveObligation(exclusiveObligation{
 		hash: hash, deadline: now.Add(time.Second),
-	}, "", now)
+	}, "")
 
-	if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, solver.sweepExclusive(t.Context(), now.Add(2*time.Second)))
 	if solver.exclusiveBlockUntil.Load() == 0 {
 		t.Fatal("runtime-recovered miss did not open exclusive breaker")
 	}
@@ -221,16 +210,14 @@ func TestExclusiveSettlementAtDeadlineDoesNotTripBreaker(t *testing.T) {
 	solver.metrics = metrics
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
-	}, now)
+	})
 
-	if err := solver.sweepExclusive(t.Context(), deadline.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, solver.sweepExclusive(t.Context(), deadline.Add(time.Second)))
 
 	if solver.exclusiveBlockUntil.Load() != 0 {
 		t.Fatal("in-time settlement tripped the exclusive breaker")
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if tracked, exists := solver.obligations[hash]; exists && tracked.resolvedAt.IsZero() {
 		t.Fatal("settled obligation remained pending")
 	}
 	reader := solver.reader.(*stateTestChainReader)
@@ -257,11 +244,9 @@ func TestAnyLateFillTripsExclusiveBreaker(t *testing.T) {
 	}
 	solver.trackExclusive(&resolvedOrder{
 		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
-	}, now)
+	})
 
-	if err := solver.sweepExclusive(t.Context(), deadline.Add(2*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	testcheck.NoError(t, solver.sweepExclusive(t.Context(), deadline.Add(2*time.Second)))
 
 	if solver.exclusiveBlockUntil.Load() == 0 {
 		t.Fatal("late fill did not trip the exclusive breaker")
@@ -287,11 +272,9 @@ func TestKnownUnfilledTerminalStatusesTripExclusiveBreaker(t *testing.T) {
 			}
 			solver.trackExclusive(&resolvedOrder{
 				Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(now.Add(time.Second).Unix()),
-			}, now)
+			})
 
-			if err := solver.sweepExclusive(t.Context(), now.Add(2*time.Second)); err != nil {
-				t.Fatal(err)
-			}
+			testcheck.NoError(t, solver.sweepExclusive(t.Context(), now.Add(2*time.Second)))
 			if solver.exclusiveBlockUntil.Load() == 0 {
 				t.Fatalf("terminal status %q did not trip the exclusive breaker", status)
 			}
@@ -320,7 +303,7 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 			}
 			solver.trackExclusive(&resolvedOrder{
 				Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
-			}, now)
+			})
 
 			if err := solver.sweepExclusive(t.Context(), deadline.Add(time.Second)); err == nil {
 				t.Fatal("unresolved terminal result was accepted")
@@ -328,7 +311,7 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 			if solver.exclusiveBlockUntil.Load() != 0 {
 				t.Fatal("unresolved terminal result tripped the exclusive breaker")
 			}
-			if _, pending := solver.exclusiveUntil[hash]; !pending {
+			if tracked, exists := solver.obligations[hash]; !exists || !tracked.resolvedAt.IsZero() {
 				t.Fatal("unresolved obligation was removed instead of retried")
 			}
 		})
@@ -341,20 +324,18 @@ func TestExclusiveTerminalRetentionCoversRecoveryLookback(t *testing.T) {
 	old := common.HexToHash("0x5678")
 	solver := &Solver{
 		cfg: &Config{Breaker: BreakerConfig{Window: 2 * time.Hour}},
-		exclusiveTerminal: map[common.Hash]time.Time{
-			recent: now.Add(-3 * time.Hour),
-			old:    now.Add(-5 * time.Hour),
+		obligations: map[common.Hash]trackedExclusive{
+			recent: {resolvedAt: now.Add(-3 * time.Hour)},
+			old:    {resolvedAt: now.Add(-5 * time.Hour)},
 		},
 	}
 
-	solver.stateMu.Lock()
-	solver.cleanupExclusiveLocked(now)
-	solver.stateMu.Unlock()
+	solver.cleanupOrderHistory(now)
 
-	if _, retained := solver.exclusiveTerminal[recent]; !retained {
+	if _, retained := solver.obligations[recent]; !retained {
 		t.Fatal("terminal outcome inside recovery lookback was discarded")
 	}
-	if _, retained := solver.exclusiveTerminal[old]; retained {
+	if _, retained := solver.obligations[old]; retained {
 		t.Fatal("terminal outcome older than recovery lookback was retained")
 	}
 }
@@ -365,11 +346,11 @@ func TestClearPendingReservationsInvalidatesQuoteState(t *testing.T) {
 	if !solver.capacity.Set(hash.Hex(), liquidlane.CapacityReservations{"capacity-1": big.NewInt(1)}) {
 		t.Fatal("set reservation")
 	}
-	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
+	solver.quotes.setForTest(&quoteState{expiresAt: time.Now().Add(time.Minute)})
 
 	solver.clearPendingReservations(hash)
 
-	if solver.quoteState.Load() != nil {
+	if solver.quotes.current() != nil {
 		t.Fatal("released capacity remained quotable through the old snapshot")
 	}
 	if solver.capacity.Len() != 0 {
@@ -381,15 +362,14 @@ func TestClaimTracksInflightAndBackoff(t *testing.T) {
 	now := time.Now()
 	hash := common.HexToHash("0x1")
 	solver := &Solver{
-		cfg:    &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}},
-		filled: make(map[common.Hash]time.Time), retryAt: make(map[common.Hash]time.Time),
-		inFlight: make(map[common.Hash]bool), attempts: make(map[common.Hash]int),
+		cfg:        &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}},
+		executions: make(map[common.Hash]executionState),
 	}
-	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
+	solver.quotes.setForTest(&quoteState{expiresAt: now.Add(time.Minute)})
 	if !solver.claim(hash, now) || solver.claim(hash, now) {
 		t.Fatal("claim did not enforce in-flight deduplication")
 	}
-	if solver.planningFills.Load() != 1 || solver.quoteState.Load() != nil {
+	if solver.quotes.planningCount() != 1 || solver.quotes.current() != nil {
 		t.Fatal("claimed order did not block quotes before fill planning")
 	}
 	solver.endFillPlanning()
@@ -398,4 +378,30 @@ func TestClaimTracksInflightAndBackoff(t *testing.T) {
 		t.Fatal("retry backoff was not enforced")
 	}
 	solver.endFillPlanning()
+}
+
+func TestExecutionCleanupRetainsActiveAndRecentOrders(t *testing.T) {
+	now := time.Now()
+	solver := &Solver{executions: make(map[common.Hash]executionState)}
+	cases := []struct {
+		phase executionPhase
+		age   time.Duration
+		keep  bool
+	}{
+		{executionClaimed, 2 * time.Hour, true},
+		{executionFilled, time.Hour, true},
+		{executionFilled, time.Hour + time.Nanosecond, false},
+		{executionRetry, time.Hour, true},
+		{executionRetry, time.Hour + time.Nanosecond, false},
+		{executionRetry, -time.Minute, true},
+	}
+	for i, tc := range cases {
+		solver.executions[common.Hash{31: byte(i)}] = executionState{phase: tc.phase, until: now.Add(-tc.age)}
+	}
+	solver.cleanupOrderHistory(now)
+	for i, tc := range cases {
+		if _, exists := solver.executions[common.Hash{31: byte(i)}]; exists != tc.keep {
+			t.Errorf("case %d: retained=%v, want %v", i, exists, tc.keep)
+		}
+	}
 }

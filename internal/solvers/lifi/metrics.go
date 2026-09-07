@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,80 +37,74 @@ type lifiMetrics struct {
 	fillAmounts        *liquidlane.FillMetrics
 }
 
-// lifiQuoteMetrics registers as one collector and holds the read lock across all child collectors,
-// so a scrape cannot interleave with Reset plus repopulation.
+// Quote reconciliation publishes immutable observations. A slow Prometheus
+// consumer cannot hold the quote worker's lock or observe half a refresh.
 type lifiQuoteMetrics struct {
-	mu            sync.RWMutex
-	activeQuotes  prometheus.Gauge
-	activeRanges  prometheus.Gauge
-	pairMaxInput  *prometheus.GaugeVec
-	lastRefreshAt prometheus.Gauge
+	current                                                 atomic.Pointer[quoteObservation]
+	activeQuotes, activeRanges, pairMaxInput, lastRefreshAt *prometheus.Desc
+}
+
+type quoteObservation struct {
+	quotes, ranges int
+	updatedAt      float64
+	pairs          []quotePairObservation
+}
+
+type quotePairObservation struct {
+	labels  []string
+	maximum float64
 }
 
 func newLIFIQuoteMetrics() *lifiQuoteMetrics {
 	return &lifiQuoteMetrics{
-		activeQuotes: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_active_quotes",
-			Help: "Process-local standing quote count from the last successful reconciliation; quotes may expire remotely after their TTL.",
-		}),
-		activeRanges: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_active_quote_ranges",
-			Help: "Process-local standing quote range count from the last successful reconciliation.",
-		}),
-		pairMaxInput: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "lifi_active_quote_max_input_atomic_units",
-			Help: "Largest currently advertised input amount per standing quote pair; alternatives are maxed, not summed.",
-		}, []string{"token_in", "token_out", "token_in_decimals", "token_out_decimals"}),
-		lastRefreshAt: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lifi_last_successful_refresh_timestamp",
-			Help: "Unix timestamp of the last successful standing-quote reconciliation.",
-		}),
+		activeQuotes:  prometheus.NewDesc("lifi_active_quotes", "Process-local standing quote count from the last successful reconciliation; quotes may expire remotely after their TTL.", nil, nil),
+		activeRanges:  prometheus.NewDesc("lifi_active_quote_ranges", "Process-local standing quote range count from the last successful reconciliation.", nil, nil),
+		pairMaxInput:  prometheus.NewDesc("lifi_active_quote_max_input_atomic_units", "Largest currently advertised input amount per standing quote pair; alternatives are maxed, not summed.", []string{"token_in", "token_out", "token_in_decimals", "token_out_decimals"}, nil),
+		lastRefreshAt: prometheus.NewDesc("lifi_last_successful_refresh_timestamp", "Unix timestamp of the last successful standing-quote reconciliation.", nil, nil),
 	}
 }
 
 func (m *lifiQuoteMetrics) Describe(ch chan<- *prometheus.Desc) {
-	m.activeQuotes.Describe(ch)
-	m.activeRanges.Describe(ch)
-	m.pairMaxInput.Describe(ch)
-	m.lastRefreshAt.Describe(ch)
+	for _, desc := range []*prometheus.Desc{m.activeQuotes, m.activeRanges, m.pairMaxInput, m.lastRefreshAt} {
+		ch <- desc
+	}
 }
 
 func (m *lifiQuoteMetrics) Collect(ch chan<- prometheus.Metric) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	m.activeQuotes.Collect(ch)
-	m.activeRanges.Collect(ch)
-	m.pairMaxInput.Collect(ch)
-	m.lastRefreshAt.Collect(ch)
+	observed := m.current.Load()
+	if observed == nil {
+		observed = &quoteObservation{}
+	}
+	ch <- prometheus.MustNewConstMetric(m.activeQuotes, prometheus.GaugeValue, float64(observed.quotes))
+	ch <- prometheus.MustNewConstMetric(m.activeRanges, prometheus.GaugeValue, float64(observed.ranges))
+	ch <- prometheus.MustNewConstMetric(m.lastRefreshAt, prometheus.GaugeValue, observed.updatedAt)
+	for _, pair := range observed.pairs {
+		ch <- prometheus.MustNewConstMetric(m.pairMaxInput, prometheus.GaugeValue, pair.maximum, pair.labels...)
+	}
 }
 
 func (m *lifiQuoteMetrics) observe(state *quoteState) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.pairMaxInput.Reset()
-	activeQuotes, activeRanges := 0, 0
+	observed := &quoteObservation{updatedAt: float64(time.Now().UnixNano()) / float64(time.Second)}
 	if state != nil {
-		activeQuotes = state.activeQuoteCount()
+		observed.quotes = state.activeQuoteCount()
 		for key, pair := range state.active {
 			maximum := new(big.Int)
 			for _, quote := range pair.quotes {
-				activeRanges += len(quote.Ranges)
-				for _, quoteRange := range quote.Ranges {
-					if quoteRange.MaxAmount != nil && quoteRange.MaxAmount.Cmp(maximum) > 0 {
-						maximum.Set(quoteRange.MaxAmount)
+				observed.ranges += len(quote.Ranges)
+				for _, interval := range quote.Ranges {
+					if interval.MaxAmount != nil && interval.MaxAmount.Cmp(maximum) > 0 {
+						maximum.Set(interval.MaxAmount)
 					}
 				}
 			}
 			value, _ := new(big.Float).SetInt(maximum).Float64()
-			m.pairMaxInput.WithLabelValues(
+			observed.pairs = append(observed.pairs, quotePairObservation{maximum: value, labels: []string{
 				strings.ToLower(key.fromAsset.Hex()), strings.ToLower(key.toAsset.Hex()),
 				strconv.Itoa(key.fromDecimals), strconv.Itoa(key.toDecimals),
-			).Set(value)
+			}})
 		}
 	}
-	m.activeQuotes.Set(float64(activeQuotes))
-	m.activeRanges.Set(float64(activeRanges))
-	m.lastRefreshAt.SetToCurrentTime()
+	m.current.Store(observed)
 }
 
 var orderProcessingOutcomes = [...]orderProcessingOutcome{
@@ -261,7 +257,8 @@ func newLIFIMetrics(
 			Event: "queue_drop", Outcomes: []string{string(queue)},
 		})
 	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	group := observability.NewMetricGroup("")
+	workflow, err := observability.NewWorkflowMetrics(group, Name, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -295,12 +292,9 @@ func newLIFIMetrics(
 		orderQueueMetrics: orderQueueMetrics,
 		fillAmounts:       liquidlane.NewFillMetrics(workflow),
 	}
-	for _, collector := range []prometheus.Collector{
-		m.quotes, m.orderFeedConnected, m.orderRecoveryReady, m.orderQueueMetrics,
-	} {
-		if err := reg.Register(collector); err != nil {
-			return nil, errors.Errorf("lifi: register metric: %w", err)
-		}
+	group.Add(m.quotes, m.orderFeedConnected, m.orderRecoveryReady, m.orderQueueMetrics)
+	if err := group.Publish(reg); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
