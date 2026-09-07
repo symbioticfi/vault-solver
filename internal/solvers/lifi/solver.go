@@ -64,9 +64,9 @@ type chainReader interface {
 	validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []route) error
 	validateGasTokens(routes []route) error
-	quoteSnapshots(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
+	quoteSnapshots(ctx context.Context, routes []route, executor common.Address) (quoteSnapshotSet, error)
 	fillSnapshots(
-		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
+		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int,
 	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
 	orderStatus(ctx context.Context, inputSettler common.Address, orderID common.Hash) (uint8, error)

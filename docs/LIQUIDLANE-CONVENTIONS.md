@@ -71,7 +71,19 @@ not independent liquidity.
 
 ## Reads and freshness
 
-LiquidLane reads always target RPC `latest` through ordinary `chain.Multicall`.
+LiquidLane reads always target RPC `latest` through `chain.Multicall` or `chain.MulticallWithTime`.
+Fixed block numbers/hashes are not used for these decision reads.
+
+Gas oracle reads batch `latestRoundData`, `decimals`, and Multicall3
+`getCurrentBlockTimestamp()` into one `latest` eth_call. Freshness is checked against that returned
+block timestamp, not an earlier header or the process clock. This requires no future-skew allowance
+and rejects timestamps ahead of the batch block. The shared oracle owns this time read for LI.FI,
+UniswapX, and OEV; callers supply protocol decision times separately.
+
+Set `gas.nativeMaxAge` and each `gas.tokenUsdFeeds[].maxAge` to the feed heartbeat plus a small,
+explicit publication margin. A heartbeat starts an update; inclusion can take additional time.
+For example, use `24h5m` for a 24h heartbeat when five minutes is acceptable for that deployment.
+Check each feed/network independently; the oracle still fails closed beyond the configured limit.
 
 - Do not use historical block tags or require archive-capable RPCs.
 - Batch related calls once per logical read. A single Multicall is internally coherent enough for current

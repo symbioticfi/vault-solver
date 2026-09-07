@@ -265,8 +265,9 @@ solvers:
       discounts: { baseUrl: "https://rfq.example", httpTimeout: 2s, minimumValidity: 15s }
       gas:
         nativeUsdFeed: "0x…"
-        nativeMaxAge: 1h
-        tokenUsdFeeds: [{ token: "0x…asset", feed: "0x…", maxAge: 1h }]
+        nativeMaxAge: 1h5m # example: 1h heartbeat + 5m publication margin
+        # Choose each feed's heartbeat plus a small publication margin.
+        tokenUsdFeeds: [{ token: "0x…asset", feed: "0x…", maxAge: 1h5m }]
       breaker: { maxFailures: 3, window: 5m }
       strategy: { name: default, config: { priceBufferBps: 20 } }
 ```

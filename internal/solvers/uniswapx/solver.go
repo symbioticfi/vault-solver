@@ -85,14 +85,13 @@ type chainReader interface {
 		routes []liquidlane.Route,
 	) ([]common.Address, error)
 	validateGasTokens(routes []liquidlane.Route) error
-	quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error)
+	quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address) (snapshot, error)
 	fillSnapshot(
 		ctx context.Context,
 		routes []liquidlane.Route,
 		executor common.Address,
 		tokenIn common.Address,
 		amountIn *big.Int,
-		now time.Time,
 	) (fillSnapshot, error)
 	physicalFillQuotes(
 		ctx context.Context,

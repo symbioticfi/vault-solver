@@ -132,7 +132,6 @@ type stateChainReader interface {
 	ReadGasPrices(
 		ctx context.Context,
 		adapter strategytypes.AdapterSnapshot,
-		observedAt time.Time,
 	) (*liquidlanegas.PriceSnapshot, error)
 }
 
@@ -161,7 +160,7 @@ func (r *coherentStateSource) Snapshot(ctx context.Context) (cachedState, error)
 	if err != nil {
 		return cachedState{}, errors.Errorf("read adapter snapshot %s: %w", r.adapter.Hex(), err)
 	}
-	gasPrices, err := r.reader.ReadGasPrices(ctx, adapter, time.Unix(int64(startHead.Time), 0))
+	gasPrices, err := r.reader.ReadGasPrices(ctx, adapter)
 	if err != nil {
 		return cachedState{}, errors.Errorf("read gas prices for loan %s: %w", adapter.Loan.Hex(), err)
 	}

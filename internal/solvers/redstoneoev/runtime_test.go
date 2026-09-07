@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -54,9 +53,8 @@ func TestCoherentStateSourceRequiresStableHeadIdentity(t *testing.T) {
 			if snapshot.GasLimit != start.GasLimit {
 				t.Fatalf("gas limit = %d, want %d", snapshot.GasLimit, start.GasLimit)
 			}
-			wantObservedAt := time.Unix(int64(start.Time), 0)
-			if !reader.gasObservedAt.Equal(wantObservedAt) {
-				t.Fatalf("gas observation time = %s, want %s", reader.gasObservedAt, wantObservedAt)
+			if reader.gasReads != 1 {
+				t.Fatalf("gas reads = %d, want 1", reader.gasReads)
 			}
 		})
 	}
@@ -90,7 +88,7 @@ func (r *sequenceHeadReader) HeaderByNumber(
 }
 
 type coherentStateReaderStub struct {
-	gasObservedAt time.Time
+	gasReads int
 }
 
 func (r *coherentStateReaderStub) ReadExecutorState(
@@ -112,9 +110,8 @@ func (r *coherentStateReaderStub) ReadAdapterSnapshot(
 func (r *coherentStateReaderStub) ReadGasPrices(
 	_ context.Context,
 	_ strategytypes.AdapterSnapshot,
-	observedAt time.Time,
 ) (*liquidlanegas.PriceSnapshot, error) {
-	r.gasObservedAt = observedAt
+	r.gasReads++
 	return nil, nil
 }
 

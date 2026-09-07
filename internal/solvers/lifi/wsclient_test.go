@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,10 +11,68 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestOrderFeedDisconnectLogLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		closeCode int
+		status    int
+		wantInfo  bool
+	}{
+		{name: "normal closure", closeCode: websocket.CloseNormalClosure, wantInfo: true},
+		{name: "going away", closeCode: websocket.CloseGoingAway, wantInfo: true},
+		{name: "unexpected EOF", wantInfo: true},
+		{name: "protocol error", closeCode: websocket.CloseProtocolError},
+		{name: "unauthorized", status: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upgrader := websocket.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				if tc.closeCode != 0 {
+					if err := conn.WriteControl(websocket.CloseMessage,
+						websocket.FormatCloseMessage(tc.closeCode, ""), time.Now().Add(time.Second)); err != nil {
+						t.Error(err)
+					}
+				}
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var event map[string]any
+			log := funcr.NewJSON(func(entry string) {
+				var fields map[string]any
+				if err := json.Unmarshal([]byte(entry), &fields); err != nil {
+					t.Error(err)
+				}
+				if fields["msg"] == "order feed disconnected; reconnecting" {
+					event = fields
+					cancel()
+				}
+			}, funcr.Options{})
+			feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", log)
+			_ = feed.run(ctx, orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
+			_, info := event["level"]
+			if event == nil || info != tc.wantInfo || event["error"] == nil || event["backoff"] != "1s" {
+				t.Fatalf("disconnect log = %v, want Info=%v with error and backoff", event, tc.wantInfo)
+			}
+		})
+	}
+}
 
 func TestPongFor(t *testing.T) {
 	tests := []struct {

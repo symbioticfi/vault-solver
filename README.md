@@ -127,7 +127,9 @@ resolved adapter loan asset and a readable initial oracle snapshot. Design, conf
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
 from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
-publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
+publishing quotes; while disconnected it suspends renewal and retries expiry of known curves.
+WebSocket closes 1000/1001/1006 are logged at Info with automatic reconnect; connection failures and
+other transport/protocol errors remain Error. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
@@ -497,6 +499,12 @@ UID is embedded. Namespace/pod selectors are query-driven over the standard Kube
 `namespace`, `pod`, `job`, and `instance`; no cluster namespace or pod-name pattern is embedded.
 
 ## Configuration
+
+For every configured Chainlink feed, set `gas.nativeMaxAge` / `gas.tokenUsdFeeds[].maxAge`
+to its heartbeat **plus a small publication margin**, for example `24h5m` for a 24h heartbeat.
+Choose the margin for the actual feed and network; setting the limit exactly to the heartbeat can
+briefly stop quote refreshes while the next update is published. This applies to LI.FI, UniswapX,
+and RedStone OEV.
 
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. Each solver has its

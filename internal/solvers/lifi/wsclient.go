@@ -57,7 +57,13 @@ func (f *orderFeed) run(
 		if connected {
 			backoff = initialWSBackoff
 		}
-		f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+		var closeErr *websocket.CloseError
+		if errors.As(err, &closeErr) && (closeErr.Code == websocket.CloseNormalClosure ||
+			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseAbnormalClosure) {
+			f.log.Info("order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
+		} else {
+			f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+		}
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():

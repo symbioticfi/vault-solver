@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -82,7 +81,6 @@ func (f *fakeGasReader) ValidateTokens(tokens []liquidlanegas.Token) error {
 func (f *fakeGasReader) Read(
 	_ context.Context,
 	tokens []liquidlanegas.Token,
-	_ time.Time,
 ) (*liquidlanegas.PriceSnapshot, error) {
 	f.tokens = tokens
 	return f.prices, nil
@@ -104,7 +102,7 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	gas := &fakeGasReader{prices: &liquidlanegas.PriceSnapshot{}}
 	reader := newReader(liquid, gas)
 
-	quote, err := reader.Quote(t.Context(), liquid.routes, common.Address{}, time.Now())
+	quote, err := reader.Quote(t.Context(), liquid.routes, common.Address{})
 	if err != nil {
 		t.Fatalf("quote: %v", err)
 	}
@@ -113,7 +111,7 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 		t.Fatalf("quote snapshot = %#v", quote)
 	}
 
-	fill, err := reader.Fill(t.Context(), liquid.routes, common.Address{}, common.Address{}, big.NewInt(1), time.Now())
+	fill, err := reader.Fill(t.Context(), liquid.routes, common.Address{}, common.Address{}, big.NewInt(1))
 	if err != nil {
 		t.Fatalf("fill: %v", err)
 	}
@@ -128,7 +126,7 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	if err := withoutGas.ValidateGasTokens(liquid.routes); err != nil {
 		t.Fatalf("validate gas tokens: %v", err)
 	}
-	quote, err = withoutGas.Quote(t.Context(), liquid.routes, common.Address{}, time.Now())
+	quote, err = withoutGas.Quote(t.Context(), liquid.routes, common.Address{})
 	if err != nil {
 		t.Fatalf("quote without gas: %v", err)
 	}
@@ -138,7 +136,6 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 		common.Address{},
 		common.Address{},
 		big.NewInt(1),
-		time.Now(),
 	)
 	if err != nil {
 		t.Fatalf("fill without gas: %v", err)

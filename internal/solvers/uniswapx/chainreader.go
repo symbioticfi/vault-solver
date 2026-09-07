@@ -117,8 +117,8 @@ func (r *reader) validateGasTokens(routes []liquidlane.Route) error {
 	return r.snapshots.ValidateGasTokens(routes)
 }
 
-func (r *reader) quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address, now time.Time) (snapshot, error) {
-	return r.snapshots.Quote(ctx, routes, executor, now)
+func (r *reader) quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address) (snapshot, error) {
+	return r.snapshots.Quote(ctx, routes, executor)
 }
 
 func (r *reader) fillSnapshot(
@@ -126,9 +126,8 @@ func (r *reader) fillSnapshot(
 	routes []liquidlane.Route,
 	executor, tokenIn common.Address,
 	amountIn *big.Int,
-	now time.Time,
 ) (fillSnapshot, error) {
-	return r.snapshots.Fill(ctx, routes, executor, tokenIn, amountIn, now)
+	return r.snapshots.Fill(ctx, routes, executor, tokenIn, amountIn)
 }
 
 func (r *reader) physicalFillQuotes(

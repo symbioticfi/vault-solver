@@ -81,7 +81,8 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
 # uses erc20.
 # Multicall3 is v2 like everything else — api/abi/Multicall3.json is hand-vendored (not a Foundry contract),
 # so it's in BINDINGS_V2 but not ABIS. The chain.Multicall transport packs/unpacks aggregate3 and does its
-# own eth_call.
+# own eth_call. getCurrentBlockTimestamp is sourced from
+# https://github.com/mds1/multicall3/blob/main/src/Multicall3.sol for time-sensitive latest reads.
 
 BIN     := bin/vault-solver
 PKG     := github.com/symbioticfi/vault-solver

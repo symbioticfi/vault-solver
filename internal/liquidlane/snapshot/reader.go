@@ -5,7 +5,6 @@ package snapshot
 import (
 	"context"
 	"math/big"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
@@ -55,7 +54,7 @@ type liquidReader interface {
 
 type gasReader interface {
 	ValidateTokens(tokens []liquidlanegas.Token) error
-	Read(ctx context.Context, tokens []liquidlanegas.Token, now time.Time) (*liquidlanegas.PriceSnapshot, error)
+	Read(ctx context.Context, tokens []liquidlanegas.Token) (*liquidlanegas.PriceSnapshot, error)
 }
 
 // Reader owns the protocol-neutral LiquidLane read path shared by solver integrations.
@@ -115,7 +114,6 @@ func (r *Reader) Quote(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	executor common.Address,
-	now time.Time,
 ) (Quote, error) {
 	physical, err := r.liquid.ReadInventory(ctx, routes)
 	if err != nil {
@@ -125,7 +123,7 @@ func (r *Reader) Quote(
 	if err != nil {
 		return Quote{}, err
 	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
+	gasSnapshot, prices, err := r.readGas(ctx, routes)
 	if err != nil {
 		return Quote{}, err
 	}
@@ -137,7 +135,6 @@ func (r *Reader) Fill(
 	routes []liquidlane.Route,
 	executor, tokenIn common.Address,
 	amountIn *big.Int,
-	now time.Time,
 ) (Fill, error) {
 	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
 	if err != nil {
@@ -157,7 +154,7 @@ func (r *Reader) Fill(
 			direct = append(direct, quote)
 		}
 	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes, now)
+	gasSnapshot, prices, err := r.readGas(ctx, routes)
 	if err != nil {
 		return Fill{}, err
 	}
@@ -167,7 +164,6 @@ func (r *Reader) Fill(
 func (r *Reader) readGas(
 	ctx context.Context,
 	routes []liquidlane.Route,
-	now time.Time,
 ) (*liquidlanegas.Snapshot, *liquidlanegas.PriceSnapshot, error) {
 	if r.gas == nil {
 		return nil, nil, nil
@@ -176,7 +172,7 @@ func (r *Reader) readGas(
 	if err != nil {
 		return nil, nil, err
 	}
-	prices, err := r.gas.Read(ctx, routeTokens(routes), now)
+	prices, err := r.gas.Read(ctx, routeTokens(routes))
 	if err != nil {
 		return nil, nil, err
 	}

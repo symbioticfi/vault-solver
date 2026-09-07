@@ -51,9 +51,8 @@ func (r *reader) quoteSnapshots(
 	ctx context.Context,
 	routes []route,
 	executorAddr common.Address,
-	chainTime time.Time,
 ) (quoteSnapshotSet, error) {
-	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
+	return r.snapshots.Quote(ctx, routes, executorAddr)
 }
 
 func (r *reader) fillSnapshots(
@@ -62,9 +61,8 @@ func (r *reader) fillSnapshots(
 	executorAddr common.Address,
 	tokenIn common.Address,
 	amountIn *big.Int,
-	chainTime time.Time,
 ) (fillSnapshotSet, error) {
-	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
+	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn)
 }
 
 func (r *reader) validateExecutor(
