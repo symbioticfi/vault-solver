@@ -14,7 +14,7 @@ require (
 	github.com/go-logr/zapr v1.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.22.0
@@ -61,5 +61,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 )
