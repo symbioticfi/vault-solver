@@ -10,10 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const (
-	outcomeLabel = "outcome"
-)
-
 const unspecifiedWorkflowStrategy = "unspecified"
 
 const (
@@ -99,38 +95,38 @@ func NewWorkflowMetrics(
 		"solver": solver, "strategy": strategy,
 	}, reg)
 	events := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_events_total",
 		Help:      "Bounded solver workflow events by integration-owned event and outcome.",
-	}, []string{eventLabel, outcomeLabel})
+	}, []string{"event", "outcome"})
 	lastEvents := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_last_event_timestamp",
 		Help:      "Unix timestamp of the last bounded solver workflow event by event and outcome.",
-	}, []string{eventLabel, outcomeLabel})
+	}, []string{"event", "outcome"})
 	amounts := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_amount_atomic_units_total",
 		Help:      "Solver workflow amounts in asset atomic units; assets and kinds must not be aggregated across unlike units.",
-	}, []string{eventLabel, "asset", "kind"})
+	}, []string{"event", "asset", "kind"})
 	states := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_observed_items",
 		Help:      "Items in the last complete solver workflow observation by integration-owned state view.",
 	}, []string{"view"})
 	lastStates := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_last_observation_timestamp",
 		Help:      "Unix timestamp of the last complete solver workflow observation by state view.",
 	}, []string{"view"})
 	operations := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "external_operation_duration_seconds",
 		Help:      "External operation duration by solver, allowlisted operation, and bounded outcome.",
 		Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-	}, []string{"operation", outcomeLabel})
+	}, []string{"operation", "outcome"})
 	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
+		Namespace: "solver_bot",
 		Name:      "workflow_dropped_observations_total",
 		Help:      "Workflow observations rejected because their event, amount, or state dimension was not declared.",
 	}, []string{"reason"})
@@ -174,7 +170,7 @@ func NewWorkflowMetrics(
 	for _, amount := range spec.Amounts {
 		for _, kind := range amount.Kinds {
 			key := workflowAmountKey{event: amount.Event, kind: kind}
-			bound := amounts.MustCurryWith(prometheus.Labels{eventLabel: amount.Event, "kind": kind})
+			bound := amounts.MustCurryWith(prometheus.Labels{"event": amount.Event, "kind": kind})
 			metrics.amounts[key] = bound
 			for _, asset := range amount.Assets {
 				bound.WithLabelValues(strings.ToLower(asset))
@@ -213,7 +209,7 @@ func validateWorkflowSpec(spec WorkflowSpec) error {
 			return errors.New("observability: workflow event outcomes are required")
 		}
 		for _, outcome := range event.Outcomes {
-			if err := add(eventLabel, event.Event, outcome); err != nil {
+			if err := add("event", event.Event, outcome); err != nil {
 				return err
 			}
 		}

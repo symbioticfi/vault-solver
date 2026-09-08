@@ -7,17 +7,12 @@ import (
 	"github.com/go-errors/errors"
 )
 
-const (
-	abiAddressType = "address"
-	abiUint256Type = "uint256"
-)
-
 var marketParamsArgs = abi.Arguments{{Type: mustTupleType([]abi.ArgumentMarshaling{
-	{Name: "loanToken", Type: abiAddressType},
-	{Name: "collateralToken", Type: abiAddressType},
-	{Name: "oracle", Type: abiAddressType},
-	{Name: "irm", Type: abiAddressType},
-	{Name: "lltv", Type: abiUint256Type},
+	{Name: "loanToken", Type: "address"},
+	{Name: "collateralToken", Type: "address"},
+	{Name: "oracle", Type: "address"},
+	{Name: "irm", Type: "address"},
+	{Name: "lltv", Type: "uint256"},
 })}}
 
 func mustTupleType(components []abi.ArgumentMarshaling) abi.Type {

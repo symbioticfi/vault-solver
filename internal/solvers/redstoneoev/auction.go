@@ -13,11 +13,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-const (
-	breakerReason       = "breaker"
-	strategyErrorReason = "strategy_error"
-)
-
 var weiPerEth = exp10(18)
 
 const (
@@ -294,7 +289,7 @@ func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() ti
 func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
 	now := nowFn()
 	if tripped, _ := s.breaker.tripped(now); tripped {
-		return bidDecision{skip: breakerReason}
+		return bidDecision{skip: "breaker"}
 	}
 	if skip := s.staleStateGate(a.ID, now); skip != "" {
 		return bidDecision{skip: skip}
@@ -313,7 +308,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
 		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
-		return bidDecision{skip: strategyErrorReason}
+		return bidDecision{skip: "strategy_error"}
 	}
 	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, inFlight, gasPrice))
 	if err != nil {
@@ -326,7 +321,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 			return bidDecision{skip: outcome}
 		}
 		s.log.Error(err, "strategy failed", "auction", a.ID)
-		return bidDecision{skip: strategyErrorReason}
+		return bidDecision{skip: "strategy_error"}
 	}
 	if err := checkExecutionEnvelope(out); err != nil {
 		s.log.Error(err, "execution envelope rejected", "auction", a.ID)

@@ -17,13 +17,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-const (
-	abiAddressType = "address"
-	orderHashField = "orderHash"
-	abiTupleType   = "tuple"
-	abiUint256Type = "uint256"
-)
-
 var (
 	errOrderNotFillable = errors.New("order is not fillable at current chain state")
 	errFillPreflight    = errors.New("fill preflight failed")
@@ -77,7 +70,7 @@ func (s *Solver) fillLoop(
 				s.log.V(1).Info(
 					"order fill deferred while transaction nonce lane is paused",
 					"source", order.Source,
-					orderHashField, order.Hash.Hex(),
+					"orderHash", order.Hash.Hex(),
 					"quoteId", order.QuoteID,
 				)
 				continue
@@ -85,7 +78,7 @@ func (s *Solver) fillLoop(
 			s.log.V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
-				orderHashField, order.Hash.Hex(),
+				"orderHash", order.Hash.Hex(),
 				"quoteId", order.QuoteID,
 			)
 			chainObservedAt := time.Now()
@@ -93,7 +86,7 @@ func (s *Solver) fillLoop(
 			if err != nil {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
-				s.log.Error(err, "order fill: read current chain time", orderHashField, order.Hash.Hex())
+				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
 				continue
 			}
 			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
@@ -105,10 +98,10 @@ func (s *Solver) fillLoop(
 				}
 				if errors.Is(err, errOrderNotFillable) {
 					s.log.V(1).Info("order not fillable yet", "source", order.Source,
-						orderHashField, order.Hash.Hex(), "quoteId", order.QuoteID)
+						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
 					continue
 				}
-				s.log.Error(err, "order fill preparation failed", orderHashField, order.Hash.Hex(), "quoteId", order.QuoteID)
+				s.log.Error(err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
 				continue
 			}
 			pending[order.Hash] = fill
@@ -151,7 +144,7 @@ func (s *Solver) startFill(
 		now,
 	)
 	if discountErr != nil {
-		s.log.Error(discountErr, "refresh fill discount routes", orderHashField, order.Hash.Hex())
+		s.log.Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
 	}
 	snapshot, err := s.reader.fillSnapshot(
 		ctx,
@@ -173,7 +166,7 @@ func (s *Solver) startFill(
 	s.log.V(1).Info(
 		"order fill snapshot loaded",
 		"source", order.Source,
-		orderHashField, order.Hash.Hex(),
+		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"routes", len(decisionRoutes),
 		"fillQuotes", len(snapshot.Direct),
@@ -198,7 +191,7 @@ func (s *Solver) startFill(
 		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
 		Trace: s.decisionTrace(
 			"source", order.Source,
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 		),
 	}
@@ -210,7 +203,7 @@ func (s *Solver) startFill(
 		s.log.V(1).Info(
 			"order fill strategy declined",
 			"source", order.Source,
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"fillQuotes", len(fillInput.Quotes),
 			"amountIn", order.AmountIn.String(),
@@ -249,7 +242,7 @@ func (s *Solver) startFill(
 	s.log.V(1).Info(
 		"order fill preflight succeeded",
 		"source", order.Source,
-		orderHashField, order.Hash.Hex(),
+		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"executor", order.Executor.Hex(),
 		"caller", s.solverAddress.Hex(),
@@ -275,7 +268,7 @@ func (s *Solver) startFill(
 	s.log.V(1).Info(
 		"order fill submitted",
 		"source", order.Source,
-		orderHashField, order.Hash.Hex(),
+		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"routes", len(plan.Routes),
 		"reservationDomains", len(reservations),
@@ -310,7 +303,7 @@ func (s *Solver) buildExecutorCalldata(
 		}
 		s.log.V(1).Info(
 			"selected discount route repricing",
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"discountId", route.DiscountID.Hex(),
 			"routeId", route.RouteID,
@@ -340,7 +333,7 @@ func (s *Solver) buildExecutorCalldata(
 		discountValidUntil = earlierTime(discountValidUntil, liquiddiscounts.ValidUntil(signed))
 		s.log.V(1).Info(
 			"selected discount resolved",
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"discountId", route.DiscountID.Hex(),
 			"routeId", route.RouteID,
@@ -400,7 +393,7 @@ func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan)
 		}
 		fields := []any{
 			"source", order.Source,
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"route", index,
 			"routeId", route.RouteID,
@@ -420,7 +413,7 @@ func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan)
 	s.log.V(1).Info(
 		"order fill plan selected",
 		"source", order.Source,
-		orderHashField, order.Hash.Hex(),
+		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"routes", len(plan.Routes),
 		"discountRoutes", discountRoutes,
@@ -437,7 +430,7 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 		s.log.V(1).Info(
 			"order fill was not admitted",
 			"source", order.Source,
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"error", completion.result.Err,
 		)
@@ -455,18 +448,18 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 		s.log.Error(
 			err,
 			"order fill failed",
-			"source", order.Source, orderHashField, order.Hash.Hex(), "quoteId", order.QuoteID,
+			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
 			"tx", completion.result.Hash.Hex(),
 		)
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
 		s.log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-			orderHashField, order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	} else {
 		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
 			"source", order.Source, "executor", order.Executor.Hex(),
-			orderHashField, order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)

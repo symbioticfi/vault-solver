@@ -159,7 +159,7 @@ func (s *Solver) pollSource(
 				}
 			}
 			s.log.V(1).Info("order rejected", "error", parseErr, "source", source,
-				orderHashField, entry.OrderHash, "quoteId", entry.QuoteID)
+				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
 		}
 		if s.trackExclusive(order, now) {
@@ -169,7 +169,7 @@ func (s *Solver) pollSource(
 			s.log.V(1).Info(
 				"order skipped: already handled or awaiting retry",
 				"source", source,
-				orderHashField, order.Hash.Hex(),
+				"orderHash", order.Hash.Hex(),
 				"quoteId", order.QuoteID,
 			)
 			continue
@@ -177,7 +177,7 @@ func (s *Solver) pollSource(
 		s.log.V(1).Info(
 			"order queued for fill",
 			"source", source,
-			orderHashField, order.Hash.Hex(),
+			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(),
 			"tokenOut", order.TokenOut.Hex(),
@@ -254,7 +254,7 @@ func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {
 	s.stateMu.Unlock()
 	s.log.V(1).Info(
 		"order retry scheduled",
-		orderHashField, hash.Hex(),
+		"orderHash", hash.Hex(),
 		"failed", failed,
 		"attempt", attempt,
 		"backoff", backoff,

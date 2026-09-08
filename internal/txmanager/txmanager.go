@@ -703,7 +703,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 		// Obsolescence is only a liveness optimization. The solver already validated the call,
 		// and execution-time contracts remain authoritative, so an unknown check keeps it alive.
 		m.requestLog(req).Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
-			transactionLabel, req.Label)
+			"label", req.Label)
 	} else if obsolete {
 		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
 	}
@@ -714,7 +714,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	}
 	m.requestLog(req).V(1).Info(
 		"transaction prepared",
-		transactionLabel, req.Label,
+		"label", req.Label,
 		"to", req.To.Hex(),
 		"value", value.String(),
 		"calldataBytes", len(req.Data),
@@ -739,12 +739,12 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	if broadcastUncertain {
 		m.requestLog(req).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
-			transactionLabel, req.Label, "hash", hash.Hex(), "nonce", nonce)
+			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	} else if sendErr != nil {
 		m.requestLog(req).Info("transaction already known by write RPC",
-			transactionLabel, req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
+			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
 	} else {
-		m.requestLog(req).Info("sent", transactionLabel, req.Label, "hash", hash.Hex(), "nonce", nonce)
+		m.requestLog(req).Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
@@ -767,7 +767,7 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
 	if errors.Is(outcome.Err, errShutdownTimeout) {
 		pending.log.Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"nonce", pending.nonce,
 			"hashes", attemptHashStrings(pending.attempts),
 		)
@@ -819,7 +819,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		}
 		cancelling, cancelRequested, timeoutC = true, nil, nil
 		pending.log.Info("pending transaction cancellation requested",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", pending.originalHash.Hex(),
 			"nonce", pending.nonce,
 			"reason", reason,
@@ -849,14 +849,14 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			if err != nil {
 				pending.obsolescenceReads.failed(pending.log, err,
 					"pending transaction obsolescence check unavailable; retaining lifecycle",
-					transactionLabel, pending.req.Label,
+					"label", pending.req.Label,
 					"hash", pending.originalHash.Hex(),
 					"nonce", pending.nonce,
 				)
 				continue
 			}
 			pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
-				transactionLabel, pending.req.Label, "nonce", pending.nonce)
+				"label", pending.req.Label, "nonce", pending.nonce)
 			if !obsolete {
 				continue
 			}
@@ -893,7 +893,7 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 
 func (m *Manager) receiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
 	pending.receiptReads.failed(pending.log, err, "pending transaction receipt unavailable",
-		transactionLabel, pending.req.Label,
+		"label", pending.req.Label,
 		"hash", attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
 		"nonce", pending.nonce,
@@ -904,7 +904,7 @@ func (m *Manager) receiptReadFailed(pending *pendingTransaction, attempt txAttem
 
 func (m *Manager) receiptReadsRecovered(pending *pendingTransaction) {
 	pending.receiptReads.recovered(pending.log, "pending transaction receipt reads recovered",
-		transactionLabel, pending.req.Label, "nonce", pending.nonce)
+		"label", pending.req.Label, "nonce", pending.nonce)
 }
 
 func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
@@ -944,7 +944,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		m.receiptReadsRecovered(pending)
 		if err := validateReceipt(attempt.hash, receipt); err != nil {
 			pending.log.Error(err, "invalid pending transaction receipt",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)
@@ -954,7 +954,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
 			if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
 				pending.log.Error(err, "owned receipt cannot reconcile nonce conflict",
-					transactionLabel, pending.req.Label,
+					"label", pending.req.Label,
 					"hash", attempt.hash.Hex(),
 					"nonce", pending.nonce,
 				)
@@ -971,7 +971,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 				m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
 			}
 			pending.log.Info("transaction inclusion reorged; resuming pending lifecycle",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)
@@ -983,7 +983,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 				revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
 			}
 			pending.log.Error(revertErr, "transaction reverted",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 				"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value),
@@ -1015,7 +1015,7 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		}
 		pending.log.V(1).Info(
 			"transaction confirmed",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
 			"blockNumber", optionalBigString(receipt.BlockNumber),
@@ -1057,7 +1057,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			return cancellation
 		}
 		pending.log.Error(err, "cannot replace pending transaction",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
@@ -1081,7 +1081,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	cancelSend()
 	if signed == nil {
 		pending.log.Error(sendErr, "pending transaction replacement rejected",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
@@ -1099,7 +1099,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	if broadcastUncertain {
 		pending.log.Error(sendErr, "replacement broadcast uncertain; tracking signed hash",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", hash.Hex(),
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
@@ -1108,7 +1108,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	if sendErr != nil {
 		pending.log.Info("replacement already known by write RPC",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", hash.Hex(),
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
@@ -1122,7 +1122,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	}
 	m.metrics.replacement(pending.req.Label, kind)
 	pending.log.Info("pending transaction replaced",
-		transactionLabel, pending.req.Label,
+		"label", pending.req.Label,
 		"hash", hash.Hex(),
 		"nonce", pending.nonce,
 		"cancellation", cancellation,
@@ -1156,14 +1156,14 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	switch {
 	case err == nil:
 		pending.log.Info("uncertain transaction rebroadcast",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
 		)
 	case known:
 		pending.log.Info("uncertain transaction already known by write RPC",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
@@ -1171,7 +1171,7 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 		)
 	default:
 		pending.log.Error(err, "uncertain transaction exact rebroadcast failed; replacement deferred",
-			transactionLabel, pending.req.Label,
+			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
 			"reason", "ambiguous-broadcast",
@@ -1205,14 +1205,14 @@ func (m *Manager) rebroadcastLatestAttempt(
 		}
 		if err != nil {
 			pending.log.Error(err, "capped transaction rebroadcast failed",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 				"cancellation", cancellation,
 			)
 		} else {
 			pending.log.Info("capped transaction rebroadcast",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 				"cancellation", cancellation,
@@ -1451,7 +1451,7 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
 		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
 		m.requestLog(req).Error(err, "gas estimation failed",
-			transactionLabel, req.Label,
+			"label", req.Label,
 			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
 		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
@@ -1542,7 +1542,7 @@ func (m *Manager) hasCanonicalTrackedReceipt(ctx context.Context, pending *pendi
 		}
 		if err != nil {
 			pending.log.Error(err, "tracked receipt unavailable during nonce reconciliation",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)
@@ -1550,7 +1550,7 @@ func (m *Manager) hasCanonicalTrackedReceipt(ctx context.Context, pending *pendi
 		}
 		if err := validateReceipt(attempt.hash, receipt); err != nil {
 			pending.log.Error(err, "invalid tracked receipt during nonce reconciliation",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)
@@ -1558,7 +1558,7 @@ func (m *Manager) hasCanonicalTrackedReceipt(ctx context.Context, pending *pendi
 		}
 		if err := m.confirmCanonicalReceipt(lookupCtx, receipt); err != nil {
 			pending.log.Error(err, "tracked receipt is not canonically visible during nonce reconciliation",
-				transactionLabel, pending.req.Label,
+				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)

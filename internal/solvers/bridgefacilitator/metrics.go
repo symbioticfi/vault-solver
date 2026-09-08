@@ -12,8 +12,6 @@ import (
 )
 
 const (
-	successOutcome = "success"
-
 	threeFStateOffers             = "offers"
 	threeFStateActiveRequests     = "active_requests"
 	threeFStateRedeemable         = "redeemable"
@@ -51,8 +49,8 @@ func newThreeFMetrics(reg prometheus.Registerer, strategyName string) (*threeFMe
 			activeRequestRefreshOperation, redeemableRefreshOperation,
 		},
 		Events: []observability.WorkflowEventSpec{
-			{Event: threeFEventOffer, Outcomes: []string{successOutcome, "error"}},
-			{Event: threeFEventRedeem, Outcomes: []string{successOutcome}},
+			{Event: threeFEventOffer, Outcomes: []string{"success", "error"}},
+			{Event: threeFEventRedeem, Outcomes: []string{"success"}},
 		},
 		Amounts: []observability.WorkflowAmountSpec{{
 			Event: threeFEventOffer, Kinds: []string{threeFOfferPrincipal, threeFOfferExpectedYield},
@@ -93,7 +91,7 @@ func (s *Solver) observeOfferSubmission(result string) {
 	if s.metrics == nil {
 		return
 	}
-	if result != successOutcome {
+	if result != "success" {
 		result = "error"
 	}
 	s.metrics.workflow.ObserveEventAt(threeFEventOffer, result, 1, s.metrics.now())
@@ -103,7 +101,7 @@ func (s *Solver) observeSubmittedOffer(token common.Address, principal, expected
 	if s.metrics == nil {
 		return
 	}
-	s.observeOfferSubmission(successOutcome)
+	s.observeOfferSubmission("success")
 	if token == (common.Address{}) {
 		return
 	}
@@ -114,7 +112,7 @@ func (s *Solver) observeSubmittedOffer(token common.Address, principal, expected
 func (s *Solver) observeRedeemedRequests(count int) {
 	if s.metrics != nil && count > 0 {
 		s.metrics.workflow.ObserveEventAt(
-			threeFEventRedeem, successOutcome, float64(count), s.metrics.now(),
+			threeFEventRedeem, "success", float64(count), s.metrics.now(),
 		)
 	}
 }

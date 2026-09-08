@@ -21,8 +21,8 @@ const (
 
 var (
 	auctionDecisionOutcomes = [...]string{
-		breakerReason, "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
-		"sign_error", "signer_locked", "state_unknown", strategyErrorReason, "strategy_invalid", "too_late",
+		"breaker", "context_canceled", "duplicate", "enqueued", "feed_ignored", "send_dropped",
+		"sign_error", "signer_locked", "state_unknown", "strategy_error", "strategy_invalid", "too_late",
 		"would_bid", "bid_cap", "deposit_low", "empty_auction_id", "executor_state_stale",
 		"no_legs", "gas_unprofitable", "stale_epoch", "stale_state", "in_flight", "callback_balance", "strategy_skip",
 	}
@@ -62,7 +62,7 @@ func newMetrics(
 		Events: []observability.WorkflowEventSpec{
 			{Event: "auction", Outcomes: auctionDecisionOutcomes[:]},
 			{Event: "bid", Outcomes: append(bidLifecycleStages[:], oevBidUnresolved)},
-			{Event: breakerReason, Outcomes: []string{"failure"}},
+			{Event: "breaker", Outcomes: []string{"failure"}},
 			{Event: "state_refresh", Outcomes: []string{"success"}},
 		},
 		Amounts: []observability.WorkflowAmountSpec{{
@@ -149,7 +149,7 @@ func (m *metrics) wouldBid(amount *big.Int) {
 
 func (m *metrics) breakerFailure() {
 	if m != nil {
-		m.workflow.ObserveEventAt(breakerReason, "failure", 1, m.now())
+		m.workflow.ObserveEventAt("breaker", "failure", 1, m.now())
 	}
 }
 

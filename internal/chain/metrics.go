@@ -9,12 +9,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const (
-	rpcRoleLabel = "role"
-
-	outcomeLabel = "outcome"
-)
-
 type rpcOutcome string
 
 const (
@@ -29,7 +23,9 @@ const (
 	rpcOutcomeDecodeError      rpcOutcome = "decode_error"
 	rpcOutcomeContextCanceled  rpcOutcome = "context_canceled"
 	rpcOutcomeDeadlineExceeded rpcOutcome = "deadline_exceeded"
+)
 
+const (
 	rpcRoleRead   = "read"
 	rpcRoleWrite  = "write"
 	rpcRoleShared = "shared"
@@ -54,42 +50,42 @@ func NewRPCMetrics(reg prometheus.Registerer) (*RPCMetrics, error) {
 	}
 	m := &RPCMetrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "requests_total",
 			Help:      "Logical HTTP JSON-RPC requests by endpoint role, bounded method, and outcome.",
-		}, []string{rpcRoleLabel, methodLabel, outcomeLabel}),
+		}, []string{"role", "method", "outcome"}),
 		attempts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "attempts_total",
 			Help:      "HTTP JSON-RPC endpoint attempts; endpoint is a role-local ordinal, never a URL.",
-		}, []string{rpcRoleLabel, "endpoint", methodLabel, outcomeLabel}),
+		}, []string{"role", "endpoint", "method", "outcome"}),
 		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "inflight",
 			Help:      "Logical HTTP JSON-RPC requests whose response body has not completed.",
-		}, []string{rpcRoleLabel}),
+		}, []string{"role"}),
 		requestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "request_duration_seconds",
 			Help:      "Logical HTTP JSON-RPC duration through response-body consumption.",
 			Buckets:   []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60},
-		}, []string{rpcRoleLabel, methodLabel, outcomeLabel}),
+		}, []string{"role", "method", "outcome"}),
 		lastSuccessfulRequest: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "last_successful_request_timestamp",
 			Help:      "Unix timestamp of the last successful logical HTTP JSON-RPC request by role.",
-		}, []string{rpcRoleLabel}),
+		}, []string{"role"}),
 		lastSuccessfulAttempt: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace,
-			Subsystem: rpcMetricsSubsystem,
+			Namespace: "solver_bot",
+			Subsystem: "rpc",
 			Name:      "last_successful_attempt_timestamp",
 			Help:      "Unix timestamp of the last successful HTTP JSON-RPC attempt by role and endpoint ordinal.",
-		}, []string{rpcRoleLabel, "endpoint"}),
+		}, []string{"role", "endpoint"}),
 		now: time.Now,
 	}
 	for _, collector := range []prometheus.Collector{

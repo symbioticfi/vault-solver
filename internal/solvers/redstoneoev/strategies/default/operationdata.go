@@ -28,13 +28,13 @@ var (
 	callbackLegArrayArgs = abi.Arguments{{Type: mustCallbackLegArrayType()}}
 	authDigestArgs       = abi.Arguments{
 		{Type: mustType("bytes32")},
-		{Type: mustType(abiUint256Type)},
-		{Type: mustType(abiAddressType)},
-		{Type: mustType(abiAddressType)},
+		{Type: mustType("uint256")},
+		{Type: mustType("address")},
+		{Type: mustType("address")},
 		{Type: mustType("bytes32")},
-		{Type: mustType(abiUint256Type)},
-		{Type: mustType(abiUint256Type)},
-		{Type: mustType(abiUint256Type)},
+		{Type: mustType("uint256")},
+		{Type: mustType("uint256")},
+		{Type: mustType("uint256")},
 		{Type: mustType("bytes32")},
 	}
 	authDomain = crypto.Keccak256Hash([]byte("SYMBIOTIC_OEV_AUTH_V1"))
@@ -115,9 +115,9 @@ func mustOperationDataType() abi.Type {
 	t, err := abi.NewType("tuple", "", []abi.ArgumentMarshaling{
 		{Name: "auth", Type: "tuple", Components: []abi.ArgumentMarshaling{
 			{Name: "auctionKey", Type: "bytes32"},
-			{Name: "bidAmount", Type: abiUint256Type},
-			{Name: "minBundleProfit", Type: abiUint256Type},
-			{Name: "deadline", Type: abiUint256Type},
+			{Name: "bidAmount", Type: "uint256"},
+			{Name: "minBundleProfit", Type: "uint256"},
+			{Name: "deadline", Type: "uint256"},
 		}},
 		{Name: "legs", Type: "tuple[]", Components: callbackLegComponents()},
 		{Name: "authSig", Type: "bytes"},
@@ -139,9 +139,9 @@ func mustCallbackLegArrayType() abi.Type {
 func callbackLegComponents() []abi.ArgumentMarshaling {
 	return []abi.ArgumentMarshaling{
 		{Name: "marketId", Type: "bytes32"},
-		{Name: "borrower", Type: abiAddressType},
-		{Name: "maxSeizeAssets", Type: abiUint256Type},
-		{Name: "minProfit", Type: abiUint256Type},
+		{Name: "borrower", Type: "address"},
+		{Name: "maxSeizeAssets", Type: "uint256"},
+		{Name: "minProfit", Type: "uint256"},
 	}
 }
 

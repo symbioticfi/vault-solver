@@ -11,10 +11,6 @@ import (
 )
 
 const (
-	outcomeLabel = "outcome"
-
-	transactionLabel = "label"
-
 	metricsNamespace = "solver_bot"
 	metricsSubsystem = "txmanager"
 
@@ -77,58 +73,58 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Subsystem: metricsSubsystem,
 			Name:      "requests_total",
 			Help:      "Logical transaction requests by terminal outcome.",
-		}, []string{transactionLabel, outcomeLabel}),
+		}, []string{"label", "outcome"}),
 		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "inflight",
 			Help:      "Accepted transaction requests awaiting a terminal result.",
-		}, []string{transactionLabel}),
+		}, []string{"label"}),
 		gasUsed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "gas_used_total",
 			Help:      "Gas used by mined transaction receipts.",
-		}, []string{transactionLabel, outcomeLabel}),
+		}, []string{"label", "outcome"}),
 		feePaidWei: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "fee_paid_wei_total",
 			Help:      "Actual transaction fees paid from mined receipt gas usage and effective gas price.",
-		}, []string{transactionLabel, outcomeLabel}),
+		}, []string{"label", "outcome"}),
 		replacements: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "replacements_total",
 			Help:      "Successfully broadcast transaction replacements and cancellations.",
-		}, []string{transactionLabel, "kind"}),
+		}, []string{"label", "kind"}),
 		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "admission_rejections_total",
 			Help:      "Transaction requests rejected before the worker lifecycle by a bounded reason.",
-		}, []string{transactionLabel, "reason"}),
+		}, []string{"label", "reason"}),
 		admissionWait: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "admission_wait_duration_seconds",
 			Help:      "Time from submission until worker lifecycle admission or a terminal pre-admission outcome; busy TrySend probes are excluded.",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300},
-		}, []string{transactionLabel, outcomeLabel}),
+		}, []string{"label", "outcome"}),
 		lifecycleDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "lifecycle_duration_seconds",
 			Help:      "Worker lifecycle duration from admission to terminal outcome; nonce-lane wait is excluded.",
 			Buckets:   []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-		}, []string{transactionLabel, outcomeLabel}),
+		}, []string{"label", "outcome"}),
 		phaseDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "phase_duration_seconds",
 			Help:      "Cumulative time spent in observed prebroadcast, pending, and confirming phases by terminal outcome.",
 			Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
-		}, []string{transactionLabel, "phase", outcomeLabel}),
+		}, []string{"label", "phase", "outcome"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.requests,
@@ -183,25 +179,25 @@ func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.
 	}
 	now := time.Now()
 	observation.phaseDurations[observation.phase] += now.Sub(observation.phaseStarted)
-	outcomeValue := string(outcome)
-	observation.metrics.requests.WithLabelValues(observation.label, outcomeValue).Inc()
+	outcomeLabel := string(outcome)
+	observation.metrics.requests.WithLabelValues(observation.label, outcomeLabel).Inc()
 	observation.metrics.inflight.WithLabelValues(observation.label).Dec()
-	observation.metrics.lifecycleDuration.WithLabelValues(observation.label, outcomeValue).
+	observation.metrics.lifecycleDuration.WithLabelValues(observation.label, outcomeLabel).
 		Observe(now.Sub(observation.started).Seconds())
 	for phase := range lifecyclePhaseCount {
 		if observation.phaseObserved[phase] {
 			observation.metrics.phaseDuration.WithLabelValues(
 				observation.label,
 				phase.label(),
-				outcomeValue,
+				outcomeLabel,
 			).Observe(observation.phaseDurations[phase].Seconds())
 		}
 	}
 	if receipt != nil {
-		observation.metrics.gasUsed.WithLabelValues(observation.label, outcomeValue).
+		observation.metrics.gasUsed.WithLabelValues(observation.label, outcomeLabel).
 			Add(float64(receipt.GasUsed))
 		if fee, ok := receiptFeePaidWei(receipt); ok {
-			observation.metrics.feePaidWei.WithLabelValues(observation.label, outcomeValue).Add(fee)
+			observation.metrics.feePaidWei.WithLabelValues(observation.label, outcomeLabel).Add(fee)
 		}
 	}
 }

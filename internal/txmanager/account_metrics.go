@@ -66,7 +66,7 @@ func newAccountMetrics() *accountMetrics {
 		refreshesDesc: newAccountMetricDesc(
 			"account_refreshes_total",
 			"Periodic complete signer balance and nonce snapshots by bounded outcome.",
-			outcomeLabel,
+			"outcome",
 		),
 		lastRefreshDesc: newAccountMetricDesc(
 			"account_last_successful_refresh_timestamp",

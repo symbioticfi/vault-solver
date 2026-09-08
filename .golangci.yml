@@ -28,7 +28,6 @@ linters:
     - gocheckcompilerdirectives
     - gochecknoinits
     - gochecksumtype
-    - goconst
     - gocritic
     #    - godox
     - gomoddirectives
@@ -242,7 +241,6 @@ linters:
       - std-error-handling
     rules:
       - linters:
-          - goconst
           - wrapcheck
           - prealloc
           - modernize

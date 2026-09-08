@@ -12,12 +12,6 @@ import (
 )
 
 const (
-	solverMetricLabel = "solver"
-
-	outcomeLabel = "outcome"
-
-	eventLabel = "event"
-
 	externalOperationFamily = "solver_bot_external_operation_duration_seconds"
 	workflowEventsFamily    = "solver_bot_workflow_events_total"
 	workflowLastEventFamily = "solver_bot_workflow_last_event_timestamp"
@@ -143,7 +137,7 @@ func RequireWorkflowEvent(
 	count, timestamp float64,
 ) {
 	tb.Helper()
-	labels := map[string]string{solverMetricLabel: solver, eventLabel: event, outcomeLabel: outcome}
+	labels := map[string]string{"solver": solver, "event": event, "outcome": outcome}
 	RequireWorkflowEventCount(tb, gatherer, solver, event, outcome, count)
 	RequireFamilyValue(tb, gatherer, workflowLastEventFamily, labels, timestamp)
 }
@@ -157,7 +151,7 @@ func RequireWorkflowEventCount(
 ) {
 	tb.Helper()
 	RequireFamilyValue(tb, gatherer, workflowEventsFamily, map[string]string{
-		solverMetricLabel: solver, eventLabel: event, outcomeLabel: outcome,
+		"solver": solver, "event": event, "outcome": outcome,
 	}, count)
 }
 
@@ -170,7 +164,7 @@ func RequireWorkflowAmount(
 ) {
 	tb.Helper()
 	RequireFamilyValue(tb, gatherer, workflowAmountsFamily, map[string]string{
-		solverMetricLabel: solver, eventLabel: event, "asset": strings.ToLower(asset), "kind": kind,
+		"solver": solver, "event": event, "asset": strings.ToLower(asset), "kind": kind,
 	}, want)
 }
 
@@ -182,7 +176,7 @@ func RequireWorkflowState(
 	count, timestamp float64,
 ) {
 	tb.Helper()
-	labels := map[string]string{solverMetricLabel: solver, "view": view}
+	labels := map[string]string{"solver": solver, "view": view}
 	RequireFamilyValue(tb, gatherer, workflowItemsFamily, labels, count)
 	RequireFamilyValue(tb, gatherer, workflowLastStateFamily, labels, timestamp)
 }
@@ -206,7 +200,7 @@ func RequireExternalOperationCount(
 		}
 		for _, metric := range family.GetMetric() {
 			if !hasLabels(metric, map[string]string{
-				solverMetricLabel: solver, "operation": operation, outcomeLabel: outcome,
+				"solver": solver, "operation": operation, "outcome": outcome,
 			}) {
 				continue
 			}

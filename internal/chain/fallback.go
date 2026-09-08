@@ -14,13 +14,6 @@ import (
 	"github.com/go-logr/logr"
 )
 
-const (
-	methodLabel         = "method"
-	rpcMetricsSubsystem = "rpc"
-	metricsNamespace    = "solver_bot"
-	unknownRPCMethod    = "unknown"
-)
-
 // rpcAttemptTimeout bounds a single endpoint attempt so a hung endpoint fails over instead of
 // blocking. Short caller deadlines are divided across the remaining endpoints.
 const (
@@ -62,7 +55,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		body = b
 	}
 	request := inspectRPCRequest(body)
-	method := unknownRPCMethod
+	method := "unknown"
 	if t.metrics != nil {
 		method = request.boundedMethod
 	}
@@ -123,7 +116,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 					}
 					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 					t.log.V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), methodLabel, nullFallbackMethod, "err", lastErr.Error())
+						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
 					continue
 				}
 				if t.metrics != nil {
@@ -181,7 +174,7 @@ type rpcRequestInfo struct {
 func inspectRPCRequest(body []byte) rpcRequestInfo {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return rpcRequestInfo{boundedMethod: unknownRPCMethod}
+		return rpcRequestInfo{boundedMethod: "unknown"}
 	}
 	if trimmed[0] == '[' {
 		return rpcRequestInfo{boundedMethod: "batch"}
@@ -192,7 +185,7 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		Method  string          `json:"method"`
 	}
 	if err := json.Unmarshal(trimmed, &request); err != nil || request.Method == "" {
-		return rpcRequestInfo{boundedMethod: unknownRPCMethod}
+		return rpcRequestInfo{boundedMethod: "unknown"}
 	}
 	info := rpcRequestInfo{
 		boundedMethod: boundedRPCMethodName(request.Method),
