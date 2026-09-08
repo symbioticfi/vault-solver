@@ -113,6 +113,10 @@ func (r *reader) unauthorizedAdapters(
 	return liquidlane.UnauthorizedAdapters(routes, authorized), nil
 }
 
+func (r *reader) validateGasOracles(ctx context.Context, routes []liquidlane.Route) error {
+	return r.snapshots.ValidateGasOracles(ctx, routes)
+}
+
 func (r *reader) validateGasTokens(routes []liquidlane.Route) error {
 	return r.snapshots.ValidateGasTokens(routes)
 }

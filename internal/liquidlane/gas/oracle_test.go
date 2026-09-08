@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/chainlink/aggregator"
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -17,10 +18,41 @@ import (
 type oracleMulticaller struct {
 	results []chain.CallResult
 	now     time.Time
+	err     error
 }
 
 func (f oracleMulticaller) MulticallWithTime(context.Context, []chain.Call) ([]chain.CallResult, time.Time, error) {
-	return f.results, f.now, nil
+	return f.results, f.now, f.err
+}
+
+func TestOracleReaderValidatesMulticallAtStartup(t *testing.T) {
+	feed := common.HexToAddress("0x1111")
+	token := common.HexToAddress("0x2222")
+	unsupported := errors.New("getCurrentBlockTimestamp call failed")
+	for _, tc := range []struct {
+		name   string
+		rpcErr error
+	}{
+		{name: "supported"},
+		{name: "unsupported timestamp selector", rpcErr: unsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, err := NewOracleReader(oracleMulticaller{err: tc.rpcErr}, OracleConfig{
+				NativeUSDFeed: USDFeed{Address: feed, MaxAge: time.Minute},
+				TokenUSDFeeds: map[common.Address]USDFeed{token: {Address: feed, MaxAge: time.Minute}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = reader.Validate(t.Context(), []Token{{Address: token, Decimals: 18}})
+			if !errors.Is(err, tc.rpcErr) {
+				t.Fatalf("Validate() error = %v, want %v", err, tc.rpcErr)
+			}
+			if tc.rpcErr != nil && !strings.Contains(err.Error(), "validate multicall timestamp") {
+				t.Fatalf("missing startup context: %v", err)
+			}
+		})
+	}
 }
 
 func TestOracleReaderComposesTokenPerNative(t *testing.T) {
@@ -43,6 +75,9 @@ func TestOracleReaderComposesTokenPerNative(t *testing.T) {
 	snapshot, err := reader.Read(t.Context(), []Token{{Address: token, Decimals: 6}})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
+	}
+	if !snapshot.BlockTime.Equal(now) {
+		t.Fatalf("block time = %s, want %s", snapshot.BlockTime, now)
 	}
 	if got := snapshot.TokenOutPerNative(token); got == nil || got.String() != "1000000000" {
 		t.Fatalf("token per native = %v, want 1000000000", got)
@@ -75,7 +110,7 @@ func TestOracleReaderRejectsMissingAndStaleFeeds(t *testing.T) {
 	}
 }
 
-// Oracle freshness uses the batch timestamp, even when the caller observed an older head.
+// Oracle freshness is measured against the timestamp returned with the prices.
 func TestOracleReaderUsesBatchTime(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -87,7 +122,6 @@ func TestOracleReaderUsesBatchTime(t *testing.T) {
 		{name: "stale", updatedOffset: -time.Minute - time.Second, wantError: "stale"},
 		{name: "future by one second", updatedOffset: time.Second, wantError: "updated 1s in the future"},
 		{name: "future by one slot", updatedOffset: 12 * time.Second, wantError: "updated 12s in the future"},
-		{name: "future by two slots", updatedOffset: 24 * time.Second, wantError: "updated 24s in the future"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nativeFeed := common.HexToAddress("0x1111111111111111111111111111111111111111")

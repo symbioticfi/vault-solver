@@ -54,6 +54,10 @@ func (r *executionTestReader) resolveRoutes(
 
 func (r *executionTestReader) validateGasTokens([]liquidlane.Route) error { return nil }
 
+func (r *executionTestReader) validateGasOracles(context.Context, []liquidlane.Route) error {
+	return nil
+}
+
 func (r *executionTestReader) latestBlockTime(context.Context) (time.Time, error) {
 	r.latestBlockReads++
 	return r.now, nil

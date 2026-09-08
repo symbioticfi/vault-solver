@@ -241,7 +241,7 @@ type CallResult struct {
 // MulticallWithTime reads calls and their block timestamp in one latest-state eth_call.
 // Keep the timestamp inside the batch: a separate latest header can observe a different head.
 func (c *Client) MulticallWithTime(ctx context.Context, calls []Call) ([]CallResult, time.Time, error) {
-	batch := append(slices.Clone(calls), Call{Target: c.multicall, Data: multicallB.PackGetCurrentBlockTimestamp()})
+	batch := append(slices.Clone(calls), Call{Target: c.multicall, AllowFailure: true, Data: multicallB.PackGetCurrentBlockTimestamp()})
 	results, err := c.Multicall(ctx, batch)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -251,7 +251,7 @@ func (c *Client) MulticallWithTime(ctx context.Context, calls []Call) ([]CallRes
 	}
 	stamp := results[len(calls)]
 	if !stamp.Success {
-		return nil, time.Time{}, errors.New("chain: multicall block timestamp call failed")
+		return nil, time.Time{}, errors.Errorf("chain: multicall %s getCurrentBlockTimestamp call failed: check chain.multicallAddress compatibility", c.multicall.Hex())
 	}
 	timestamp, err := multicallB.UnpackGetCurrentBlockTimestamp(stamp.ReturnData)
 	if err != nil {

@@ -73,6 +73,10 @@ type fakeGasReader struct {
 	prices *liquidlanegas.PriceSnapshot
 }
 
+func (f *fakeGasReader) Validate(_ context.Context, tokens []liquidlanegas.Token) error {
+	return f.ValidateTokens(tokens)
+}
+
 func (f *fakeGasReader) ValidateTokens(tokens []liquidlanegas.Token) error {
 	f.tokens = tokens
 	return nil
@@ -123,7 +127,7 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	}
 
 	withoutGas := newReader(liquid, nil)
-	if err := withoutGas.ValidateGasTokens(liquid.routes); err != nil {
+	if err := withoutGas.ValidateGasOracles(t.Context(), liquid.routes); err != nil {
 		t.Fatalf("validate gas tokens: %v", err)
 	}
 	quote, err = withoutGas.Quote(t.Context(), liquid.routes, common.Address{})

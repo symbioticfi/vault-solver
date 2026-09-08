@@ -178,6 +178,10 @@ func (r *coherentStateSource) Snapshot(ctx context.Context) (cachedState, error)
 			endHead.Hash.Hex(),
 		)
 	}
+	if gasPrices != nil && !gasPrices.BlockTime.Equal(time.Unix(int64(startHead.Time), 0)) {
+		return cachedState{}, errors.Errorf("%w: gas batch time %s differs from head time %d",
+			errStateRefreshBlockBoundary, gasPrices.BlockTime, startHead.Time)
+	}
 	return cachedState{
 		Exec: st, Adapter: adapter, GasPrices: gasPrices,
 		GasLimit: startHead.GasLimit, UpdatedAt: observedAt,

@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-logr/logr"
@@ -19,7 +19,7 @@ import (
 )
 
 func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
-	parsed, err := abi.JSON(strings.NewReader(multicall3.Multicall3MetaData.ABI))
+	parsed, err := multicall3.Multicall3MetaData.ParseABI()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 		wantError string
 	}{
 		{name: "batch time and original call results", results: withTimestamp(big.NewInt(timestamp))},
-		{name: "failed timestamp", results: []multicall3.Multicall3Result{originalResult, {}}, wantError: "timestamp call failed"},
+		{name: "failed timestamp", results: []multicall3.Multicall3Result{originalResult, {}}, wantError: "getCurrentBlockTimestamp call failed"},
 		{name: "malformed timestamp", results: []multicall3.Multicall3Result{originalResult, {Success: true, ReturnData: []byte{0xff}}}, wantError: "block timestamp:"},
 		{name: "missing timestamp", results: []multicall3.Multicall3Result{originalResult}, wantError: "got 1 results, want 2"},
 		{name: "zero timestamp", results: withTimestamp(new(big.Int)), wantError: "invalid block timestamp"},
@@ -51,13 +51,13 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 			original := Call{Target: common.HexToAddress("0x1234"), AllowFailure: true, Data: []byte{1, 2, 3}}
 			wantData := multicallB.PackAggregate3([]multicall3.Multicall3Call3{
 				{Target: original.Target, AllowFailure: true, CallData: original.Data},
-				{Target: multicall, CallData: multicallB.PackGetCurrentBlockTimestamp()},
+				{Target: multicall, AllowFailure: true, CallData: multicallB.PackGetCurrentBlockTimestamp()},
 			})
 			encoded, err := parsed.Methods["aggregate3"].Outputs.Pack(tc.results)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var calls int
+			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					ID     json.RawMessage   `json:"id"`
@@ -72,7 +72,7 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 				switch request.Method {
 				case "eth_chainId":
 				case rpcMethodCall:
-					calls++
+					calls.Add(1)
 					if len(request.Params) != 2 || string(request.Params[1]) != `"latest"` {
 						t.Errorf("expected latest eth_call, got %s", request.Params)
 						return
@@ -105,8 +105,8 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 			}
 			defer client.Close()
 			results, now, err := client.MulticallWithTime(t.Context(), []Call{original})
-			if calls != 1 {
-				t.Fatalf("eth_call count = %d, want 1", calls)
+			if calls.Load() != 1 {
+				t.Fatalf("eth_call count = %d, want 1", calls.Load())
 			}
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) {

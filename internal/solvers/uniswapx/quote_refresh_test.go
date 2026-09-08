@@ -48,6 +48,10 @@ func (r *quoteModeReader) validateGasTokens([]liquidlane.Route) error {
 	return r.gasErr
 }
 
+func (r *quoteModeReader) validateGasOracles(context.Context, []liquidlane.Route) error {
+	return r.gasErr
+}
+
 func (r *quoteModeReader) quoteSnapshot(
 	_ context.Context,
 	routes []liquidlane.Route,

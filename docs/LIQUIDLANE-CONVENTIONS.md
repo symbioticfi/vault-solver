@@ -78,7 +78,15 @@ Gas oracle reads batch `latestRoundData`, `decimals`, and Multicall3
 `getCurrentBlockTimestamp()` into one `latest` eth_call. Freshness is checked against that returned
 block timestamp, not an earlier header or the process clock. This requires no future-skew allowance
 and rejects timestamps ahead of the batch block. The shared oracle owns this time read for LI.FI,
-UniswapX, and OEV; callers supply protocol decision times separately.
+UniswapX, and OEV; callers supply protocol decision times separately. `PriceSnapshot.BlockTime`
+retains the batch timestamp. OEV requires it to match the timestamp of its unchanged start/end
+head before publishing state; this catches a lagging fallback batch without fixed-block calls.
+A matching timestamp is not a proof of block identity across different RPC endpoints.
+
+A `chain.multicallAddress` override must implement both `aggregate3` and `getCurrentBlockTimestamp`.
+The timestamp sub-call allows failure so an unsupported selector produces an explicit compatibility
+error rather than reverting the whole batch. Gas-enabled LI.FI and UniswapX probe it at startup;
+OEV validates it through its mandatory initial gas/state read.
 
 Set `gas.nativeMaxAge` and each `gas.tokenUsdFeeds[].maxAge` to the feed heartbeat plus a small,
 explicit publication margin. A heartbeat starts an update; inclusion can take additional time.

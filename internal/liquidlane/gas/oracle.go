@@ -34,6 +34,8 @@ type Token struct {
 }
 
 type PriceSnapshot struct {
+	// BlockTime is the timestamp returned alongside prices in the same latest-state batch.
+	BlockTime         time.Time
 	tokenOutPerNative map[common.Address]*big.Int
 }
 
@@ -100,6 +102,18 @@ func NewOracleReader(c multicaller, cfg OracleConfig) (*OracleReader, error) {
 	return &OracleReader{chain: c, cfg: cfg}, nil
 }
 
+// Validate checks configured tokens and the timed Multicall3 surface before quoting starts.
+func (r *OracleReader) Validate(ctx context.Context, tokens []Token) error {
+	if err := r.ValidateTokens(tokens); err != nil {
+		return err
+	}
+	_, _, err := r.chain.MulticallWithTime(ctx, nil)
+	if err != nil {
+		return errors.Errorf("gas oracle: validate multicall timestamp: %w", err)
+	}
+	return nil
+}
+
 func (r *OracleReader) ValidateTokens(tokens []Token) error {
 	decimals := make(map[common.Address]int, len(tokens))
 	for _, token := range tokens {
@@ -161,7 +175,9 @@ func (r *OracleReader) Read(ctx context.Context, tokens []Token) (*PriceSnapshot
 		}
 		rates[token.Address] = rate
 	}
-	return NewPriceSnapshot(rates), nil
+	snapshot := NewPriceSnapshot(rates)
+	snapshot.BlockTime = blockTime
+	return snapshot, nil
 }
 
 type feedPrice struct {

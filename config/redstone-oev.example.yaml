@@ -38,15 +38,15 @@ solvers:
       # Optional common gas accounting. Omit the entire block to skip Chainlink reads and choose bundles
       # by gross loan-token profit. Gas-limit fitting, native Executor-deposit headroom/reservations, the
       # fixed callback-funded bid, and the signed maxTxGasPriceWei cap still apply when this is omitted.
-      # Set each max age to that feed's heartbeat plus a small publication margin; never heartbeat alone.
+      # Feed age limits: docs/LIQUIDLANE-CONVENTIONS.md#reads-and-freshness
       # Examples below include slack; verify the selected feed and network before deploying.
       gas:
         nativeUsdFeed: "0x694AA1769357215DE4FAC081bf1f309aDC325306" # Chainlink Sepolia ETH / USD
-        nativeMaxAge: 1h5m                                           # 1h heartbeat + 5m publication margin
+        nativeMaxAge: 2h
         tokenUsdFeeds:
           - token: "0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d"   # actual adapter vault asset / loan token (TLOAN)
             feed: "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E"  # Chainlink Sepolia USDC / USD (proxy for TLOAN)
-            maxAge: 24h5m                                            # 24h heartbeat + 5m publication margin
+            maxAge: 24h5m
 
       strategy:
         name: default

@@ -84,6 +84,7 @@ type chainReader interface {
 		executor common.Address,
 		routes []liquidlane.Route,
 	) ([]common.Address, error)
+	validateGasOracles(ctx context.Context, routes []liquidlane.Route) error
 	validateGasTokens(routes []liquidlane.Route) error
 	quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address) (snapshot, error)
 	fillSnapshot(
@@ -235,7 +236,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			return startupErr
 		}
 	}
-	if err := s.reader.validateGasTokens(routes); err != nil {
+	if err := s.reader.validateGasOracles(ctx, routes); err != nil {
 		startupErr := errors.Errorf("validate adapter gas tokens: %w", err)
 		s.log.Error(startupErr, "adapter validation failed", "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr

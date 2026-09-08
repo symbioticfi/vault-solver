@@ -43,8 +43,8 @@ func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) (
 	return r.snapshots.ResolveRoutes(ctx, adapters)
 }
 
-func (r *reader) validateGasTokens(routes []route) error {
-	return r.snapshots.ValidateGasTokens(routes)
+func (r *reader) validateGasOracles(ctx context.Context, routes []route) error {
+	return r.snapshots.ValidateGasOracles(ctx, routes)
 }
 
 func (r *reader) quoteSnapshots(

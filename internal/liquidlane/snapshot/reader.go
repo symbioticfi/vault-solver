@@ -53,6 +53,7 @@ type liquidReader interface {
 }
 
 type gasReader interface {
+	Validate(ctx context.Context, tokens []liquidlanegas.Token) error
 	ValidateTokens(tokens []liquidlanegas.Token) error
 	Read(ctx context.Context, tokens []liquidlanegas.Token) (*liquidlanegas.PriceSnapshot, error)
 }
@@ -83,6 +84,14 @@ func newReader(liquid liquidReader, gas gasReader) *Reader {
 
 func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error) {
 	return r.liquid.ResolveRoutes(ctx, adapters)
+}
+
+// ValidateGasOracles checks token coverage and the timestamp selector during startup.
+func (r *Reader) ValidateGasOracles(ctx context.Context, routes []liquidlane.Route) error {
+	if r.gas == nil {
+		return nil
+	}
+	return r.gas.Validate(ctx, routeTokens(routes))
 }
 
 func (r *Reader) ValidateGasTokens(routes []liquidlane.Route) error {

@@ -265,13 +265,14 @@ solvers:
       discounts: { baseUrl: "https://rfq.example", httpTimeout: 2s, minimumValidity: 15s }
       gas:
         nativeUsdFeed: "0x…"
-        nativeMaxAge: 1h5m # example: 1h heartbeat + 5m publication margin
-        # Choose each feed's heartbeat plus a small publication margin.
+        nativeMaxAge: 1h5m
+        # See LIQUIDLANE-CONVENTIONS.md, Reads and freshness.
         tokenUsdFeeds: [{ token: "0x…asset", feed: "0x…", maxAge: 1h5m }]
       breaker: { maxFailures: 3, window: 5m }
       strategy: { name: default, config: { priceBufferBps: 20 } }
 ```
 
+Startup checks configured gas tokens and the Multicall3 timestamp selector.
 The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
 skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
 quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
