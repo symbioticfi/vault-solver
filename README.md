@@ -563,6 +563,6 @@ make generate                           # regenerate bindings + API client
 ## Contributing
 
 Engineering conventions — the modular framework/integration boundary, config-driven configuration,
-modern Go 1.26 style, the required test/lint/format gate, and secure-coding rules — are in
+modern Go 1.27 style, the required test/lint/format gate, and secure-coding rules — are in
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
