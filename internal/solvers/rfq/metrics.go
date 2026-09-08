@@ -158,7 +158,7 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 	})
 }
 
-// httpMethodLabel bounds arbitrary HTTP methods to the methods served by this process.
+// methodLabel bounds arbitrary HTTP methods to the methods served by this process.
 func methodLabel(method string) string {
 	switch method {
 	case http.MethodGet, http.MethodPost:
@@ -184,7 +184,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// httpRouteLabel maps a path to a bounded set of route labels (known routes, else "other").
+// routeLabel maps a path to a bounded set of route labels (known routes, else "other").
 func routeLabel(path string) string {
 	switch path {
 	case "/health", "/quote", "/openapi.json", "/openapi.yaml", "/docs":
