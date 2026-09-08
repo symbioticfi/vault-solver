@@ -256,11 +256,11 @@ key's registered identities include the configured executor, then checks
 `GET /api/v1/solver/supported-contracts` and, when needed,
 merges the configured escrow InputSettler and OutputSettler into the complete list with `PUT`. The endpoint
 has replace semantics, so the solver preserves existing entries, registers the two settlers only in their
-respective `inputSettler` / `outputSettler` lists, and leaves `oracle` untouched. LI.FI correctly returns an
-empty `oracle` list for this same-chain model; the order-level oracle identifiers still equal the configured
-OutputSettler, but that does not make the settler an `oracle`-kind supported contract. This opts the solver
-into opened escrow delivery over WebSocket; the same executor is the on-chain solver identity and callback
-destination.
+respective `inputSettler` / `outputSettler` lists, and omits the now-deprecated, server-ignored `oracle` field.
+LI.FI correctly returns an empty `oracle` list for this same-chain model; the order-level oracle identifiers
+still equal the configured OutputSettler, but that does not make the settler an `oracle`-kind supported
+contract. This opts the solver into opened escrow delivery over WebSocket; the same executor is the on-chain
+solver identity and callback destination.
 
 #### Identity, API key, and reputation
 
@@ -916,7 +916,7 @@ still requires the redeploy in phase 0.
   fills/attests output via `orderFinalised(uint256[2][] inputs, bytes call)` in the same transaction.
   It is **opt-in** ("your solver has to support `orderFinalised`"). **Opt-in mechanism = resolved:** the solver
   ensures the escrow InputSettler and OutputSettler under their respective supported-contract kinds as
-  described in §5.1 and §8.1; it leaves `oracle[]` unchanged, and an empty list is valid. The executor is the
+  described in §5.1 and §8.1; it omits the deprecated, ignored `oracle[]` field. The executor is the
   registered solver, finalise caller, and callback destination. The previous EOA-identity build proved the
   remainder of the live path: `order-dev`
   delivered an already-opened/funded escrow order over `user:vm-order-submit`, and the resulting Sepolia

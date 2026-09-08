@@ -54,23 +54,22 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		body = b
 	}
+	request := inspectRPCRequest(body)
 	method := "unknown"
+	if t.metrics != nil {
+		method = request.boundedMethod
+	}
 	var (
 		nullFallbackID     json.RawMessage
 		nullFallbackMethod string
 		nullFallback       bool
 	)
-	if t.metrics != nil || len(t.endpoints) > 1 {
-		request := inspectRPCRequest(body)
-		if t.metrics != nil {
-			method = request.boundedMethod
-		}
-		if len(t.endpoints) > 1 {
-			nullFallbackID = request.id
-			nullFallbackMethod = request.rawMethod
-			nullFallback = request.nullFallback
-		}
+	if len(t.endpoints) > 1 {
+		nullFallbackID = request.id
+		nullFallbackMethod = request.rawMethod
+		nullFallback = request.nullFallback
 	}
+	pendingLookup := isPendingLookupMethod(request.rawMethod)
 	requestObservation := t.metrics.beginRequest(t.role, method)
 
 	var (
@@ -92,6 +91,9 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		attempt := req.Clone(ctx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
+		if pendingLookup {
+			attempt.Header.Set(erpcRetryEmptyHeader, "false")
+		}
 		if body != nil {
 			attempt.Body = io.NopCloser(bytes.NewReader(body))
 			attempt.ContentLength = int64(len(body))
@@ -199,6 +201,18 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		info.nullFallback = true
 	}
 	return info
+}
+
+// erpcRetryEmptyHeader opts a request out of eRPC's empty-result retry. Transactions are sent
+// through a private relay, so until one is mined every public upstream legitimately returns null
+// for its receipt; eRPC treats that null as a lagging upstream and retries across all of them,
+// which turns "still pending" into a timeout at our 2s receipt read budget. With the header, the
+// null comes straight back and the tx manager keeps polling normally. Other proxies ignore it.
+const erpcRetryEmptyHeader = "X-ERPC-Retry-Empty"
+
+// isPendingLookupMethod reports the methods whose null result means "not mined yet", not "missing".
+func isPendingLookupMethod(method string) bool {
+	return method == rpcMethodGetTransactionReceipt || method == "eth_getTransactionByHash"
 }
 
 func boundedRPCMethod(body []byte) string {

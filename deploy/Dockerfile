@@ -4,9 +4,9 @@
 # Pin the toolchain via GOTOOLCHAIN (matches the Makefile/CI); the base image only needs to be
 # new enough to honour it. CGO is disabled so go-ethereum uses its pure-Go secp256k1 path and the
 # result is a fully static binary.
-FROM golang:1.26.5-alpine3.23 AS build
+FROM golang:1.26.7-alpine3.23 AS build
 
-ENV GOTOOLCHAIN=go1.26.5 \
+ENV GOTOOLCHAIN=go1.26.7 \
     CGO_ENABLED=0 \
     GOFLAGS=-trimpath
 

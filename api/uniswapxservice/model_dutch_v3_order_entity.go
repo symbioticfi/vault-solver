@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the DutchV3OrderEntity type satisfies the MappedNullable interface at compile time
@@ -27,14 +25,14 @@ type DutchV3OrderEntity struct {
 	// EIP-712 signature over the order.
 	Signature string `json:"signature" validate:"regexp=^0x[0-9a-fA-F]{130}$"`
 	// Permit2 nonce, uint256 encoded as a base-10 string.
-	Nonce       *string     `json:"nonce,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	Nonce       *string     `json:"nonce,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	OrderHash   string      `json:"orderHash" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
 	OrderStatus OrderStatus `json:"orderStatus"`
 	ChainId     ChainId     `json:"chainId"`
 	// EIP-55 checksummed Ethereum address.
 	Swapper string `json:"swapper"`
 	// uint256 encoded as a base-10 string.
-	StartingBaseFee *string                          `json:"startingBaseFee,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	StartingBaseFee *string                          `json:"startingBaseFee,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	Input           *DutchV3OrderEntityInput         `json:"input,omitempty"`
 	Outputs         []DutchV3OrderEntityOutputsInner `json:"outputs,omitempty"`
 	CosignerData    *DutchV3OrderEntityCosignerData  `json:"cosignerData,omitempty"`
@@ -48,9 +46,10 @@ type DutchV3OrderEntity struct {
 	// Defined when the order has a quote request associated with it.
 	RequestId *string `json:"requestId,omitempty"`
 	// Transaction hash of the fill. Defined once the order has been filled.
-	TxHash         *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
-	SettledAmounts []SettledAmount `json:"settledAmounts,omitempty"`
-	Route          *Route          `json:"route,omitempty"`
+	TxHash               *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	SettledAmounts       []SettledAmount `json:"settledAmounts,omitempty"`
+	Route                *Route          `json:"route,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _DutchV3OrderEntity DutchV3OrderEntity
@@ -719,48 +718,54 @@ func (o DutchV3OrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Route) {
 		toSerialize["route"] = o.Route
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *DutchV3OrderEntity) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"type",
-		"encodedOrder",
-		"signature",
-		"orderHash",
-		"orderStatus",
-		"chainId",
-		"swapper",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varDutchV3OrderEntity := _DutchV3OrderEntity{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varDutchV3OrderEntity)
+	err = json.Unmarshal(data, &varDutchV3OrderEntity)
 
 	if err != nil {
 		return err
 	}
 
 	*o = DutchV3OrderEntity(varDutchV3OrderEntity)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "signature")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "orderHash")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "startingBaseFee")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "cosignerData")
+		delete(additionalProperties, "cosignature")
+		delete(additionalProperties, "fillBlock")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "settledAmounts")
+		delete(additionalProperties, "route")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

@@ -73,9 +73,10 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	data := bfAdapter.PackMulticall(finalize)
 
 	res := s.txManager.Send(ctx, txmanager.Request{
-		To:    target.Adapter,
-		Data:  data,
-		Label: "redeem",
+		Solver: Name,
+		To:     target.Adapter,
+		Data:   data,
+		Label:  "redeem",
 	})
 	if !res.Outcome.Included() {
 		err := res.Err

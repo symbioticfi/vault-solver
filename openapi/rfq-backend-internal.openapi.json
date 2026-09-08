@@ -1,0 +1,482 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Symbiotic RFQ Backend Internal API",
+    "version": "1.0.0",
+    "description": "Internal RFQ backend API: discount listing and resolution."
+  },
+  "paths": {
+    "/api-internal/v1/discounts": {
+      "get": {
+        "tags": [
+          "RFQ"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscountsResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "discountId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{64}$"
+            }
+          },
+          {
+            "name": "discountIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "adapter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            }
+          },
+          {
+            "name": "tokenToRedeem",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            }
+          },
+          {
+            "name": "adapters",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tokensToRedeem",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "RFQ"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDiscountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveDiscountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DiscountsResponse": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "protocol": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "discountId": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{64}$"
+                },
+                "adapter": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "tokenToRedeem": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "collateral": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "collateralDecimals": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "discount": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "signer": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "deadline": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "maxRate": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "maxAssets": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                }
+              },
+              "required": [
+                "discountId",
+                "adapter",
+                "tokenToRedeem",
+                "collateral",
+                "collateralDecimals",
+                "discount",
+                "signer",
+                "deadline",
+                "maxRate",
+                "maxAssets"
+              ]
+            }
+          }
+        },
+        "required": [
+          "requestId",
+          "protocol",
+          "discounts"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "status",
+              "timestamp"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "type": "number"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "ResolveDiscountRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "discountId"
+            ],
+            "properties": {
+              "discountId": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{64}$"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "discountIds"
+            ],
+            "properties": {
+              "discountIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{64}$"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "adapter",
+              "tokenToRedeem"
+            ],
+            "properties": {
+              "adapter": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              },
+              "tokenToRedeem": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "adapters",
+              "tokensToRedeem"
+            ],
+            "properties": {
+              "adapters": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                }
+              },
+              "tokensToRedeem": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ResolveDiscountResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "requestId",
+              "discountId",
+              "discount",
+              "signerSignature",
+              "protocolDeadline",
+              "protocolSignature"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "discountId": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{64}$"
+              },
+              "discount": {
+                "type": "object",
+                "required": [
+                  "adapter",
+                  "tokenToRedeem",
+                  "discount",
+                  "signer",
+                  "protocol",
+                  "nonce",
+                  "deadline"
+                ],
+                "properties": {
+                  "adapter": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "tokenToRedeem": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "discount": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "signer": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "pattern": "^\\d+$",
+                    "description": "Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted."
+                  },
+                  "deadline": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "signerSignature": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              },
+              "protocolDeadline": {
+                "type": "integer"
+              },
+              "protocolSignature": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]+$"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "requestId",
+              "discounts"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "discounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "discountId",
+                    "discount",
+                    "signerSignature",
+                    "protocolDeadline",
+                    "protocolSignature"
+                  ],
+                  "properties": {
+                    "discountId": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{64}$"
+                    },
+                    "discount": {
+                      "type": "object",
+                      "required": [
+                        "adapter",
+                        "tokenToRedeem",
+                        "discount",
+                        "signer",
+                        "protocol",
+                        "nonce",
+                        "deadline"
+                      ],
+                      "properties": {
+                        "adapter": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "tokenToRedeem": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "discount": {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        },
+                        "signer": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{40}$"
+                        },
+                        "nonce": {
+                          "type": "string",
+                          "pattern": "^\\d+$",
+                          "description": "Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted."
+                        },
+                        "deadline": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "signerSignature": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]+$"
+                    },
+                    "protocolDeadline": {
+                      "type": "integer"
+                    },
+                    "protocolSignature": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]+$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

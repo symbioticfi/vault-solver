@@ -85,14 +85,15 @@ func (c *orderClient) ensureSupportedContracts(
 	if err != nil {
 		return apiErr("get supported contracts", httpResp, err)
 	}
-	if current != nil && supportsConfiguredContracts(current.Data, chain, inputSettler, outputSettler) {
+	// The client tolerates a dropped field by zero-valuing it, and PUT replaces the whole registered
+	// set, so an incomplete snapshot must not be merged or the missing kinds would be deregistered.
+	if current == nil || current.Data.InputSettler == nil || current.Data.OutputSettler == nil {
+		return errors.New("get supported contracts: incomplete snapshot; refusing to replace the registered set")
+	}
+	if supportsConfiguredContracts(current.Data, chain, inputSettler, outputSettler) {
 		return nil
 	}
-	contracts := lifiorder.ContractsByKindDto{}
-	if current != nil {
-		contracts = current.Data
-	}
-	return c.replaceSupportedContracts(ctx, supportedContractsDTO(contracts, chain, inputSettler, outputSettler))
+	return c.replaceSupportedContracts(ctx, supportedContractsDTO(current.Data, chain, inputSettler, outputSettler))
 }
 
 func chainRef(chainID int64) string {
@@ -105,7 +106,6 @@ func supportedContractsDTO(
 	inputSettler, outputSettler common.Address,
 ) lifiorder.PutSupportedContractsDto {
 	dto := lifiorder.PutSupportedContractsDto{
-		Oracle:        supportedContractEntries(current.Oracle),
 		InputSettler:  supportedContractEntries(current.InputSettler),
 		OutputSettler: supportedContractEntries(current.OutputSettler),
 	}
@@ -114,28 +114,28 @@ func supportedContractsDTO(
 	return dto
 }
 
-func supportedContractEntries(items []lifiorder.ChainAddressDto) []lifiorder.QuoteRequestDtoIntentMetadataOracleInner {
+func supportedContractEntries(items []lifiorder.ChainAddressDto) []lifiorder.PutSupportedContractsDtoOracleInner {
 	if len(items) == 0 {
 		return nil
 	}
-	out := make([]lifiorder.QuoteRequestDtoIntentMetadataOracleInner, len(items))
+	out := make([]lifiorder.PutSupportedContractsDtoOracleInner, len(items))
 	for i, item := range items {
-		out[i] = lifiorder.QuoteRequestDtoIntentMetadataOracleInner(item)
+		out[i] = lifiorder.PutSupportedContractsDtoOracleInner(item)
 	}
 	return out
 }
 
 func appendSupportedContract(
-	items []lifiorder.QuoteRequestDtoIntentMetadataOracleInner,
+	items []lifiorder.PutSupportedContractsDtoOracleInner,
 	chain string,
 	address common.Address,
-) []lifiorder.QuoteRequestDtoIntentMetadataOracleInner {
+) []lifiorder.PutSupportedContractsDtoOracleInner {
 	for _, item := range items {
 		if item.Chain == chain && strings.EqualFold(item.Address, address.Hex()) {
 			return items
 		}
 	}
-	return append(items, lifiorder.QuoteRequestDtoIntentMetadataOracleInner{Chain: chain, Address: address.Hex()})
+	return append(items, lifiorder.PutSupportedContractsDtoOracleInner{Chain: chain, Address: address.Hex()})
 }
 
 func supportsConfiguredContracts(
@@ -256,7 +256,7 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 	}
 
 	response, httpResp, err := c.api.SolverAPIAPI.
-		QuotesControllerSubmitQuotes(c.withAuth(ctx)).
+		QuoteSubmissionControllerSubmitQuotes(c.withAuth(ctx)).
 		SubmitQuotesDto(lifiorder.SubmitQuotesDto{Quotes: dtoQuotes}).
 		Execute()
 	closeResp(httpResp)

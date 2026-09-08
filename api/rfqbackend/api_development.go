@@ -31,9 +31,7 @@ func (r ApiApiV1DevFaucetGetRequest) Execute() (*LocalFaucetResponse, *http.Resp
 }
 
 /*
-ApiV1DevFaucetGet Describe the faucet bundle
-
-Development/test helper that lists the fixed faucet bundle available on supported deployments.
+ApiV1DevFaucetGet Method for ApiV1DevFaucetGet
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1DevFaucetGetRequest
@@ -147,9 +145,7 @@ func (r ApiApiV1DevFaucetPostRequest) Execute() (*LocalFaucetFundResponse, *http
 }
 
 /*
-ApiV1DevFaucetPost Fund a wallet from the faucet
-
-Development/test helper that transfers the full faucet bundle to the requested wallet.
+ApiV1DevFaucetPost Method for ApiV1DevFaucetPost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1DevFaucetPostRequest
@@ -227,29 +223,7 @@ func (a *DevelopmentAPIService) ApiV1DevFaucetPostExecute(r ApiApiV1DevFaucetPos
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
 		}
-		if localVarHTTPResponse.StatusCode == 400 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
 		if localVarHTTPResponse.StatusCode == 403 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 500 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {
@@ -290,9 +264,7 @@ func (r ApiApiV1DevFundPostRequest) Execute() (*LocalFundResponse, *http.Respons
 }
 
 /*
-ApiV1DevFundPost Fund a local wallet
-
-Local-only helper that tops a wallet up with ETH and the local input token.
+ApiV1DevFundPost Method for ApiV1DevFundPost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1DevFundPostRequest
@@ -369,17 +341,6 @@ func (a *DevelopmentAPIService) ApiV1DevFundPostExecute(r ApiApiV1DevFundPostReq
 		newErr := &GenericOpenAPIError{
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
-		}
-		if localVarHTTPResponse.StatusCode == 400 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
 		}
 		if localVarHTTPResponse.StatusCode == 403 {
 			var v ErrorResponse

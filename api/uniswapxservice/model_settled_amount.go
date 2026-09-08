@@ -21,11 +21,14 @@ var _ MappedNullable = &SettledAmount{}
 type SettledAmount struct {
 	TokenOut *string `json:"tokenOut,omitempty" validate:"regexp=^(0x)?[0-9a-fA-F]{40}$"`
 	// uint256 encoded as a base-10 string.
-	AmountOut *string `json:"amountOut,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	AmountOut *string `json:"amountOut,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	TokenIn   *string `json:"tokenIn,omitempty" validate:"regexp=^(0x)?[0-9a-fA-F]{40}$"`
 	// uint256 encoded as a base-10 string.
-	AmountIn *string `json:"amountIn,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	AmountIn             *string `json:"amountIn,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _SettledAmount SettledAmount
 
 // NewSettledAmount instantiates a new SettledAmount object
 // This constructor will assign default values to properties that have it defined,
@@ -194,7 +197,36 @@ func (o SettledAmount) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.AmountIn) {
 		toSerialize["amountIn"] = o.AmountIn
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *SettledAmount) UnmarshalJSON(data []byte) (err error) {
+	varSettledAmount := _SettledAmount{}
+
+	err = json.Unmarshal(data, &varSettledAmount)
+
+	if err != nil {
+		return err
+	}
+
+	*o = SettledAmount(varSettledAmount)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenOut")
+		delete(additionalProperties, "amountOut")
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "amountIn")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableSettledAmount struct {

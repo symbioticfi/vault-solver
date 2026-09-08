@@ -25,6 +25,8 @@ import (
 // offerStatusIgnored are 3F offer statuses that are not live coverage when reconciling the cache: a
 // FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so discovery should
 // re-offer.
+var errRequiredFieldMissing = errors.New("required field missing from API response")
+
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
@@ -215,6 +217,12 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = new(big.Int)
 			}
+			if o.AuctionId <= 0 {
+				complete = false
+				s.log.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				continue
+			}
 			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
 			auctionID := int64(o.AuctionId)
 			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
@@ -259,6 +267,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		s.log.Error(err, "discover: list auctions")
 		return
 	}
+	auctions = s.validAuctions(auctions)
 	s.log.V(1).Info("discovered auctions", "count", len(auctions))
 
 	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
@@ -465,13 +474,18 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 		r := resolved[i]
 		if r.err != nil {
 			resolutionComplete = false
-			s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+			if errors.Is(r.err, errAdapterUnconfigured) {
+				s.log.V(1).Info("skipping adapter: not configured on-chain",
+					"adapter", adapterAddr.Hex(), "reason", r.err.Error())
+			} else {
+				s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+			}
 			continue
 		}
 		if !r.authorized {
 			s.log.Info("skipping adapter: solver is not an authorized offer signer",
 				"adapter", adapterAddr.Hex(),
-				"solver", s.signerAddr.Hex(),
+				"signer", s.signerAddr.Hex(),
 				"offerSigner", r.signer.Hex())
 			continue
 		}
@@ -507,4 +521,27 @@ func (s *Solver) installTargets(targets []Target) {
 	}
 	s.offers.retainAdapters(active)
 	s.targets = targets
+}
+
+// validAuctions drops auctions missing a field the solver acts on. The generated client tolerates a
+// dropped field by zero-valuing it, so this is where such a schema change becomes visible.
+func (s *Solver) validAuctions(auctions []threef.AuctionDto) []threef.AuctionDto {
+	kept := make([]threef.AuctionDto, 0, len(auctions))
+	for _, a := range auctions {
+		var missing string
+		switch {
+		case a.Id <= 0:
+			missing = "id"
+		case strings.TrimSpace(a.Status) == "":
+			missing = "status"
+		case !common.IsHexAddress(a.RequestId):
+			missing = "requestId"
+		default:
+			kept = append(kept, a)
+			continue
+		}
+		s.log.Error(errRequiredFieldMissing, "discover: skipping auction",
+			"field", missing, "auctionId", a.Id, "requestId", a.RequestId, "status", a.Status)
+	}
+	return kept
 }

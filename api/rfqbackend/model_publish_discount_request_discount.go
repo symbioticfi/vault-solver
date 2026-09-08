@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PublishDiscountRequestDiscount type satisfies the MappedNullable interface at compile time
@@ -23,12 +21,13 @@ var _ MappedNullable = &PublishDiscountRequestDiscount{}
 type PublishDiscountRequestDiscount struct {
 	Adapter       string `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenToRedeem string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Discount      string `json:"discount" validate:"regexp=^\\\\d+$"`
+	Discount      string `json:"discount" validate:"regexp=^\\d+$"`
 	Signer        string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Protocol      string `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	// Base-10 uint256 string.
-	Nonce    string `json:"nonce" validate:"regexp=^\\\\d+$"`
-	Deadline int32  `json:"deadline"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
+	Deadline             int64  `json:"deadline"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublishDiscountRequestDiscount PublishDiscountRequestDiscount
@@ -37,7 +36,7 @@ type _PublishDiscountRequestDiscount PublishDiscountRequestDiscount
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublishDiscountRequestDiscount(adapter string, tokenToRedeem string, discount string, signer string, protocol string, nonce string, deadline int32) *PublishDiscountRequestDiscount {
+func NewPublishDiscountRequestDiscount(adapter string, tokenToRedeem string, discount string, signer string, protocol string, nonce string, deadline int64) *PublishDiscountRequestDiscount {
 	this := PublishDiscountRequestDiscount{}
 	this.Adapter = adapter
 	this.TokenToRedeem = tokenToRedeem
@@ -202,9 +201,9 @@ func (o *PublishDiscountRequestDiscount) SetNonce(v string) {
 }
 
 // GetDeadline returns the Deadline field value
-func (o *PublishDiscountRequestDiscount) GetDeadline() int32 {
+func (o *PublishDiscountRequestDiscount) GetDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -213,7 +212,7 @@ func (o *PublishDiscountRequestDiscount) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value
 // and a boolean to check if the value has been set.
-func (o *PublishDiscountRequestDiscount) GetDeadlineOk() (*int32, bool) {
+func (o *PublishDiscountRequestDiscount) GetDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -221,7 +220,7 @@ func (o *PublishDiscountRequestDiscount) GetDeadlineOk() (*int32, bool) {
 }
 
 // SetDeadline sets field value
-func (o *PublishDiscountRequestDiscount) SetDeadline(v int32) {
+func (o *PublishDiscountRequestDiscount) SetDeadline(v int64) {
 	o.Deadline = v
 }
 
@@ -242,48 +241,41 @@ func (o PublishDiscountRequestDiscount) ToMap() (map[string]interface{}, error) 
 	toSerialize["protocol"] = o.Protocol
 	toSerialize["nonce"] = o.Nonce
 	toSerialize["deadline"] = o.Deadline
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *PublishDiscountRequestDiscount) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"adapter",
-		"tokenToRedeem",
-		"discount",
-		"signer",
-		"protocol",
-		"nonce",
-		"deadline",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPublishDiscountRequestDiscount := _PublishDiscountRequestDiscount{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varPublishDiscountRequestDiscount)
+	err = json.Unmarshal(data, &varPublishDiscountRequestDiscount)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublishDiscountRequestDiscount(varPublishDiscountRequestDiscount)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "adapter")
+		delete(additionalProperties, "tokenToRedeem")
+		delete(additionalProperties, "discount")
+		delete(additionalProperties, "signer")
+		delete(additionalProperties, "protocol")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "deadline")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

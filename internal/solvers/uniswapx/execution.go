@@ -254,7 +254,8 @@ func (s *Solver) startFill(
 		"cancelAt", cancelAt.Unix(),
 	)
 	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
-		To: order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
+		Solver: Name,
+		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
 		Label: "uniswapx-fill",
 	})
 	if !accepted {

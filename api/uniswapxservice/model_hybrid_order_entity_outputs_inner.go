@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the HybridOrderEntityOutputsInner type satisfies the MappedNullable interface at compile time
@@ -24,9 +22,10 @@ type HybridOrderEntityOutputsInner struct {
 	// EIP-55 checksummed Ethereum address.
 	Token string `json:"token"`
 	// uint256 encoded as a base-10 string.
-	MinAmount string `json:"minAmount" validate:"regexp=^[0-9]{1,78}$"`
+	MinAmount string `json:"minAmount" validate:"regexp=^[0-9]{1\\,78}$"`
 	// EIP-55 checksummed Ethereum address.
-	Recipient string `json:"recipient"`
+	Recipient            string `json:"recipient"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _HybridOrderEntityOutputsInner HybridOrderEntityOutputsInner
@@ -136,44 +135,37 @@ func (o HybridOrderEntityOutputsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize["token"] = o.Token
 	toSerialize["minAmount"] = o.MinAmount
 	toSerialize["recipient"] = o.Recipient
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *HybridOrderEntityOutputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-		"minAmount",
-		"recipient",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varHybridOrderEntityOutputsInner := _HybridOrderEntityOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varHybridOrderEntityOutputsInner)
+	err = json.Unmarshal(data, &varHybridOrderEntityOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = HybridOrderEntityOutputsInner(varHybridOrderEntityOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "minAmount")
+		delete(additionalProperties, "recipient")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

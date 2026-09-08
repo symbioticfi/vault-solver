@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the AuctionEip712DomainDto type satisfies the MappedNullable interface at compile time
@@ -26,7 +24,8 @@ type AuctionEip712DomainDto struct {
 	// Resolved EIP-712 domain version or null if unavailable
 	Version NullableString `json:"version"`
 	// Resolved EIP-712 domain chain ID or null if unavailable
-	ChainId NullableFloat32 `json:"chainId"`
+	ChainId              NullableFloat32 `json:"chainId"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _AuctionEip712DomainDto AuctionEip712DomainDto
@@ -142,44 +141,37 @@ func (o AuctionEip712DomainDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name.Get()
 	toSerialize["version"] = o.Version.Get()
 	toSerialize["chainId"] = o.ChainId.Get()
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *AuctionEip712DomainDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"name",
-		"version",
-		"chainId",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varAuctionEip712DomainDto := _AuctionEip712DomainDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varAuctionEip712DomainDto)
+	err = json.Unmarshal(data, &varAuctionEip712DomainDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = AuctionEip712DomainDto(varAuctionEip712DomainDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "version")
+		delete(additionalProperties, "chainId")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

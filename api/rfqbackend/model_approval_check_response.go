@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the ApprovalCheckResponse type satisfies the MappedNullable interface at compile time
@@ -21,9 +19,10 @@ var _ MappedNullable = &ApprovalCheckResponse{}
 
 // ApprovalCheckResponse struct for ApprovalCheckResponse
 type ApprovalCheckResponse struct {
-	RequestId string                        `json:"requestId"`
-	Approval  ApprovalCheckResponseApproval `json:"approval"`
-	Cancel    interface{}                   `json:"cancel"`
+	RequestId            string                                `json:"requestId"`
+	Approval             NullableApprovalCheckResponseApproval `json:"approval"`
+	Cancel               interface{}                           `json:"cancel"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _ApprovalCheckResponse ApprovalCheckResponse
@@ -32,7 +31,7 @@ type _ApprovalCheckResponse ApprovalCheckResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewApprovalCheckResponse(requestId string, approval ApprovalCheckResponseApproval, cancel interface{}) *ApprovalCheckResponse {
+func NewApprovalCheckResponse(requestId string, approval NullableApprovalCheckResponseApproval, cancel interface{}) *ApprovalCheckResponse {
 	this := ApprovalCheckResponse{}
 	this.RequestId = requestId
 	this.Approval = approval
@@ -73,31 +72,32 @@ func (o *ApprovalCheckResponse) SetRequestId(v string) {
 }
 
 // GetApproval returns the Approval field value
+// If the value is explicit nil, the zero value for ApprovalCheckResponseApproval will be returned
 func (o *ApprovalCheckResponse) GetApproval() ApprovalCheckResponseApproval {
-	if o == nil {
+	if o == nil || o.Approval.Get() == nil {
 		var ret ApprovalCheckResponseApproval
 		return ret
 	}
 
-	return o.Approval
+	return *o.Approval.Get()
 }
 
 // GetApprovalOk returns a tuple with the Approval field value
 // and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *ApprovalCheckResponse) GetApprovalOk() (*ApprovalCheckResponseApproval, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.Approval, true
+	return o.Approval.Get(), o.Approval.IsSet()
 }
 
 // SetApproval sets field value
 func (o *ApprovalCheckResponse) SetApproval(v ApprovalCheckResponseApproval) {
-	o.Approval = v
+	o.Approval.Set(&v)
 }
 
 // GetCancel returns the Cancel field value
-// If the value is explicit nil, the zero value for interface{} will be returned
 func (o *ApprovalCheckResponse) GetCancel() interface{} {
 	if o == nil {
 		var ret interface{}
@@ -109,9 +109,8 @@ func (o *ApprovalCheckResponse) GetCancel() interface{} {
 
 // GetCancelOk returns a tuple with the Cancel field value
 // and a boolean to check if the value has been set.
-// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *ApprovalCheckResponse) GetCancelOk() (*interface{}, bool) {
-	if o == nil || IsNil(o.Cancel) {
+	if o == nil {
 		return nil, false
 	}
 	return &o.Cancel, true
@@ -133,48 +132,39 @@ func (o ApprovalCheckResponse) MarshalJSON() ([]byte, error) {
 func (o ApprovalCheckResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
-	toSerialize["approval"] = o.Approval
-	if o.Cancel != nil {
-		toSerialize["cancel"] = o.Cancel
+	toSerialize["approval"] = o.Approval.Get()
+	toSerialize["cancel"] = o.Cancel
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
 	}
+
 	return toSerialize, nil
 }
 
 func (o *ApprovalCheckResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"requestId",
-		"approval",
-		"cancel",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varApprovalCheckResponse := _ApprovalCheckResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varApprovalCheckResponse)
+	err = json.Unmarshal(data, &varApprovalCheckResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = ApprovalCheckResponse(varApprovalCheckResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "approval")
+		delete(additionalProperties, "cancel")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

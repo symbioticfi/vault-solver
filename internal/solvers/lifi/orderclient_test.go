@@ -237,7 +237,7 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = w.Write([]byte(`{"data":{"oracle":[{"chain":"eip155:1","address":"0x3333333333333333333333333333333333333333"}],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`))
+			_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`))
 		case http.MethodPut:
 			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 				t.Fatalf("decode body: %v", err)
@@ -282,12 +282,8 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 	if got := outputSettlers[1].Address; got != "0x2222222222222222222222222222222222222222" {
 		t.Fatalf("configured outputSettler address = %v", got)
 	}
-	oracles := gotBody.Oracle
-	if got := len(oracles); got != 1 {
-		t.Fatalf("oracle count = %d", got)
-	}
-	if got := oracles[0].Address; got != "0x3333333333333333333333333333333333333333" {
-		t.Fatalf("preserved oracle address = %v", got)
+	if gotBody.Oracle != nil {
+		t.Fatalf("oracles = %+v, want omitted deprecated field", gotBody.Oracle)
 	}
 }
 
@@ -422,6 +418,40 @@ func TestOrderClientListRecoverableOrdersPaginationLimit(t *testing.T) {
 			}
 			if len(orders) != tc.wantOrders {
 				t.Fatalf("orders = %d, want %d", len(orders), tc.wantOrders)
+			}
+		})
+	}
+}
+
+// PUT replaces the whole registered set, so a snapshot missing a kind (the tolerant client
+// zero-values a dropped field) must not be merged and pushed back.
+func TestOrderClientEnsureSupportedContractsRejectsIncompleteSnapshot(t *testing.T) {
+	for name, body := range map[string]string{
+		"no data":        `{}`,
+		"missing a kind": `{"data":{"inputSettler":[]}}`,
+		"null kind":      `{"data":{"inputSettler":[],"outputSettler":null}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var methods []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				methods = append(methods, r.Method)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			err := client.ensureSupportedContracts(
+				context.Background(),
+				11155111,
+				common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				common.HexToAddress("0x2222222222222222222222222222222222222222"),
+			)
+			if err == nil || !strings.Contains(err.Error(), "incomplete snapshot") {
+				t.Fatalf("err = %v, want incomplete snapshot", err)
+			}
+			if len(methods) != 1 || methods[0] != http.MethodGet {
+				t.Fatalf("methods = %v, want only GET", methods)
 			}
 		})
 	}

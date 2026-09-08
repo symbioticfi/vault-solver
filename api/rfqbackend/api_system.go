@@ -31,7 +31,7 @@ func (r ApiApiV1HealthGetRequest) Execute() (*HealthResponse, *http.Response, er
 }
 
 /*
-ApiV1HealthGet Health check
+ApiV1HealthGet Method for ApiV1HealthGet
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1HealthGetRequest

@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the CreateOfferDto type satisfies the MappedNullable interface at compile time
@@ -21,7 +19,7 @@ var _ MappedNullable = &CreateOfferDto{}
 
 // CreateOfferDto struct for CreateOfferDto
 type CreateOfferDto struct {
-	// Chain ID for signature verification
+	// Chain ID for resolving the request EIP-712 domain
 	ChainId *float32 `json:"chainId,omitempty"`
 	// ID of the auction to submit an offer for
 	AuctionId float32 `json:"auctionId"`
@@ -37,8 +35,9 @@ type CreateOfferDto struct {
 	Expiration string `json:"expiration"`
 	// Whether to use callback when executing the offer
 	UseCallback bool `json:"useCallback"`
-	// EIP-712 signature (required if chainId is provided)
-	Signature *string `json:"signature,omitempty" validate:"regexp=^0x[a-fA-F0-9]{130}$"`
+	// EIP-712/EIP-1271 signature bytes. `0x` is accepted for deferred EIP-1271 approval only with a matching facilitator API key. Required if chainId is provided.
+	Signature            *string `json:"signature,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOfferDto CreateOfferDto
@@ -322,48 +321,43 @@ func (o CreateOfferDto) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Signature) {
 		toSerialize["signature"] = o.Signature
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *CreateOfferDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"auctionId",
-		"maker",
-		"amount",
-		"expectedReturn",
-		"nonce",
-		"expiration",
-		"useCallback",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varCreateOfferDto := _CreateOfferDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varCreateOfferDto)
+	err = json.Unmarshal(data, &varCreateOfferDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOfferDto(varCreateOfferDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "auctionId")
+		delete(additionalProperties, "maker")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "expectedReturn")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "expiration")
+		delete(additionalProperties, "useCallback")
+		delete(additionalProperties, "signature")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

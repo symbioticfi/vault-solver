@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
@@ -56,6 +57,12 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	solverNames := make([]string, len(cfg.Solvers))
 	for i, s := range cfg.Solvers {
 		solverNames[i] = s.Name
+	}
+	// With one solver per process (the deployed shape), stamp every line, shared components such as
+	// txmanager included, with the integration it serves. With several, each solver's own logger is
+	// stamped below instead, and shared components attribute work through the request label.
+	if len(solverNames) == 1 {
+		log = log.WithValues("solver", solverNames[0])
 	}
 	log.Info("vault-solver starting",
 		"version", version.Version,
@@ -132,13 +139,19 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ReportFatal: reportFatal,
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
+	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
 	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
-		slv, err := solver.New(sc.Name, sc.Config, deps)
+		solverDeps := deps
+		if len(cfg.Solvers) > 1 {
+			solverDeps.Log = log.WithValues("solver", sc.Name)
+		}
+		slv, err := solver.New(sc.Name, sc.Config, solverDeps)
 		if err != nil {
 			return err
 		}
 		solvers = append(solvers, slv)
+		solverLogs = append(solverLogs, solverDeps.Log)
 		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
 	}
 	if requiresTxManager {
@@ -192,8 +205,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
 		})
 	}
-	for _, slv := range solvers {
-		g.Go(func() error { return solver.Run(gctx, slv, log) })
+	for i, slv := range solvers {
+		g.Go(func() error { return solver.Run(gctx, slv, solverLogs[i]) })
 	}
 
 	var (

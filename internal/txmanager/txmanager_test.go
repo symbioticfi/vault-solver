@@ -1624,7 +1624,7 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
 
-	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
+	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
 	if err != nil || got != receipt {
 		t.Fatalf("waitForConfirmations = (%+v, %v), want stable confirmed receipt", got, err)
 	}
@@ -1652,7 +1652,7 @@ func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
 
-	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
+	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
 	if got != receipt || !errors.Is(err, errReceiptReorged) {
 		t.Fatalf("waitForConfirmations = (%+v, %v), want reorg error", got, err)
 	}

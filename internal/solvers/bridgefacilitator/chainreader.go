@@ -163,6 +163,11 @@ func authorizedByProbe(res chain.CallResult) bool {
 	return magic == erc1271MagicValue
 }
 
+// errAdapterUnconfigured marks an adapter whose on-chain wiring is incomplete (a zero offerSigner,
+// vault or asset). That is the normal state of a freshly deployed adapter, not a read failure, so
+// callers skip it quietly instead of alerting.
+var errAdapterUnconfigured = errors.New("adapter not configured")
+
 // decodeAddr returns the non-zero address a Multicall sub-call returned, or an error tagged with
 // `what` if it reverted, failed to decode, or returned zero.
 func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error), what string) (common.Address, error) {
@@ -174,7 +179,7 @@ func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error
 		return common.Address{}, errors.Errorf("decode %s: %w", what, err)
 	}
 	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s returned zero address", what)
+		return common.Address{}, errors.Errorf("%s returned zero address: %w", what, errAdapterUnconfigured)
 	}
 	return addr, nil
 }

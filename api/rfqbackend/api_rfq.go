@@ -37,9 +37,7 @@ func (r ApiApiV1CheckApprovalPostRequest) Execute() (*ApprovalCheckResponse, *ht
 }
 
 /*
-ApiV1CheckApprovalPost Check Reactor approval
-
-Returns an ERC-20 approval payload when Reactor allowance is insufficient.
+ApiV1CheckApprovalPost Method for ApiV1CheckApprovalPost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1CheckApprovalPostRequest
@@ -158,9 +156,9 @@ func (r ApiApiV1DiscountPostRequest) Execute() (*PublishDiscountResponse, *http.
 }
 
 /*
-ApiV1DiscountPost Publish a live discount
+ApiV1DiscountPost Method for ApiV1DiscountPost
 
-Validates a reusable discount signature and stores it as the live row for an adapter/token pair.
+Publish a signed discount. A signed request with deadline=0 instead cancels (deletes) the discount currently stored for the (adapter, tokenToRedeem) pair; the signer must still produce a valid signature and be authorized for the adapter. Cancellation is backend-only — it stops the discount being served but does not retract the signed object on-chain.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1DiscountPostRequest
@@ -263,292 +261,6 @@ func (a *RFQAPIService) ApiV1DiscountPostExecute(r ApiApiV1DiscountPostRequest) 
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type ApiApiV1DiscountsGetRequest struct {
-	ctx            context.Context
-	ApiService     *RFQAPIService
-	discountId     *string
-	discountIds    *string
-	adapter        *string
-	tokenToRedeem  *string
-	adapters       *string
-	tokensToRedeem *string
-}
-
-func (r ApiApiV1DiscountsGetRequest) DiscountId(discountId string) ApiApiV1DiscountsGetRequest {
-	r.discountId = &discountId
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) DiscountIds(discountIds string) ApiApiV1DiscountsGetRequest {
-	r.discountIds = &discountIds
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) Adapter(adapter string) ApiApiV1DiscountsGetRequest {
-	r.adapter = &adapter
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) TokenToRedeem(tokenToRedeem string) ApiApiV1DiscountsGetRequest {
-	r.tokenToRedeem = &tokenToRedeem
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) Adapters(adapters string) ApiApiV1DiscountsGetRequest {
-	r.adapters = &adapters
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) TokensToRedeem(tokensToRedeem string) ApiApiV1DiscountsGetRequest {
-	r.tokensToRedeem = &tokensToRedeem
-	return r
-}
-
-func (r ApiApiV1DiscountsGetRequest) Execute() (*DiscountsResponse, *http.Response, error) {
-	return r.ApiService.ApiV1DiscountsGetExecute(r)
-}
-
-/*
-ApiV1DiscountsGet List live discounts
-
-Returns currently live discount-backed inventory for adapter/token pairs.
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return ApiApiV1DiscountsGetRequest
-*/
-func (a *RFQAPIService) ApiV1DiscountsGet(ctx context.Context) ApiApiV1DiscountsGetRequest {
-	return ApiApiV1DiscountsGetRequest{
-		ApiService: a,
-		ctx:        ctx,
-	}
-}
-
-// Execute executes the request
-//
-//	@return DiscountsResponse
-func (a *RFQAPIService) ApiV1DiscountsGetExecute(r ApiApiV1DiscountsGetRequest) (*DiscountsResponse, *http.Response, error) {
-	var (
-		localVarHTTPMethod  = http.MethodGet
-		localVarPostBody    interface{}
-		formFiles           []formFile
-		localVarReturnValue *DiscountsResponse
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RFQAPIService.ApiV1DiscountsGet")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/api/v1/discounts"
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	if r.discountId != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "discountId", r.discountId, "form", "")
-	}
-	if r.discountIds != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "discountIds", r.discountIds, "form", "")
-	}
-	if r.adapter != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "adapter", r.adapter, "form", "")
-	}
-	if r.tokenToRedeem != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "tokenToRedeem", r.tokenToRedeem, "form", "")
-	}
-	if r.adapters != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "adapters", r.adapters, "form", "")
-	}
-	if r.tokensToRedeem != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "tokensToRedeem", r.tokensToRedeem, "form", "")
-	}
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type ApiApiV1DiscountsPostRequest struct {
-	ctx                       context.Context
-	ApiService                *RFQAPIService
-	apiV1DiscountsPostRequest *ApiV1DiscountsPostRequest
-}
-
-func (r ApiApiV1DiscountsPostRequest) ApiV1DiscountsPostRequest(apiV1DiscountsPostRequest ApiV1DiscountsPostRequest) ApiApiV1DiscountsPostRequest {
-	r.apiV1DiscountsPostRequest = &apiV1DiscountsPostRequest
-	return r
-}
-
-func (r ApiApiV1DiscountsPostRequest) Execute() (*ResolveDiscountResponse, *http.Response, error) {
-	return r.ApiService.ApiV1DiscountsPostExecute(r)
-}
-
-/*
-ApiV1DiscountsPost Resolve a live discount
-
-Returns the stored discount plus a fresh short-lived protocol signature.
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return ApiApiV1DiscountsPostRequest
-*/
-func (a *RFQAPIService) ApiV1DiscountsPost(ctx context.Context) ApiApiV1DiscountsPostRequest {
-	return ApiApiV1DiscountsPostRequest{
-		ApiService: a,
-		ctx:        ctx,
-	}
-}
-
-// Execute executes the request
-//
-//	@return ResolveDiscountResponse
-func (a *RFQAPIService) ApiV1DiscountsPostExecute(r ApiApiV1DiscountsPostRequest) (*ResolveDiscountResponse, *http.Response, error) {
-	var (
-		localVarHTTPMethod  = http.MethodPost
-		localVarPostBody    interface{}
-		formFiles           []formFile
-		localVarReturnValue *ResolveDiscountResponse
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RFQAPIService.ApiV1DiscountsPost")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/api/v1/discounts"
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.apiV1DiscountsPostRequest == nil {
-		return localVarReturnValue, nil, reportError("apiV1DiscountsPostRequest is required and must be specified")
-	}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{"application/json"}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	// body params
-	localVarPostBody = r.apiV1DiscountsPostRequest
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		if localVarHTTPResponse.StatusCode == 400 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 404 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
 type ApiApiV1LiquidityPostRequest struct {
 	ctx              context.Context
 	ApiService       *RFQAPIService
@@ -565,9 +277,7 @@ func (r ApiApiV1LiquidityPostRequest) Execute() (*LiquidityResponse, *http.Respo
 }
 
 /*
-ApiV1LiquidityPost Check available liquidity
-
-Requests best solver quotes for configured input amounts and reports oracle-relative price impact when a Midas oracle is configured.
+ApiV1LiquidityPost Method for ApiV1LiquidityPost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1LiquidityPostRequest
@@ -697,9 +407,7 @@ func (r ApiApiV1OrderPostRequest) Execute() (*CreateOrderResponse, *http.Respons
 }
 
 /*
-ApiV1OrderPost Create an order
-
-Submits a signed quote and creates an RFQ order.
+ApiV1OrderPost Method for ApiV1OrderPost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1OrderPostRequest
@@ -827,8 +535,7 @@ func (a *RFQAPIService) ApiV1OrderPostExecute(r ApiApiV1OrderPostRequest) (*Crea
 type ApiApiV1OrdersGetRequest struct {
 	ctx         context.Context
 	ApiService  *RFQAPIService
-	orderType   *string
-	limit       *int32
+	limit       *int64
 	cursor      *string
 	orderStatus *string
 	orderId     *string
@@ -841,12 +548,7 @@ type ApiApiV1OrdersGetRequest struct {
 	sort        *string
 }
 
-func (r ApiApiV1OrdersGetRequest) OrderType(orderType string) ApiApiV1OrdersGetRequest {
-	r.orderType = &orderType
-	return r
-}
-
-func (r ApiApiV1OrdersGetRequest) Limit(limit int32) ApiApiV1OrdersGetRequest {
+func (r ApiApiV1OrdersGetRequest) Limit(limit int64) ApiApiV1OrdersGetRequest {
 	r.limit = &limit
 	return r
 }
@@ -906,9 +608,7 @@ func (r ApiApiV1OrdersGetRequest) Execute() (*OrdersResponse, *http.Response, er
 }
 
 /*
-ApiV1OrdersGet List orders
-
-Lists orders by supported filters such as orderId, status, swapper, or filler.
+ApiV1OrdersGet Method for ApiV1OrdersGet
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1OrdersGetRequest
@@ -942,9 +642,6 @@ func (a *RFQAPIService) ApiV1OrdersGetExecute(r ApiApiV1OrdersGetRequest) (*Orde
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
-	if r.orderType != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "orderType", r.orderType, "form", "")
-	}
 	if r.limit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
 	}
@@ -1058,9 +755,7 @@ func (r ApiApiV1QuotePostRequest) Execute() (*PublicQuoteResponse, *http.Respons
 }
 
 /*
-ApiV1QuotePost Request a quote
-
-Returns an indicative quote or 404 when no solver can quote.
+ApiV1QuotePost Method for ApiV1QuotePost
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1QuotePostRequest

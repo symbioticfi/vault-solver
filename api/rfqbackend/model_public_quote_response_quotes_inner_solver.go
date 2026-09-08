@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PublicQuoteResponseQuotesInnerSolver type satisfies the MappedNullable interface at compile time
@@ -21,10 +19,11 @@ var _ MappedNullable = &PublicQuoteResponseQuotesInnerSolver{}
 
 // PublicQuoteResponseQuotesInnerSolver struct for PublicQuoteResponseQuotesInnerSolver
 type PublicQuoteResponseQuotesInnerSolver struct {
-	Id       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Filler   string                 `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Metadata map[string]interface{} `json:"metadata"`
+	Id                   string                                       `json:"id"`
+	Name                 string                                       `json:"name"`
+	Filler               string                                       `json:"filler" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Metadata             PublicQuoteResponseQuotesInnerSolverMetadata `json:"metadata"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PublicQuoteResponseQuotesInnerSolver PublicQuoteResponseQuotesInnerSolver
@@ -33,7 +32,7 @@ type _PublicQuoteResponseQuotesInnerSolver PublicQuoteResponseQuotesInnerSolver
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublicQuoteResponseQuotesInnerSolver(id string, name string, filler string, metadata map[string]interface{}) *PublicQuoteResponseQuotesInnerSolver {
+func NewPublicQuoteResponseQuotesInnerSolver(id string, name string, filler string, metadata PublicQuoteResponseQuotesInnerSolverMetadata) *PublicQuoteResponseQuotesInnerSolver {
 	this := PublicQuoteResponseQuotesInnerSolver{}
 	this.Id = id
 	this.Name = name
@@ -123,9 +122,9 @@ func (o *PublicQuoteResponseQuotesInnerSolver) SetFiller(v string) {
 }
 
 // GetMetadata returns the Metadata field value
-func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() map[string]interface{} {
+func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() PublicQuoteResponseQuotesInnerSolverMetadata {
 	if o == nil {
-		var ret map[string]interface{}
+		var ret PublicQuoteResponseQuotesInnerSolverMetadata
 		return ret
 	}
 
@@ -134,15 +133,15 @@ func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadata() map[string]interfac
 
 // GetMetadataOk returns a tuple with the Metadata field value
 // and a boolean to check if the value has been set.
-func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadataOk() (map[string]interface{}, bool) {
+func (o *PublicQuoteResponseQuotesInnerSolver) GetMetadataOk() (*PublicQuoteResponseQuotesInnerSolverMetadata, bool) {
 	if o == nil {
-		return map[string]interface{}{}, false
+		return nil, false
 	}
-	return o.Metadata, true
+	return &o.Metadata, true
 }
 
 // SetMetadata sets field value
-func (o *PublicQuoteResponseQuotesInnerSolver) SetMetadata(v map[string]interface{}) {
+func (o *PublicQuoteResponseQuotesInnerSolver) SetMetadata(v PublicQuoteResponseQuotesInnerSolverMetadata) {
 	o.Metadata = v
 }
 
@@ -160,45 +159,38 @@ func (o PublicQuoteResponseQuotesInnerSolver) ToMap() (map[string]interface{}, e
 	toSerialize["name"] = o.Name
 	toSerialize["filler"] = o.Filler
 	toSerialize["metadata"] = o.Metadata
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *PublicQuoteResponseQuotesInnerSolver) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"id",
-		"name",
-		"filler",
-		"metadata",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPublicQuoteResponseQuotesInnerSolver := _PublicQuoteResponseQuotesInnerSolver{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varPublicQuoteResponseQuotesInnerSolver)
+	err = json.Unmarshal(data, &varPublicQuoteResponseQuotesInnerSolver)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PublicQuoteResponseQuotesInnerSolver(varPublicQuoteResponseQuotesInnerSolver)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
+		delete(additionalProperties, "name")
+		delete(additionalProperties, "filler")
+		delete(additionalProperties, "metadata")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

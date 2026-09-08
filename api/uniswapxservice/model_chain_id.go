@@ -37,6 +37,7 @@ const (
 	_42161    ChainId = 42161
 	_42220    ChainId = 42220
 	_43114    ChainId = 43114
+	_57073    ChainId = 57073
 	_81457    ChainId = 81457
 	_7777777  ChainId = 7777777
 	_11155111 ChainId = 11155111
@@ -62,6 +63,7 @@ var AllowedChainIdEnumValues = []ChainId{
 	42161,
 	42220,
 	43114,
+	57073,
 	81457,
 	7777777,
 	11155111,

@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the CreateOrderRequestQuoteOrderInfo type satisfies the MappedNullable interface at compile time
@@ -22,10 +20,12 @@ var _ MappedNullable = &CreateOrderRequestQuoteOrderInfo{}
 // CreateOrderRequestQuoteOrderInfo struct for CreateOrderRequestQuoteOrderInfo
 type CreateOrderRequestQuoteOrderInfo struct {
 	TokenIn  string                                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	AmountIn string                                         `json:"amountIn" validate:"regexp=^\\\\d+$"`
+	AmountIn string                                         `json:"amountIn" validate:"regexp=^\\d+$"`
 	Outputs  []CreateOrderRequestQuoteOrderInfoOutputsInner `json:"outputs"`
-	Deadline int32                                          `json:"deadline"`
-	Nonce    string                                         `json:"nonce" validate:"regexp=^\\\\d+$"`
+	Deadline int64                                          `json:"deadline"`
+	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
+	Nonce                string `json:"nonce" validate:"regexp=^\\d+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequestQuoteOrderInfo CreateOrderRequestQuoteOrderInfo
@@ -34,7 +34,7 @@ type _CreateOrderRequestQuoteOrderInfo CreateOrderRequestQuoteOrderInfo
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCreateOrderRequestQuoteOrderInfo(tokenIn string, amountIn string, outputs []CreateOrderRequestQuoteOrderInfoOutputsInner, deadline int32, nonce string) *CreateOrderRequestQuoteOrderInfo {
+func NewCreateOrderRequestQuoteOrderInfo(tokenIn string, amountIn string, outputs []CreateOrderRequestQuoteOrderInfoOutputsInner, deadline int64, nonce string) *CreateOrderRequestQuoteOrderInfo {
 	this := CreateOrderRequestQuoteOrderInfo{}
 	this.TokenIn = tokenIn
 	this.AmountIn = amountIn
@@ -125,9 +125,9 @@ func (o *CreateOrderRequestQuoteOrderInfo) SetOutputs(v []CreateOrderRequestQuot
 }
 
 // GetDeadline returns the Deadline field value
-func (o *CreateOrderRequestQuoteOrderInfo) GetDeadline() int32 {
+func (o *CreateOrderRequestQuoteOrderInfo) GetDeadline() int64 {
 	if o == nil {
-		var ret int32
+		var ret int64
 		return ret
 	}
 
@@ -136,7 +136,7 @@ func (o *CreateOrderRequestQuoteOrderInfo) GetDeadline() int32 {
 
 // GetDeadlineOk returns a tuple with the Deadline field value
 // and a boolean to check if the value has been set.
-func (o *CreateOrderRequestQuoteOrderInfo) GetDeadlineOk() (*int32, bool) {
+func (o *CreateOrderRequestQuoteOrderInfo) GetDeadlineOk() (*int64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -144,7 +144,7 @@ func (o *CreateOrderRequestQuoteOrderInfo) GetDeadlineOk() (*int32, bool) {
 }
 
 // SetDeadline sets field value
-func (o *CreateOrderRequestQuoteOrderInfo) SetDeadline(v int32) {
+func (o *CreateOrderRequestQuoteOrderInfo) SetDeadline(v int64) {
 	o.Deadline = v
 }
 
@@ -187,46 +187,39 @@ func (o CreateOrderRequestQuoteOrderInfo) ToMap() (map[string]interface{}, error
 	toSerialize["outputs"] = o.Outputs
 	toSerialize["deadline"] = o.Deadline
 	toSerialize["nonce"] = o.Nonce
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *CreateOrderRequestQuoteOrderInfo) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"tokenIn",
-		"amountIn",
-		"outputs",
-		"deadline",
-		"nonce",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varCreateOrderRequestQuoteOrderInfo := _CreateOrderRequestQuoteOrderInfo{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varCreateOrderRequestQuoteOrderInfo)
+	err = json.Unmarshal(data, &varCreateOrderRequestQuoteOrderInfo)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequestQuoteOrderInfo(varCreateOrderRequestQuoteOrderInfo)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "amountIn")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "deadline")
+		delete(additionalProperties, "nonce")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

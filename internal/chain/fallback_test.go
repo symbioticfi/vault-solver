@@ -965,3 +965,35 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 		t.Fatalf("primary endpoint did not receive the broadcast, saw: %v", methods)
 	}
 }
+
+// A receipt lookup for a transaction sent through a private relay returns null from every public
+// upstream until it is mined; eRPC would retry that null across upstreams past our read budget.
+func TestFallbackTransport_OptsPendingLookupsOutOfERPCEmptyRetry(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":null}`)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		method string
+		want   string
+	}{
+		{method: "eth_getTransactionReceipt", want: "false"},
+		{method: "eth_getTransactionByHash", want: "false"},
+		{method: "eth_blockNumber", want: ""},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"` + tc.method + `","params":[]}`
+			resp, err := roundTrip(t, mustEndpoints(t, srv.URL), body)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			_ = resp.Body.Close()
+			if v := got.Get(erpcRetryEmptyHeader); v != tc.want {
+				t.Fatalf("%s header = %q, want %q", erpcRetryEmptyHeader, v, tc.want)
+			}
+		})
+	}
+}

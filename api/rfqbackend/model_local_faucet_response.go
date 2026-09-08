@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the LocalFaucetResponse type satisfies the MappedNullable interface at compile time
@@ -21,8 +19,9 @@ var _ MappedNullable = &LocalFaucetResponse{}
 
 // LocalFaucetResponse struct for LocalFaucetResponse
 type LocalFaucetResponse struct {
-	RequestId string                           `json:"requestId"`
-	Assets    []LocalFaucetResponseAssetsInner `json:"assets"`
+	RequestId            string                                     `json:"requestId"`
+	Assets               []LocalFaucetFundResponseFundedAssetsInner `json:"assets"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _LocalFaucetResponse LocalFaucetResponse
@@ -31,7 +30,7 @@ type _LocalFaucetResponse LocalFaucetResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLocalFaucetResponse(requestId string, assets []LocalFaucetResponseAssetsInner) *LocalFaucetResponse {
+func NewLocalFaucetResponse(requestId string, assets []LocalFaucetFundResponseFundedAssetsInner) *LocalFaucetResponse {
 	this := LocalFaucetResponse{}
 	this.RequestId = requestId
 	this.Assets = assets
@@ -71,9 +70,9 @@ func (o *LocalFaucetResponse) SetRequestId(v string) {
 }
 
 // GetAssets returns the Assets field value
-func (o *LocalFaucetResponse) GetAssets() []LocalFaucetResponseAssetsInner {
+func (o *LocalFaucetResponse) GetAssets() []LocalFaucetFundResponseFundedAssetsInner {
 	if o == nil {
-		var ret []LocalFaucetResponseAssetsInner
+		var ret []LocalFaucetFundResponseFundedAssetsInner
 		return ret
 	}
 
@@ -82,7 +81,7 @@ func (o *LocalFaucetResponse) GetAssets() []LocalFaucetResponseAssetsInner {
 
 // GetAssetsOk returns a tuple with the Assets field value
 // and a boolean to check if the value has been set.
-func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetResponseAssetsInner, bool) {
+func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetFundResponseFundedAssetsInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -90,7 +89,7 @@ func (o *LocalFaucetResponse) GetAssetsOk() ([]LocalFaucetResponseAssetsInner, b
 }
 
 // SetAssets sets field value
-func (o *LocalFaucetResponse) SetAssets(v []LocalFaucetResponseAssetsInner) {
+func (o *LocalFaucetResponse) SetAssets(v []LocalFaucetFundResponseFundedAssetsInner) {
 	o.Assets = v
 }
 
@@ -106,43 +105,36 @@ func (o LocalFaucetResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["assets"] = o.Assets
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *LocalFaucetResponse) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"requestId",
-		"assets",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varLocalFaucetResponse := _LocalFaucetResponse{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varLocalFaucetResponse)
+	err = json.Unmarshal(data, &varLocalFaucetResponse)
 
 	if err != nil {
 		return err
 	}
 
 	*o = LocalFaucetResponse(varLocalFaucetResponse)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "assets")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

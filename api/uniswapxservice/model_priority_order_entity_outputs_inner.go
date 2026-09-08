@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the PriorityOrderEntityOutputsInner type satisfies the MappedNullable interface at compile time
@@ -24,11 +22,12 @@ type PriorityOrderEntityOutputsInner struct {
 	// EIP-55 checksummed Ethereum address.
 	Token string `json:"token"`
 	// uint256 encoded as a base-10 string.
-	Amount string `json:"amount" validate:"regexp=^[0-9]{1,78}$"`
+	Amount string `json:"amount" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	MpsPerPriorityFeeWei string `json:"mpsPerPriorityFeeWei" validate:"regexp=^[0-9]{1,78}$"`
+	MpsPerPriorityFeeWei string `json:"mpsPerPriorityFeeWei" validate:"regexp=^[0-9]{1\\,78}$"`
 	// EIP-55 checksummed Ethereum address.
-	Recipient string `json:"recipient"`
+	Recipient            string `json:"recipient"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _PriorityOrderEntityOutputsInner PriorityOrderEntityOutputsInner
@@ -164,45 +163,38 @@ func (o PriorityOrderEntityOutputsInner) ToMap() (map[string]interface{}, error)
 	toSerialize["amount"] = o.Amount
 	toSerialize["mpsPerPriorityFeeWei"] = o.MpsPerPriorityFeeWei
 	toSerialize["recipient"] = o.Recipient
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *PriorityOrderEntityOutputsInner) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"token",
-		"amount",
-		"mpsPerPriorityFeeWei",
-		"recipient",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varPriorityOrderEntityOutputsInner := _PriorityOrderEntityOutputsInner{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varPriorityOrderEntityOutputsInner)
+	err = json.Unmarshal(data, &varPriorityOrderEntityOutputsInner)
 
 	if err != nil {
 		return err
 	}
 
 	*o = PriorityOrderEntityOutputsInner(varPriorityOrderEntityOutputsInner)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "mpsPerPriorityFeeWei")
+		delete(additionalProperties, "recipient")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

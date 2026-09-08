@@ -2,6 +2,7 @@ package observability
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -59,14 +60,57 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 	for _, f := range fields {
 		f.AddTo(enc)
 	}
-	sentry.WithScope(func(scope *sentry.Scope) {
+	// The global hub's scope stack is not goroutine-safe; each write gets its own clone.
+	hub := sentry.CurrentHub().Clone()
+	hub.WithScope(func(scope *sentry.Scope) {
 		if len(enc.Fields) > 0 {
 			scope.SetContext("log", enc.Fields)
 		}
 		scope.SetLevel(sentryLevel(e.Level))
-		sentry.CaptureMessage(e.Message)
+		// Loggers are named per solver ("rfq", "lifi.txmanager", ...), so the name says which
+		// deployment an event came from even when the log site is shared code like txmanager.
+		tags := eventTags(e.LoggerName, enc.Fields)
+		for key, value := range tags {
+			scope.SetTag(key, value)
+		}
+		// Group by solver and static message, not the title: the title carries the error text so
+		// the issue stream shows the cause, while one log site in one solver still maps to one issue.
+		scope.SetFingerprint([]string{tags["solver"], e.Message})
+		hub.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
+}
+
+// eventTags picks the searchable attribution for an event. "solver" is the log field run.go
+// stamps (process-wide with one solver, per solver otherwise), falling back to the first logger
+// name segment ("rfq.txmanager" -> "rfq"); "label" is the txmanager request label, which is how
+// shared components attribute work when several solvers share a process.
+func eventTags(loggerName string, fields map[string]any) map[string]string {
+	tags := map[string]string{}
+	if loggerName != "" {
+		tags["logger"] = loggerName
+	}
+	solver, _ := fields["solver"].(string)
+	if solver == "" {
+		solver, _, _ = strings.Cut(loggerName, ".")
+	}
+	if solver != "" {
+		tags["solver"] = solver
+	}
+	if label, ok := fields["label"].(string); ok && label != "" {
+		tags["label"] = label
+	}
+	return tags
+}
+
+// eventTitle is the log message followed by the logged error, when there is one. logr's
+// Error(err, msg) reaches zap as the static msg plus an "error" field, so without this the issue
+// stream only ever shows the message.
+func eventTitle(message string, fields map[string]any) string {
+	if errText, ok := fields["error"].(string); ok && errText != "" {
+		return message + ": " + errText
+	}
+	return message
 }
 
 func (c *sentryCore) Sync() error { sentry.Flush(sentryFlushTimeout); return nil }

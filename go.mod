@@ -2,13 +2,13 @@ module github.com/symbioticfi/vault-solver
 
 go 1.26
 
-toolchain go1.26.5
+toolchain go1.26.7
 
 require (
 	github.com/Khan/genqlient v0.8.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/ethereum/go-ethereum v1.17.5
-	github.com/getsentry/sentry-go v0.48.0
+	github.com/getsentry/sentry-go v0.49.0
 	github.com/go-errors/errors v1.5.1
 	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/zapr v1.3.0

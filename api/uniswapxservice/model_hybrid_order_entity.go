@@ -11,9 +11,7 @@ API version: 2.0.0
 package uniswapxservice
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the HybridOrderEntity type satisfies the MappedNullable interface at compile time
@@ -27,7 +25,7 @@ type HybridOrderEntity struct {
 	// EIP-712 signature over the order.
 	Signature string `json:"signature" validate:"regexp=^0x[0-9a-fA-F]{130}$"`
 	// Permit2 nonce, uint256 encoded as a base-10 string.
-	Nonce       *string     `json:"nonce,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	Nonce       *string     `json:"nonce,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	OrderHash   string      `json:"orderHash" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
 	OrderStatus OrderStatus `json:"orderStatus"`
 	ChainId     ChainId     `json:"chainId"`
@@ -35,9 +33,9 @@ type HybridOrderEntity struct {
 	Swapper           string   `json:"swapper"`
 	AuctionStartBlock *float32 `json:"auctionStartBlock,omitempty"`
 	// uint256 encoded as a base-10 string.
-	BaselinePriorityFee *string `json:"baselinePriorityFee,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	BaselinePriorityFee *string `json:"baselinePriorityFee,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// uint256 encoded as a base-10 string.
-	ScalingFactor *string `json:"scalingFactor,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	ScalingFactor *string `json:"scalingFactor,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// 1e18-denominated multipliers; all elements are on the same side of 1e18. Empty for priority-style hybrid orders.
 	PriceCurve []string                        `json:"priceCurve,omitempty"`
 	Input      *HybridOrderEntityInput         `json:"input,omitempty"`
@@ -53,9 +51,10 @@ type HybridOrderEntity struct {
 	// Defined when the order has a quote request associated with it.
 	RequestId *string `json:"requestId,omitempty"`
 	// Transaction hash of the fill. Defined once the order has been filled.
-	TxHash         *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
-	SettledAmounts []SettledAmount `json:"settledAmounts,omitempty"`
-	Route          *Route          `json:"route,omitempty"`
+	TxHash               *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	SettledAmounts       []SettledAmount `json:"settledAmounts,omitempty"`
+	Route                *Route          `json:"route,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _HybridOrderEntity HybridOrderEntity
@@ -829,48 +828,57 @@ func (o HybridOrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Route) {
 		toSerialize["route"] = o.Route
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *HybridOrderEntity) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"type",
-		"encodedOrder",
-		"signature",
-		"orderHash",
-		"orderStatus",
-		"chainId",
-		"swapper",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varHybridOrderEntity := _HybridOrderEntity{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varHybridOrderEntity)
+	err = json.Unmarshal(data, &varHybridOrderEntity)
 
 	if err != nil {
 		return err
 	}
 
 	*o = HybridOrderEntity(varHybridOrderEntity)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
+		delete(additionalProperties, "encodedOrder")
+		delete(additionalProperties, "signature")
+		delete(additionalProperties, "nonce")
+		delete(additionalProperties, "orderHash")
+		delete(additionalProperties, "orderStatus")
+		delete(additionalProperties, "chainId")
+		delete(additionalProperties, "swapper")
+		delete(additionalProperties, "auctionStartBlock")
+		delete(additionalProperties, "baselinePriorityFee")
+		delete(additionalProperties, "scalingFactor")
+		delete(additionalProperties, "priceCurve")
+		delete(additionalProperties, "input")
+		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "cosigner")
+		delete(additionalProperties, "cosignerData")
+		delete(additionalProperties, "cosignature")
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "quoteId")
+		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "settledAmounts")
+		delete(additionalProperties, "route")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

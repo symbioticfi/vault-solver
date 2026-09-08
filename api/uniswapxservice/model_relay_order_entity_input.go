@@ -22,10 +22,13 @@ type RelayOrderEntityInput struct {
 	// EIP-55 checksummed Ethereum address.
 	Token *string `json:"token,omitempty"`
 	// uint256 encoded as a base-10 string.
-	Amount *string `json:"amount,omitempty" validate:"regexp=^[0-9]{1,78}$"`
+	Amount *string `json:"amount,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
 	// EIP-55 checksummed Ethereum address.
-	Recipient *string `json:"recipient,omitempty"`
+	Recipient            *string `json:"recipient,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _RelayOrderEntityInput RelayOrderEntityInput
 
 // NewRelayOrderEntityInput instantiates a new RelayOrderEntityInput object
 // This constructor will assign default values to properties that have it defined,
@@ -159,7 +162,35 @@ func (o RelayOrderEntityInput) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Recipient) {
 		toSerialize["recipient"] = o.Recipient
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *RelayOrderEntityInput) UnmarshalJSON(data []byte) (err error) {
+	varRelayOrderEntityInput := _RelayOrderEntityInput{}
+
+	err = json.Unmarshal(data, &varRelayOrderEntityInput)
+
+	if err != nil {
+		return err
+	}
+
+	*o = RelayOrderEntityInput(varRelayOrderEntityInput)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "token")
+		delete(additionalProperties, "amount")
+		delete(additionalProperties, "recipient")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableRelayOrderEntityInput struct {

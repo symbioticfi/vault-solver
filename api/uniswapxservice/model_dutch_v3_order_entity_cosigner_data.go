@@ -23,9 +23,12 @@ type DutchV3OrderEntityCosignerData struct {
 	// EIP-55 checksummed Ethereum address.
 	ExclusiveFiller *string `json:"exclusiveFiller,omitempty"`
 	// uint256 encoded as a base-10 string.
-	InputOverride   *string  `json:"inputOverride,omitempty" validate:"regexp=^[0-9]{1,78}$"`
-	OutputOverrides []string `json:"outputOverrides,omitempty"`
+	InputOverride        *string  `json:"inputOverride,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	OutputOverrides      []string `json:"outputOverrides,omitempty"`
+	AdditionalProperties map[string]interface{}
 }
+
+type _DutchV3OrderEntityCosignerData DutchV3OrderEntityCosignerData
 
 // NewDutchV3OrderEntityCosignerData instantiates a new DutchV3OrderEntityCosignerData object
 // This constructor will assign default values to properties that have it defined,
@@ -194,7 +197,36 @@ func (o DutchV3OrderEntityCosignerData) ToMap() (map[string]interface{}, error) 
 	if !IsNil(o.OutputOverrides) {
 		toSerialize["outputOverrides"] = o.OutputOverrides
 	}
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
+}
+
+func (o *DutchV3OrderEntityCosignerData) UnmarshalJSON(data []byte) (err error) {
+	varDutchV3OrderEntityCosignerData := _DutchV3OrderEntityCosignerData{}
+
+	err = json.Unmarshal(data, &varDutchV3OrderEntityCosignerData)
+
+	if err != nil {
+		return err
+	}
+
+	*o = DutchV3OrderEntityCosignerData(varDutchV3OrderEntityCosignerData)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "decayStartBlock")
+		delete(additionalProperties, "exclusiveFiller")
+		delete(additionalProperties, "inputOverride")
+		delete(additionalProperties, "outputOverrides")
+		o.AdditionalProperties = additionalProperties
+	}
+
+	return err
 }
 
 type NullableDutchV3OrderEntityCosignerData struct {

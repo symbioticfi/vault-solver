@@ -131,7 +131,7 @@ func (r ApiLimitOrdersGetRequest) Execute() (*GetOrdersResponse, *http.Response,
 /*
 LimitOrdersGet Retrieve UniswapX limit orders
 
-Retrieve limit orders filtered by query parameter(s). Query semantics are identical to /orders. Limit orders are returned with the Dutch order shape without decay (input and output startAmount equals endAmount).
+Retrieve limit orders filtered by query parameter(s). Query semantics match /orders, and this endpoint additionally pages with `cursor` and accepts `sortKey`, `sort` and `desc`: `orderHashes` cannot be combined with `sortKey`, and `sortKey` is required whenever `sort` or `desc` is provided. Limit orders are returned with the Dutch order shape without decay (input and output startAmount equals endAmount).
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiLimitOrdersGetRequest

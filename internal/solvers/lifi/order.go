@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -20,7 +21,12 @@ const (
 	exclusiveDutchAuctionContextType byte = 0xe1
 )
 
-var errOrderForDifferentChain = errors.New("order is for a different chain")
+var (
+	errOrderForDifferentChain = errors.New("order is for a different chain")
+	// errOrderUnsupported marks order kinds the feed carries but this solver never fills (non-EVM
+	// submissions, non-fillable statuses). Expected traffic, not a malformed message.
+	errOrderUnsupported = errors.New("unsupported order")
+)
 
 type submittedOrderEvent struct {
 	OrderType    string                        `json:"orderType"`
@@ -85,15 +91,21 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	}
 
 	if !isFillableOrderStatus(event.Meta.OrderStatus) {
-		return nil, errors.Errorf("unsupported order status %q", event.Meta.OrderStatus)
+		return nil, errors.Errorf("unsupported order status %q: %w", event.Meta.OrderStatus, errOrderUnsupported)
 	}
 	if !isOnChainOrderEvent(event) {
 		if event.OrderType == "" {
 			return nil, errors.New("missing orderType requires onChainOrderId and inputSettler")
 		}
-		return nil, errors.Errorf("unsupported non-onchain order type %q", event.OrderType)
+		return nil, errors.Errorf("unsupported non-onchain order type %q: %w", event.OrderType, errOrderUnsupported)
 	}
 
+	// Classify by chain before reading any address: the feed carries every network LI.FI serves
+	// (a Solana settler is a base58 program id) and cross-chain orders, and this solver only fills
+	// same-chain orders on its configured chain.
+	if err := validateOrderChains(event.Order, chainID); err != nil {
+		return nil, err
+	}
 	inputSettler, err := parseAddress(event.InputSettler, "inputSettler")
 	if err != nil {
 		return nil, err
@@ -158,6 +170,27 @@ func isOnChainOrderType(orderType string) bool {
 	default:
 		return false
 	}
+}
+
+func validateOrderChains(dto lifiorder.SubmitOrderDtoOrder, chainID int64) error {
+	want := big.NewInt(chainID)
+	originChainID, err := parseUint(dto.OriginChainId, "order.originChainId")
+	if err != nil {
+		return err
+	}
+	if originChainID.Cmp(want) != 0 {
+		return errors.Errorf("%w: originChainId %s, configuredChainId %d", errOrderForDifferentChain, originChainID, chainID)
+	}
+	for i, output := range dto.Outputs {
+		outputChainID, err := parseUint(output.ChainId, fmt.Sprintf("order.outputs[%d].chainId", i))
+		if err != nil {
+			return err
+		}
+		if outputChainID.Cmp(want) != 0 {
+			return errors.Errorf("%w: outputs[%d].chainId %s, configuredChainId %d", errOrderForDifferentChain, i, outputChainID, chainID)
+		}
+	}
+	return nil
 }
 
 func isOnChainOrderEvent(event submittedOrderEvent) bool {
@@ -260,6 +293,10 @@ func parseOutput(
 	tokenID, err := parseBytes32(dto.Token, "order.outputs[0].token")
 	if err != nil {
 		return nil, err
+	}
+	if tokenID == ([32]byte{}) {
+		// The zero identifier is the chain's native asset; fills only deliver ERC-20 outputs.
+		return nil, errors.Errorf("order.outputs[0].token: native asset output: %w", errOrderUnsupported)
 	}
 	tokenOut, err := identifierAddress(tokenID, "order.outputs[0].token")
 	if err != nil {

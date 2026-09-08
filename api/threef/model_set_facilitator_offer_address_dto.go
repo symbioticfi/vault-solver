@@ -11,9 +11,7 @@ API version: 0.0.1
 package threef
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the SetFacilitatorOfferAddressDto type satisfies the MappedNullable interface at compile time
@@ -22,7 +20,8 @@ var _ MappedNullable = &SetFacilitatorOfferAddressDto{}
 // SetFacilitatorOfferAddressDto struct for SetFacilitatorOfferAddressDto
 type SetFacilitatorOfferAddressDto struct {
 	// Offer address to associate with the facilitator
-	OfferAddress string `json:"offerAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	OfferAddress         string `json:"offerAddress" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _SetFacilitatorOfferAddressDto SetFacilitatorOfferAddressDto
@@ -80,42 +79,35 @@ func (o SetFacilitatorOfferAddressDto) MarshalJSON() ([]byte, error) {
 func (o SetFacilitatorOfferAddressDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["offerAddress"] = o.OfferAddress
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *SetFacilitatorOfferAddressDto) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"offerAddress",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varSetFacilitatorOfferAddressDto := _SetFacilitatorOfferAddressDto{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varSetFacilitatorOfferAddressDto)
+	err = json.Unmarshal(data, &varSetFacilitatorOfferAddressDto)
 
 	if err != nil {
 		return err
 	}
 
 	*o = SetFacilitatorOfferAddressDto(varSetFacilitatorOfferAddressDto)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "offerAddress")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

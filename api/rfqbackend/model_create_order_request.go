@@ -11,9 +11,7 @@ API version: 1.0.0
 package rfqbackend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 )
 
 // checks if the CreateOrderRequest type satisfies the MappedNullable interface at compile time
@@ -21,8 +19,9 @@ var _ MappedNullable = &CreateOrderRequest{}
 
 // CreateOrderRequest struct for CreateOrderRequest
 type CreateOrderRequest struct {
-	Quote     CreateOrderRequestQuote `json:"quote"`
-	Signature string                  `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Quote                CreateOrderRequestQuote `json:"quote"`
+	Signature            string                  `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	AdditionalProperties map[string]interface{}
 }
 
 type _CreateOrderRequest CreateOrderRequest
@@ -106,43 +105,36 @@ func (o CreateOrderRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["quote"] = o.Quote
 	toSerialize["signature"] = o.Signature
+
+	for key, value := range o.AdditionalProperties {
+		toSerialize[key] = value
+	}
+
 	return toSerialize, nil
 }
 
 func (o *CreateOrderRequest) UnmarshalJSON(data []byte) (err error) {
-	// This validates that all required properties are included in the JSON object
-	// by unmarshalling the object into a generic map with string keys and checking
-	// that every required field exists as a key in the generic map.
-	requiredProperties := []string{
-		"quote",
-		"signature",
-	}
-
-	allProperties := make(map[string]interface{})
-
-	err = json.Unmarshal(data, &allProperties)
-
-	if err != nil {
-		return err
-	}
-
-	for _, requiredProperty := range requiredProperties {
-		if _, exists := allProperties[requiredProperty]; !exists {
-			return fmt.Errorf("no value given for required property %v", requiredProperty)
-		}
-	}
+	// Required-property validation removed by hack/openapi-relax-client.py:
+	// upstream may drop fields at any time; absent values zero-value instead of
+	// failing the whole decode.
 
 	varCreateOrderRequest := _CreateOrderRequest{}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&varCreateOrderRequest)
+	err = json.Unmarshal(data, &varCreateOrderRequest)
 
 	if err != nil {
 		return err
 	}
 
 	*o = CreateOrderRequest(varCreateOrderRequest)
+
+	additionalProperties := make(map[string]interface{})
+
+	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "quote")
+		delete(additionalProperties, "signature")
+		o.AdditionalProperties = additionalProperties
+	}
 
 	return err
 }

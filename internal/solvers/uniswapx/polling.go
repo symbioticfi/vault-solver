@@ -86,9 +86,6 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 	lookback := s.exclusiveRecoveryLookback()
 	createdAfter := now.Add(-lookback)
 	entries, err := s.orders.recentOrders(ctx, s.chainID, s.cfg.Executor, createdAfter)
-	if err != nil {
-		return errors.Errorf("poll recent exclusive orders: %w", err)
-	}
 	for _, entry := range entries {
 		if entry.OrderStatus == orderStatusOpen {
 			continue
@@ -113,6 +110,9 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 		"createdAfter", createdAfter.Unix(),
 		"startup", startup,
 	)
+	if err != nil {
+		return errors.Errorf("poll recent exclusive orders: %w", err)
+	}
 	return nil
 }
 
