@@ -205,7 +205,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.log.Error(err, "quote refresh: read latest block time")
 		return
 	}
-	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor, chainTime)
+	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
 	if err != nil {
 		s.log.Error(err, "quote refresh: read routes")
 		return
