@@ -43,17 +43,16 @@ func (r *reader) resolveRoutes(ctx context.Context, adapters []common.Address) (
 	return r.snapshots.ResolveRoutes(ctx, adapters)
 }
 
-func (r *reader) validateGasTokens(routes []route) error {
-	return r.snapshots.ValidateGasTokens(routes)
+func (r *reader) validateGasOracles(ctx context.Context, routes []route) error {
+	return r.snapshots.ValidateGasOracles(ctx, routes)
 }
 
 func (r *reader) quoteSnapshots(
 	ctx context.Context,
 	routes []route,
 	executorAddr common.Address,
-	chainTime time.Time,
 ) (quoteSnapshotSet, error) {
-	return r.snapshots.Quote(ctx, routes, executorAddr, chainTime)
+	return r.snapshots.Quote(ctx, routes, executorAddr)
 }
 
 func (r *reader) fillSnapshots(
@@ -62,9 +61,8 @@ func (r *reader) fillSnapshots(
 	executorAddr common.Address,
 	tokenIn common.Address,
 	amountIn *big.Int,
-	chainTime time.Time,
 ) (fillSnapshotSet, error) {
-	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn, chainTime)
+	return r.snapshots.Fill(ctx, routes, executorAddr, tokenIn, amountIn)
 }
 
 func (r *reader) validateExecutor(
