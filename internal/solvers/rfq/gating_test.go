@@ -327,6 +327,7 @@ func TestQuoteMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 	strategy := &inputRecordingStrategy{quoteOut: types.QuoteOutput{Decision: types.DecisionDecline}}
 	srv := testServer()
+	srv.quotes.discountsEnabled = true
 	srv.quotes.strategy = strategy
 	request := validQuoteBody()
 	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
@@ -357,4 +358,23 @@ func testPermissionedPolicy(t *testing.T, tokens ...common.Address) tokenpolicy.
 		t.Fatalf("tokenpolicy.New: %v", err)
 	}
 	return policy
+}
+
+func TestQuoteFiltersDiscountsInExternalMode(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		srv := testServer()
+		srv.quotes.discountsEnabled = enabled
+		recorder := &inputRecordingStrategy{quoteOut: types.QuoteOutput{Decision: types.DecisionDecline}}
+		srv.quotes.strategy = recorder
+		request := validQuoteBody()
+		id := "0x00000000000000000000000000000000000000000000000000000000000000ab"
+		request.Adapters[0].DiscountID = &id
+		_, err := srv.quotes.quote(t.Context(), &request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(recorder.quoteInput.Candidates); (got > 0) != enabled {
+			t.Fatalf("enabled %v: candidates %d", enabled, got)
+		}
+	}
 }

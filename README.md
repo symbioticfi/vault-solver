@@ -351,10 +351,24 @@ and its replacements; cancellation may exceed that request cap but never `maxFee
 to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
 positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
 when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
-txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
-the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
+txmanager uses the median gas-weighted p25 priority reward from the latest five blocks, so one low-reward
+block cannot drag the tip to zero. The result is clamped to available fee-cap headroom.
 Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
 operator-controlled fallback.
+
+For liquidity commitments, the built-in strategies apply these limits:
+
+- 3F counts all live offer principals and request slots before creating offers for another auction.
+  Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
+  `principal`; remote strategies must reserve it as well as the live request slot.
+- RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
+  direct swap, whose calldata caps output. A failed transaction with a recorded hash is not resubmitted;
+  uncertain inclusion is reconciled through the backend.
+- LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
+  quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
+- The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
+  decision are skipped; liquidity and gas use the full estimated callback output, while the configured
+  haircut applies to profit. Search shortlists at most 512 candidates using the selected profit objective.
 
 ## Requirements
 

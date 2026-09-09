@@ -102,7 +102,7 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 		t.Fatalf("remaining = %s, want 0", input.Auctions[0].RemainingAmount)
 	}
 	if len(input.LiveOffers) != 1 ||
-		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
+		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 || input.LiveOffers[0].Principal.Int64() != 100 {
 		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
 	}
 }

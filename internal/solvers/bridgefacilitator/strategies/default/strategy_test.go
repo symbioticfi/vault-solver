@@ -263,3 +263,68 @@ func TestStrategyOwnsEligibility(t *testing.T) {
 		t.Fatalf("offers = %+v, want none: live, collateral, and min-yield filters are strategy-owned", got.Offers)
 	}
 }
+
+func TestStrategyReservesLiveOffersAcrossDiscoveryPasses(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		principal     *big.Int
+		maxConcurrent int
+		want          int64
+	}{
+		{"remaining principal", big.NewInt(60_000_000), 50, 40_000_000},
+		{"fully committed", big.NewInt(100_000_000), 50, 0},
+		{"last slot committed", big.NewInt(10_000_000), 1, 0},
+		{"unknown principal", nil, 50, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := testAdapter(1, 100_000_000)
+			adapter.MaxConcurrent = tc.maxConcurrent
+			out, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{testAuction(2, 100_000_000)},
+				LiveOffers: []types.LiveOffer{{AdapterID: adapter.ID, AuctionID: 1, Principal: tc.principal}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			total := new(big.Int)
+			for _, offer := range out.Offers {
+				total.Add(total, offer.Principal)
+			}
+			if total.Int64() != tc.want {
+				t.Fatalf("principal = %s, want %d", total, tc.want)
+			}
+		})
+	}
+}
+
+func TestStrategyLeavesRemainderAboveNextAdapterFloor(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		firstMin, wantFirst, wantSecond int64
+	}{
+		{"rebalance", 0, 70_000_000, 20_000_000},
+		{"preserve first floor", 75_000_000, 80_000_000, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := testAdapter(1, 80_000_000), testAdapter(2, 50_000_000)
+			a.MinAssets = big.NewInt(tc.firstMin)
+			b.MinAssets = big.NewInt(20_000_000)
+			out, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{a, b}, Auctions: []types.AuctionSnapshot{testAuction(1, 90_000_000)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[common.Address]int64{}
+			for _, offer := range out.Offers {
+				got[offer.Maker] = offer.Principal.Int64()
+				if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, new(big.Int), 200); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got[a.Adapter] != tc.wantFirst || got[b.Adapter] != tc.wantSecond {
+				t.Fatalf("amounts = %v", got)
+			}
+		})
+	}
+}

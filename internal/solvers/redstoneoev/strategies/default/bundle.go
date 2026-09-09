@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math/big"
 	"slices"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
@@ -15,7 +16,11 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 )
 
-const netBundleBeamWidth = 64
+const (
+	netBundleBeamWidth = 64
+	// Bound auction-time replay work independently of the monitor's tracked position count.
+	maxBundleSearchCandidates = 512
+)
 
 type bundleEngine struct {
 	cfg Config
@@ -30,8 +35,8 @@ func newBundleEngine(cfg Config, log logr.Logger) bundleEngine {
 type bundleLeg struct {
 	selectedLeg
 
-	expectedLoanOut *big.Int       // loan-token output estimate used for route/gas prediction
-	collateral      common.Address // seized collateral; legs sharing it share the adapter's getMaxAssets pool
+	settlementLoanOut *big.Int       // loan-token output estimate used for route/gas prediction
+	collateral        common.Address // seized collateral; legs sharing it share the adapter's getMaxAssets pool
 }
 
 // scoredLeg is a liquidatable, sized leg paired with replay source and the cached adapter budget.
@@ -123,6 +128,23 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 		return bundleSearchState{}, false
 	}
 	group := sortedScoredLegs(scored)
+	if len(group) > maxBundleSearchCandidates {
+		// Rank the shortlist by the actual objective, including route gas in net mode.
+		// A gross-only cut can discard the only profitable acquire route.
+		type scoredCandidate struct {
+			leg   scoredLeg
+			score *big.Int
+		}
+		ranked := make([]scoredCandidate, len(group))
+		for i, leg := range group {
+			ranked[i] = scoredCandidate{leg, scoreFn(chosenBundle{legs: []bundleLeg{leg.bundleLeg}, grossLoan: leg.profit})}
+		}
+		slices.SortStableFunc(ranked, func(a, b scoredCandidate) int { return b.score.Cmp(a.score) })
+		group = group[:maxBundleSearchCandidates]
+		for i := range group {
+			group[i] = ranked[i].leg
+		}
+	}
 	start := bundleSearchState{
 		bundle:   chosenBundle{grossLoan: new(big.Int)},
 		consumed: make(map[common.Address]*big.Int),
@@ -147,17 +169,11 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 					continue
 				}
 				trial.score = scoreFn(trial.bundle)
-				nextBeam = append(nextBeam, trial)
+				nextBeam = retainBundleTrial(nextBeam, trial)
 			}
 		}
 		if len(nextBeam) == 0 {
 			break
-		}
-		slices.SortStableFunc(nextBeam, func(a, b bundleSearchState) int {
-			return b.score.Cmp(a.score)
-		})
-		if len(nextBeam) > netBundleBeamWidth {
-			nextBeam = nextBeam[:netBundleBeamWidth]
 		}
 		if len(best.bundle.legs) == 0 || nextBeam[0].score.Cmp(best.score) > 0 {
 			best = nextBeam[0]
@@ -227,7 +243,7 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	nextMarket.positions[cand.Borrower] = replay.Position
 	nextLeg := sl
 	nextLeg.selectedLeg = sized.leg
-	nextLeg.expectedLoanOut = sized.expectedLoanOut
+	nextLeg.settlementLoanOut = sized.settlementLoanOut
 	nextLeg.profit = sized.profit
 	nextLeg.collateral = cand.Market.Params.CollateralToken
 	nextLeg.maxAssets = sl.source.quote.MaxAssets
@@ -250,7 +266,7 @@ func fitsCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) bo
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return true
 	}
-	next := new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
+	next := new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.settlementLoanOut))
 	return next.Cmp(sl.maxAssets) <= 0
 }
 
@@ -258,7 +274,7 @@ func commitCollateralBudget(consumed map[common.Address]*big.Int, sl scoredLeg) 
 	if sl.maxAssets == nil || sl.maxAssets.Sign() <= 0 {
 		return
 	}
-	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.expectedLoanOut))
+	consumed[sl.collateral] = new(big.Int).Add(orZero(consumed[sl.collateral]), orZero(sl.settlementLoanOut))
 }
 
 func cloneCollateralBudget(in map[common.Address]*big.Int) map[common.Address]*big.Int {
@@ -313,7 +329,7 @@ func cloneBundleWithLeg(b chosenBundle, sl scoredLeg) chosenBundle {
 func cloneBundleLeg(in bundleLeg) bundleLeg {
 	in.MaxSeizeAssets = cloneBig(in.MaxSeizeAssets)
 	in.MinProfit = cloneBig(in.MinProfit)
-	in.expectedLoanOut = cloneBig(in.expectedLoanOut)
+	in.settlementLoanOut = cloneBig(in.settlementLoanOut)
 	return in
 }
 
@@ -429,4 +445,21 @@ func (e bundleEngine) logBundleEconomics(auctionID, msg string, b chosenBundle, 
 		"gasLimit", gasLimit,
 		"usableGasLimit", usableGasLimit(gasLimit),
 		"routes", liquidlanegas.RoutesString(gas.Routes))
+}
+
+// retainBundleTrial keeps the best beam in descending order, preserving encounter order for ties.
+// Rejected trials are released immediately instead of retaining width*candidates replay states.
+func retainBundleTrial(beam []bundleSearchState, trial bundleSearchState) []bundleSearchState {
+	index := sort.Search(len(beam), func(i int) bool {
+		return beam[i].score.Cmp(trial.score) < 0
+	})
+	if index >= netBundleBeamWidth {
+		return beam
+	}
+	if len(beam) < netBundleBeamWidth {
+		beam = append(beam, bundleSearchState{})
+	}
+	copy(beam[index+1:], beam[index:len(beam)-1])
+	beam[index] = trial
+	return beam
 }

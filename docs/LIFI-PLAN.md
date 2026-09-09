@@ -429,12 +429,10 @@ type Strategy interface {
   when at most `max(quoteInterval, quoteTtl / 3)` remains, even when no new block is observed or the head poll
   fails. The strategy
   may only shorten that expiry to `discount deadline - executionDeadlineBuffer`.
-  Capacity allocation is scoped to one token pair before the range curve is built. Different pairs backed
-  by the same vault therefore each advertise the full currently unreserved `CapacityID` instead of receiving
-  static shares. This is deliberately optimistic: an accepted fill reserves the shared domain and wakes quote
-  refresh immediately, but two orders matched against the previous curves can still race. Fresh fill planning,
-  the shared reservation ledger, and inclusion-time adapter checks prevent double spending; they do not promise
-  that every concurrently matched order can be filled.
+  Capacity is allocated across all live routes before grouping them into pair curves. Routes sharing a
+  `CapacityID` receive shares of one unreserved vault budget; two different pairs no longer each advertise
+  that entire budget. Accepted fills reserve the domain and wake quote refresh. Multiple matches against
+  one unchanged curve can still contend; fresh fill planning and inclusion-time checks remain necessary.
 - **`FillInput`** = the matched signed `StandardOrder` output facts (`output.amount`, raw
   `output.context`) plus fresh `getAmountOut`, `minDiscount`, `getMaxAssets`, pending fill reservations
   by shared `CapacityID`, and the same optional LiquidLane gas facts. Direct candidates require current

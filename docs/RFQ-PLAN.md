@@ -88,6 +88,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
+- **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
+  may be retried while the order is open. A reverted or cancelled transaction retains its hash and is not
+  re-armed by open-order polling. If transaction tracking stops with inclusion unknown, the order stays
+  submitted and reconciles the backend without broadcasting another fill. These protections are in-memory;
+  persistence across process restarts remains outside this change.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
   the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
@@ -149,8 +154,9 @@ There is no quote-plan cache or default/webhook-specific Executor mapping.
 `permissionedTokens` is both the membership set for `tokensToQuote` and, only when that scope is
 `permissioned`, a solver-owned hard constraint. The solver sets `RequireSingleRoute` on both quote
 and fill snapshots for admitted tokens in that scope. A strategy must choose one candidate that
-covers the entire `amountIn`; partial candidates, including direct and discount variants of the same
-adapter, cannot be combined. The default strategy chooses the best fully viable candidate and
+takes the entire `amountIn`; only direct swaps may absorb excess input with an explicit output cap.
+Discount legs must have capacity for their full input. Direct and discount variants of the same
+adapter cannot be combined. The default strategy chooses the best fully viable candidate and
 declines if none exists. The solver independently rejects any quoted or fill plan whose leg count is
 not exactly one, so webhook and fresh fill planning fail closed at the same boundary. The `all` and
 `permissionless` scopes retain greedy multi-candidate aggregation.
@@ -232,7 +238,7 @@ adapter whitelist (it replaces the earlier separate `adapterWhitelistEnabled` / 
 config still carrying either is rejected at startup so operators migrate):
 
 - **`external`** (default — the open-source filler external parties run): **never touches the discounts
-  API** — skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
+  API** — filters discount inventory before quoting, skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
   leg is failed closed). It uses **only its own adapters**, which scope quoting/filling and are
   **required** (no discounts fallback → an empty list is rejected at startup). Before starting HTTP or
   polling, every configured adapter must directly authorize the executor through `owner`, `marketMaker`,

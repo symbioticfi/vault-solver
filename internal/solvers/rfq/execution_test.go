@@ -101,11 +101,13 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 }
 
 type fakeTxm struct {
+	calls   int
 	lastReq txmanager.Request
 	result  txmanager.Result
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
+	f.calls++
 	f.lastReq = req
 	return f.result
 }
@@ -646,6 +648,26 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 
 			if got := st.order("o1").Status; got != statusSubmitted {
 				t.Fatalf("status = %q, want %q", got, statusSubmitted)
+			}
+		})
+	}
+}
+
+func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeReverted, txmanager.OutcomeCancelled, txmanager.OutcomeTrackingStopped} {
+		t.Run(string(outcome), func(t *testing.T) {
+			st, be := fillFixtures(t)
+			hash := common.HexToHash("0x1234")
+			txm := &fakeTxm{result: txmanager.Result{Outcome: outcome, Hash: hash, Err: errors.New("fill failed")}}
+			e := newExec(t, st, be, txm)
+			for range 5 {
+				e.syncOnce(t.Context())
+			}
+			if txm.calls != 1 {
+				t.Fatalf("sends = %d, want 1", txm.calls)
+			}
+			if got := st.order("o1"); got == nil || got.TxHash != hash {
+				t.Fatalf("lost tracking hash: %+v", got)
 			}
 		})
 	}

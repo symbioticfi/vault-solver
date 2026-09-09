@@ -170,24 +170,24 @@ func TestSizeLegClampsToGetMaxAssets(t *testing.T) {
 	c := cand(1)
 	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
 
-	// Uncapped first, to learn the full expectedLoanOut.
+	// Uncapped first, to learn the full settlementLoanOut.
 	full, ok := sizeLeg(c, price, newQuote("1780000000000000000000", nil), accrued, sp)
 	if !ok {
 		t.Fatal("uncapped leg should size")
 	}
 
-	// Cap the adapter below the full expectedLoanOut so the clamp binds.
-	uncapped := full.expectedLoanOut
+	// Cap the adapter below the full settlementLoanOut so the clamp binds.
+	uncapped := full.settlementLoanOut
 	budget := new(big.Int).Div(uncapped, big.NewInt(2))
 	capped, ok := sizeLeg(c, price, newQuote("1780000000000000000000", budget), accrued, sp)
 	if !ok {
 		t.Fatal("capped leg should still size (smaller)")
 	}
-	if capped.expectedLoanOut.Cmp(budget) > 0 {
-		t.Fatalf("leg over-draws the adapter: expectedLoanOut=%s > getMaxAssets=%s", capped.expectedLoanOut, budget)
+	if capped.settlementLoanOut.Cmp(budget) > 0 {
+		t.Fatalf("leg over-draws the adapter: settlementLoanOut=%s > getMaxAssets=%s", capped.settlementLoanOut, budget)
 	}
-	if capped.expectedLoanOut.Cmp(uncapped) >= 0 {
-		t.Fatalf("a tight budget must trim below the uncapped expectedLoanOut: capped=%s uncapped=%s", capped.expectedLoanOut, uncapped)
+	if capped.settlementLoanOut.Cmp(uncapped) >= 0 {
+		t.Fatalf("a tight budget must trim below the uncapped settlementLoanOut: capped=%s uncapped=%s", capped.settlementLoanOut, uncapped)
 	}
 	if capped.profit.Cmp(full.profit) >= 0 {
 		t.Fatalf("clamped leg should net less profit: capped=%s full=%s", capped.profit, full.profit)
@@ -205,8 +205,8 @@ func TestSizeLegReturnsExpectedLoanOut(t *testing.T) {
 	if !ok {
 		t.Fatal("position should liquidate")
 	}
-	if sized.expectedLoanOut == nil || sized.expectedLoanOut.Sign() <= 0 {
-		t.Fatalf("sizing must return a positive expectedLoanOut, got %v", sized.expectedLoanOut)
+	if sized.settlementLoanOut == nil || sized.settlementLoanOut.Sign() <= 0 {
+		t.Fatalf("sizing must return a positive settlementLoanOut, got %v", sized.settlementLoanOut)
 	}
 	if sized.leg.MaxSeizeAssets.Sign() <= 0 {
 		t.Fatalf("leg should seize collateral, got maxSeizeAssets=%s", sized.leg.MaxSeizeAssets)
@@ -247,7 +247,7 @@ func TestSizeLegClampsSeizeToDebt(t *testing.T) {
 	}
 
 	sp := SizingParams{AllowFullLiquidation: false, SwapHaircutBps: 0}
-	// MaxRate sized so the swap proceeds clear the repayment (profitable): expectedLoanOut = collIn·rate·1e6/(1e18·1e18).
+	// MaxRate sized so the swap proceeds clear the repayment (profitable): settlementLoanOut = collIn·rate·1e6/(1e18·1e18).
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
 	sized, ok := sizeLeg(c, price, q, accrued, sp)
 	if !ok {
@@ -297,5 +297,26 @@ func TestSizeLegSkipsDustPosition(t *testing.T) {
 	q := newQuote("2000000000000000000000000000000", mustBig("100000000000000000000000000000000"))
 	if _, ok := sizeLeg(c, price, q, accrued, sp); ok {
 		t.Fatal("a dust position whose full-debt seize floors to 0 must be skipped (ok=false), not over-seized")
+	}
+}
+
+func TestSizingHaircutDoesNotReduceSettlementCapacity(t *testing.T) {
+	_, cand, price := sizeFixture()
+	c := cand(1)
+	accrued := morpho.AccruedTotalBorrowAssets(c.Market.State, assignNowTs)
+	quote := newQuote("1780000000000000000000", big.NewInt(700_000_000))
+	for _, haircut := range []int{0, 100, 500} {
+		sized, ok := sizeLeg(c, price, quote, accrued, SizingParams{AllowFullLiquidation: false, SwapHaircutBps: haircut})
+		if !ok {
+			t.Fatalf("haircut %d: no leg", haircut)
+		}
+		full := settlementLoanOutFor(sized.leg.MaxSeizeAssets, quote)
+		if full.Cmp(quote.MaxAssets) > 0 || full.Cmp(sized.settlementLoanOut) != 0 {
+			t.Fatalf("haircut %d: settlement %s > capacity %s", haircut, full, quote.MaxAssets)
+		}
+		profitOut := expectedLoanOutFor(sized.leg.MaxSeizeAssets, quote, haircut)
+		if profitOut.Cmp(full) >= 0 {
+			t.Fatalf("haircut %d: profit estimate %s >= settlement %s", haircut, profitOut, full)
+		}
 	}
 }

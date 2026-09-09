@@ -168,8 +168,8 @@ assertion because the PR19 ABI has no getter.
   is not a signal to reopen quoting.
 - **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
   floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
-  minimum gas-weighted p25 priority reward from the latest five blocks, aligned with the observed behavior
-  of Etherscan Gas Tracker's Fast tier, also clamped to headroom, and fails new submissions closed when
+  median gas-weighted p25 priority reward from the latest five blocks, also clamped to headroom, so a single
+  anomalous low-reward block cannot set a zero tip. It fails new submissions closed when
   `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a 12.5% bump;
   when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei` is the
   absolute global ceiling and normal sends reserve cancellation headroom below it. With gas accounting
@@ -276,7 +276,7 @@ Startup checks configured gas tokens and the Multicall3 timestamp selector.
 The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
 skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
 quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
-the quote. With `tipGwei: 0`, the fee-history policy aligned with observed Etherscan Fast behavior avoids
+the quote. With `tipGwei: 0`, the median fee-history policy avoids
 relying on a potentially unusable node tip suggestion. Suggestions and rewards are advisory and are clamped
 to available headroom; a positive value remains the mandatory operator-controlled floor and fallback.
 `maxFeeGwei` remains the absolute ceiling described in §2.2.
@@ -574,9 +574,10 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    `tokenOut` that adapter's vault asset; native-ETH `tokenOut` is declined in v1 —
    this rule also auto-declines the opposing probe), or no viable inventory.
 2. Read the atomically published direct LiquidLane inventory/rate snapshot, its optional gas snapshot, and its valid advertised
-   signed-discount candidates. Filter inventory to the requested token pair before allocating shared capacity, so unrelated
-   input-token routes backed by the same vault do not receive static shares. Matching routes and direct/private alternatives
-   still share `CapacityID`, including reservations from accepted fills.
+   signed-discount candidates. Allocate shared capacity across all live routes before filtering to the requested
+   pair, so different input-token routes cannot each quote the full same vault budget. Direct/private alternatives
+   remain one route share, and reservations from accepted fills reduce the common `CapacityID` budget.
+   Returned quotes themselves are not reservations; repeated concurrent requests within one pair can still contend.
 3. The UniswapX-local `Strategy.DecideQuote` selects a provisional route only to calculate the concrete
    request's executable output and, when gas accounting is configured, full estimated fill gas. It returns
    one `amountIn`/`amountOut` pair; below the enabled gas-aware floor or outside current capacity ⇒ decline.

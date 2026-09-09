@@ -1428,16 +1428,15 @@ func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
 	if history == nil || len(history.Reward) != feeHistoryBlocks {
 		return nil, false
 	}
-	var tip *big.Int
+	tips := make([]*big.Int, 0, len(history.Reward))
 	for _, blockRewards := range history.Reward {
 		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
 			return nil, false
 		}
-		if tip == nil || blockRewards[0].Cmp(tip) < 0 {
-			tip = new(big.Int).Set(blockRewards[0])
-		}
+		tips = append(tips, blockRewards[0])
 	}
-	return tip, true
+	slices.SortFunc(tips, func(a, b *big.Int) int { return a.Cmp(b) })
+	return new(big.Int).Set(tips[len(tips)/2]), true
 }
 
 func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) {
@@ -1448,11 +1447,9 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		Data:  req.Data,
 	})
 	if err != nil {
-		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
-		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
+		// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
 		m.requestLog(req).Error(err, "gas estimation failed",
 			"label", req.Label,
-			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
 		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}

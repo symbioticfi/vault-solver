@@ -29,7 +29,11 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		validAfter = input.ServerTime
 	}
 	groups := make(map[strategyPairKey][]liquidlane.Inventory)
-	for _, item := range liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)) {
+	allocatedInventory := liquidgreedy.AllocateInventoryCapacity(
+		liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)),
+		input.Reservations, s.cfg.InventoryReserveBps,
+	)
+	for _, item := range allocatedInventory {
 		key := strategyPairKey{
 			tokenIn: item.TokenIn, tokenOut: item.TokenOut,
 			inputDecimals: item.TokenInDecimals, outputDecimals: item.TokenOutDecimals,
@@ -44,11 +48,7 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 	sort.Slice(keys, func(i, j int) bool { return pairLess(keys[i], keys[j]) })
 	out := types.QuoteOutput{Quotes: make([]types.Quote, 0, len(keys))}
 	for _, key := range keys {
-		inventory := liquidgreedy.AllocateInventoryCapacity(
-			groups[key],
-			input.Reservations,
-			s.cfg.InventoryReserveBps,
-		)
+		inventory := groups[key]
 		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 		for _, item := range inventory {
 			candidate := liquidgreedy.NewQuoteCandidate(
