@@ -7,6 +7,7 @@ package txmanager
 import (
 	"context"
 	"math/big"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1191,8 +1192,7 @@ func (m *Manager) rebroadcastLatestAttempt(
 	pending *pendingTransaction,
 	cancellation bool,
 ) bool {
-	for i := len(pending.attempts) - 1; i >= 0; i-- {
-		attempt := pending.attempts[i]
+	for _, attempt := range slices.Backward(pending.attempts) {
 		if attempt.cancellation != cancellation || attempt.tx == nil {
 			continue
 		}
