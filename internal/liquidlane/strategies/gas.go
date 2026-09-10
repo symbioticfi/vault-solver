@@ -122,12 +122,10 @@ func fillGasCostAtRate(
 	units := envelope.SettlementUnits
 	for _, leg := range executorOrderedGasLegs(legs) {
 		demands = append(demands, liquidlanegas.AdapterDemand{
-			Adapter: leg.Route.Adapter,
-			Vault:   leg.Route.Vault,
-			Demand: liquidlanegas.Demand{
-				Collateral: leg.Route.TokenIn,
-				AmountOut:  liquidlane.CloneBig(leg.AmountOut),
-			},
+			Adapter:    leg.Route.Adapter,
+			Vault:      leg.Route.Vault,
+			Collateral: leg.Route.TokenIn,
+			AmountOut:  liquidlane.CloneBig(leg.AmountOut),
 		})
 		if leg.Private {
 			units = saturatingAdd(units, envelope.PrivateRouteUnits)

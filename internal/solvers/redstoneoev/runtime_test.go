@@ -28,14 +28,19 @@ func TestCoherentStateSourceRequiresStableHeadIdentity(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		end          *ethtypes.Header
+		gasPrices    *liquidlanegas.PriceSnapshot
 		wantBoundary bool
 	}{
-		{name: "stable head", end: same},
+		{name: "stable head without gas", end: same},
+		{name: "matching gas batch", end: same, gasPrices: &liquidlanegas.PriceSnapshot{BlockTime: time.Unix(int64(start.Time), 0)}},
+		{name: "older fallback gas batch", end: same, gasPrices: &liquidlanegas.PriceSnapshot{BlockTime: time.Unix(int64(start.Time)-12, 0)}, wantBoundary: true},
+		{name: "newer gas batch", end: same, gasPrices: &liquidlanegas.PriceSnapshot{BlockTime: time.Unix(int64(start.Time)+12, 0)}, wantBoundary: true},
+		{name: "missing gas batch time", end: same, gasPrices: &liquidlanegas.PriceSnapshot{}, wantBoundary: true},
 		{name: "next block", end: nextBlock, wantBoundary: true},
 		{name: "same-height reorg", end: sameHeightReorg, wantBoundary: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			reader := &coherentStateReaderStub{}
+			reader := &coherentStateReaderStub{gasPrices: test.gasPrices}
 			source := &coherentStateSource{
 				heads:  &sequenceHeadReader{headers: []*ethtypes.Header{start, test.end}},
 				reader: reader,
@@ -54,9 +59,8 @@ func TestCoherentStateSourceRequiresStableHeadIdentity(t *testing.T) {
 			if snapshot.GasLimit != start.GasLimit {
 				t.Fatalf("gas limit = %d, want %d", snapshot.GasLimit, start.GasLimit)
 			}
-			wantObservedAt := time.Unix(int64(start.Time), 0)
-			if !reader.gasObservedAt.Equal(wantObservedAt) {
-				t.Fatalf("gas observation time = %s, want %s", reader.gasObservedAt, wantObservedAt)
+			if reader.gasReads != 1 {
+				t.Fatalf("gas reads = %d, want 1", reader.gasReads)
 			}
 		})
 	}
@@ -90,7 +94,8 @@ func (r *sequenceHeadReader) HeaderByNumber(
 }
 
 type coherentStateReaderStub struct {
-	gasObservedAt time.Time
+	gasReads  int
+	gasPrices *liquidlanegas.PriceSnapshot
 }
 
 func (r *coherentStateReaderStub) ReadExecutorState(
@@ -112,10 +117,9 @@ func (r *coherentStateReaderStub) ReadAdapterSnapshot(
 func (r *coherentStateReaderStub) ReadGasPrices(
 	_ context.Context,
 	_ strategytypes.AdapterSnapshot,
-	observedAt time.Time,
 ) (*liquidlanegas.PriceSnapshot, error) {
-	r.gasObservedAt = observedAt
-	return nil, nil
+	r.gasReads++
+	return r.gasPrices, nil
 }
 
 func stateTestHeader(number int64, marker byte) *ethtypes.Header {

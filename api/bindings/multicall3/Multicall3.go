@@ -39,7 +39,7 @@ type Multicall3Result struct {
 
 // Multicall3MetaData contains all meta data concerning the Multicall3 contract.
 var Multicall3MetaData = bind.MetaData{
-	ABI: "[{\"inputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"target\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"allowFailure\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"callData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Call3[]\",\"name\":\"calls\",\"type\":\"tuple[]\"}],\"name\":\"aggregate3\",\"outputs\":[{\"components\":[{\"internalType\":\"bool\",\"name\":\"success\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"returnData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Result[]\",\"name\":\"returnData\",\"type\":\"tuple[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ABI: "[{\"inputs\":[{\"components\":[{\"internalType\":\"address\",\"name\":\"target\",\"type\":\"address\"},{\"internalType\":\"bool\",\"name\":\"allowFailure\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"callData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Call3[]\",\"name\":\"calls\",\"type\":\"tuple[]\"}],\"name\":\"aggregate3\",\"outputs\":[{\"components\":[{\"internalType\":\"bool\",\"name\":\"success\",\"type\":\"bool\"},{\"internalType\":\"bytes\",\"name\":\"returnData\",\"type\":\"bytes\"}],\"internalType\":\"structMulticall3.Result[]\",\"name\":\"returnData\",\"type\":\"tuple[]\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"getCurrentBlockTimestamp\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"timestamp\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
 	ID:  "Multicall3",
 }
 
@@ -95,5 +95,40 @@ func (multicall3 *Multicall3) UnpackAggregate3(data []byte) ([]Multicall3Result,
 		return *new([]Multicall3Result), err
 	}
 	out0 := *abi.ConvertType(out[0], new([]Multicall3Result)).(*[]Multicall3Result)
+	return out0, nil
+}
+
+// PackGetCurrentBlockTimestamp is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x0f28c97d.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function getCurrentBlockTimestamp() view returns(uint256 timestamp)
+func (multicall3 *Multicall3) PackGetCurrentBlockTimestamp() []byte {
+	enc, err := multicall3.abi.Pack("getCurrentBlockTimestamp")
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackGetCurrentBlockTimestamp is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x0f28c97d.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function getCurrentBlockTimestamp() view returns(uint256 timestamp)
+func (multicall3 *Multicall3) TryPackGetCurrentBlockTimestamp() ([]byte, error) {
+	return multicall3.abi.Pack("getCurrentBlockTimestamp")
+}
+
+// UnpackGetCurrentBlockTimestamp is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x0f28c97d.
+//
+// Solidity: function getCurrentBlockTimestamp() view returns(uint256 timestamp)
+func (multicall3 *Multicall3) UnpackGetCurrentBlockTimestamp(data []byte) (*big.Int, error) {
+	out, err := multicall3.abi.Unpack("getCurrentBlockTimestamp", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
 	return out0, nil
 }

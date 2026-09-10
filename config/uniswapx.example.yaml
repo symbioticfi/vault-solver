@@ -76,13 +76,15 @@ solvers:
       # Optional. Omit this entire block to exclude fill gas from quote/fill economics and skip
       # gas-state and Chainlink reads. The tx manager still prices and pays actual transaction gas.
       # When enabled, dynamic internal discount routes without a configured token feed are skipped.
+      # Feed age limits: docs/LIQUIDLANE-CONVENTIONS.md#reads-and-freshness
+      # Examples below include slack; verify the selected feed and network before deploying.
       gas:
         nativeUsdFeed: ${ETH_USD_FEED} # native gas token / USD feed
-        nativeMaxAge: 1h               # maximum accepted native feed staleness
+        nativeMaxAge: 1h5m
         tokenUsdFeeds:
           - token: ${VAULT_ASSET}              # adapter vault asset (tokenOut)
             feed: ${VAULT_ASSET_USD_FEED}      # tokenOut / USD feed
-            maxAge: 1h                         # maximum accepted token feed staleness
+            maxAge: 1h5m
 
       breaker:
         maxFailures: 3 # pause quotes after this many failed fills in the window

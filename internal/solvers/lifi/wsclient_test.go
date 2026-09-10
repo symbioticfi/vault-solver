@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,10 +11,137 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestOrderFeedDisconnectLogLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		closeCode int
+		status    int
+		ready     bool
+		wantInfo  bool
+	}{
+		{name: "normal closure", closeCode: websocket.CloseNormalClosure, ready: true, wantInfo: true},
+		{name: "going away", closeCode: websocket.CloseGoingAway, ready: true, wantInfo: true},
+		{name: "unexpected EOF", ready: true, wantInfo: true},
+		{name: "no status", closeCode: websocket.CloseNoStatusReceived, ready: true, wantInfo: true},
+		{name: "service restart", closeCode: websocket.CloseServiceRestart, ready: true, wantInfo: true},
+		{name: "try again later", closeCode: websocket.CloseTryAgainLater, ready: true, wantInfo: true},
+		{name: "early EOF"},
+		{name: "early normal closure", closeCode: websocket.CloseNormalClosure},
+		{name: "early no status", closeCode: websocket.CloseNoStatusReceived},
+		{name: "early restart", closeCode: websocket.CloseServiceRestart},
+		{name: "protocol error", closeCode: websocket.CloseProtocolError, ready: true},
+		{name: "unauthorized", status: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upgrader := websocket.Upgrader{}
+			readStarted := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				<-readStarted
+				if tc.closeCode != 0 {
+					if err := conn.WriteControl(websocket.CloseMessage,
+						websocket.FormatCloseMessage(tc.closeCode, ""), time.Now().Add(time.Second)); err != nil {
+						t.Error(err)
+					}
+				}
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var event map[string]any
+			log := funcr.NewJSON(func(entry string) {
+				var fields map[string]any
+				if err := json.Unmarshal([]byte(entry), &fields); err != nil {
+					t.Error(err)
+				}
+				if fields["msg"] == "order feed disconnected; reconnecting" {
+					event = fields
+					cancel()
+				}
+			}, funcr.Options{})
+			feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", log)
+			_ = feed.run(ctx, orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
+				if tc.ready {
+					feed.markRecoveryReady(connectionCtx)
+				}
+				close(readStarted)
+			}}, func(context.Context, orderMessage) {})
+			_, info := event["level"]
+			if event == nil || info != tc.wantInfo || event["error"] == nil || event["backoff"] != "1s" {
+				t.Fatalf("disconnect log = %v, want Info=%v with error and backoff", event, tc.wantInfo)
+			}
+		})
+	}
+}
+
+func TestOrderFeedBackoffResetsOnlyAfterRecovery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	readStarted := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		select {
+		case <-readStarted:
+		case <-ctx.Done():
+		}
+	}))
+	defer server.Close()
+	var backoffs []string
+	log := funcr.NewJSON(func(entry string) {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(entry), &fields); err != nil {
+			t.Error(err)
+		}
+		if fields["msg"] != "order feed disconnected; reconnecting" {
+			return
+		}
+		backoff, _ := fields["backoff"].(string)
+		backoffs = append(backoffs, backoff)
+		_, info := fields["level"]
+		if info != (len(backoffs) == 3) {
+			t.Errorf("disconnect %d Info=%v", len(backoffs), info)
+		}
+		if len(backoffs) == 3 {
+			cancel()
+		}
+	}, funcr.Options{})
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", log)
+	attempts := 0
+	_ = feed.run(ctx, orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
+		attempts++
+		if attempts == 3 {
+			feed.markRecoveryReady(connectionCtx)
+		}
+		select {
+		case readStarted <- struct{}{}:
+		case <-connectionCtx.Done():
+		}
+	}}, func(context.Context, orderMessage) {})
+	if got := strings.Join(backoffs, ","); got != "1s,2s,1s" {
+		t.Fatalf("disconnect backoffs = %s", got)
+	}
+}
 
 func TestPongFor(t *testing.T) {
 	tests := []struct {
@@ -39,7 +167,7 @@ func TestPongFor(t *testing.T) {
 	}
 }
 
-func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
+func TestWatchOnceReportsUnrecoveredConnection(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -52,9 +180,9 @@ func TestWatchOnceReportsEstablishedConnection(t *testing.T) {
 	defer server.Close()
 
 	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
-	connected, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
-	if !connected {
-		t.Fatal("connection was not reported as established")
+	ready, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
+	if ready {
+		t.Fatal("connection closed before recovery completed")
 	}
 	if err == nil {
 		t.Fatal("expected read error after server closed the connection")

@@ -307,6 +307,12 @@ by this executor now. Exclusive Dutch (`0xe1`) is unsupported and discarded on r
 correlation metadata only: it is not an authorization input, is not used by the contract, and may be absent in
 the WS event.
 
+After a connection completes REST recovery, closes 1000/1001/1005/1006/1012/1013 are logged at Info
+with the error and backoff. Code 1006 is synthesized for abnormal EOF, not sent by the peer.
+A disconnect before recovery or any other error remains Error. Only recovered connections reset
+backoff; repeated early disconnects increase it to the existing 30-second cap. The closing connection's
+readiness is captured before cancellation and cleanup. Quote suspension and REST recovery are unchanged.
+
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
 `pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
@@ -582,11 +588,11 @@ solvers:
           executionDeadlineBuffer: 12s
       gas:                                  # optional; omit to disable economic gas accounting
         nativeUsdFeed: "0x…"
-        nativeMaxAge: 1h                     # native/USD feed heartbeat
+        nativeMaxAge: 2h
         tokenUsdFeeds:
           - token: "0x…"                # every resolved adapter tokenOut
             feed: "0x…"                 # token/USD Chainlink feed
-            maxAge: 24h                 # this token/USD feed's heartbeat
+            maxAge: 24h5m
       orderServer:
         baseUrl: https://order-dev.li.fi          # order.li.fi in prod
         wsUrl:   wss://order-dev.li.fi
@@ -740,8 +746,8 @@ production.
    fallback still needs filler authorization.
 6. **Optionally configure gas conversion.** When enabling `gas:`, provide one native/USD Chainlink feed and one token/USD feed for every
    distinct adapter output asset. Set `gas.nativeMaxAge` and every `gas.tokenUsdFeeds[].maxAge`
-   from the feed's heartbeat plus realistic publication slack; stale, non-positive, missing, or materially
-   future-dated rounds fail the quote/fill decision closed.
+   using the [shared freshness rules](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
+   Startup validates token coverage and the Multicall3 timestamp selector before feed/quote loops start.
 7. **Optional private discounts.** `solverMode: external` needs no discount backend and serves only
    direct-authorized routes. `solverMode: internal` additionally requires a reachable
    `privateDiscountsUrl` and active signer/protocol policies for the configured adapters.

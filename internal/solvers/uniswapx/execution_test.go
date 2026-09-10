@@ -54,6 +54,10 @@ func (r *executionTestReader) resolveRoutes(
 
 func (r *executionTestReader) validateGasTokens([]liquidlane.Route) error { return nil }
 
+func (r *executionTestReader) validateGasOracles(context.Context, []liquidlane.Route) error {
+	return nil
+}
+
 func (r *executionTestReader) latestBlockTime(context.Context) (time.Time, error) {
 	r.latestBlockReads++
 	return r.now, nil
@@ -306,7 +310,6 @@ func (r *executionTestReader) fillSnapshot(
 	_ common.Address,
 	_ common.Address,
 	amountIn *big.Int,
-	_ time.Time,
 ) (fillSnapshot, error) {
 	r.fillRoutes = append([]liquidlane.Route(nil), routes...)
 	r.fillAmounts = append(r.fillAmounts, new(big.Int).Set(amountIn))

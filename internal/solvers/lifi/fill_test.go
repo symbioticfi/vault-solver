@@ -58,14 +58,14 @@ func (f fakeLifiReader) validateDirectAuthorization(context.Context, common.Addr
 	return f.directAuthErr
 }
 
-func (f fakeLifiReader) validateGasTokens([]route) error { return nil }
+func (f fakeLifiReader) validateGasOracles(context.Context, []route) error { return nil }
 
-func (f fakeLifiReader) quoteSnapshots(context.Context, []route, common.Address, time.Time) (quoteSnapshotSet, error) {
+func (f fakeLifiReader) quoteSnapshots(context.Context, []route, common.Address) (quoteSnapshotSet, error) {
 	return quoteSnapshotSet{}, nil
 }
 
 func (f fakeLifiReader) fillSnapshots(
-	context.Context, []route, common.Address, common.Address, *big.Int, time.Time,
+	context.Context, []route, common.Address, common.Address, *big.Int,
 ) (fillSnapshotSet, error) {
 	if f.fillSetFn != nil {
 		return f.withGasFacts(f.fillSetFn()), nil
